@@ -5,6 +5,17 @@ info:
 servers:
   - url: /api/v1
 paths:
+  /metrics:
+    get:
+      operationId: metrics
+      servers:
+        - url: /
+      responses:
+        "200":
+          description: Prometheus text exposition
+          content:
+            text/plain:
+              schema: {type: string}
   /health:
     get:
       operationId: health
@@ -230,4 +241,3 @@ components:
         warnings: {type: array, items: {type: string}}
         createdAt: {type: string, format: date-time}
         updatedAt: {type: string, format: date-time}
-

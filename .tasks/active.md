@@ -1,11 +1,10 @@
 # Active
 
-## Core wave ownership
+## API and browser wave ownership
 
 | ID | Owner | Depends on | Allowed paths | Prohibited paths |
 |---|---|---|---|---|
-| C01 | C | A01,B01,I01 | `internal/media/preview`, `internal/ffmpeg`, `internal/hardware`, `test/integration/preview` | Cache/jobs, API, contracts |
-| D01 | D | A01,I01 | `internal/jobs`, `internal/cache`, `internal/limits`, `internal/store/migrations/004_cache.sql`, `test/integration/cache` | Preview runner, API, contracts |
-| E01 | E | A01,B01,I01 | `internal/projects`, `internal/export`, project/job store files, migrations 002/003, `test/integration/export` | API, cache, contracts |
+| F01 | F | B01,C01,D01,E01 | `internal/api`, `internal/auth`, `internal/httpx`, `internal/metrics`, `test/integration/api` | Contracts and domain implementations |
+| G01 | G | A01,Frozen OpenAPI | `web/src`, `web/tests`, `web/playwright`, web test config | Backend and contracts |
 
-All consume `internal/contracts.PreviewRunner` v1 where applicable.
+Both consume `docs/contracts/api.openapi.yaml` v1 without modifying it.
