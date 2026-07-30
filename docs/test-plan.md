@@ -24,13 +24,25 @@ controller environment and must be tested only as a failing-to-software-fallback
 | `avc-aac.mkv` | Matroska / H.264 + AAC | container normalization | valid fMP4 | compatible stream-copy baseline |
 | `avc-aac.mov` | MOV / H.264 + AAC | container normalization | valid fMP4 | compatible stream-copy baseline |
 | `avc-video-only-long-gop.mp4` | MP4 / H.264 only, 2 s GOP | audio absent | valid silent fMP4 | keyframe-warning path |
+| `portrait-avc-aac.mp4` | MP4 / 180x320 H.264 + AAC | portrait dimensions | valid fMP4 | compatible stream-copy baseline |
+| `unusual-dimensions-avc-aac.mp4` | MP4 / 318x178 H.264 + AAC | non-standard even dimensions | normalized 1280x720 fMP4 | compatible stream-copy baseline |
+| `multi-audio-avc-aac.mkv` | Matroska / H.264 + two AAC streams | streams and language tags | selected/default audio behavior | compatible stream-copy baseline |
+| `vfr-avc-video-only.mp4` | MP4 / variable-frame-rate H.264 | differing nominal/average frame rates | normalized 30 fps fMP4 | keyframe-warning path |
+| `very-short-avc-aac.mp4` | MP4 / 100 ms H.264 + AAC | duration below usual window | boundary-clamped fMP4 | valid short export or safe error |
 | `vp9-opus.webm` | WebM / VP9 + Opus | non-baseline codecs | normalized H.264/AAC fMP4 | unsupported-copy warning or rejection |
+| `hevc-aac.mkv` | Matroska / HEVC + AAC | HEVC metadata | normalized H.264/AAC fMP4 | stream-copy eligibility/warnings |
+| `av1-aac.mkv` | Matroska / AV1 + AAC | AV1 metadata | normalized H.264/AAC fMP4 | unsupported-copy warning or rejection |
 | `audio-only.wav` | WAV / PCM | video absent | safe validation error | safe validation error |
 | `corrupt-truncated.mp4` | truncated MP4 | probe fails safely | no process/publish | no process/output |
 
 The generated visual and audio signals, duration, frame rate, GOP, and command
 arguments are fixed. Byte equality is only expected under the same FFmpeg build;
 tests validate with FFprobe rather than committing machine-generated media.
+`libx264` and AAC are the base requirement. WebM, HEVC, and AV1 are optional:
+when `libvpx-vp9`/`libopus`, `libx265`, or `libaom-av1` is unavailable, the
+generator records an explicit `skipped` row in `fixture-status.tsv` and the
+base harness still passes. CI should retain that status file with its test
+artifacts and run optional rows whenever their encoder is present.
 
 ## Cancellation and cleanup
 
