@@ -32,7 +32,7 @@ Incomplete files end in `.partial`; only atomic rename publishes a hit.
 
 ## Projects and jobs
 
-- Projects are owned by normalized Tailscale login. Cross-owner access returns
+- Projects are owned by opaque `Principal.Subject`. Cross-owner access returns
   404. Revision zero creates; successful PUT increments revision; stale
   revisions return 409.
 - Segment bounds are non-negative, ordered, non-overlapping, within the media
