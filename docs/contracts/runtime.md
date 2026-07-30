@@ -39,6 +39,10 @@ Incomplete files end in `.partial`; only atomic rename publishes a hit.
   duration, and `startMs < endMs`.
 - Job states: `queued`, `running`, `succeeded`, `failed`, `cancelled`.
   Terminal states never transition.
+- Export capacity is admission-controlled before a durable job is created;
+  excess submissions return HTTP 429 rather than forming an unbounded queue.
+- On restart, both `queued` and `running` jobs become failed with
+  `interrupted_by_restart`.
 - MVP exports use MKV and `stream_copy_preferred`; no smart-boundary re-encode.
   Non-keyframe accuracy limitations are explicit structured warnings.
 
@@ -46,6 +50,8 @@ Incomplete files end in `.partial`; only atomic rename publishes a hit.
 
 - Production mode accepts Tailscale identity/capability headers only from
   configured trusted-proxy CIDRs while listening on loopback.
+- Preview, export, and media-refresh actions require a matching forwarded
+  capability grant in production mode. Development mode bypasses grants.
 - The default trusted proxies are `127.0.0.0/8,::1/128`.
 - Development mode requires `EDITAPP_DEV_USER_LOGIN`, refuses non-loopback
   binding, and synthesizes only that identity.
@@ -58,6 +64,7 @@ Incomplete files end in `.partial`; only atomic rename publishes a hit.
 - A newer foreground request supersedes the same user's previous subscription.
 - Identical normalized previews share one process. The process is cancelled
   when no subscribers remain.
+- A shared preview retains at most 64 MiB for replay to late subscribers.
 - FFmpeg receives SIGTERM, a bounded grace period, then forced termination.
 - Streaming begins from stdout without waiting for process completion.
 - Cache completion requires FFmpeg success and FFprobe validation.
@@ -100,4 +107,3 @@ and `error_code`.
 Metrics use the exact names in the implementation prompt. Labels are restricted
 to bounded route templates, methods, status classes, cache state, cancellation
 reason, and encoder profile. Paths and unique IDs are never labels.
-

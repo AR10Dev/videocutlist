@@ -17,6 +17,9 @@ func TestJobStateTransitionsAndRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
+	if _, err := jobs.Create(ctx, store.ExportJob{ID: "queued", OwnerLogin: "editor", ProjectID: "project", ProjectRevision: 1, RequestJSON: `{}`}); err != nil {
+		t.Fatal(err)
+	}
 	for _, id := range []string{"restart", "done"} {
 		if _, err := jobs.Create(ctx, store.ExportJob{ID: id, OwnerLogin: "editor", ProjectID: "project", ProjectRevision: 1, RequestJSON: `{}`}); err != nil {
 			t.Fatal(err)
@@ -25,8 +28,12 @@ func TestJobStateTransitionsAndRecovery(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if count, err := jobs.Recover(ctx); err != nil || count != 2 {
+	if count, err := jobs.Recover(ctx); err != nil || count != 3 {
 		t.Fatalf("recover = %d, %v", count, err)
+	}
+	queued, err := jobs.Get(ctx, "editor", "queued")
+	if err != nil || queued.State != store.JobFailed {
+		t.Fatalf("recovered queued job = %#v, %v", queued, err)
 	}
 	job, err := jobs.Get(ctx, "editor", "restart")
 	if err != nil || job.State != store.JobFailed || job.ErrorCode.String != "interrupted_by_restart" {

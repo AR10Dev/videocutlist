@@ -90,7 +90,7 @@ func run(ctx context.Context) error {
 	}
 	projectService, _ := projects.NewService(projectStore)
 	refreshJobs := app.NewRefreshJobs()
-	mediaAdapter := app.MediaAdapter{Scanner: scanner, Store: mediaStore, Refresh: refreshJobs}
+	mediaAdapter := &app.MediaAdapter{Scanner: scanner, Store: mediaStore, Refresh: refreshJobs}
 	previewAdapter := app.PreviewAdapter{Scanner: scanner, Media: mediaStore, Manager: previewManager, Cache: cacheStore, Validator: validator}
 	projectAdapter := app.ProjectAdapter{Service: projectService, Store: projectStore}
 	exportAdapter := app.NewExportAdapter(jobStore, scanner, mediaStore, exporter.Service{
@@ -106,6 +106,9 @@ func run(ctx context.Context) error {
 	apiServer, err := api.New(api.Config{
 		Authenticator: authenticator, Media: mediaAdapter, Preview: previewAdapter,
 		Projects: projectAdapter, Exports: exportAdapter, Jobs: jobAdapter,
+		Authorize: api.AuthorizerFunc(func(identity auth.Identity, action, resource string) bool {
+			return cfg.AuthMode == "dev" || identity.Capabilities.AllowsAny(action, resource)
+		}),
 		Ready: db.PingContext, Logger: logger, Metrics: metrics.New(),
 		BeforeMS: int64(cfg.PreviewBeforeMS), AfterMS: int64(cfg.PreviewAfterMS),
 		MaxPreviewMS: int64(cfg.PreviewMaxMS), GridMS: int64(cfg.PreviewGridMS),
@@ -120,7 +123,7 @@ func run(ctx context.Context) error {
 	mux.Handle("/", http.FileServer(http.Dir("web/dist")))
 	server := &http.Server{
 		Addr: cfg.ListenAddr, Handler: mux, ReadHeaderTimeout: 5 * time.Second,
-		IdleTimeout: 60 * time.Second,
+		ReadTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second,
 	}
 	failed := make(chan error, 1)
 	go func() {

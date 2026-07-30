@@ -52,9 +52,13 @@ type MediaAdapter struct {
 	Scanner *index.Scanner
 	Store   *store.MediaStore
 	Refresh *RefreshJobs
+
+	mu         sync.Mutex
+	refreshing bool
+	refreshed  time.Time
 }
 
-func (m MediaAdapter) List(ctx context.Context, cursor string, limit int) (api.MediaPage, error) {
+func (m *MediaAdapter) List(ctx context.Context, cursor string, limit int) (api.MediaPage, error) {
 	page, err := m.Store.List(ctx, cursor, limit)
 	if err != nil {
 		return api.MediaPage{}, err
@@ -69,7 +73,7 @@ func (m MediaAdapter) List(ctx context.Context, cursor string, limit int) (api.M
 	return result, nil
 }
 
-func (m MediaAdapter) Get(ctx context.Context, id string) (api.Media, error) {
+func (m *MediaAdapter) Get(ctx context.Context, id string) (api.Media, error) {
 	record, err := m.Store.Get(ctx, id)
 	if err != nil {
 		return api.Media{}, err
@@ -77,7 +81,21 @@ func (m MediaAdapter) Get(ctx context.Context, id string) (api.Media, error) {
 	return apiMedia(record.Media), nil
 }
 
-func (m MediaAdapter) RefreshMedia(ctx context.Context, owner string) (api.Job, error) {
+func (m *MediaAdapter) RefreshMedia(ctx context.Context, owner string) (api.Job, error) {
+	m.mu.Lock()
+	if m.refreshing || !m.refreshed.IsZero() && time.Since(m.refreshed) < time.Minute {
+		m.mu.Unlock()
+		return api.Job{}, api.ErrBusy
+	}
+	m.refreshing = true
+	m.mu.Unlock()
+	defer func() {
+		m.mu.Lock()
+		m.refreshing = false
+		m.refreshed = time.Now()
+		m.mu.Unlock()
+	}()
+
 	started := time.Now().UTC()
 	id, err := newID("j_")
 	if err != nil {
@@ -232,6 +250,18 @@ func NewExportAdapter(jobStore *store.JobStore, scanner *index.Scanner, media *s
 }
 
 func (e *ExportAdapter) Create(ctx context.Context, owner, projectID string, project api.Project, input api.ExportInput) (api.Job, error) {
+	select {
+	case e.slots <- struct{}{}:
+	default:
+		return api.Job{}, api.ErrBusy
+	}
+	admitted := false
+	defer func() {
+		if !admitted {
+			<-e.slots
+		}
+	}()
+
 	id, err := newID("j_")
 	if err != nil {
 		return api.Job{}, err
@@ -252,23 +282,18 @@ func (e *ExportAdapter) Create(ctx context.Context, owner, projectID string, pro
 	e.mu.Lock()
 	e.cancel[id] = cancel
 	e.mu.Unlock()
+	admitted = true
 	go e.run(jobCtx, owner, id, project)
 	return apiJob(record), nil
 }
 
 func (e *ExportAdapter) run(ctx context.Context, owner, id string, project api.Project) {
+	defer func() { <-e.slots }()
 	defer func() {
 		e.mu.Lock()
 		delete(e.cancel, id)
 		e.mu.Unlock()
 	}()
-	select {
-	case e.slots <- struct{}{}:
-		defer func() { <-e.slots }()
-	case <-ctx.Done():
-		_, _ = e.Store.Cancel(context.Background(), owner, id)
-		return
-	}
 	source, _, err := e.Scanner.Open(ctx, e.Media, project.MediaID)
 	if err != nil {
 		_, _ = e.Store.Start(context.Background(), owner, id)

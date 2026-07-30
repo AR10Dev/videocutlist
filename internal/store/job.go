@@ -111,7 +111,7 @@ func (s *JobStore) Cancel(ctx context.Context, owner, id string) (ExportJob, err
 // Recover records the only safe result for an OS process interrupted by restart.
 func (s *JobStore) Recover(ctx context.Context) (int64, error) {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	result, err := s.db.ExecContext(ctx, `UPDATE export_jobs SET state = ?, error_code = ?, updated_at = ? WHERE state = ?`, JobFailed, "interrupted_by_restart", now, JobRunning)
+	result, err := s.db.ExecContext(ctx, `UPDATE export_jobs SET state = ?, error_code = ?, updated_at = ? WHERE state IN (?, ?)`, JobFailed, "interrupted_by_restart", now, JobQueued, JobRunning)
 	if err != nil {
 		return 0, err
 	}

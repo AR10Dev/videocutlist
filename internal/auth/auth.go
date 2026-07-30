@@ -41,6 +41,15 @@ func (c Capabilities) Allows(name, action, resource string) bool {
 	return false
 }
 
+func (c Capabilities) AllowsAny(action, resource string) bool {
+	for name := range c {
+		if c.Allows(name, action, resource) {
+			return true
+		}
+	}
+	return false
+}
+
 func matches(values []string, want string) bool {
 	for _, value := range values {
 		if value == "*" || value == want {

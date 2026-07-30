@@ -15,10 +15,13 @@ import (
 type CacheStatus string
 
 const (
-	CacheHit    CacheStatus = "hit"
-	CacheMiss   CacheStatus = "miss"
-	CacheShared CacheStatus = "shared"
+	CacheHit       CacheStatus = "hit"
+	CacheMiss      CacheStatus = "miss"
+	CacheShared    CacheStatus = "shared"
+	maxReplayBytes             = 64 << 20
 )
+
+var ErrReplayLimit = errors.New("preview replay limit exceeded")
 
 type Result struct {
 	Key    string
@@ -30,6 +33,7 @@ type PreviewManager struct {
 	runner    contracts.PreviewRunner
 	validator cache.Validator
 	limits    *limits.Preview
+	maxReplay int64
 
 	mu     sync.Mutex
 	jobs   map[string]*previewJob
@@ -40,7 +44,7 @@ func NewPreviewManager(store *cache.Store, runner contracts.PreviewRunner, valid
 	if store == nil || runner == nil || validator == nil || limiter == nil {
 		return nil, errors.New("cache, runner, validator, and limiter are required")
 	}
-	return &PreviewManager{cache: store, runner: runner, validator: validator, limits: limiter, jobs: make(map[string]*previewJob), byUser: make(map[string]*subscriber)}, nil
+	return &PreviewManager{cache: store, runner: runner, validator: validator, limits: limiter, maxReplay: maxReplayBytes, jobs: make(map[string]*previewJob), byUser: make(map[string]*subscriber)}, nil
 }
 
 // Preview returns an immediate reader. Closing it, or cancelling ctx, detaches
@@ -175,6 +179,7 @@ type previewJob struct {
 	mu          sync.Mutex
 	cond        *sync.Cond
 	chunks      [][]byte
+	replayBytes int64
 	done        bool
 	err         error
 	subscribers map[*subscriber]struct{}
@@ -190,14 +195,21 @@ func (j *previewJob) run() {
 		n, err := j.running.Stdout.Read(buf)
 		if n > 0 {
 			chunk := append([]byte(nil), buf[:n]...)
+			j.mu.Lock()
+			if j.replayBytes+int64(n) > j.manager.maxReplay {
+				copyErr = ErrReplayLimit
+				j.cancel()
+				j.mu.Unlock()
+				break
+			}
+			j.replayBytes += int64(n)
+			j.chunks = append(j.chunks, chunk)
+			j.cond.Broadcast()
+			j.mu.Unlock()
 			if _, writeErr := j.partial.Write(chunk); writeErr != nil && copyErr == nil {
 				copyErr = writeErr
 				j.cancel()
 			}
-			j.mu.Lock()
-			j.chunks = append(j.chunks, chunk)
-			j.cond.Broadcast()
-			j.mu.Unlock()
 		}
 		if err != nil {
 			if !errors.Is(err, io.EOF) && copyErr == nil {

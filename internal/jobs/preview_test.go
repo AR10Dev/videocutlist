@@ -1,6 +1,7 @@
 package jobs
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -13,6 +14,15 @@ import (
 	"editapp/internal/contracts"
 	"editapp/internal/limits"
 )
+
+type bytesRunner []byte
+
+func (r bytesRunner) Start(context.Context, contracts.PreviewSpec) (*contracts.RunningPreview, error) {
+	return &contracts.RunningPreview{
+		Stdout: io.NopCloser(bytes.NewReader(r)),
+		Wait:   func() error { return nil },
+	}, nil
+}
 
 type testRunner struct {
 	mu      sync.Mutex
@@ -174,7 +184,24 @@ func TestLimitFailure(t *testing.T) {
 	_ = first.Close()
 }
 
+func TestReplayBufferLimitCancelsPreview(t *testing.T) {
+	manager := newManagerWithRunner(t, bytesRunner("too large"), 1, 1)
+	manager.maxReplay = 4
+	reader, _, err := manager.Preview(context.Background(), "a", testSpec("m_large"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.ReadAll(reader); !errors.Is(err, ErrReplayLimit) {
+		t.Fatalf("read error = %v", err)
+	}
+	_ = reader.Close()
+}
+
 func newManager(t *testing.T, runner *testRunner, global, perUser int) *PreviewManager {
+	return newManagerWithRunner(t, runner, global, perUser)
+}
+
+func newManagerWithRunner(t *testing.T, runner contracts.PreviewRunner, global, perUser int) *PreviewManager {
 	t.Helper()
 	store, err := cache.New(t.TempDir(), 1<<20)
 	if err != nil {

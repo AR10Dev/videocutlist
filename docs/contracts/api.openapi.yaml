@@ -48,6 +48,8 @@ paths:
           content:
             application/json:
               schema: {$ref: "#/components/schemas/Job"}
+        "403": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
   /media/{mediaId}:
     parameters:
       - {$ref: "#/components/parameters/MediaId"}
@@ -83,6 +85,7 @@ paths:
               schema: {type: string, format: binary}
         "404": {$ref: "#/components/responses/Error"}
         "422": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
         "429": {$ref: "#/components/responses/Error"}
     head:
       operationId: previewStatus
@@ -133,6 +136,8 @@ paths:
             application/json:
               schema: {$ref: "#/components/schemas/Job"}
         "404": {$ref: "#/components/responses/Error"}
+        "403": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
         "422": {$ref: "#/components/responses/Error"}
   /jobs/{jobId}:
     parameters:

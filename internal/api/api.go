@@ -26,6 +26,8 @@ var (
 
 const maxQueryBytes = 4 << 10
 
+var ErrBusy = errors.New("service is busy")
+
 type Media struct {
 	ID         string         `json:"id"`
 	Name       string         `json:"name"`
@@ -325,6 +327,10 @@ func (s *Server) refreshMedia(writer http.ResponseWriter, request *http.Request,
 	}
 	job, err := s.config.Media.RefreshMedia(request.Context(), identity.Login)
 	if err != nil {
+		if errors.Is(err, ErrBusy) {
+			httpx.Error(writer, http.StatusTooManyRequests, "refresh_busy", "A media refresh is already in progress.", id)
+			return
+		}
 		internalError(writer, id)
 		return
 	}
@@ -525,6 +531,10 @@ func (s *Server) createExport(writer http.ResponseWriter, request *http.Request,
 	}
 	job, err := s.config.Exports.Create(request.Context(), identity.Login, project, owned, input)
 	if err != nil {
+		if errors.Is(err, ErrBusy) {
+			httpx.Error(writer, http.StatusTooManyRequests, "export_busy", "Export capacity is full.", id)
+			return
+		}
 		internalError(writer, id)
 		return
 	}
