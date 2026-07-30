@@ -63,6 +63,8 @@ test.beforeEach(async ({ page }) => {
       return route.fulfill({
         headers: {
           "content-type": "video/mp4",
+          "Access-Control-Expose-Headers":
+            "X-Preview-Start, X-Preview-Duration, X-Preview-Offset, X-Preview-Cache, X-Request-ID",
           "X-Preview-Start": "0",
           "X-Preview-Duration": "8000",
           "X-Preview-Offset": center,
@@ -125,12 +127,12 @@ test("MVP browser behavior: list, metadata, settle, cancel, offset, markers, res
   await page.waitForTimeout(220);
   await expect(page.getByText("Loading preview…")).toBeVisible(); // 3 request waits for the 200 ms settle debounce
   await playhead.fill("2000");
+  await expect(page.getByText("preview-2000")).toBeVisible(); // 4 rapid reselection never presents the stale response
   await expect(page.getByText("Preview ready.")).toBeVisible(); // 4 stale request is cancelled/ignored; 5 preview begins
   await expect(page.getByLabel("Preview player")).toHaveAttribute(
     "data-preview-offset",
     "2000",
   ); // 6 returned offset is used
-  await expect(page.getByText("preview-2000")).toBeVisible(); // 9 rapid reselection never presents the stale response
 
   await playhead.fill("100");
   await page.keyboard.press("i");
