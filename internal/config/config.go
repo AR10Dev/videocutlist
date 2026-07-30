@@ -214,7 +214,7 @@ func parseHTTPURL(raw, setting string, origin bool) (string, error) {
 		return "", nil
 	}
 	u, err := url.ParseRequestURI(raw)
-	if err != nil || u.Scheme != "http" && u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.Opaque != "" || origin && u.Path != "" {
+	if strings.Contains(raw, "#") || err != nil || u.Scheme != "http" && u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.Opaque != "" || origin && u.Path != "" {
 		kind := "URL"
 		if origin {
 			kind = "origin"
