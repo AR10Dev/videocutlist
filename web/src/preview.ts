@@ -71,12 +71,14 @@ export function streamPreview(
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   let disposed = false;
   let completed = false;
+  let seekApplied = false;
+  let previewOffsetMs = 0;
   const queued: Uint8Array[] = [];
   const clean = () => {
     disposed = true;
     void reader?.cancel();
     mediaSource.removeEventListener("sourceopen", open);
-    sourceBuffer?.removeEventListener("updateend", appendNext);
+    sourceBuffer?.removeEventListener("updateend", updateEnd);
     video.removeAttribute("src");
     video.load();
     URL.revokeObjectURL(objectURL);
@@ -94,10 +96,18 @@ export function streamPreview(
       clean();
     }
   };
+  const updateEnd = () => {
+    if (!disposed && !seekApplied) {
+      seekApplied = true;
+      video.currentTime = previewOffsetMs / 1000;
+      void video.play().catch(() => undefined);
+    }
+    appendNext();
+  };
   const open = async () => {
     try {
       sourceBuffer = mediaSource.addSourceBuffer(previewMime);
-      sourceBuffer.addEventListener("updateend", appendNext);
+      sourceBuffer.addEventListener("updateend", updateEnd);
       const started = performance.now();
       const response = await fetch(url, { signal });
       if (!response.ok || !response.body)
@@ -107,8 +117,7 @@ export function streamPreview(
         Math.round(performance.now() - started),
       );
       onDiagnostics(diagnostics);
-      video.currentTime = diagnostics.offsetMs / 1000;
-      void video.play().catch(() => undefined);
+      previewOffsetMs = diagnostics.offsetMs;
       reader = response.body.getReader();
       while (!disposed) {
         const next = await reader.read();

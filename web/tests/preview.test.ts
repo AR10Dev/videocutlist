@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   canStreamPreview,
   previewMime,
+  streamPreview,
   validateSegments,
 } from "../src/preview";
 
@@ -42,5 +43,62 @@ describe("MSE capability detection", () => {
     vi.stubGlobal("MediaSource", { isTypeSupported });
     expect(canStreamPreview()).toBe(true);
     expect(isTypeSupported).toHaveBeenCalledWith(previewMime);
+  });
+});
+
+describe("preview streaming", () => {
+  it("seeks only after the first SourceBuffer append completes", async () => {
+    class FakeBuffer extends EventTarget {
+      updating = false;
+      appendBuffer = vi.fn();
+    }
+    const source = new FakeBuffer();
+    const instances: EventTarget[] = [];
+    class FakeMediaSource extends EventTarget {
+      readyState = "open";
+      constructor() {
+        super();
+        instances.push(this);
+      }
+      addSourceBuffer() {
+        return source as unknown as SourceBuffer;
+      }
+      endOfStream() {}
+    }
+    vi.stubGlobal("MediaSource", FakeMediaSource);
+    vi.stubGlobal("URL", {
+      createObjectURL: vi.fn(() => "blob:preview"),
+      revokeObjectURL: vi.fn(),
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(() =>
+        Promise.resolve(
+          new Response(new Uint8Array([1]), {
+            headers: { "X-Preview-Offset": "1234" },
+          }),
+        ),
+      ),
+    );
+    const video = {
+      currentTime: 0,
+      src: "",
+      load: vi.fn(),
+      play: vi.fn(() => Promise.resolve()),
+      removeAttribute: vi.fn(),
+    } as unknown as HTMLVideoElement;
+    const stop = streamPreview(
+      video,
+      "/preview",
+      new AbortController().signal,
+      vi.fn(),
+    );
+    instances[0].dispatchEvent(new Event("sourceopen"));
+    await vi.waitFor(() => expect(source.appendBuffer).toHaveBeenCalledOnce());
+    expect(video.currentTime).toBe(0);
+    source.dispatchEvent(new Event("updateend"));
+    expect(video.currentTime).toBe(1.234);
+    expect(video.play).toHaveBeenCalledOnce();
+    stop();
   });
 });
