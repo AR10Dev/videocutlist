@@ -10,23 +10,33 @@ func TestPreviewLimits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	releaseA, err := p.Acquire("a")
+	releaseA, err := p.AcquireUser("a")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := p.Acquire("a"); !errors.Is(err, ErrUserLimit) {
+	if _, err := p.AcquireUser("a"); !errors.Is(err, ErrUserLimit) {
 		t.Fatalf("same user error = %v", err)
 	}
-	releaseB, err := p.Acquire("b")
+	releaseB, err := p.AcquireUser("b")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := p.Acquire("c"); !errors.Is(err, ErrGlobalLimit) {
+	processA, err := p.AcquireProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	processB, err := p.AcquireProcess()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.AcquireProcess(); !errors.Is(err, ErrGlobalLimit) {
 		t.Fatalf("global error = %v", err)
 	}
 	releaseA()
 	releaseA()
 	releaseB()
+	processA()
+	processB()
 	if got := p.Active(); got != 0 {
 		t.Fatalf("active = %d", got)
 	}

@@ -137,6 +137,30 @@ func TestSameUserSameKeyStillSharesRunner(t *testing.T) {
 	}
 }
 
+func TestSupersedingSharedJobStartsNewKeyImmediately(t *testing.T) {
+	runner := &testRunner{gate: make(chan struct{})}
+	manager := newManager(t, runner, 2, 1)
+	first, _, err := manager.Preview(context.Background(), "a", testSpec("m_first"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	shared, result, err := manager.Preview(context.Background(), "b", testSpec("m_first"))
+	if err != nil || result.Status != CacheShared {
+		t.Fatalf("shared = %v, %+v", err, result)
+	}
+	second, result, err := manager.Preview(context.Background(), "a", testSpec("m_second"))
+	if err != nil || result.Status != CacheMiss {
+		t.Fatalf("superseding request = %v, %+v", err, result)
+	}
+	if starts, cancels := runner.counts(); starts != 2 || cancels != 0 {
+		t.Fatalf("starts, cancels = %d, %d; old shared job must remain active", starts, cancels)
+	}
+	close(runner.gate)
+	for _, reader := range []io.ReadCloser{first, shared, second} {
+		_ = reader.Close()
+	}
+}
+
 func TestLimitFailure(t *testing.T) {
 	runner := &testRunner{gate: make(chan struct{})}
 	manager := newManager(t, runner, 1, 1)

@@ -53,32 +53,32 @@ func (m *PreviewManager) Preview(ctx context.Context, user string, spec contract
 	if reader, ok := m.replaceSameKey(ctx, user, key); ok {
 		return reader, Result{Key: key, Status: CacheShared}, nil
 	}
-	superseded := m.supersede(user)
-	if hit, err := m.cache.Open(ctx, key, m.validator); err == nil {
-		return hit, Result{Key: key, Status: CacheHit}, nil
-	} else if !errors.Is(err, cache.ErrMiss) {
+	m.supersede(user)
+	releaseUser, err := m.limits.AcquireUser(user)
+	if err != nil {
 		return nil, Result{}, err
 	}
-	if superseded != nil {
-		select {
-		case <-superseded.finished:
-		case <-ctx.Done():
-			return nil, Result{}, ctx.Err()
-		}
+	if hit, err := m.cache.Open(ctx, key, m.validator); err == nil {
+		return &limitedReader{ReadCloser: hit, release: releaseUser}, Result{Key: key, Status: CacheHit}, nil
+	} else if !errors.Is(err, cache.ErrMiss) {
+		releaseUser()
+		return nil, Result{}, err
 	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if job := m.jobs[key]; job != nil {
-		return m.subscribeLocked(ctx, user, job, CacheShared), Result{Key: key, Status: CacheShared}, nil
+		return m.subscribeLocked(ctx, user, job, releaseUser), Result{Key: key, Status: CacheShared}, nil
 	}
-	release, err := m.limits.Acquire(user)
+	releaseProcess, err := m.limits.AcquireProcess()
 	if err != nil {
+		releaseUser()
 		return nil, Result{}, err
 	}
 	partial, err := m.cache.Begin(key)
 	if err != nil {
-		release()
+		releaseProcess()
+		releaseUser()
 		return nil, Result{}, err
 	}
 	jobCtx, cancel := context.WithCancel(context.Background())
@@ -86,13 +86,14 @@ func (m *PreviewManager) Preview(ctx context.Context, user string, spec contract
 	if err != nil {
 		cancel()
 		_ = partial.Discard()
-		release()
+		releaseProcess()
+		releaseUser()
 		return nil, Result{}, err
 	}
-	job := &previewJob{manager: m, key: key, ctx: jobCtx, cancel: cancel, running: running, partial: partial, release: release, subscribers: make(map[*subscriber]struct{}), finished: make(chan struct{})}
+	job := &previewJob{manager: m, key: key, ctx: jobCtx, cancel: cancel, running: running, partial: partial, release: releaseProcess, subscribers: make(map[*subscriber]struct{}), finished: make(chan struct{})}
 	job.cond = sync.NewCond(&job.mu)
 	m.jobs[key] = job
-	reader := m.subscribeLocked(ctx, user, job, CacheMiss)
+	reader := m.subscribeLocked(ctx, user, job, releaseUser)
 	go job.run()
 	return reader, Result{Key: key, Status: CacheMiss}, nil
 }
@@ -110,8 +111,15 @@ func (m *PreviewManager) replaceSameKey(ctx context.Context, user, key string) (
 	job := old.job
 	job.mu.Lock()
 	delete(job.subscribers, old)
+	old.release()
+	release, err := m.limits.AcquireUser(user)
+	if err != nil {
+		job.mu.Unlock()
+		m.mu.Unlock()
+		return nil, false
+	}
 	reader, writer := io.Pipe()
-	sub := &subscriber{manager: m, job: job, user: user, reader: reader, writer: writer}
+	sub := &subscriber{manager: m, job: job, user: user, reader: reader, writer: writer, release: release}
 	job.subscribers[sub] = struct{}{}
 	m.byUser[user] = sub
 	job.mu.Unlock()
@@ -119,36 +127,38 @@ func (m *PreviewManager) replaceSameKey(ctx context.Context, user, key string) (
 	_ = old.writer.CloseWithError(context.Canceled)
 	go sub.copy()
 	go func() {
-		<-ctx.Done()
-		sub.job.remove(sub, ctx.Err())
+		select {
+		case <-ctx.Done():
+			sub.job.remove(sub, ctx.Err())
+		case <-sub.job.finished:
+		}
 	}()
 	return sub, true
 }
 
-func (m *PreviewManager) supersede(user string) *previewJob {
+func (m *PreviewManager) supersede(user string) {
 	m.mu.Lock()
 	old := m.byUser[user]
 	m.mu.Unlock()
 	if old != nil {
 		old.job.remove(old, context.Canceled)
 	}
-	if old == nil {
-		return nil
-	}
-	return old.job
 }
 
-func (m *PreviewManager) subscribeLocked(ctx context.Context, user string, job *previewJob, _ CacheStatus) io.ReadCloser {
+func (m *PreviewManager) subscribeLocked(ctx context.Context, user string, job *previewJob, release func()) io.ReadCloser {
 	reader, writer := io.Pipe()
-	sub := &subscriber{manager: m, job: job, user: user, reader: reader, writer: writer}
+	sub := &subscriber{manager: m, job: job, user: user, reader: reader, writer: writer, release: release}
 	job.mu.Lock()
 	job.subscribers[sub] = struct{}{}
 	job.mu.Unlock()
 	m.byUser[user] = sub
 	go sub.copy()
 	go func() {
-		<-ctx.Done()
-		sub.job.remove(sub, ctx.Err())
+		select {
+		case <-ctx.Done():
+			sub.job.remove(sub, ctx.Err())
+		case <-sub.job.finished:
+		}
 	}()
 	return sub
 }
@@ -219,6 +229,7 @@ func (j *previewJob) finish(err error) {
 	j.mu.Unlock()
 	delete(j.manager.jobs, j.key)
 	for sub := range j.subscribers {
+		sub.release()
 		if j.manager.byUser[sub.user] == sub {
 			delete(j.manager.byUser, sub.user)
 		}
@@ -236,6 +247,7 @@ func (j *previewJob) remove(sub *subscriber, reason error) {
 		return
 	}
 	delete(j.subscribers, sub)
+	sub.release()
 	empty := len(j.subscribers) == 0 && !j.done
 	j.cond.Broadcast()
 	j.mu.Unlock()
@@ -256,12 +268,25 @@ type subscriber struct {
 	reader  *io.PipeReader
 	writer  *io.PipeWriter
 	once    sync.Once
+	release func()
 }
 
 func (s *subscriber) Read(p []byte) (int, error) { return s.reader.Read(p) }
 func (s *subscriber) Close() error {
 	err := s.reader.Close()
 	s.once.Do(func() { s.job.remove(s, context.Canceled) })
+	return err
+}
+
+type limitedReader struct {
+	io.ReadCloser
+	once    sync.Once
+	release func()
+}
+
+func (r *limitedReader) Close() error {
+	err := r.ReadCloser.Close()
+	r.once.Do(r.release)
 	return err
 }
 
