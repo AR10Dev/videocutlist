@@ -41,6 +41,9 @@ describe("client API boundary", () => {
     "#fragment",
     "../projects",
     "media/../../projects",
+    "media%2f..%2f..%2fadmin",
+    "media%5c..%5c..%5cadmin",
+    "media%",
   ])(
     "rejects a request path that could escape the API boundary: %s",
     (path) => {

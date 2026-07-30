@@ -17,8 +17,6 @@ type Fetch = (
   init?: RequestInit,
 ) => Promise<Response>;
 
-const encodedParentSegment = /%2e/i;
-
 const hasControlCharacter = (value: string) =>
   Array.from(value).some((character) => {
     const code = character.charCodeAt(0);
@@ -93,9 +91,16 @@ export function createApiClient(
     )
       throw new Error("API paths must be relative and remain within /api/v1/.");
     const path = relativePath.split("?", 1)[0];
+    let decodedPath: string;
+    try {
+      decodedPath = decodeURIComponent(path);
+    } catch {
+      throw new Error("API paths must use valid percent encoding.");
+    }
     if (
-      path.split("/").some((segment) => segment === "." || segment === "..") ||
-      encodedParentSegment.test(path)
+      decodedPath
+        .split(/[\\/]/)
+        .some((segment) => segment === "." || segment === "..")
     )
       throw new Error("API paths must not contain parent-escaping segments.");
     const target = new URL(relativePath, base);
