@@ -1,0 +1,7 @@
+.worktrees/
+.cache/
+dist/
+node_modules/
+*.tmp
+*.partial
+
