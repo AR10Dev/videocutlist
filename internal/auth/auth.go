@@ -1,170 +1,120 @@
-// Package auth authenticates only the Tailscale Serve proxy boundary.
+// Package auth provides provider-neutral request authentication.
 package auth
 
 import (
-	"encoding/json"
+	"crypto/subtle"
 	"errors"
-	"mime"
-	"net"
 	"net/http"
 	"strings"
-)
+	"unicode"
 
-const (
-	loginHeader = "Tailscale-User-Login"
-	capsHeader  = "Tailscale-App-Capabilities"
-	maxCapsSize = 8 << 10
+	"editapp/internal/httpx"
 )
 
 var ErrUnauthenticated = errors.New("unauthenticated")
 
-type Identity struct {
-	Login        string
-	Capabilities Capabilities
+// Principal is the authenticated subject propagated through application code.
+type Principal struct {
+	Subject      string
+	DisplayName  string
+	Roles        []string
+	Capabilities []string
 }
 
-// Capabilities is Tailscale's map of opaque capability names to grant objects.
-type Capabilities map[string][]json.RawMessage
-
-// Allows implements the common action/resources grant shape. An absent
-// capability never authorizes; callers choose the capability name and action.
-func (c Capabilities) Allows(name, action, resource string) bool {
-	for _, raw := range c[name] {
-		var grant struct {
-			Action    []string `json:"action"`
-			Resources []string `json:"resources"`
-		}
-		if json.Unmarshal(raw, &grant) == nil && matches(grant.Action, action) && matches(grant.Resources, resource) {
+// Allows reports whether a principal has a matching generic capability.
+func (principal Principal) Allows(action, resource string) bool {
+	for _, capability := range principal.Capabilities {
+		if capability == "*" || capability == action || capability == action+":"+resource {
 			return true
 		}
 	}
 	return false
 }
 
-func (c Capabilities) AllowsAny(action, resource string) bool {
-	for name := range c {
-		if c.Allows(name, action, resource) {
-			return true
-		}
-	}
-	return false
-}
-
-func matches(values []string, want string) bool {
-	for _, value := range values {
-		if value == "*" || value == want {
-			return true
-		}
-	}
-	return false
+// Authenticator turns a request into a provider-neutral principal.
+type Authenticator interface {
+	Authenticate(*http.Request) (Principal, error)
 }
 
 type Config struct {
-	Mode              string
-	DevUserLogin      string
-	TrustedProxyCIDRs []string
+	Mode          string
+	BearerToken   string
+	BearerSubject string
 }
 
-type Authenticator struct {
-	mode     string
-	devLogin string
-	trusted  []*net.IPNet
+type authenticator struct {
+	mode      string
+	token     []byte
+	principal Principal
 }
 
-func New(config Config) (*Authenticator, error) {
-	a := &Authenticator{mode: config.Mode, devLogin: normalize(config.DevUserLogin)}
-	if a.mode == "" {
-		a.mode = "tailscale"
+// New constructs one of the built-in generic authenticators.
+func New(config Config) (Authenticator, error) {
+	mode := config.Mode
+	if mode == "" {
+		mode = "none"
 	}
-	if a.mode != "tailscale" && a.mode != "dev" {
+	subject := config.BearerSubject
+	if subject == "" {
+		subject = "static-bearer"
+	}
+	if mode != "none" && mode != "bearer" && mode != "trusted_proxy" {
 		return nil, errors.New("unsupported authentication mode")
 	}
-	if a.mode == "dev" && a.devLogin == "" {
-		return nil, errors.New("development user login is required")
-	}
-	for _, cidr := range config.TrustedProxyCIDRs {
-		_, network, err := net.ParseCIDR(strings.TrimSpace(cidr))
-		if err != nil {
-			return nil, err
-		}
-		a.trusted = append(a.trusted, network)
-	}
-	if a.mode == "tailscale" && len(a.trusted) == 0 {
-		return nil, errors.New("trusted proxy CIDRs are required")
-	}
-	return a, nil
-}
-
-func (a *Authenticator) Authenticate(request *http.Request) (Identity, error) {
-	ip, err := remoteIP(request.RemoteAddr)
-	if err != nil || !ip.IsLoopback() && a.mode == "dev" {
-		return Identity{}, ErrUnauthenticated
-	}
-	if a.mode == "dev" {
-		return Identity{Login: a.devLogin}, nil // Never consume spoofable identity headers in dev mode.
-	}
-	if !a.isTrusted(ip) {
-		return Identity{}, ErrUnauthenticated
-	}
-	login := normalize(decodeHeader(request.Header.Get(loginHeader)))
-	if login == "" {
-		return Identity{}, ErrUnauthenticated
-	}
-	caps, err := parseCapabilities(request.Header.Get(capsHeader))
-	if err != nil {
-		return Identity{}, ErrUnauthenticated
-	}
-	return Identity{Login: login, Capabilities: caps}, nil
-}
-
-func (a *Authenticator) isTrusted(ip net.IP) bool {
-	for _, network := range a.trusted {
-		if network.Contains(ip) {
-			return true
+	if mode == "bearer" {
+		if !validToken(config.BearerToken) || !validSubject(subject) {
+			return nil, errors.New("invalid bearer configuration")
 		}
 	}
-	return false
+	return &authenticator{
+		mode:      mode,
+		token:     []byte(config.BearerToken),
+		principal: builtInPrincipal(subject),
+	}, nil
 }
 
-func remoteIP(remote string) (net.IP, error) {
-	host, _, err := net.SplitHostPort(remote)
-	if err != nil {
-		return nil, err
+func (authenticator *authenticator) Authenticate(request *http.Request) (Principal, error) {
+	switch authenticator.mode {
+	case "none":
+		return builtInPrincipal("anonymous"), nil
+	case "bearer":
+		return authenticator.bearer(request)
+	case "trusted_proxy":
+		subject := httpx.GetForwardedInfo(request.Context()).User
+		if !validSubject(subject) {
+			return Principal{}, ErrUnauthenticated
+		}
+		return builtInPrincipal(subject), nil
+	default:
+		return Principal{}, ErrUnauthenticated
 	}
-	ip := net.ParseIP(host)
-	if ip == nil {
-		return nil, errors.New("invalid remote address")
-	}
-	return ip, nil
 }
 
-func parseCapabilities(value string) (Capabilities, error) {
-	if value == "" {
-		return Capabilities{}, nil
+func (authenticator *authenticator) bearer(request *http.Request) (Principal, error) {
+	values := request.Header.Values("Authorization")
+	if len(values) != 1 {
+		return Principal{}, ErrUnauthenticated
 	}
-	if len(value) > maxCapsSize {
-		return nil, errors.New("capabilities header is too large")
+	const prefix = "Bearer "
+	value := values[0]
+	if len(value) <= len(prefix) || !strings.EqualFold(value[:len(prefix)-1], prefix[:len(prefix)-1]) || value[len(prefix)-1] != ' ' || strings.ContainsAny(value[len(prefix):], " \t\r\n") || subtle.ConstantTimeCompare([]byte(value[len(prefix):]), authenticator.token) != 1 {
+		return Principal{}, ErrUnauthenticated
 	}
-	decoded := decodeHeader(value)
-	var capabilities Capabilities
-	if err := json.Unmarshal([]byte(decoded), &capabilities); err != nil || capabilities == nil {
-		return nil, errors.New("invalid capabilities header")
-	}
-	return capabilities, nil
+	return authenticator.principal, nil
 }
 
-func decodeHeader(value string) string {
-	decoded, err := new(mime.WordDecoder).DecodeHeader(value)
-	if err == nil {
-		return decoded
-	}
-	return value
+func builtInPrincipal(subject string) Principal {
+	return Principal{Subject: subject, Roles: []string{"editor"}, Capabilities: []string{"*"}}
 }
 
-func normalize(login string) string {
-	login = strings.ToLower(strings.TrimSpace(login))
-	if len(login) > 320 || strings.ContainsAny(login, "\r\n\x00") {
-		return ""
-	}
-	return login
+func validToken(token string) bool {
+	return token != "" && !containsControl(token)
+}
+
+func validSubject(subject string) bool {
+	return subject != "" && subject == strings.TrimSpace(subject) && len(subject) <= 320 && !containsControl(subject)
+}
+
+func containsControl(value string) bool {
+	return strings.IndexFunc(value, unicode.IsControl) >= 0
 }

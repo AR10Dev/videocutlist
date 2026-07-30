@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 )
 
 const (
@@ -46,7 +47,8 @@ type Config struct {
 	ExportDir           string
 	MediaRoots          map[string]string
 	AuthMode            string
-	DevUserLogin        string
+	BearerToken         string
+	BearerSubject       string
 	TrustedProxyCIDRs   []string
 	FFmpegPath          string
 	FFprobePath         string
@@ -72,8 +74,9 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 		DatabasePath:      required(lookup, "EDITAPP_DATABASE_PATH"),
 		CacheDir:          required(lookup, "EDITAPP_CACHE_DIR"),
 		ExportDir:         required(lookup, "EDITAPP_EXPORT_DIR"),
-		AuthMode:          value(lookup, "EDITAPP_AUTH_MODE", "tailscale"),
-		DevUserLogin:      value(lookup, "EDITAPP_DEV_USER_LOGIN", ""),
+		AuthMode:          value(lookup, "EDITAPP_AUTH_MODE", "none"),
+		BearerToken:       value(lookup, "EDITAPP_BEARER_TOKEN", ""),
+		BearerSubject:     value(lookup, "EDITAPP_BEARER_SUBJECT", "static-bearer"),
 		FFmpegPath:        value(lookup, "EDITAPP_FFMPEG_PATH", defaultFFmpegPath),
 		FFprobePath:       value(lookup, "EDITAPP_FFPROBE_PATH", defaultFFprobePath),
 		EncoderPreference: value(lookup, "EDITAPP_ENCODER_PREFERENCE", defaultEncoderPreference),
@@ -98,9 +101,6 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 	if c.IdleTimeout, err = duration(lookup, "EDITAPP_IDLE_TIMEOUT", time.Minute, true); err != nil {
 		return Config{}, err
 	}
-	if c.AuthMode == "dev" && !net.ParseIP(c.ListenAddress).IsLoopback() {
-		return Config{}, fmt.Errorf("EDITAPP_LISTEN_ADDRESS must be a loopback IP in dev mode")
-	}
 	if c.DatabasePath == "" || c.CacheDir == "" || c.ExportDir == "" {
 		return Config{}, fmt.Errorf("EDITAPP_DATABASE_PATH, EDITAPP_CACHE_DIR, and EDITAPP_EXPORT_DIR are required")
 	}
@@ -112,11 +112,16 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 			return Config{}, fmt.Errorf("EDITAPP_MEDIA_ROOTS_JSON contains an empty alias or path")
 		}
 	}
-	if c.AuthMode != "tailscale" && c.AuthMode != "dev" {
-		return Config{}, fmt.Errorf("EDITAPP_AUTH_MODE must be tailscale or dev")
+	if c.AuthMode != "none" && c.AuthMode != "bearer" && c.AuthMode != "trusted_proxy" {
+		return Config{}, fmt.Errorf("EDITAPP_AUTH_MODE must be none, bearer, or trusted_proxy")
 	}
-	if c.AuthMode == "dev" && c.DevUserLogin == "" {
-		return Config{}, fmt.Errorf("EDITAPP_DEV_USER_LOGIN is required in dev mode")
+	if c.AuthMode == "bearer" {
+		if c.BearerToken == "" || containsControl(c.BearerToken) {
+			return Config{}, fmt.Errorf("EDITAPP_BEARER_TOKEN must be non-empty and control-free in bearer mode")
+		}
+		if c.BearerSubject == "" || c.BearerSubject != strings.TrimSpace(c.BearerSubject) || len(c.BearerSubject) > 320 || containsControl(c.BearerSubject) {
+			return Config{}, fmt.Errorf("EDITAPP_BEARER_SUBJECT must be a trimmed, non-empty, control-free subject of at most 320 bytes")
+		}
 	}
 	trusted := value(lookup, "EDITAPP_TRUSTED_PROXY_CIDRS", defaultTrustedProxies)
 	for _, cidr := range strings.Split(trusted, ",") {
@@ -312,4 +317,8 @@ func positiveInt64(lookup func(string) (string, bool), key string, fallback int6
 		return 0, fmt.Errorf("%s must be a positive integer", key)
 	}
 	return v, nil
+}
+
+func containsControl(value string) bool {
+	return strings.IndexFunc(value, unicode.IsControl) >= 0
 }

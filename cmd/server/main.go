@@ -99,7 +99,7 @@ func run(ctx context.Context) error {
 	}, cfg.ExportLimit)
 	jobAdapter := app.JobAdapter{Exports: exportAdapter, Refresh: refreshJobs}
 	authenticator, err := auth.New(auth.Config{
-		Mode: cfg.AuthMode, DevUserLogin: cfg.DevUserLogin, TrustedProxyCIDRs: cfg.TrustedProxyCIDRs,
+		Mode: cfg.AuthMode, BearerToken: cfg.BearerToken, BearerSubject: cfg.BearerSubject,
 	})
 	if err != nil {
 		return err
@@ -107,8 +107,8 @@ func run(ctx context.Context) error {
 	apiServer, err := api.New(api.Config{
 		Authenticator: authenticator, Media: mediaAdapter, Preview: previewAdapter,
 		Projects: projectAdapter, Exports: exportAdapter, Jobs: jobAdapter,
-		Authorize: api.AuthorizerFunc(func(identity auth.Identity, action, resource string) bool {
-			return cfg.AuthMode == "dev" || identity.Capabilities.AllowsAny(action, resource)
+		Authorize: api.AuthorizerFunc(func(principal auth.Principal, action, resource string) bool {
+			return principal.Allows(action, resource)
 		}),
 		Ready: db.PingContext, Logger: logger, Metrics: metrics.New(),
 		BeforeMS: int64(cfg.PreviewBeforeMS), AfterMS: int64(cfg.PreviewAfterMS),
