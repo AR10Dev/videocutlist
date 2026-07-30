@@ -74,7 +74,13 @@ Incomplete files end in `.partial`; only atomic rename publishes a hit.
 All settings use environment variables:
 
 ```text
-EDITAPP_LISTEN_ADDR=127.0.0.1:8787
+EDITAPP_LISTEN_ADDRESS=127.0.0.1
+EDITAPP_PORT=8787
+EDITAPP_PUBLIC_BASE_URL
+EDITAPP_ALLOWED_ORIGINS
+EDITAPP_READ_TIMEOUT=15s
+EDITAPP_WRITE_TIMEOUT=0s
+EDITAPP_IDLE_TIMEOUT=60s
 EDITAPP_DATABASE_PATH
 EDITAPP_CACHE_DIR
 EDITAPP_EXPORT_DIR
@@ -95,6 +101,19 @@ EDITAPP_PREVIEW_GRID_MS
 EDITAPP_ENCODER_PREFERENCE
 EDITAPP_LOG_LEVEL
 ```
+
+Listener addresses are IP literals and are joined to the port with
+`net.JoinHostPort`. Production mode permits explicit non-loopback binding;
+development mode remains loopback-only. `EDITAPP_LISTEN_ADDR` is a legacy
+combined-address alias only when neither new listener setting is present.
+
+Public base URLs and allowed origins accept only absolute HTTP(S) values
+without credentials, query, or fragment; origins also have no path.
+`EDITAPP_ALLOWED_ORIGINS` is comma-separated and empty by default. CORS is
+still disabled until the Stage 3 contract is implemented.
+
+Read and idle timeouts must be positive Go durations. Write timeout may be
+zero so streamed previews are not terminated by a whole-response deadline.
 
 ## Logging and metrics
 
