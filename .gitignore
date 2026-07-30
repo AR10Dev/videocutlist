@@ -2,6 +2,6 @@
 .cache/
 dist/
 node_modules/
+test-results/
 *.tmp
 *.partial
-

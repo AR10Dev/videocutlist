@@ -119,7 +119,7 @@ type PreviewResult struct {
 type MediaService interface {
 	List(context.Context, string, int) (MediaPage, error)
 	Get(context.Context, string) (Media, error)
-	Refresh(context.Context) (Job, error)
+	RefreshMedia(context.Context, string) (Job, error)
 }
 type PreviewService interface {
 	Start(context.Context, string, PreviewSpec) (PreviewResult, error)
@@ -323,7 +323,7 @@ func (s *Server) refreshMedia(writer http.ResponseWriter, request *http.Request,
 	if !s.allowed(writer, identity, "media_refresh", "*", id) {
 		return
 	}
-	job, err := s.config.Media.Refresh(request.Context())
+	job, err := s.config.Media.RefreshMedia(request.Context(), identity.Login)
 	if err != nil {
 		internalError(writer, id)
 		return

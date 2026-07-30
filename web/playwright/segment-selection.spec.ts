@@ -105,9 +105,9 @@ test("MVP browser behavior: list, metadata, settle, cancel, offset, markers, res
   await page.goto("/");
   await expect(page.getByRole("button", { name: /camera.mp4/ })).toBeVisible(); // 1 media list loads
   await page.getByRole("button", { name: /camera.mp4/ }).click();
-  await expect(page.getByText(/0:10/)).toBeVisible(); // 2 metadata loads
 
   const playhead = page.getByLabel("Timeline playhead");
+  await expect(playhead).toHaveAttribute("max", "10000"); // 2 metadata loads
   await playhead.fill("1000");
   await expect(page.getByText("Loading preview…")).not.toBeVisible();
   await page.waitForTimeout(220);

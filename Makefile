@@ -1,7 +1,8 @@
 GO ?= go
 GOFMT ?= gofmt
 NPM ?= npm
-GO_PACKAGES = $(shell $(GO) list ./... | grep -v '/web/node_modules/')
+GO_PACKAGES = ./cmd/... ./internal/...
+GO_TEST_PACKAGES = ./cmd/... ./internal/... ./test/...
 
 .PHONY: build check format lint smoke test web-install
 
@@ -12,18 +13,18 @@ build:
 check: lint test build
 
 format:
-	$(GO) fmt $(GO_PACKAGES)
+	$(GO) fmt $(GO_TEST_PACKAGES)
 	$(NPM) --prefix web run format
 
 lint:
-	test -z "$$($(GOFMT) -l $$(find . -name '*.go' -not -path './.git/*' -not -path './web/node_modules/*'))"
-	$(GO) vet $(GO_PACKAGES)
+	test -z "$$($(GOFMT) -l $$(git ls-files '*.go'))"
+	$(GO) vet $(GO_TEST_PACKAGES)
 	$(NPM) --prefix web run lint
 
 smoke: check
 
 test:
-	$(GO) test -race $(GO_PACKAGES)
+	$(GO) test -race $(GO_TEST_PACKAGES)
 	$(NPM) --prefix web test
 
 web-install:

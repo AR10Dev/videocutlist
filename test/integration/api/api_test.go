@@ -27,7 +27,9 @@ func (m *mediaStub) Get(context.Context, string) (api.Media, error) {
 	m.calls++
 	return api.Media{ID: validMedia, Name: "clip.mp4", DurationMS: 10_000, SizeBytes: 1, Container: "mp4", Streams: map[string]any{}, ETag: "e"}, nil
 }
-func (m *mediaStub) Refresh(context.Context) (api.Job, error) { return api.Job{}, nil }
+func (m *mediaStub) RefreshMedia(context.Context, string) (api.Job, error) {
+	return api.Job{}, nil
+}
 
 type previewStub struct {
 	start func(context.Context) (api.PreviewResult, error)

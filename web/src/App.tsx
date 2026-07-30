@@ -150,7 +150,8 @@ export function App() {
   useEffect(() => {
     const keyboard = (event: KeyboardEvent) => {
       if (
-        event.target instanceof HTMLInputElement ||
+        (event.target instanceof HTMLInputElement &&
+          event.target.type !== "range") ||
         event.target instanceof HTMLTextAreaElement ||
         !selected
       )

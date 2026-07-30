@@ -1,10 +1,10 @@
 # Active
 
-## API and browser wave ownership
+## Deployment and security wave ownership
 
 | ID | Owner | Depends on | Allowed paths | Prohibited paths |
 |---|---|---|---|---|
-| F01 | F | B01,C01,D01,E01 | `internal/api`, `internal/auth`, `internal/httpx`, `internal/metrics`, `test/integration/api` | Contracts and domain implementations |
-| G01 | G | A01,Frozen OpenAPI | `web/src`, `web/tests`, `web/playwright`, web test config | Backend and contracts |
+| H01 | H | F01,G01 | `deployments/systemd`, `deployments/docker`, `scripts/install`, `scripts/ops`, `docs/runbooks` | Product code and contracts |
+| J01 | J | F01,G01,H01 | Read-only | All writes until controller assigns remediation |
 
-Both consume `docs/contracts/api.openapi.yaml` v1 without modifying it.
+J begins after H commits so its review covers the production deployment.
