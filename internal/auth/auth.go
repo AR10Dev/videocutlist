@@ -97,7 +97,7 @@ func (authenticator *authenticator) bearer(request *http.Request) (Principal, er
 	}
 	const prefix = "Bearer "
 	value := values[0]
-	if len(value) <= len(prefix) || !strings.EqualFold(value[:len(prefix)-1], prefix[:len(prefix)-1]) || value[len(prefix)-1] != ' ' || strings.ContainsAny(value[len(prefix):], " \t\r\n") || subtle.ConstantTimeCompare([]byte(value[len(prefix):]), authenticator.token) != 1 {
+	if len(value) <= len(prefix) || !strings.EqualFold(value[:len(prefix)-1], prefix[:len(prefix)-1]) || value[len(prefix)-1] != ' ' || subtle.ConstantTimeCompare([]byte(value[len(prefix):]), authenticator.token) != 1 {
 		return Principal{}, ErrUnauthenticated
 	}
 	return authenticator.principal, nil
