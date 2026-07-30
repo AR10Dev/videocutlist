@@ -124,6 +124,7 @@ test("MVP browser behavior: list, metadata, settle, cancel, offset, markers, res
   await page.keyboard.press("i");
   await playhead.fill("700");
   await page.keyboard.press("o");
+  await expect(page.getByText("preview-700")).toBeVisible(); // wait for the final marker preview before saving
   await page.getByRole("button", { name: "Add In/Out segment" }).click();
   await expect(page.getByText("0:00 – 0:01")).toBeVisible();
   await page.getByRole("button", { name: "Save project" }).click();
