@@ -42,6 +42,8 @@ func CORS(allowedOrigins []string, next http.Handler) http.Handler {
 				return
 			}
 			setCORSHeaders(writer.Header(), origin)
+			addVary(writer.Header(), "Access-Control-Request-Method")
+			addVary(writer.Header(), "Access-Control-Request-Headers")
 			writer.Header().Set("Access-Control-Allow-Methods", allowedMethods)
 			writer.Header().Set("Access-Control-Allow-Headers", allowedHeaders)
 			writer.WriteHeader(http.StatusNoContent)
