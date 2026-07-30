@@ -121,13 +121,10 @@ func run(ctx context.Context) error {
 	mux.Handle("/api/", apiServer)
 	mux.Handle("/metrics", apiServer)
 	mux.Handle("/", http.FileServer(http.Dir("web/dist")))
-	server := &http.Server{
-		Addr: cfg.ListenAddr, Handler: mux, ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second,
-	}
+	server := newHTTPServer(cfg, mux)
 	failed := make(chan error, 1)
 	go func() {
-		logger.Printf(`{"event":"server_started","listen_addr":%q}`, cfg.ListenAddr)
+		logger.Printf(`{"event":"server_started","listen_addr":%q}`, server.Addr)
 		failed <- server.ListenAndServe()
 	}()
 	select {
@@ -140,5 +137,16 @@ func run(ctx context.Context) error {
 		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		return server.Shutdown(shutdown)
+	}
+}
+
+func newHTTPServer(cfg config.Config, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              cfg.ListenAddr,
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       cfg.ReadTimeout,
+		WriteTimeout:      cfg.WriteTimeout,
+		IdleTimeout:       cfg.IdleTimeout,
 	}
 }

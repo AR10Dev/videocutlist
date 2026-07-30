@@ -5,13 +5,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
-	defaultListenAddr        = "127.0.0.1:8787"
+	defaultListenAddress     = "127.0.0.1"
+	defaultPort              = 8787
 	defaultTrustedProxies    = "127.0.0.0/8,::1/128"
 	defaultFFmpegPath        = "ffmpeg"
 	defaultFFprobePath       = "ffprobe"
@@ -30,7 +33,14 @@ const (
 // Config contains process settings only; filesystem access and service setup
 // belong to their respective packages.
 type Config struct {
+	ListenAddress       string
+	Port                int
 	ListenAddr          string
+	PublicBaseURL       string
+	AllowedOrigins      []string
+	ReadTimeout         time.Duration
+	WriteTimeout        time.Duration
+	IdleTimeout         time.Duration
 	DatabasePath        string
 	CacheDir            string
 	ExportDir           string
@@ -59,7 +69,6 @@ func Load() (Config, error) {
 
 func load(lookup func(string) (string, bool)) (Config, error) {
 	c := Config{
-		ListenAddr:        value(lookup, "EDITAPP_LISTEN_ADDR", defaultListenAddr),
 		DatabasePath:      required(lookup, "EDITAPP_DATABASE_PATH"),
 		CacheDir:          required(lookup, "EDITAPP_CACHE_DIR"),
 		ExportDir:         required(lookup, "EDITAPP_EXPORT_DIR"),
@@ -70,8 +79,27 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 		EncoderPreference: value(lookup, "EDITAPP_ENCODER_PREFERENCE", defaultEncoderPreference),
 		LogLevel:          value(lookup, "EDITAPP_LOG_LEVEL", defaultLogLevel),
 	}
-	if err := validateListenAddr(c.ListenAddr); err != nil {
+	if err := loadListener(&c, lookup); err != nil {
 		return Config{}, err
+	}
+	var err error
+	if c.PublicBaseURL, err = absoluteHTTPURL(lookup, "EDITAPP_PUBLIC_BASE_URL", false); err != nil {
+		return Config{}, err
+	}
+	if c.AllowedOrigins, err = allowedOrigins(lookup); err != nil {
+		return Config{}, err
+	}
+	if c.ReadTimeout, err = duration(lookup, "EDITAPP_READ_TIMEOUT", 15*time.Second, true); err != nil {
+		return Config{}, err
+	}
+	if c.WriteTimeout, err = duration(lookup, "EDITAPP_WRITE_TIMEOUT", 0, false); err != nil {
+		return Config{}, err
+	}
+	if c.IdleTimeout, err = duration(lookup, "EDITAPP_IDLE_TIMEOUT", time.Minute, true); err != nil {
+		return Config{}, err
+	}
+	if c.AuthMode == "dev" && !net.ParseIP(c.ListenAddress).IsLoopback() {
+		return Config{}, fmt.Errorf("EDITAPP_LISTEN_ADDRESS must be a loopback IP in dev mode")
 	}
 	if c.DatabasePath == "" || c.CacheDir == "" || c.ExportDir == "" {
 		return Config{}, fmt.Errorf("EDITAPP_DATABASE_PATH, EDITAPP_CACHE_DIR, and EDITAPP_EXPORT_DIR are required")
@@ -101,7 +129,6 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 		}
 		c.TrustedProxyCIDRs = append(c.TrustedProxyCIDRs, cidr)
 	}
-	var err error
 	if c.PreviewGlobalLimit, err = positiveInt(lookup, "EDITAPP_PREVIEW_GLOBAL_LIMIT", defaultPreviewGlobal); err != nil {
 		return Config{}, err
 	}
@@ -135,6 +162,131 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 	return c, nil
 }
 
+func loadListener(c *Config, lookup func(string) (string, bool)) error {
+	legacy, hasLegacy := lookup("EDITAPP_LISTEN_ADDR")
+	_, hasAddress := lookup("EDITAPP_LISTEN_ADDRESS")
+	_, hasPort := lookup("EDITAPP_PORT")
+	if hasLegacy && (hasAddress || hasPort) {
+		return fmt.Errorf("EDITAPP_LISTEN_ADDR cannot be combined with EDITAPP_LISTEN_ADDRESS or EDITAPP_PORT")
+	}
+	if hasLegacy {
+		host, parsedPort, err := net.SplitHostPort(strings.TrimSpace(legacy))
+		if err != nil {
+			return fmt.Errorf("EDITAPP_LISTEN_ADDR must be an IP and port: %w", err)
+		}
+		if net.ParseIP(host) == nil {
+			return fmt.Errorf("EDITAPP_LISTEN_ADDR must use an IP literal")
+		}
+		c.ListenAddress = host
+		c.Port, err = parsePort(parsedPort, "EDITAPP_LISTEN_ADDR")
+		if err != nil {
+			return err
+		}
+	} else {
+		c.ListenAddress = value(lookup, "EDITAPP_LISTEN_ADDRESS", defaultListenAddress)
+		if net.ParseIP(c.ListenAddress) == nil {
+			return fmt.Errorf("EDITAPP_LISTEN_ADDRESS must be an IP literal")
+		}
+		var err error
+		c.Port, err = parsePort(value(lookup, "EDITAPP_PORT", strconv.Itoa(defaultPort)), "EDITAPP_PORT")
+		if err != nil {
+			return err
+		}
+	}
+	c.ListenAddr = net.JoinHostPort(c.ListenAddress, strconv.Itoa(c.Port))
+	return nil
+}
+
+func parsePort(value, setting string) (int, error) {
+	port, err := strconv.Atoi(value)
+	if err != nil || port < 1 || port > 65535 {
+		return 0, fmt.Errorf("%s must be an integer from 1 through 65535", setting)
+	}
+	return port, nil
+}
+
+func absoluteHTTPURL(lookup func(string) (string, bool), setting string, origin bool) (string, error) {
+	return parseHTTPURL(value(lookup, setting, ""), setting, origin)
+}
+
+func parseHTTPURL(raw, setting string, origin bool) (string, error) {
+	if raw == "" {
+		return "", nil
+	}
+	u, err := url.ParseRequestURI(raw)
+	if err != nil || u.Scheme != "http" && u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || u.Opaque != "" || origin && u.Path != "" {
+		kind := "URL"
+		if origin {
+			kind = "origin"
+		}
+		return "", fmt.Errorf("%s must be an absolute HTTP(S) %s without credentials, query, or fragment", setting, kind)
+	}
+	if err := validURLPort(u); err != nil {
+		return "", fmt.Errorf("%s must use a valid URL port: %w", setting, err)
+	}
+	return u.String(), nil
+}
+
+func validURLPort(u *url.URL) error {
+	host := u.Host
+	if strings.HasPrefix(host, "[") {
+		end := strings.LastIndex(host, "]")
+		if end < 0 {
+			return fmt.Errorf("invalid host")
+		}
+		if end == len(host)-1 {
+			return nil
+		}
+		_, port, err := net.SplitHostPort(host)
+		if err != nil {
+			return err
+		}
+		_, err = parsePort(port, "port")
+		return err
+	}
+	if strings.Count(host, ":") == 1 {
+		_, port, _ := strings.Cut(host, ":")
+		if port == "" {
+			return fmt.Errorf("missing port")
+		}
+		_, err := parsePort(port, "port")
+		return err
+	}
+	return nil
+}
+
+func allowedOrigins(lookup func(string) (string, bool)) ([]string, error) {
+	raw := value(lookup, "EDITAPP_ALLOWED_ORIGINS", "")
+	if raw == "" {
+		return nil, nil
+	}
+	origins := strings.Split(raw, ",")
+	for i, origin := range origins {
+		origin = strings.TrimSpace(origin)
+		if origin == "" {
+			return nil, fmt.Errorf("EDITAPP_ALLOWED_ORIGINS contains an empty origin")
+		}
+		parsed, err := parseHTTPURL(origin, "EDITAPP_ALLOWED_ORIGINS", true)
+		if err != nil {
+			return nil, err
+		}
+		origins[i] = parsed
+	}
+	return origins, nil
+}
+
+func duration(lookup func(string) (string, bool), setting string, fallback time.Duration, positive bool) (time.Duration, error) {
+	raw := value(lookup, setting, fallback.String())
+	duration, err := time.ParseDuration(raw)
+	if err != nil || duration < 0 || positive && duration == 0 {
+		if positive {
+			return 0, fmt.Errorf("%s must be a positive Go duration", setting)
+		}
+		return 0, fmt.Errorf("%s must be a non-negative Go duration", setting)
+	}
+	return duration, nil
+}
+
 func value(lookup func(string) (string, bool), key, fallback string) string {
 	if v, ok := lookup(key); ok {
 		return strings.TrimSpace(v)
@@ -160,16 +312,4 @@ func positiveInt64(lookup func(string) (string, bool), key string, fallback int6
 		return 0, fmt.Errorf("%s must be a positive integer", key)
 	}
 	return v, nil
-}
-
-func validateListenAddr(addr string) error {
-	host, port, err := net.SplitHostPort(addr)
-	if err != nil || !net.ParseIP(host).IsLoopback() {
-		return fmt.Errorf("EDITAPP_LISTEN_ADDR must use a loopback IP and port")
-	}
-	n, err := strconv.Atoi(port)
-	if err != nil || n < 1 || n > 65535 {
-		return fmt.Errorf("EDITAPP_LISTEN_ADDR must use a valid port")
-	}
-	return nil
 }
