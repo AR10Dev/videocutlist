@@ -4,10 +4,14 @@ info:
   version: 1.0.0
 servers:
   - url: /api/v1
+security:
+  - tailscaleIdentity: []
 paths:
   /metrics:
     get:
+      summary: Read service metrics
       operationId: metrics
+      security: []
       servers:
         - url: /
       responses:
@@ -18,17 +22,22 @@ paths:
               schema: {type: string}
   /health:
     get:
+      summary: Check process health
       operationId: health
+      security: []
       responses:
         "200": {description: Alive}
   /ready:
     get:
+      summary: Check dependency readiness
       operationId: ready
+      security: []
       responses:
         "200": {description: Ready}
         "503": {$ref: "#/components/responses/Error"}
   /media:
     get:
+      summary: List indexed media
       operationId: listMedia
       parameters:
         - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 50}}
@@ -41,6 +50,7 @@ paths:
               schema: {$ref: "#/components/schemas/MediaPage"}
   /media/refresh:
     post:
+      summary: Refresh the media index
       operationId: refreshMedia
       responses:
         "202":
@@ -54,6 +64,7 @@ paths:
     parameters:
       - {$ref: "#/components/parameters/MediaId"}
     get:
+      summary: Read media metadata
       operationId: getMedia
       responses:
         "200":
@@ -70,6 +81,7 @@ paths:
       - {name: afterMs, in: query, schema: {type: integer, minimum: 0}}
       - {name: mute, in: query, schema: {type: boolean, default: false}}
     get:
+      summary: Stream a normalized preview
       operationId: streamPreview
       responses:
         "200":
@@ -88,6 +100,7 @@ paths:
         "403": {$ref: "#/components/responses/Error"}
         "429": {$ref: "#/components/responses/Error"}
     head:
+      summary: Check for a cached preview
       operationId: previewStatus
       responses:
         "200": {description: Complete cached preview exists}
@@ -96,6 +109,7 @@ paths:
     parameters:
       - {$ref: "#/components/parameters/ProjectId"}
     get:
+      summary: Read an owned project
       operationId: getProject
       responses:
         "200":
@@ -105,6 +119,7 @@ paths:
               schema: {$ref: "#/components/schemas/Project"}
         "404": {$ref: "#/components/responses/Error"}
     put:
+      summary: Save an owned project
       operationId: putProject
       requestBody:
         required: true
@@ -123,6 +138,7 @@ paths:
     parameters:
       - {$ref: "#/components/parameters/ProjectId"}
     post:
+      summary: Create a durable export
       operationId: createExport
       requestBody:
         required: true
@@ -143,6 +159,7 @@ paths:
     parameters:
       - {$ref: "#/components/parameters/JobId"}
     get:
+      summary: Read an owned job
       operationId: getJob
       responses:
         "200":
@@ -152,11 +169,18 @@ paths:
               schema: {$ref: "#/components/schemas/Job"}
         "404": {$ref: "#/components/responses/Error"}
     delete:
+      summary: Cancel an owned job
       operationId: cancelJob
       responses:
         "204": {description: Cancelled or already terminal}
         "404": {$ref: "#/components/responses/Error"}
 components:
+  securitySchemes:
+    tailscaleIdentity:
+      type: apiKey
+      in: header
+      name: Tailscale-User-Login
+      description: Injected only by the trusted local Tailscale Serve proxy.
   parameters:
     MediaId: {name: mediaId, in: path, required: true, schema: {type: string, pattern: "^m_[A-Za-z0-9_-]{43}$"}}
     ProjectId: {name: projectId, in: path, required: true, schema: {type: string, pattern: "^p_[A-Za-z0-9_-]{12,64}$"}}

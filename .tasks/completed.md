@@ -13,4 +13,4 @@
 | G01 | G | `0a5dfc8`, `b0d4d6d` | accepted after deferred MSE seek remediation | lint, Vitest, Vite, Playwright |
 | H01 | H | `ee73173`, `95e8568`, `42f8252`, `aa4b95a`, `44ff04d` | accepted after permission and capability remediation | deployment static checks |
 | J01 | J/controller | `9b4173a`, `b64c237` | security PASS after four high and four medium remediations | race, vet, deployment, audit |
-| RC01 | Controller | pending release-doc commit | accepted | full check, E2E, harnesses, live smoke |
+| RC01 | Controller | `b592d74` | accepted | full check, E2E, harnesses, live smoke |
