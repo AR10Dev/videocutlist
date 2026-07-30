@@ -10,8 +10,14 @@ const media = {
   etag: "v1",
 };
 
+const apiOrigin = "http://127.0.0.1:8787";
+
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
+    window.EDITAPP_CONFIG = {
+      serverBaseUrl: "http://127.0.0.1:8787",
+      authentication: { type: "none" },
+    };
     class FakeBuffer extends EventTarget {
       updating = false;
       appendBuffer() {
@@ -43,7 +49,7 @@ test.beforeEach(async ({ page }) => {
     Object.defineProperty(URL, "revokeObjectURL", { value: () => undefined });
   });
   let savedRevision = 0;
-  await page.route("**/api/v1/**", async (route) => {
+  await page.route(`${apiOrigin}/api/v1/**`, async (route) => {
     const request = route.request();
     const url = new URL(request.url());
     if (url.pathname === "/api/v1/media")
@@ -102,7 +108,13 @@ test.beforeEach(async ({ page }) => {
 test("MVP browser behavior: list, metadata, settle, cancel, offset, markers, restore, and stale protection", async ({
   page,
 }) => {
+  const requestOrigins: string[] = [];
+  page.on("request", (request) => {
+    if (request.url().includes("/api/v1/"))
+      requestOrigins.push(new URL(request.url()).origin);
+  });
   await page.goto("/");
+  expect(new URL(page.url()).origin).toBe("http://127.0.0.1:5173");
   await expect(page.getByRole("button", { name: /camera.mp4/ })).toBeVisible(); // 1 media list loads
   await page.getByRole("button", { name: /camera.mp4/ }).click();
 
@@ -133,6 +145,9 @@ test("MVP browser behavior: list, metadata, settle, cancel, offset, markers, res
   await page.getByRole("button", { name: "Load project" }).click();
   await expect(page.getByText("Project loaded.")).toBeVisible(); // 8 project restores after reload
   await expect(page.getByText(/restored/)).toBeVisible();
+  expect(requestOrigins).not.toHaveLength(0);
+  expect(requestOrigins).toEqual(expect.arrayContaining([apiOrigin]));
+  expect(new Set(requestOrigins)).toEqual(new Set([apiOrigin]));
 });
 
 test("save reports an optimistic revision conflict", async ({ page }) => {

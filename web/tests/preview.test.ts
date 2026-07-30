@@ -70,14 +70,13 @@ describe("preview streaming", () => {
       createObjectURL: vi.fn(() => "blob:preview"),
       revokeObjectURL: vi.fn(),
     });
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(() =>
-        Promise.resolve(
-          new Response(new Uint8Array([1]), {
-            headers: { "X-Preview-Offset": "1234" },
-          }),
-        ),
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+    const request = vi.fn(() =>
+      Promise.resolve(
+        new Response(new Uint8Array([1]), {
+          headers: { "X-Preview-Offset": "1234" },
+        }),
       ),
     );
     const video = {
@@ -87,18 +86,15 @@ describe("preview streaming", () => {
       play: vi.fn(() => Promise.resolve()),
       removeAttribute: vi.fn(),
     } as unknown as HTMLVideoElement;
-    const stop = streamPreview(
-      video,
-      "/preview",
-      new AbortController().signal,
-      vi.fn(),
-    );
+    const stop = streamPreview(video, request, vi.fn());
     instances[0].dispatchEvent(new Event("sourceopen"));
     await vi.waitFor(() => expect(source.appendBuffer).toHaveBeenCalledOnce());
     expect(video.currentTime).toBe(0);
     source.dispatchEvent(new Event("updateend"));
     expect(video.currentTime).toBe(1.234);
     expect(video.play).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledOnce();
+    expect(fetch).not.toHaveBeenCalled();
     stop();
   });
 });
