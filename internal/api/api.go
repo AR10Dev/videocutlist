@@ -121,34 +121,34 @@ type PreviewResult struct {
 type MediaService interface {
 	List(context.Context, string, int) (MediaPage, error)
 	Get(context.Context, string) (Media, error)
-	RefreshMedia(context.Context, string) (Job, error)
+	RefreshMedia(context.Context, auth.Principal) (Job, error)
 }
 type PreviewService interface {
-	Start(context.Context, string, PreviewSpec) (PreviewResult, error)
+	Start(context.Context, auth.Principal, PreviewSpec) (PreviewResult, error)
 	Cached(context.Context, PreviewSpec) (bool, error)
 }
 type ProjectService interface {
-	Get(context.Context, string, string) (Project, error)
-	Save(context.Context, string, string, ProjectInput, int64) (Project, error)
+	Get(context.Context, auth.Principal, string) (Project, error)
+	Save(context.Context, auth.Principal, string, ProjectInput, int64) (Project, error)
 }
 type ExportService interface {
-	Create(context.Context, string, string, Project, ExportInput) (Job, error)
+	Create(context.Context, auth.Principal, string, Project, ExportInput) (Job, error)
 }
 type JobService interface {
-	Get(context.Context, string, string) (Job, error)
-	Cancel(context.Context, string, string) error
+	Get(context.Context, auth.Principal, string) (Job, error)
+	Cancel(context.Context, auth.Principal, string) error
 }
 type Authorizer interface {
-	Allow(auth.Identity, string, string) bool
+	Allow(auth.Principal, string, string) bool
 }
-type AuthorizerFunc func(auth.Identity, string, string) bool
+type AuthorizerFunc func(auth.Principal, string, string) bool
 
-func (f AuthorizerFunc) Allow(identity auth.Identity, action, resource string) bool {
-	return f(identity, action, resource)
+func (f AuthorizerFunc) Allow(principal auth.Principal, action, resource string) bool {
+	return f(principal, action, resource)
 }
 
 type Config struct {
-	Authenticator *auth.Authenticator
+	Authenticator auth.Authenticator
 	Media         MediaService
 	Preview       PreviewService
 	Projects      ProjectService
@@ -199,10 +199,10 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	id := httpx.RequestID()
 	writer.Header().Set("X-Request-ID", id)
 	status := &statusWriter{ResponseWriter: writer, status: http.StatusOK}
-	route, login := s.dispatch(status, request, id)
+	route, subject := s.dispatch(status, request, id)
 	s.metrics.HTTP(route, request.Method, strconv.Itoa(status.status/100)+"xx", time.Since(started).Seconds())
 	if s.config.Logger != nil {
-		data, _ := json.Marshal(map[string]any{"request_id": id, "user_login": login, "method": request.Method, "route": route, "status": status.status})
+		data, _ := json.Marshal(map[string]any{"request_id": id, "principal_subject": subject, "method": request.Method, "route": route, "status": status.status})
 		s.config.Logger.Print(string(data))
 	}
 }
@@ -225,7 +225,7 @@ func (s *Server) dispatch(writer http.ResponseWriter, request *http.Request, id 
 		}
 		return "/api/v1/ready", ""
 	}
-	identity, ok := s.identity(writer, request, id)
+	principal, ok := s.identity(writer, request, id)
 	if !ok {
 		return routeFor(request.URL.Path), ""
 	}
@@ -233,61 +233,61 @@ func (s *Server) dispatch(writer http.ResponseWriter, request *http.Request, id 
 	switch {
 	case path == "/media" && request.Method == http.MethodGet:
 		s.listMedia(writer, request, id)
-		return "/api/v1/media", identity.Login
+		return "/api/v1/media", principal.Subject
 	case path == "/media/refresh" && request.Method == http.MethodPost:
-		s.refreshMedia(writer, request, identity, id)
-		return "/api/v1/media/refresh", identity.Login
+		s.refreshMedia(writer, request, principal, id)
+		return "/api/v1/media/refresh", principal.Subject
 	case path == "/media" && request.Method != http.MethodGet:
 		break
 	case strings.HasPrefix(path, "/media/"):
 		parts := strings.Split(strings.TrimPrefix(path, "/media/"), "/")
 		if len(parts) == 1 && request.Method == http.MethodGet {
 			s.getMedia(writer, request, parts[0], id)
-			return "/api/v1/media/{mediaId}", identity.Login
+			return "/api/v1/media/{mediaId}", principal.Subject
 		}
 		if len(parts) == 2 && parts[1] == "preview" && (request.Method == http.MethodGet || request.Method == http.MethodHead) {
-			s.preview(writer, request, identity, parts[0], id)
-			return "/api/v1/media/{mediaId}/preview", identity.Login
+			s.preview(writer, request, principal, parts[0], id)
+			return "/api/v1/media/{mediaId}/preview", principal.Subject
 		}
 	case strings.HasPrefix(path, "/projects/"):
 		parts := strings.Split(strings.TrimPrefix(path, "/projects/"), "/")
 		if len(parts) == 1 && request.Method == http.MethodGet {
-			s.getProject(writer, request, identity, parts[0], id)
-			return "/api/v1/projects/{projectId}", identity.Login
+			s.getProject(writer, request, principal, parts[0], id)
+			return "/api/v1/projects/{projectId}", principal.Subject
 		}
 		if len(parts) == 1 && request.Method == http.MethodPut {
-			s.putProject(writer, request, identity, parts[0], id)
-			return "/api/v1/projects/{projectId}", identity.Login
+			s.putProject(writer, request, principal, parts[0], id)
+			return "/api/v1/projects/{projectId}", principal.Subject
 		}
 		if len(parts) == 2 && parts[1] == "exports" && request.Method == http.MethodPost {
-			s.createExport(writer, request, identity, parts[0], id)
-			return "/api/v1/projects/{projectId}/exports", identity.Login
+			s.createExport(writer, request, principal, parts[0], id)
+			return "/api/v1/projects/{projectId}/exports", principal.Subject
 		}
 	case strings.HasPrefix(path, "/jobs/"):
 		parts := strings.Split(strings.TrimPrefix(path, "/jobs/"), "/")
 		if len(parts) == 1 && request.Method == http.MethodGet {
-			s.getJob(writer, request, identity, parts[0], id)
-			return "/api/v1/jobs/{jobId}", identity.Login
+			s.getJob(writer, request, principal, parts[0], id)
+			return "/api/v1/jobs/{jobId}", principal.Subject
 		}
 		if len(parts) == 1 && request.Method == http.MethodDelete {
-			s.cancelJob(writer, request, identity, parts[0], id)
-			return "/api/v1/jobs/{jobId}", identity.Login
+			s.cancelJob(writer, request, principal, parts[0], id)
+			return "/api/v1/jobs/{jobId}", principal.Subject
 		}
 	}
 	httpx.Error(writer, http.StatusNotFound, "not_found", "Resource not found.", id)
-	return routeFor(request.URL.Path), identity.Login
+	return routeFor(request.URL.Path), principal.Subject
 }
 
-func (s *Server) identity(writer http.ResponseWriter, request *http.Request, id string) (auth.Identity, bool) {
-	identity, err := s.config.Authenticator.Authenticate(request)
+func (s *Server) identity(writer http.ResponseWriter, request *http.Request, id string) (auth.Principal, bool) {
+	principal, err := s.config.Authenticator.Authenticate(request)
 	if err != nil {
 		httpx.Error(writer, http.StatusUnauthorized, "unauthenticated", "Authentication is required.", id)
-		return auth.Identity{}, false
+		return auth.Principal{}, false
 	}
-	return identity, true
+	return principal, true
 }
-func (s *Server) allowed(writer http.ResponseWriter, identity auth.Identity, action, resource, id string) bool {
-	if s.config.Authorize == nil || s.config.Authorize.Allow(identity, action, resource) {
+func (s *Server) allowed(writer http.ResponseWriter, principal auth.Principal, action, resource, id string) bool {
+	if (s.config.Authorize == nil && principal.Allows(action, resource)) || s.config.Authorize != nil && s.config.Authorize.Allow(principal, action, resource) {
 		return true
 	}
 	httpx.Error(writer, http.StatusForbidden, "forbidden", "Permission denied.", id)
@@ -321,11 +321,11 @@ func (s *Server) listMedia(writer http.ResponseWriter, request *http.Request, id
 	httpx.WriteJSON(writer, 200, page)
 }
 
-func (s *Server) refreshMedia(writer http.ResponseWriter, request *http.Request, identity auth.Identity, id string) {
-	if !s.allowed(writer, identity, "media_refresh", "*", id) {
+func (s *Server) refreshMedia(writer http.ResponseWriter, request *http.Request, principal auth.Principal, id string) {
+	if !s.allowed(writer, principal, "media_refresh", "*", id) {
 		return
 	}
-	job, err := s.config.Media.RefreshMedia(request.Context(), identity.Login)
+	job, err := s.config.Media.RefreshMedia(request.Context(), principal)
 	if err != nil {
 		if errors.Is(err, ErrBusy) {
 			httpx.Error(writer, http.StatusTooManyRequests, "refresh_busy", "A media refresh is already in progress.", id)
@@ -349,12 +349,12 @@ func (s *Server) getMedia(writer http.ResponseWriter, request *http.Request, med
 	httpx.WriteJSON(writer, 200, result)
 }
 
-func (s *Server) preview(writer http.ResponseWriter, request *http.Request, identity auth.Identity, media string, id string) {
+func (s *Server) preview(writer http.ResponseWriter, request *http.Request, principal auth.Principal, media string, id string) {
 	if !mediaID.MatchString(media) {
 		notFound(writer, id)
 		return
 	}
-	if !s.allowed(writer, identity, "preview", media, id) {
+	if !s.allowed(writer, principal, "preview", media, id) {
 		return
 	}
 	item, err := s.config.Media.Get(request.Context(), media)
@@ -381,7 +381,7 @@ func (s *Server) preview(writer http.ResponseWriter, request *http.Request, iden
 		writer.WriteHeader(http.StatusOK)
 		return
 	}
-	result, err := s.config.Preview.Start(request.Context(), identity.Login, spec)
+	result, err := s.config.Preview.Start(request.Context(), principal, spec)
 	if err != nil {
 		httpx.Error(writer, http.StatusTooManyRequests, "preview_unavailable", "Preview is unavailable.", id)
 		return
@@ -469,21 +469,27 @@ func (s *Server) previewSpec(request *http.Request, item Media) (PreviewSpec, er
 	return PreviewSpec{MediaID: item.ID, DurationMS: item.DurationMS, StartMS: start, WindowMS: duration, OffsetMS: offset, Mute: mute}, nil
 }
 
-func (s *Server) getProject(writer http.ResponseWriter, request *http.Request, identity auth.Identity, project string, id string) {
+func (s *Server) getProject(writer http.ResponseWriter, request *http.Request, principal auth.Principal, project string, id string) {
 	if !projectID.MatchString(project) {
 		notFound(writer, id)
 		return
 	}
-	value, err := s.config.Projects.Get(request.Context(), identity.Login, project)
+	if !s.allowed(writer, principal, "project_read", project, id) {
+		return
+	}
+	value, err := s.config.Projects.Get(request.Context(), principal, project)
 	if err != nil {
 		notFound(writer, id)
 		return
 	}
 	httpx.WriteJSON(writer, 200, value)
 }
-func (s *Server) putProject(writer http.ResponseWriter, request *http.Request, identity auth.Identity, project string, id string) {
+func (s *Server) putProject(writer http.ResponseWriter, request *http.Request, principal auth.Principal, project string, id string) {
 	if !projectID.MatchString(project) {
 		notFound(writer, id)
+		return
+	}
+	if !s.allowed(writer, principal, "project_save", project, id) {
 		return
 	}
 	var input ProjectInput
@@ -504,24 +510,24 @@ func (s *Server) putProject(writer http.ResponseWriter, request *http.Request, i
 		httpx.Error(writer, 422, "invalid_project", "Project is invalid.", id)
 		return
 	}
-	saved, err := s.config.Projects.Save(request.Context(), identity.Login, project, input, media.DurationMS)
+	saved, err := s.config.Projects.Save(request.Context(), principal, project, input, media.DurationMS)
 	if err != nil {
 		httpx.Error(writer, http.StatusConflict, "revision_conflict", "Project revision conflicts.", id)
 		return
 	}
 	httpx.WriteJSON(writer, 200, saved)
 }
-func (s *Server) createExport(writer http.ResponseWriter, request *http.Request, identity auth.Identity, project string, id string) {
+func (s *Server) createExport(writer http.ResponseWriter, request *http.Request, principal auth.Principal, project string, id string) {
 	if !projectID.MatchString(project) {
 		notFound(writer, id)
 		return
 	}
-	owned, err := s.config.Projects.Get(request.Context(), identity.Login, project)
-	if err != nil {
-		notFound(writer, id)
+	if !s.allowed(writer, principal, "export", project, id) {
 		return
 	}
-	if !s.allowed(writer, identity, "export", project, id) {
+	owned, err := s.config.Projects.Get(request.Context(), principal, project)
+	if err != nil {
+		notFound(writer, id)
 		return
 	}
 	var input ExportInput
@@ -529,7 +535,7 @@ func (s *Server) createExport(writer http.ResponseWriter, request *http.Request,
 		httpx.Error(writer, 422, "invalid_export", "Export is invalid.", id)
 		return
 	}
-	job, err := s.config.Exports.Create(request.Context(), identity.Login, project, owned, input)
+	job, err := s.config.Exports.Create(request.Context(), principal, project, owned, input)
 	if err != nil {
 		if errors.Is(err, ErrBusy) {
 			httpx.Error(writer, http.StatusTooManyRequests, "export_busy", "Export capacity is full.", id)
@@ -541,24 +547,30 @@ func (s *Server) createExport(writer http.ResponseWriter, request *http.Request,
 	s.metrics.Add("export_jobs_total", 1)
 	httpx.WriteJSON(writer, http.StatusAccepted, job)
 }
-func (s *Server) getJob(writer http.ResponseWriter, request *http.Request, identity auth.Identity, job string, id string) {
+func (s *Server) getJob(writer http.ResponseWriter, request *http.Request, principal auth.Principal, job string, id string) {
 	if !jobID.MatchString(job) {
 		notFound(writer, id)
 		return
 	}
-	value, err := s.config.Jobs.Get(request.Context(), identity.Login, job)
+	if !s.allowed(writer, principal, "job_read", job, id) {
+		return
+	}
+	value, err := s.config.Jobs.Get(request.Context(), principal, job)
 	if err != nil {
 		notFound(writer, id)
 		return
 	}
 	httpx.WriteJSON(writer, 200, value)
 }
-func (s *Server) cancelJob(writer http.ResponseWriter, request *http.Request, identity auth.Identity, job string, id string) {
+func (s *Server) cancelJob(writer http.ResponseWriter, request *http.Request, principal auth.Principal, job string, id string) {
 	if !jobID.MatchString(job) {
 		notFound(writer, id)
 		return
 	}
-	if err := s.config.Jobs.Cancel(request.Context(), identity.Login, job); err != nil {
+	if !s.allowed(writer, principal, "job_cancel", job, id) {
+		return
+	}
+	if err := s.config.Jobs.Cancel(request.Context(), principal, job); err != nil {
 		notFound(writer, id)
 		return
 	}

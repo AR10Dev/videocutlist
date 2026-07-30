@@ -17,7 +17,7 @@ func TestLoadDefaults(t *testing.T) {
 	if c.ReadTimeout != 15*time.Second || c.WriteTimeout != 0 || c.IdleTimeout != time.Minute {
 		t.Fatalf("unexpected timeout defaults: %#v", c)
 	}
-	if c.AuthMode != "tailscale" || c.PreviewGridMS != 500 {
+	if c.AuthMode != "none" || c.PreviewGridMS != 500 {
 		t.Fatalf("unexpected defaults: %#v", c)
 	}
 	if c.PublicBaseURL != "" || len(c.AllowedOrigins) != 0 {
@@ -40,8 +40,7 @@ func TestLoadListenerConfiguration(t *testing.T) {
 		{name: "LAN", changes: map[string]string{"EDITAPP_LISTEN_ADDRESS": "0.0.0.0", "EDITAPP_PORT": "4000"}, listenAddr: "0.0.0.0:4000"},
 		{name: "IPv6", changes: map[string]string{"EDITAPP_LISTEN_ADDRESS": "::1", "EDITAPP_PORT": "4000"}, listenAddr: "[::1]:4000"},
 		{name: "legacy alias", changes: map[string]string{"EDITAPP_LISTEN_ADDR": "127.0.0.1:9000"}, listenAddr: "127.0.0.1:9000"},
-		{name: "development loopback", changes: map[string]string{"EDITAPP_AUTH_MODE": "dev", "EDITAPP_DEV_USER_LOGIN": "dev@example.com"}, listenAddr: "127.0.0.1:8787"},
-		{name: "development LAN", changes: map[string]string{"EDITAPP_AUTH_MODE": "dev", "EDITAPP_DEV_USER_LOGIN": "dev@example.com", "EDITAPP_LISTEN_ADDRESS": "0.0.0.0"}, wantErr: true},
+		{name: "bearer LAN", changes: map[string]string{"EDITAPP_AUTH_MODE": "bearer", "EDITAPP_BEARER_TOKEN": "secret", "EDITAPP_LISTEN_ADDRESS": "0.0.0.0", "EDITAPP_PORT": "4000"}, listenAddr: "0.0.0.0:4000"},
 		{name: "combined new listener settings", changes: map[string]string{"EDITAPP_LISTEN_ADDR": "127.0.0.1:9000", "EDITAPP_PORT": "9001"}, wantErr: true},
 		{name: "combined new address and legacy alias", changes: map[string]string{"EDITAPP_LISTEN_ADDRESS": "127.0.0.1", "EDITAPP_LISTEN_ADDR": "127.0.0.1:9000"}, wantErr: true},
 		{name: "invalid IP", changes: map[string]string{"EDITAPP_LISTEN_ADDRESS": "localhost"}, wantErr: true},
@@ -159,10 +158,10 @@ func TestLoadTimeouts(t *testing.T) {
 
 func TestLoadRejectsUnsafeConfiguration(t *testing.T) {
 	for name, changes := range map[string]map[string]string{
-		"unknown auth":     {"EDITAPP_AUTH_MODE": "none"},
-		"dev without user": {"EDITAPP_AUTH_MODE": "dev"},
-		"bad roots":        {"EDITAPP_MEDIA_ROOTS_JSON": "[]"},
-		"window too large": {"EDITAPP_PREVIEW_BEFORE_MS": "10000", "EDITAPP_PREVIEW_AFTER_MS": "6000"},
+		"unknown auth":         {"EDITAPP_AUTH_MODE": "oidc"},
+		"bearer without token": {"EDITAPP_AUTH_MODE": "bearer"},
+		"bad roots":            {"EDITAPP_MEDIA_ROOTS_JSON": "[]"},
+		"window too large":     {"EDITAPP_PREVIEW_BEFORE_MS": "10000", "EDITAPP_PREVIEW_AFTER_MS": "6000"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			values := mergeEnv(baseEnv(), changes)

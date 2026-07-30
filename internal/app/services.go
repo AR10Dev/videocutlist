@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"editapp/internal/api"
+	"editapp/internal/auth"
 	"editapp/internal/cache"
 	"editapp/internal/contracts"
 	exporter "editapp/internal/export"
@@ -81,7 +82,7 @@ func (m *MediaAdapter) Get(ctx context.Context, id string) (api.Media, error) {
 	return apiMedia(record.Media), nil
 }
 
-func (m *MediaAdapter) RefreshMedia(ctx context.Context, owner string) (api.Job, error) {
+func (m *MediaAdapter) RefreshMedia(ctx context.Context, principal auth.Principal) (api.Job, error) {
 	m.mu.Lock()
 	if m.refreshing || !m.refreshed.IsZero() && time.Since(m.refreshed) < time.Minute {
 		m.mu.Unlock()
@@ -105,7 +106,7 @@ func (m *MediaAdapter) RefreshMedia(ctx context.Context, owner string) (api.Job,
 		return api.Job{}, err
 	}
 	job := api.Job{ID: id, Type: "media_refresh", State: string(store.JobSucceeded), Progress: 1, CreatedAt: started, UpdatedAt: time.Now().UTC()}
-	m.Refresh.put(owner, job)
+	m.Refresh.put(principal.Subject, job)
 	return job, nil
 }
 
@@ -132,7 +133,7 @@ type PreviewAdapter struct {
 	Validator cache.Validator
 }
 
-func (p PreviewAdapter) Start(ctx context.Context, user string, request api.PreviewSpec) (api.PreviewResult, error) {
+func (p PreviewAdapter) Start(ctx context.Context, principal auth.Principal, request api.PreviewSpec) (api.PreviewResult, error) {
 	source, item, err := p.Scanner.Open(ctx, p.Media, request.MediaID)
 	if err != nil {
 		return api.PreviewResult{}, err
@@ -143,7 +144,7 @@ func (p PreviewAdapter) Start(ctx context.Context, user string, request api.Prev
 		return api.PreviewResult{}, errors.New("media source is not a file")
 	}
 	spec := previewSpec(file, item, request)
-	reader, result, err := p.Manager.Preview(ctx, user, spec)
+	reader, result, err := p.Manager.Preview(ctx, principal.Subject, spec)
 	if err != nil {
 		return api.PreviewResult{}, err
 	}
@@ -182,24 +183,24 @@ type ProjectAdapter struct {
 	Store   *store.ProjectStore
 }
 
-func (p ProjectAdapter) Get(ctx context.Context, owner, id string) (api.Project, error) {
-	document, err := p.Service.Load(ctx, owner, id)
+func (p ProjectAdapter) Get(ctx context.Context, principal auth.Principal, id string) (api.Project, error) {
+	document, err := p.Service.Load(ctx, principal.Subject, id)
 	if err != nil {
 		return api.Project{}, err
 	}
-	record, err := p.Store.Get(ctx, owner, id)
+	record, err := p.Store.Get(ctx, principal.Subject, id)
 	if err != nil {
 		return api.Project{}, err
 	}
 	return apiProject(id, document, record.UpdatedAt), nil
 }
 
-func (p ProjectAdapter) Save(ctx context.Context, owner, id string, input api.ProjectInput, duration int64) (api.Project, error) {
-	document, err := p.Service.Save(ctx, owner, id, projectDocument(input), duration)
+func (p ProjectAdapter) Save(ctx context.Context, principal auth.Principal, id string, input api.ProjectInput, duration int64) (api.Project, error) {
+	document, err := p.Service.Save(ctx, principal.Subject, id, projectDocument(input), duration)
 	if err != nil {
 		return api.Project{}, err
 	}
-	record, err := p.Store.Get(ctx, owner, id)
+	record, err := p.Store.Get(ctx, principal.Subject, id)
 	if err != nil {
 		return api.Project{}, err
 	}
@@ -249,7 +250,7 @@ func NewExportAdapter(jobStore *store.JobStore, scanner *index.Scanner, media *s
 	}
 }
 
-func (e *ExportAdapter) Create(ctx context.Context, owner, projectID string, project api.Project, input api.ExportInput) (api.Job, error) {
+func (e *ExportAdapter) Create(ctx context.Context, principal auth.Principal, projectID string, project api.Project, input api.ExportInput) (api.Job, error) {
 	select {
 	case e.slots <- struct{}{}:
 	default:
@@ -272,7 +273,7 @@ func (e *ExportAdapter) Create(ctx context.Context, owner, projectID string, pro
 		return api.Job{}, err
 	}
 	record, err := e.Store.Create(ctx, store.ExportJob{
-		ID: id, OwnerLogin: owner, ProjectID: projectID,
+		ID: id, OwnerLogin: principal.Subject, ProjectID: projectID,
 		ProjectRevision: project.Revision, RequestJSON: string(data),
 	})
 	if err != nil {
@@ -283,7 +284,7 @@ func (e *ExportAdapter) Create(ctx context.Context, owner, projectID string, pro
 	e.cancel[id] = cancel
 	e.mu.Unlock()
 	admitted = true
-	go e.run(jobCtx, owner, id, project)
+	go e.run(jobCtx, principal.Subject, id, project)
 	return apiJob(record), nil
 }
 
@@ -336,22 +337,22 @@ type JobAdapter struct {
 	Refresh *RefreshJobs
 }
 
-func (j JobAdapter) Get(ctx context.Context, owner, id string) (api.Job, error) {
-	if job, ok := j.Refresh.get(owner, id); ok {
+func (j JobAdapter) Get(ctx context.Context, principal auth.Principal, id string) (api.Job, error) {
+	if job, ok := j.Refresh.get(principal.Subject, id); ok {
 		return job, nil
 	}
-	record, err := j.Exports.Store.Get(ctx, owner, id)
+	record, err := j.Exports.Store.Get(ctx, principal.Subject, id)
 	if err != nil {
 		return api.Job{}, err
 	}
 	return apiJob(record), nil
 }
 
-func (j JobAdapter) Cancel(_ context.Context, owner, id string) error {
-	if _, ok := j.Refresh.get(owner, id); ok {
+func (j JobAdapter) Cancel(_ context.Context, principal auth.Principal, id string) error {
+	if _, ok := j.Refresh.get(principal.Subject, id); ok {
 		return nil
 	}
-	return j.Exports.cancelJob(owner, id)
+	return j.Exports.cancelJob(principal.Subject, id)
 }
 
 func apiJob(record store.ExportJob) api.Job {
