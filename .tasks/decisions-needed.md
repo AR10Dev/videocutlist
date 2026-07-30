@@ -27,3 +27,12 @@ token. Logical remediation agent `terra-stage-4-fix-1` may edit only
 `internal/auth/auth.go` on a new branch to remove the contradictory suffix
 whitespace rejection. Exact one-header parsing, the `Bearer ` separator,
 constant-time comparison, tests, and every other behavior remain frozen.
+
+## Controller exception — Stage 4 runtime wording remediation
+
+The Stage 4 verifier found one stale controller-owned runtime sentence that
+still assigns project ownership to a normalized Tailscale login. Logical
+remediation agent `terra-stage-4-fix-2` may edit only that sentence in
+`docs/contracts/runtime.md` to use opaque `Principal.Subject` ownership while
+preserving cross-owner 404 behavior. No other contract or code change is
+authorized.
