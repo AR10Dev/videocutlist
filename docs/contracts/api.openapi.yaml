@@ -3,7 +3,11 @@ info:
   title: EditApp API
   version: 1.0.0
 servers:
-  - url: /api/v1
+  - url: "{serverBaseUrl}/api/v1"
+    variables:
+      serverBaseUrl:
+        default: http://localhost:8787
+        description: Reachable EditApp server base URL; transport provider independent.
 security:
   - tailscaleIdentity: []
 paths:

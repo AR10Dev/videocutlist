@@ -115,6 +115,21 @@ still disabled until the Stage 3 contract is implemented.
 Read and idle timeouts must be positive Go durations. Write timeout may be
 zero so streamed previews are not terminated by a whole-response deadline.
 
+## Browser client
+
+The browser reads an optional `window.EDITAPP_CONFIG` before application module
+loading:
+
+```text
+serverBaseUrl: absolute HTTP(S) URL
+authentication: none | bearer token | cookie
+```
+
+When absent, the client uses the current page origin and no authentication.
+All application requests resolve beneath the normalized
+`<serverBaseUrl>/api/v1/` boundary. Bearer tokens are never read from build-time
+environment variables.
+
 ## Logging and metrics
 
 Structured JSON fields are: `request_id`, `user_login`, `media_id`,
