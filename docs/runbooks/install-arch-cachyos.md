@@ -16,9 +16,9 @@ Set `EDITAPP_MEDIA_ROOTS_JSON` to a mounted originals directory before starting.
 | `editapp` | system user, no login shell | service identity |
 | `editapp-media` | system group | read/traverse access to original-media mount only |
 | `/srv/editapp/media` | `root:editapp-media`, `0750` | read-only original-media mount point |
-| `/var/lib/editapp/data` | `root:editapp`, `0750` | SQLite database |
-| `/var/cache/editapp/previews` | `root:editapp`, `0750` | disposable preview cache |
-| `/var/lib/editapp/exports` | `root:editapp`, `0750` | completed and temporary exports |
+| `/var/lib/editapp/data` | `root:editapp`, `0770` | writable SQLite database |
+| `/var/cache/editapp/previews` | `root:editapp`, `0770` | writable disposable preview cache |
+| `/var/lib/editapp/exports` | `root:editapp`, `0770` | writable completed and temporary exports |
 | `/etc/editapp/editapp.env` | `root:editapp`, `0640` | production configuration |
 
 The systemd sandbox permits writes only to the database, cache, and export paths and mounts media read-only. Do not make originals writable by `editapp`. Keep `EDITAPP_LISTEN_ADDR=127.0.0.1:8787`; the server refuses a non-loopback address.

@@ -21,7 +21,8 @@ id -u editapp >/dev/null 2>&1 || useradd --system --user-group --home-dir /nonex
 usermod -a -G editapp-media editapp
 
 install -d -o root -g root -m 0755 /opt/editapp/releases
-install -d -o root -g editapp -m 0750 /etc/editapp /var/lib/editapp/data /var/lib/editapp/exports /var/cache/editapp/previews
+install -d -o root -g editapp -m 0750 /etc/editapp
+install -d -o root -g editapp -m 0770 /var/lib/editapp/data /var/lib/editapp/exports /var/cache/editapp/previews
 install -d -o root -g editapp-media -m 0750 /srv/editapp/media
 
 stage=$(mktemp -d /opt/editapp/.install.XXXXXX)
