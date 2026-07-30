@@ -1,0 +1,48 @@
+[Unit]
+Description=EditApp remote video preview service
+Documentation=file:///opt/editapp/current/docs/runbooks/install-arch-cachyos.md
+Wants=network-online.target
+After=network-online.target
+ConditionPathExists=/etc/editapp/editapp.env
+
+[Service]
+Type=simple
+User=editapp
+Group=editapp
+SupplementaryGroups=editapp-media
+WorkingDirectory=/opt/editapp/current
+EnvironmentFile=/etc/editapp/editapp.env
+ExecStart=/opt/editapp/current/bin/editapp
+Restart=on-failure
+RestartSec=2s
+TimeoutStopSec=15s
+UMask=0077
+LimitNOFILE=8192
+TasksMax=256
+
+# The service writes only its SQLite database, preview cache, and exports.
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+SystemCallArchitectures=native
+ReadWritePaths=/var/lib/editapp/data /var/lib/editapp/exports /var/cache/editapp/previews
+ReadOnlyPaths=/srv/editapp/media
+
+[Install]
+WantedBy=multi-user.target

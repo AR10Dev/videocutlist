@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Repository-safe smoke check: syntax and static deployment invariants only.
+set -euo pipefail
+
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
+for script in "$root"/scripts/install/*.sh "$root"/scripts/ops/*.sh; do bash -n "$script"; done
+grep -qx 'EDITAPP_LISTEN_ADDR=127.0.0.1:8787' "$root/deployments/systemd/editapp.env.example"
+grep -qx 'PrivateDevices=yes' "$root/deployments/systemd/editapp.service"
+grep -qx 'ProtectSystem=strict' "$root/deployments/systemd/editapp.service"
+grep -qx 'ReadOnlyPaths=/srv/editapp/media' "$root/deployments/systemd/editapp.service"
+if command -v systemd-analyze >/dev/null; then
+  tmp=$(mktemp -d)
+  trap 'rm -rf "$tmp"' EXIT
+  install -m 0755 /bin/true "$tmp/editapp"
+  sed "s|/opt/editapp/current/bin/editapp|$tmp/editapp|" "$root/deployments/systemd/editapp.service" >"$tmp/editapp.service"
+  systemd-analyze verify "$tmp/editapp.service"
+fi
+echo "deployment file checks passed"

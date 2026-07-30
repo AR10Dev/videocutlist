@@ -1,0 +1,6 @@
+# Install only after a real probe transcode succeeds; see gpu-troubleshooting.md.
+# /etc/systemd/system/editapp.service.d/gpu.conf
+[Service]
+SupplementaryGroups=editapp-media render
+PrivateDevices=no
+DeviceAllow=/dev/dri/renderD128 rw
