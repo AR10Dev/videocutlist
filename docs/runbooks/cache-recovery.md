@@ -23,7 +23,7 @@ For suspected cache corruption or an urgent space recovery, move the exact cache
 ```bash
 sudo systemctl stop editapp
 sudo mv /var/cache/editapp/previews /var/cache/editapp/previews.quarantine
-sudo install -d -o root -g editapp -m 0750 /var/cache/editapp/previews
+sudo install -d -o root -g editapp -m 0770 /var/cache/editapp/previews
 sudo systemctl start editapp
 sudo scripts/ops/verify-deployment.sh
 ```

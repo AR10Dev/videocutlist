@@ -10,6 +10,7 @@ grep -qx 'ProtectSystem=strict' "$root/deployments/systemd/editapp.service"
 grep -qx 'ReadOnlyPaths=/srv/editapp/media' "$root/deployments/systemd/editapp.service"
 grep -F 'install -d -o root -g editapp -m 0750 /etc/editapp' "$root/scripts/install/install-arch-cachyos.sh" >/dev/null
 grep -F 'install -d -o root -g editapp -m 0770 /var/lib/editapp/data /var/lib/editapp/exports /var/cache/editapp/previews' "$root/scripts/install/install-arch-cachyos.sh" >/dev/null
+grep -F 'sudo install -d -o root -g editapp -m 0770 /var/cache/editapp/previews' "$root/docs/runbooks/cache-recovery.md" >/dev/null
 grep -F 'mkdir -p "$stage/bin" "$stage/web/dist"' "$root/scripts/install/install-arch-cachyos.sh" >/dev/null
 grep -F 'cp -a "$root/web/dist/." "$stage/web/dist/"' "$root/scripts/install/install-arch-cachyos.sh" >/dev/null
 grep -F 'caps=${EDITAPP_TAILSCALE_APP_CAPS:-}' "$root/scripts/ops/setup-tailscale-serve.sh" >/dev/null
