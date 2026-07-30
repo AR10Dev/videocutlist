@@ -12,6 +12,9 @@ grep -F 'install -d -o root -g editapp -m 0750 /etc/editapp' "$root/scripts/inst
 grep -F 'install -d -o root -g editapp -m 0770 /var/lib/editapp/data /var/lib/editapp/exports /var/cache/editapp/previews' "$root/scripts/install/install-arch-cachyos.sh" >/dev/null
 grep -F 'mkdir -p "$stage/bin" "$stage/web/dist"' "$root/scripts/install/install-arch-cachyos.sh" >/dev/null
 grep -F 'cp -a "$root/web/dist/." "$stage/web/dist/"' "$root/scripts/install/install-arch-cachyos.sh" >/dev/null
+grep -F 'caps=${EDITAPP_TAILSCALE_APP_CAPS:-}' "$root/scripts/ops/setup-tailscale-serve.sh" >/dev/null
+grep -F '[[ -n $caps ]] || { echo "EDITAPP_TAILSCALE_APP_CAPS is required" >&2; exit 2; }' "$root/scripts/ops/setup-tailscale-serve.sh" >/dev/null
+grep -F 'args=(serve --bg --https=443 "--accept-app-caps=$caps" http://127.0.0.1:8787)' "$root/scripts/ops/setup-tailscale-serve.sh" >/dev/null
 if command -v systemd-analyze >/dev/null; then
   tmp=$(mktemp -d)
   trap 'rm -rf "$tmp"' EXIT
