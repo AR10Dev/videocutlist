@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -39,9 +40,9 @@ type Audio struct {
 	Channels int    `json:"channels"`
 }
 
-// Runner allows the indexer to use a real probe or a small test double.
+// Runner allows the indexer to probe an already-open media descriptor.
 type Runner interface {
-	Probe(context.Context, string) (Metadata, error)
+	ProbeFile(context.Context, *os.File) (Metadata, error)
 }
 
 type Client struct {
@@ -49,6 +50,19 @@ type Client struct {
 }
 
 func (c Client) Probe(ctx context.Context, filename string) (Metadata, error) {
+	return c.run(ctx, filename, nil)
+}
+
+// ProbeFile passes source as child descriptor 3 so FFprobe never reopens a
+// pathname after the media resolver has checked it.
+func (c Client) ProbeFile(ctx context.Context, source *os.File) (Metadata, error) {
+	if source == nil {
+		return Metadata{}, errors.New("ffprobe source is required")
+	}
+	return c.run(ctx, "/proc/self/fd/3", []*os.File{source})
+}
+
+func (c Client) run(ctx context.Context, input string, files []*os.File) (Metadata, error) {
 	path := c.Path
 	if path == "" {
 		path = "ffprobe"
@@ -57,8 +71,9 @@ func (c Client) Probe(ctx context.Context, filename string) (Metadata, error) {
 		"-v", "error",
 		"-show_entries", "format=duration,format_name:stream=index,codec_type,codec_name,width,height,avg_frame_rate,channels",
 		"-of", "json",
-		filename,
+		input,
 	)
+	cmd.ExtraFiles = files
 	var stdout, stderr limitedBuffer
 	stdout.limit, stderr.limit = maxOutputBytes, maxOutputBytes
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr

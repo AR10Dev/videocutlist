@@ -27,7 +27,7 @@ type Root struct {
 	Alias string
 	Path  string
 
-	canonical string
+	handle *os.Root
 }
 
 // Media intentionally omits root and relative path so callers cannot return
@@ -76,15 +76,11 @@ func NewScanner(roots []Root, prober probe.Runner) (*Scanner, error) {
 		if _, ok := s.roots[root.Alias]; ok {
 			return nil, fmt.Errorf("duplicate media root alias %q", root.Alias)
 		}
-		canonical, err := filepath.EvalSymlinks(root.Path)
+		handle, err := os.OpenRoot(root.Path)
 		if err != nil {
-			return nil, fmt.Errorf("resolve media root %q: %w", root.Alias, err)
+			return nil, fmt.Errorf("open media root %q: %w", root.Alias, err)
 		}
-		info, err := os.Stat(canonical)
-		if err != nil || !info.IsDir() {
-			return nil, fmt.Errorf("media root %q is not a directory", root.Alias)
-		}
-		root.canonical = canonical
+		root.handle = handle
 		s.roots[root.Alias] = root
 	}
 	return s, nil
@@ -102,7 +98,7 @@ func (s *Scanner) Scan(ctx context.Context, alias string) ([]Record, error) {
 		return nil, ErrNotFound
 	}
 	var records []Record
-	err := filepath.WalkDir(root.canonical, func(path string, entry fs.DirEntry, walkErr error) error {
+	err := fs.WalkDir(root.handle.FS(), ".", func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
@@ -112,24 +108,25 @@ func (s *Scanner) Scan(ctx context.Context, alias string) ([]Record, error) {
 		if entry.IsDir() || !isMediaPath(path) {
 			return nil
 		}
-		resolved, info, err := resolve(root, path)
-		if errors.Is(err, ErrOutsideRoot) || errors.Is(err, fs.ErrNotExist) {
-			return nil // A deleted file or symlink escape is never indexed.
-		}
-		if err != nil || !info.Mode().IsRegular() {
+		file, info, err := openMedia(root, path)
+		if err != nil {
 			return nil
 		}
-		metadata, err := s.prober.Probe(ctx, resolved)
+		if !info.Mode().IsRegular() {
+			_ = file.Close()
+			return nil
+		}
+		metadata, err := s.prober.ProbeFile(ctx, file)
+		closeErr := file.Close()
 		if err != nil {
 			return nil // Corrupt and unsupported files are not usable media.
 		}
-		relative, err := filepath.Rel(root.canonical, path)
-		if err != nil {
-			return err
+		if closeErr != nil {
+			return closeErr
 		}
 		records = append(records, Record{
-			Media:     Media{ID: MediaID(root.Alias, relative), Name: filepath.Base(relative), SizeBytes: info.Size(), MtimeNS: info.ModTime().UnixNano(), Metadata: metadata},
-			RootAlias: root.Alias, RelativePath: filepath.ToSlash(relative),
+			Media:     Media{ID: MediaID(root.Alias, path), Name: filepath.Base(path), SizeBytes: info.Size(), MtimeNS: info.ModTime().UnixNano(), Metadata: metadata},
+			RootAlias: root.Alias, RelativePath: filepath.ToSlash(path),
 		})
 		return nil
 	})
@@ -172,34 +169,38 @@ func (s *Scanner) Open(ctx context.Context, catalog Catalog, id string) (io.Read
 	if !ok {
 		return nil, Media{}, ErrNotFound
 	}
-	path, info, err := resolve(root, filepath.Join(root.canonical, filepath.FromSlash(record.RelativePath)))
+	file, info, err := openMedia(root, record.RelativePath)
 	if err != nil {
 		return nil, Media{}, err
 	}
-	if info.Size() != record.SizeBytes || info.ModTime().UnixNano() != record.MtimeNS {
+	if !info.Mode().IsRegular() || info.Size() != record.SizeBytes || info.ModTime().UnixNano() != record.MtimeNS {
+		_ = file.Close()
 		return nil, Media{}, ErrSourceChanged
-	}
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, Media{}, err
 	}
 	return file, record.Media, nil
 }
 
-func resolve(root Root, candidate string) (string, fs.FileInfo, error) {
-	resolved, err := filepath.EvalSymlinks(candidate)
+// openMedia resolves a relative path beneath the root's persistent descriptor,
+// then stats that exact descriptor. os.Root rejects escapes even if a symlink
+// changes while it is being resolved.
+func openMedia(root Root, relative string) (*os.File, fs.FileInfo, error) {
+	if root.handle == nil {
+		return nil, nil, ErrNotFound
+	}
+	name := filepath.Clean(filepath.FromSlash(relative))
+	if name == "." || filepath.IsAbs(name) || name == ".." || strings.HasPrefix(name, ".."+string(filepath.Separator)) {
+		return nil, nil, ErrOutsideRoot
+	}
+	file, err := root.handle.Open(name)
 	if err != nil {
-		return "", nil, err
+		return nil, nil, err
 	}
-	relative, err := filepath.Rel(root.canonical, resolved)
-	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
-		return "", nil, ErrOutsideRoot
-	}
-	info, err := os.Stat(resolved)
+	info, err := file.Stat()
 	if err != nil {
-		return "", nil, err
+		_ = file.Close()
+		return nil, nil, err
 	}
-	return resolved, info, nil
+	return file, info, nil
 }
 
 func isMediaPath(path string) bool {

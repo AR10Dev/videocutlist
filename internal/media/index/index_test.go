@@ -3,6 +3,7 @@ package index
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -12,8 +13,91 @@ import (
 
 type fakeProbe struct{}
 
-func (fakeProbe) Probe(context.Context, string) (probe.Metadata, error) {
+func (fakeProbe) ProbeFile(context.Context, *os.File) (probe.Metadata, error) {
 	return probe.Metadata{DurationMS: 1000, Container: "mp4", Video: &probe.Video{Codec: "h264", Width: 320, Height: 180}}, nil
+}
+
+func TestOpenRejectsSymlinkReplacementAfterIndexing(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "clip.mp4")
+	if err := os.WriteFile(path, []byte("inside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	external := filepath.Join(t.TempDir(), "outside.mp4")
+	if err := os.WriteFile(external, []byte("outside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	scanner, err := NewScanner([]Root{{Alias: "camera", Path: root}}, fakeProbe{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog := &memoryCatalog{}
+	if err := scanner.Refresh(context.Background(), catalog); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(external, path); err != nil {
+		t.Fatal(err)
+	}
+	for id := range catalog.records {
+		file, _, err := scanner.Open(context.Background(), catalog, id)
+		if file != nil {
+			_ = file.Close()
+		}
+		if err == nil {
+			t.Fatal("opened symlink escape")
+		}
+		return
+	}
+	t.Fatal("expected indexed media")
+}
+
+func TestOpenKeepsOriginalRootAcrossPathReplacement(t *testing.T) {
+	parent := t.TempDir()
+	root := filepath.Join(parent, "media")
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "clip.mp4"), []byte("inside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	scanner, err := NewScanner([]Root{{Alias: "camera", Path: root}}, fakeProbe{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog := &memoryCatalog{}
+	if err := scanner.Refresh(context.Background(), catalog); err != nil {
+		t.Fatal(err)
+	}
+	oldRoot := filepath.Join(parent, "media-old")
+	if err := os.Rename(root, oldRoot); err != nil {
+		t.Fatal(err)
+	}
+	external := filepath.Join(parent, "external")
+	if err := os.Mkdir(external, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(external, "clip.mp4"), []byte("outside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(external, root); err != nil {
+		t.Fatal(err)
+	}
+	for id := range catalog.records {
+		file, _, err := scanner.Open(context.Background(), catalog, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := io.ReadAll(file)
+		_ = file.Close()
+		if err != nil || string(data) != "inside" {
+			t.Fatalf("read %q, %v", data, err)
+		}
+		return
+	}
+	t.Fatal("expected indexed media")
 }
 
 type memoryCatalog struct{ records map[string]Record }
