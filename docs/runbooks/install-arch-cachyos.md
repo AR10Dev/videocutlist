@@ -6,10 +6,12 @@ Run this on the host holding the original media. The installer uses Arch package
 sudo scripts/install/install-arch-cachyos.sh 2026-07-29
 sudoedit /etc/editapp/editapp.env
 sudo systemctl enable --now tailscaled editapp
-sudo scripts/ops/setup-tailscale-serve.sh
+sudo EDITAPP_TAILSCALE_APP_CAPS='example.com/cap/editapp' scripts/ops/setup-tailscale-serve.sh
 ```
 
 Set `EDITAPP_MEDIA_ROOTS_JSON` to a mounted originals directory before starting. The default path is `/srv/editapp/media`; mount or bind-mount originals there rather than copying them into application state.
+
+Replace `example.com/cap/editapp` with the capability granted by this tailnet's policy; see [Tailscale Serve](tailscale-serve.md) for the required action grants.
 
 | Path or identity | Owner and mode | Purpose |
 | --- | --- | --- |
