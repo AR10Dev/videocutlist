@@ -18,6 +18,7 @@ import (
 	"editapp/internal/config"
 	exporter "editapp/internal/export"
 	"editapp/internal/ffmpeg"
+	"editapp/internal/httpx"
 	"editapp/internal/jobs"
 	"editapp/internal/limits"
 	"editapp/internal/media/index"
@@ -121,7 +122,11 @@ func run(ctx context.Context) error {
 	mux.Handle("/api/", apiServer)
 	mux.Handle("/metrics", apiServer)
 	mux.Handle("/", http.FileServer(http.Dir("web/dist")))
-	server := newHTTPServer(cfg, mux)
+	proxied, err := httpx.TrustedProxy(cfg.TrustedProxyCIDRs, mux)
+	if err != nil {
+		return err
+	}
+	server := newHTTPServer(cfg, httpx.CORS(cfg.AllowedOrigins, proxied))
 	failed := make(chan error, 1)
 	go func() {
 		logger.Printf(`{"event":"server_started","listen_addr":%q}`, server.Addr)
