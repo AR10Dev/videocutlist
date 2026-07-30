@@ -48,15 +48,39 @@ Incomplete files end in `.partial`; only atomic rename publishes a hit.
 
 ## Authentication
 
-- Production mode accepts Tailscale identity/capability headers only from
-  configured trusted-proxy CIDRs while listening on loopback.
-- Preview, export, and media-refresh actions require a matching forwarded
-  capability grant in production mode. Development mode bypasses grants.
-- The default trusted proxies are `127.0.0.0/8,::1/128`.
-- Development mode requires `EDITAPP_DEV_USER_LOGIN`, refuses non-loopback
-  binding, and synthesizes only that identity.
-- Local OS users able to connect to the loopback port are inside the proxy
-  trust boundary. Funnel is forbidden.
+Authentication is provider-neutral:
+
+```go
+type Principal struct {
+    Subject      string
+    DisplayName  string
+    Roles        []string
+    Capabilities []string
+}
+
+type Authenticator interface {
+    Authenticate(*http.Request) (Principal, error)
+}
+```
+
+Modes are `none`, `bearer`, and `trusted_proxy`.
+
+- `none` ignores credentials and returns subject `anonymous`.
+- `bearer` requires exactly one `Authorization: Bearer <token>` value and uses
+  constant-time comparison with `EDITAPP_BEARER_TOKEN`. The principal subject
+  is `EDITAPP_BEARER_SUBJECT`, default `static-bearer`.
+- `trusted_proxy` consumes only the validated `X-Forwarded-User` value already
+  placed in request context by the trusted-proxy middleware. It never reads a
+  raw identity header.
+- Built-in authenticated principals receive role `editor` and capability `*`.
+  A capability allows an action when it equals `*`, the action, or
+  `<action>:<resource>`.
+- The interface is the OIDC-ready adapter boundary; Stage 4 adds no OIDC
+  dependency or speculative implementation.
+
+Subjects are opaque, case-sensitive, trimmed, non-empty, at most 320 bytes, and
+contain no control characters. Failed authentication and authorization return
+before preview, refresh, project, job, or export application services run.
 
 ## Cancellation and streaming
 
@@ -85,8 +109,9 @@ EDITAPP_DATABASE_PATH
 EDITAPP_CACHE_DIR
 EDITAPP_EXPORT_DIR
 EDITAPP_MEDIA_ROOTS_JSON
-EDITAPP_AUTH_MODE=tailscale|dev
-EDITAPP_DEV_USER_LOGIN
+EDITAPP_AUTH_MODE=none|bearer|trusted_proxy
+EDITAPP_BEARER_TOKEN
+EDITAPP_BEARER_SUBJECT=static-bearer
 EDITAPP_TRUSTED_PROXY_CIDRS
 EDITAPP_FFMPEG_PATH
 EDITAPP_FFPROBE_PATH
@@ -165,7 +190,7 @@ environment variables.
 
 ## Logging and metrics
 
-Structured JSON fields are: `request_id`, `user_login`, `media_id`,
+Structured JSON fields are: `request_id`, `principal_subject`, `media_id`,
 `project_id`, `job_id`, `cache_key`, `cache_status`, `preview_start_ms`,
 `preview_duration_ms`, `encoder_profile`, `ffmpeg_pid`, `queue_wait_ms`,
 `spawn_to_first_byte_ms`, `total_job_ms`, `bytes_streamed`, `cancel_reason`,

@@ -9,7 +9,8 @@ servers:
         default: http://localhost:8787
         description: Reachable EditApp server base URL; transport provider independent.
 security:
-  - tailscaleIdentity: []
+  - bearerAuth: []
+  - {}
 paths:
   /metrics:
     get:
@@ -180,11 +181,10 @@ paths:
         "404": {$ref: "#/components/responses/Error"}
 components:
   securitySchemes:
-    tailscaleIdentity:
-      type: apiKey
-      in: header
-      name: Tailscale-User-Login
-      description: Injected only by the trusted local Tailscale Serve proxy.
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Used only when the server selects static bearer mode.
   parameters:
     MediaId: {name: mediaId, in: path, required: true, schema: {type: string, pattern: "^m_[A-Za-z0-9_-]{43}$"}}
     ProjectId: {name: projectId, in: path, required: true, schema: {type: string, pattern: "^p_[A-Za-z0-9_-]{12,64}$"}}
