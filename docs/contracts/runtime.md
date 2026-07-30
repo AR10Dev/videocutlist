@@ -110,7 +110,40 @@ combined-address alias only when neither new listener setting is present.
 Public base URLs and allowed origins accept only absolute HTTP(S) values
 without credentials, query, or fragment; origins also have no path.
 `EDITAPP_ALLOWED_ORIGINS` is comma-separated and empty by default. CORS is
-still disabled until the Stage 3 contract is implemented.
+deny-by-default: requests without `Origin` remain ordinary same-origin or
+non-browser requests, while a request with `Origin` must exactly match the
+configured list. Allowed responses echo that origin, set
+`Access-Control-Allow-Credentials: true`, vary on `Origin`, and expose
+`ETag`, `X-Request-ID`, `X-Preview-Start`, `X-Preview-Duration`,
+`X-Preview-Offset`, `X-Preview-Cache`, and `Retry-After`. Wildcard origins are
+never emitted.
+
+Allowed preflights require `OPTIONS`, `Origin`, and
+`Access-Control-Request-Method`. Methods are limited to `GET`, `HEAD`, `POST`,
+`PUT`, and `DELETE`; request headers are limited case-insensitively to
+`Authorization`, `Content-Type`, `If-Match`, and `If-None-Match`. Valid
+preflights return 204 before authentication. Disallowed or malformed
+cross-origin requests return 403 before application services run.
+
+## Trusted reverse proxies
+
+`X-Forwarded-For`, `X-Forwarded-Host`, `X-Forwarded-Proto`, and
+`X-Forwarded-User` are consumed only when the immediate transport peer belongs
+to `EDITAPP_TRUSTED_PROXY_CIDRS`. The middleware strips these headers before
+calling application code and exposes validated values through request context.
+Untrusted peers retain their transport address, request host, and transport
+scheme; their forwarded values and identity are ignored.
+
+For trusted peers, client address is selected right-to-left from
+`X-Forwarded-For`, skipping configured trusted proxy hops and stopping at the
+first untrusted address. Every hop must be an IP literal. Forwarded protocol is
+`http` or `https`; forwarded host and optional identity are single, bounded,
+control-character-free values. Malformed trusted forwarded data returns 400.
+The preserved transport peer address is never replaced by forwarded data.
+
+Server middleware order is CORS, then trusted-proxy parsing, then the API/static
+handler. No connectivity-provider header or address rule participates in this
+layer.
 
 Read and idle timeouts must be positive Go durations. Write timeout may be
 zero so streamed previews are not terminated by a whole-response deadline.
