@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createApiClient, resolveBrowserConfiguration } from "./api";
 import {
   canStreamPreview,
   streamPreview,
@@ -15,7 +16,7 @@ type Project = {
   uiState: { playheadMs: number; zoom: number; muted: boolean };
 };
 
-const api = "/api/v1";
+const api = createApiClient(resolveBrowserConfiguration());
 
 const formatTime = (ms: number) => {
   const total = Math.max(0, Math.round(ms / 1000));
@@ -50,7 +51,8 @@ export function App() {
     setOutMs(0);
     setSegments([]);
     setStatus(`Selected ${item.name}.`);
-    void fetch(`${api}/media/${encodeURIComponent(item.id)}`)
+    void api
+      .request(`media/${encodeURIComponent(item.id)}`)
       .then((response) =>
         response.ok
           ? (response.json() as Promise<Media>)
@@ -72,7 +74,8 @@ export function App() {
 
   useEffect(() => {
     const controller = new AbortController();
-    fetch(`${api}/media?limit=50`, { signal: controller.signal })
+    api
+      .request("media?limit=50", { signal: controller.signal })
       .then((response) =>
         response.ok
           ? response.json()
@@ -118,8 +121,11 @@ export function App() {
       try {
         cleanupRef.current = streamPreview(
           video,
-          `${api}/media/${encodeURIComponent(selected.id)}/preview?${params}`,
-          controller.signal,
+          () =>
+            api.request(
+              `media/${encodeURIComponent(selected.id)}/preview?${params}`,
+              { signal: controller.signal },
+            ),
           (next) => {
             if (request !== selectionRef.current || controller.signal.aborted)
               return;
@@ -201,8 +207,8 @@ export function App() {
 
   const loadProject = async () => {
     try {
-      const response = await fetch(
-        `${api}/projects/${encodeURIComponent(projectId)}`,
+      const response = await api.request(
+        `projects/${encodeURIComponent(projectId)}`,
       );
       if (!response.ok)
         throw new Error(`Project load failed (${response.status}).`);
@@ -227,8 +233,8 @@ export function App() {
     const error = validateSegments(segments, selected.durationMs);
     if (error) return setStatus(error);
     try {
-      const response = await fetch(
-        `${api}/projects/${encodeURIComponent(projectId)}`,
+      const response = await api.request(
+        `projects/${encodeURIComponent(projectId)}`,
         {
           method: "PUT",
           headers: { "Content-Type": "application/json" },

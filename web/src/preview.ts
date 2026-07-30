@@ -61,8 +61,7 @@ const headersToDiagnostics = (
 
 export function streamPreview(
   video: HTMLVideoElement,
-  url: string,
-  signal: AbortSignal,
+  request: () => Promise<Response>,
   onDiagnostics: (diagnostics: PreviewDiagnostics) => void,
 ): () => void {
   const mediaSource = new MediaSource();
@@ -109,7 +108,7 @@ export function streamPreview(
       sourceBuffer = mediaSource.addSourceBuffer(previewMime);
       sourceBuffer.addEventListener("updateend", updateEnd);
       const started = performance.now();
-      const response = await fetch(url, { signal });
+      const response = await request();
       if (!response.ok || !response.body)
         throw new Error(`Preview request failed (${response.status}).`);
       const diagnostics = headersToDiagnostics(
