@@ -26,11 +26,11 @@ install -d -o root -g editapp-media -m 0750 /srv/editapp/media
 
 stage=$(mktemp -d /opt/editapp/.install.XXXXXX)
 trap 'rm -rf "$stage"' EXIT
-mkdir -p "$stage/bin" "$stage/web"
+mkdir -p "$stage/bin" "$stage/web/dist"
 go -C "$root" build -trimpath -buildvcs=true -o "$stage/bin/editapp" ./cmd/server
 npm --prefix "$root/web" ci
 npm --prefix "$root/web" run build
-cp -a "$root/web/dist/." "$stage/web/"
+cp -a "$root/web/dist/." "$stage/web/dist/"
 cp -a "$root/docs" "$stage/docs"
 
 release_dir="/opt/editapp/releases/$release"

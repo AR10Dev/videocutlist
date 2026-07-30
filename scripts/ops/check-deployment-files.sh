@@ -8,6 +8,8 @@ grep -qx 'EDITAPP_LISTEN_ADDR=127.0.0.1:8787' "$root/deployments/systemd/editapp
 grep -qx 'PrivateDevices=yes' "$root/deployments/systemd/editapp.service"
 grep -qx 'ProtectSystem=strict' "$root/deployments/systemd/editapp.service"
 grep -qx 'ReadOnlyPaths=/srv/editapp/media' "$root/deployments/systemd/editapp.service"
+grep -F 'mkdir -p "$stage/bin" "$stage/web/dist"' "$root/scripts/install/install-arch-cachyos.sh" >/dev/null
+grep -F 'cp -a "$root/web/dist/." "$stage/web/dist/"' "$root/scripts/install/install-arch-cachyos.sh" >/dev/null
 if command -v systemd-analyze >/dev/null; then
   tmp=$(mktemp -d)
   trap 'rm -rf "$tmp"' EXIT
