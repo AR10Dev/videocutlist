@@ -10,11 +10,19 @@ multi-agent program in `CODEX_MULTI_AGENT_IMPLEMENTATION_PROMPT.md`.
 - The repository began with specifications only.
 - Available: Node 26.5, npm 11.17, FFmpeg/FFprobe 6.1.1, SQLite 3.50.6,
   Git, Make, curl, and jq.
-- Missing at inspection: Go and Tailscale.
+- Go 1.26.5 was supplied as a task-local toolchain. Tailscale remains absent.
 - FFmpeg contains libx264, NVENC, QSV, and VAAPI encoders, but no GPU device is
   visible. Only libx264 may be accepted in this environment.
 - The production installation target is Arch/CachyOS; the controller workspace
-  is Ubuntu.
+  exposes a CachyOS host kernel but an Ubuntu userspace/container.
+
+## Status
+
+Phases 0 through 4 are complete. The implementation, deployment static checks,
+and security gate are complete with no open critical/high findings. Phase 5
+still requires live Tailscale verification on a tailnet host; Phase 6 still
+requires the clean-host Arch/CachyOS installer check before production
+promotion. See `docs/release-checklist.md`.
 
 ## Dependency graph
 
@@ -65,4 +73,3 @@ No phase is complete until its gate passes on the integration branch.
 - Stream copy is keyframe/container constrained and must return warnings.
 - Full-disk and cancellation paths can corrupt outputs unless temp/rename
   invariants are applied universally.
-
