@@ -115,11 +115,8 @@ func (s Service) Run(ctx context.Context, source *os.File, document projects.Doc
 		return Result{}, fmt.Errorf("validate export: %w", err)
 	}
 	finalPath := filepath.Join(s.OutputDir, outputName)
-	if err := os.Link(temporaryPath, finalPath); err != nil {
+	if err := os.Rename(temporaryPath, finalPath); err != nil {
 		return Result{}, fmt.Errorf("publish export: %w", err)
-	}
-	if err := os.Remove(temporaryPath); err != nil {
-		return Result{}, fmt.Errorf("remove published temporary export: %w", err)
 	}
 	info, err := os.Stat(finalPath)
 	if err != nil {
