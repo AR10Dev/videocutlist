@@ -34,6 +34,9 @@ func TestStreamCopySegmentsMergeWithWarningAndAtomicPublish(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer source.Close()
+	if err := os.Remove(sourcePath); err != nil {
+		t.Fatal(err)
+	}
 	outputDir := filepath.Join(directory, "exports")
 	service := export.Service{FFmpegPath: ffmpeg, OutputDir: outputDir, Retention: time.Hour}
 	document := projects.Document{Segments: []projects.Segment{{StartMS: 0, EndMS: 700}, {StartMS: 1_000, EndMS: 1_700}}}

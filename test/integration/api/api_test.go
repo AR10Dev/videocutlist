@@ -279,12 +279,17 @@ func TestPreviewCancellationUsesRequestContextAndFailureIsSafe(t *testing.T) {
 	}
 
 	failing := server(t, noneAuth(t), &mediaStub{}, &previewStub{start: func(context.Context) (api.PreviewResult, error) {
-		return api.PreviewResult{}, errors.New("ffmpeg stderr secret")
+		return api.PreviewResult{}, errors.New("ffmpeg stderr /originals/secret.mp4 /cache/preview.mp4 /exports/final.mkv provider=tailnet")
 	}}, &exportStub{}, nil)
 	recorder = httptest.NewRecorder()
 	failing.ServeHTTP(recorder, localRequest(http.MethodGet, "/api/v1/media/"+validMedia+"/preview?centerMs=100", nil))
-	if recorder.Code != http.StatusTooManyRequests || strings.Contains(recorder.Body.String(), "stderr") {
+	if recorder.Code != http.StatusTooManyRequests {
 		t.Fatalf("unsafe failure: %d %s", recorder.Code, recorder.Body.String())
+	}
+	for _, forbidden := range []string{"stderr", "/originals", "/cache", "/exports", "provider", "tailnet"} {
+		if strings.Contains(recorder.Body.String(), forbidden) {
+			t.Fatalf("unsafe failure exposed %q: %s", forbidden, recorder.Body.String())
+		}
 	}
 }
 

@@ -79,8 +79,20 @@ func TestPreviewCancellationAfterFirstByte(t *testing.T) {
 	if _, err := running.Stdout.Read(buf); err != nil {
 		t.Fatal(err)
 	}
+	completed := make(chan error, 1)
+	go func() { completed <- running.Wait() }()
+	select {
+	case err := <-completed:
+		t.Fatalf("producer exited before first preview bytes were observable: %v", err)
+	default:
+	}
 	cancel()
-	if err := running.Wait(); err == nil {
-		t.Fatal("expected cancellation")
+	select {
+	case err := <-completed:
+		if err == nil {
+			t.Fatal("expected cancellation")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cancelled producer did not exit")
 	}
 }

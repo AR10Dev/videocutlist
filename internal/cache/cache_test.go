@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"editapp/internal/contracts"
 )
@@ -46,13 +45,59 @@ func TestCommitOpenAndEvict(t *testing.T) {
 	if b, _ := io.ReadAll(reader); string(b) != "one" {
 		t.Fatalf("got %q", b)
 	}
-	time.Sleep(time.Millisecond) // ensure deterministic LRU ordering on coarse filesystems.
 	writePartial(t, store, key2, "two")
 	if _, err := store.Open(context.Background(), key1, accept); err != nil {
 		t.Fatalf("leased entry was evicted: %v", err)
 	}
 	if _, err := store.Open(context.Background(), key2, accept); !errors.Is(err, ErrMiss) {
 		t.Fatalf("new entry error = %v, want miss after bounded eviction", err)
+	}
+}
+
+func TestPartialPublishesOnlyAfterValidationAndRename(t *testing.T) {
+	store, err := New(t.TempDir(), 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := stringsOf('5')
+	partial, err := store.Begin(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := partial.Write([]byte("preview")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Open(context.Background(), key, accept); !errors.Is(err, ErrMiss) {
+		t.Fatalf("partial open error = %v", err)
+	}
+	final, err := store.path(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	validated := false
+	validator := ValidatorFunc(func(ctx context.Context, path string) error {
+		if path != partial.Path() {
+			t.Fatalf("validated %q, want partial %q", path, partial.Path())
+		}
+		if _, err := os.Stat(final); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("final existed before validation: %v", err)
+		}
+		validated = true
+		return accept.Validate(ctx, path)
+	})
+	if err := partial.Commit(context.Background(), validator); err != nil {
+		t.Fatal(err)
+	}
+	if !validated {
+		t.Fatal("partial was not validated")
+	}
+	reader, err := store.Open(context.Background(), key, accept)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	if body, err := io.ReadAll(reader); err != nil || string(body) != "preview" {
+		t.Fatalf("published body = %q, %v", body, err)
 	}
 }
 

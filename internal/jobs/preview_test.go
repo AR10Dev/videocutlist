@@ -29,6 +29,7 @@ type testRunner struct {
 	starts  int
 	cancels int
 	gate    chan struct{}
+	cancel  chan struct{}
 }
 
 func (r *testRunner) Start(ctx context.Context, _ contracts.PreviewSpec) (*contracts.RunningPreview, error) {
@@ -47,6 +48,10 @@ func (r *testRunner) Start(ctx context.Context, _ contracts.PreviewSpec) (*contr
 			r.mu.Lock()
 			r.cancels++
 			r.mu.Unlock()
+			select {
+			case r.cancel <- struct{}{}:
+			default:
+			}
 			_ = writer.CloseWithError(ctx.Err())
 			done <- ctx.Err()
 		}
@@ -61,7 +66,7 @@ func (r *testRunner) counts() (int, int) {
 }
 
 func TestDuplicateRequestsShareRunnerAndPublishCache(t *testing.T) {
-	runner := &testRunner{gate: make(chan struct{})}
+	runner := newTestRunner()
 	manager := newManager(t, runner, 1, 1)
 	spec := testSpec("m_a")
 	one, result, err := manager.Preview(context.Background(), "a", spec)
@@ -80,53 +85,37 @@ func TestDuplicateRequestsShareRunnerAndPublishCache(t *testing.T) {
 			t.Fatalf("body = %q, %v", body, err)
 		}
 	}
-	deadline := time.Now().Add(time.Second)
-	for {
-		hit, _, err := manager.Preview(context.Background(), "c", spec)
-		if err == nil {
-			_ = hit.Close()
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal(err)
-		}
-		time.Sleep(time.Millisecond)
+	hit, result, err := manager.Preview(context.Background(), "c", spec)
+	if err != nil || result.Status != CacheHit {
+		t.Fatalf("cache hit = %v, %+v", err, result)
 	}
+	_ = hit.Close()
 	if starts, _ := runner.counts(); starts != 1 {
 		t.Fatalf("starts = %d", starts)
 	}
 }
 
 func TestCancellationRemovesPartialAndSupersedes(t *testing.T) {
-	runner := &testRunner{gate: make(chan struct{})}
+	runner := newTestRunner()
 	manager := newManager(t, runner, 1, 1)
-	first, _, err := manager.Preview(context.Background(), "a", testSpec("m_first"))
+	spec := testSpec("m_first")
+	first, _, err := manager.Preview(context.Background(), "a", spec)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := first.Close(); err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.Now().Add(time.Second)
-	for {
-		_, cancels := runner.counts()
-		if cancels == 1 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("runner was not cancelled")
-		}
-		time.Sleep(time.Millisecond)
-	}
-	second, _, err := manager.Preview(context.Background(), "a", testSpec("m_second"))
-	if err != nil {
-		t.Fatal(err)
+	awaitCancel(t, runner)
+	second, result, err := eventuallyReplacement(t, manager, "a", spec)
+	if err != nil || result.Status != CacheMiss {
+		t.Fatalf("replacement = %v, %+v", err, result)
 	}
 	_ = second.Close()
 }
 
 func TestSameUserSameKeyStillSharesRunner(t *testing.T) {
-	runner := &testRunner{gate: make(chan struct{})}
+	runner := newTestRunner()
 	manager := newManager(t, runner, 1, 1)
 	first, _, err := manager.Preview(context.Background(), "a", testSpec("m_same"))
 	if err != nil {
@@ -148,7 +137,7 @@ func TestSameUserSameKeyStillSharesRunner(t *testing.T) {
 }
 
 func TestSupersedingSharedJobStartsNewKeyImmediately(t *testing.T) {
-	runner := &testRunner{gate: make(chan struct{})}
+	runner := newTestRunner()
 	manager := newManager(t, runner, 2, 1)
 	first, _, err := manager.Preview(context.Background(), "a", testSpec("m_first"))
 	if err != nil {
@@ -166,13 +155,19 @@ func TestSupersedingSharedJobStartsNewKeyImmediately(t *testing.T) {
 		t.Fatalf("starts, cancels = %d, %d; old shared job must remain active", starts, cancels)
 	}
 	close(runner.gate)
-	for _, reader := range []io.ReadCloser{first, shared, second} {
-		_ = reader.Close()
+	if body, err := io.ReadAll(shared); err != nil || string(body) != "preview" {
+		t.Fatalf("shared body = %q, %v", body, err)
 	}
+	if body, err := io.ReadAll(second); err != nil || string(body) != "preview" {
+		t.Fatalf("replacement body = %q, %v", body, err)
+	}
+	_ = first.Close()
+	_ = shared.Close()
+	_ = second.Close()
 }
 
 func TestLimitFailure(t *testing.T) {
-	runner := &testRunner{gate: make(chan struct{})}
+	runner := newTestRunner()
 	manager := newManager(t, runner, 1, 1)
 	first, _, err := manager.Preview(context.Background(), "a", testSpec("m_a"))
 	if err != nil {
@@ -182,6 +177,41 @@ func TestLimitFailure(t *testing.T) {
 		t.Fatalf("limit error = %v", err)
 	}
 	_ = first.Close()
+}
+
+func newTestRunner() *testRunner {
+	return &testRunner{gate: make(chan struct{}), cancel: make(chan struct{}, 2)}
+}
+
+func awaitCancel(t *testing.T, runner *testRunner) {
+	t.Helper()
+	select {
+	case <-runner.cancel:
+	case <-time.After(time.Second):
+		t.Fatal("runner was not cancelled")
+	}
+}
+
+func eventuallyReplacement(t *testing.T, manager *PreviewManager, user string, spec contracts.PreviewSpec) (io.ReadCloser, Result, error) {
+	t.Helper()
+	deadline := time.NewTimer(time.Second)
+	defer deadline.Stop()
+	tick := time.NewTicker(time.Millisecond)
+	defer tick.Stop()
+	for {
+		reader, result, err := manager.Preview(context.Background(), user, spec)
+		if err == nil && result.Status != CacheShared {
+			return reader, result, nil
+		}
+		if reader != nil {
+			_ = reader.Close()
+		}
+		select {
+		case <-deadline.C:
+			return nil, Result{}, errors.New("replacement did not begin")
+		case <-tick.C:
+		}
+	}
 }
 
 func TestReplayBufferLimitCancelsPreview(t *testing.T) {
