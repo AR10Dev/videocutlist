@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Configure a private HTTPS reverse proxy. This script never invokes Funnel.
+# Configure optional private HTTPS. This script never invokes Funnel.
 set -euo pipefail
 
 if (( EUID != 0 )); then
@@ -16,6 +16,11 @@ systemctl is-active --quiet tailscaled || { echo "tailscaled is not active" >&2;
 systemctl is-active --quiet editapp || { echo "editapp is not active" >&2; exit 1; }
 curl --fail --silent --show-error http://127.0.0.1:8787/api/v1/ready >/dev/null
 
-args=(serve --bg --https=443 "--accept-app-caps=$caps" http://127.0.0.1:8787)
-tailscale "${args[@]}"
-"$(dirname "${BASH_SOURCE[0]}")/verify-deployment.sh"
+tailscale serve --bg --https=443 "--accept-app-caps=$caps" http://127.0.0.1:8787
+serve=$(tailscale serve status --json)
+printf '%s\n' "$serve" | grep -F '127.0.0.1:8787' >/dev/null || { echo "Serve is not proxying 127.0.0.1:8787" >&2; exit 1; }
+funnel=$(tailscale funnel status --json)
+if printf '%s\n' "$funnel" | grep -qiE 'funnel (on|enabled)|"allowfunnel"[[:space:]]*:[[:space:]]*true'; then
+  echo "Funnel is enabled; disable it before using this optional Serve configuration" >&2
+  exit 1
+fi
