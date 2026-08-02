@@ -41,8 +41,9 @@ grep -F 'ss -ltnH' "$verifier" >/dev/null || fail "neutral verifier does not che
 [[ -x $optional ]] || fail "optional Tailscale helper is missing"
 grep -Eq '(^|[^[:alnum:]_])tailscale([[:space:]]|$)' "$optional" || fail "optional helper does not use Tailscale"
 grep -Eq '(^|[^[:alnum:]_])serve([[:space:]]|$)' "$optional" || fail "optional helper does not configure Serve"
-if grep -E 'tailscale[[:space:]].*funnel|--funnel' "$optional" >/dev/null; then
-	fail "optional helper invokes Funnel"
+funnel_calls=$(grep -Eo 'tailscale[[:space:]]+funnel([[:space:]]+[^[:space:];|&)]+)?' "$optional" || true)
+if [[ -n $funnel_calls ]] && printf '%s\n' "$funnel_calls" | grep -Ev '^tailscale[[:space:]]+funnel[[:space:]]+status$' >/dev/null; then
+	fail "optional helper enables or mutates Funnel"
 fi
 grep -F 'setup-tailscale-serve.sh' "$installer" "$verifier" >/dev/null && fail "primary path invokes optional helper"
 

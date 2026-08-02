@@ -3,8 +3,12 @@
 set -euo pipefail
 
 command -v curl >/dev/null || { echo "missing curl" >&2; exit 1; }
-env_file=/etc/editapp/editapp.env
-[[ -r $env_file ]] || { echo "missing $env_file" >&2; exit 1; }
+env_file=${EDITAPP_VERIFY_ENV_FILE:-/etc/editapp/editapp.env}
+case $env_file in
+  /*) ;;
+  *) echo "EDITAPP_VERIFY_ENV_FILE must be an absolute path" >&2; exit 1 ;;
+esac
+[[ -f $env_file && -r $env_file ]] || { echo "missing $env_file" >&2; exit 1; }
 
 setting() {
   sed -n "s/^$1=//p" "$env_file" | tail -n 1
