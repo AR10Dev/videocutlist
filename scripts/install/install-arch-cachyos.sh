@@ -14,7 +14,7 @@ case $release in
 esac
 
 for command in pacman systemctl install git; do command -v "$command" >/dev/null || { echo "missing $command" >&2; exit 1; }; done
-pacman -S --needed --noconfirm base-devel go nodejs npm ffmpeg sqlite tailscale curl jq
+pacman -S --needed --noconfirm base-devel go nodejs npm ffmpeg sqlite curl jq
 
 getent group editapp-media >/dev/null || groupadd --system editapp-media
 id -u editapp >/dev/null 2>&1 || useradd --system --user-group --home-dir /nonexistent --shell /usr/bin/nologin editapp
@@ -48,5 +48,4 @@ if [[ ! -e /etc/editapp/editapp.env ]]; then
 fi
 systemctl daemon-reload
 echo "Installed $release_dir. Set EDITAPP_MEDIA_ROOTS_JSON in /etc/editapp/editapp.env, then run:"
-echo "  systemctl enable --now tailscaled editapp"
-echo "  $root/scripts/ops/setup-tailscale-serve.sh"
+echo "  systemctl enable --now editapp"

@@ -2,14 +2,27 @@
 
 ## Health and smoke
 
-Run the read-only check after install, restart, upgrade, or Serve changes:
+Run the read-only check after install, restart, or upgrade:
 
 ```bash
 sudo scripts/ops/verify-deployment.sh
 journalctl -u editapp -n 100 --no-pager
 ```
 
-It checks `/api/v1/health`, `/api/v1/ready`, the loopback-only listener, active services, the Serve target, and absence of Funnel. A tailnet client should load the HTTPS Serve hostname, not port 8787 or a LAN address.
+It checks `/api/v1/health`, `/api/v1/ready`, the active EditApp service, and the listener configured in `/etc/editapp/editapp.env`. The server address is `http://EDITAPP_LISTEN_ADDRESS:EDITAPP_PORT`; bracket an IPv6 address in a browser URL.
+
+For the bundled client served by EditApp, no browser configuration is needed: it uses the current page origin and no authentication. For a separately hosted browser client, define `window.EDITAPP_CONFIG` before its application module loads:
+
+```html
+<script>
+window.EDITAPP_CONFIG = {
+  serverBaseUrl: "https://editapp.example.test",
+  authentication: { type: "bearer", token: "editor-token" }
+};
+</script>
+```
+
+`serverBaseUrl` must be an absolute HTTP(S) URL without credentials, query, or fragment. Its API requests stay beneath `/api/v1/`. Set `EDITAPP_ALLOWED_ORIGINS` to the exact client origins (comma-separated) for this cross-origin setup; a non-matching cross-origin request is denied, and `*` is never accepted. Use `{ type: "none" }` for application `none`; use `{ type: "bearer", token: "..." }` for `bearer`; use `{ type: "cookie" }` only with a trusted reverse proxy that supplies the browser session and validated `X-Forwarded-User`.
 
 ## Upgrade
 

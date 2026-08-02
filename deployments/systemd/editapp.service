@@ -1,5 +1,5 @@
 [Unit]
-Description=EditApp remote video preview service
+Description=EditApp video preview service
 Documentation=file:///opt/editapp/current/docs/runbooks/install-arch-cachyos.md
 Wants=network-online.target
 After=network-online.target
