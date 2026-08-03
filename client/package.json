@@ -12,12 +12,12 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
-    "@vitejs/plugin-react": "6.0.4",
     "react": "19.2.8",
     "react-dom": "19.2.8"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
+    "@vitejs/plugin-react": "6.0.4",
     "@playwright/test": "1.58.2",
     "@types/node": "26.1.2",
     "@types/react": "19.2.17",

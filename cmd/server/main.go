@@ -119,7 +119,7 @@ func run(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.Handle("/api/", apiServer)
 	mux.Handle("/metrics", apiServer)
-	mux.Handle("/", http.FileServer(http.Dir("web/dist")))
+	mux.Handle("/", http.FileServer(http.Dir("client/dist")))
 	proxied, err := httpapi.TrustedProxy(cfg.TrustedProxyCIDRs, mux)
 	if err != nil {
 		return err
