@@ -242,7 +242,7 @@ func (j *previewJob) run() {
 		copyErr = waitErr
 	}
 	if copyErr == nil && j.ctx.Err() == nil {
-		copyErr = j.partial.Commit(context.Background(), j.manager.validator)
+		copyErr = j.partial.Commit(j.ctx, j.manager.validator)
 	} else {
 		_ = j.partial.Discard()
 		if copyErr == nil {

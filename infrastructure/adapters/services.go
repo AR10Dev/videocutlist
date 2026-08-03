@@ -45,11 +45,14 @@ func (m MediaCatalog) Get(ctx context.Context, id string) (application.Media, er
 }
 func (m MediaCatalog) Refresh(ctx context.Context) error { return m.Scanner.Refresh(ctx, m.Store) }
 func (m MediaCatalog) Preview(ctx context.Context, request application.PreviewSpec) (domain.PreviewSpec, error) {
-	record, err := m.Store.Get(ctx, request.MediaID)
+	source, item, err := m.Scanner.Open(ctx, m.Store, request.MediaID)
 	if err != nil {
 		return domain.PreviewSpec{}, err
 	}
-	return preview(record.Media, request), nil
+	if err := source.Close(); err != nil {
+		return domain.PreviewSpec{}, err
+	}
+	return preview(item, request), nil
 }
 func media(item index.Media) application.Media {
 	streams := map[string]any{}

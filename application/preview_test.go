@@ -340,6 +340,72 @@ func TestFinishedPreviewContextCancellationDetachesSubscriber(t *testing.T) {
 	}
 }
 
+func TestCancellationInterruptsPreviewCommit(t *testing.T) {
+	store, err := cache.New(t.TempDir(), 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	limiter, err := NewPreviewLimits(1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	manager, err := NewPreviewManager(testCache{store}, bytesRunner("preview"), func(ctx context.Context, _ string) error {
+		close(started)
+		<-ctx.Done()
+		return ctx.Err()
+	}, limiter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	spec := testSpec("m_commit")
+	reader, _, err := manager.Preview(ctx, "a", spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	manager.mu.Lock()
+	job := manager.byUser["a"].job
+	manager.mu.Unlock()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("commit validation did not start")
+	}
+	cancel()
+	select {
+	case <-job.finished:
+	case <-time.After(time.Second):
+		t.Fatal("cancelled commit did not finish")
+	}
+
+	deadline := time.NewTimer(time.Second)
+	defer deadline.Stop()
+	for {
+		release, err := limiter.AcquireProcess()
+		if err == nil {
+			release()
+			break
+		}
+		if !errors.Is(err, ErrGlobalLimit) {
+			t.Fatalf("process slot = %v", err)
+		}
+		select {
+		case <-deadline.C:
+			t.Fatal("process slot was not released")
+		case <-time.After(time.Millisecond):
+		}
+	}
+	if cached, err := store.Open(context.Background(), domain.PreviewKey(spec), cache.ValidatorFunc(func(context.Context, string) error { return nil })); !errors.Is(err, cache.ErrMiss) {
+		if cached != nil {
+			_ = cached.Close()
+		}
+		t.Fatalf("cancelled commit cache = %v", err)
+	}
+}
+
 func TestSameKeyReplacementStopsStalledCopy(t *testing.T) {
 	runner := newTestRunner()
 	manager := newManager(t, runner, 1, 1)
