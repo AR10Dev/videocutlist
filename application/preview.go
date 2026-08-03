@@ -132,6 +132,7 @@ func (m *PreviewManager) replaceSameKey(ctx context.Context, user, key string) (
 	job := old.job
 	job.mu.Lock()
 	delete(job.subscribers, old)
+	job.cond.Broadcast()
 	old.release()
 	release, err := m.limits.AcquireUser(user)
 	if err != nil {
@@ -140,9 +141,10 @@ func (m *PreviewManager) replaceSameKey(ctx context.Context, user, key string) (
 		return nil, false
 	}
 	reader, writer := io.Pipe()
-	sub := &subscriber{manager: m, job: job, user: user, reader: reader, writer: writer, release: release}
+	sub := &subscriber{manager: m, job: job, user: user, reader: reader, writer: writer, detached: make(chan struct{}), copyDone: make(chan struct{}), release: release}
 	job.subscribers[sub] = struct{}{}
 	m.byUser[user] = sub
+	close(old.detached)
 	job.mu.Unlock()
 	m.mu.Unlock()
 	_ = old.writer.CloseWithError(context.Canceled)
@@ -151,7 +153,7 @@ func (m *PreviewManager) replaceSameKey(ctx context.Context, user, key string) (
 		select {
 		case <-ctx.Done():
 			sub.job.remove(sub, ctx.Err())
-		case <-sub.job.finished:
+		case <-sub.detached:
 		}
 	}()
 	return sub, true
@@ -168,7 +170,7 @@ func (m *PreviewManager) supersede(user string) {
 
 func (m *PreviewManager) subscribeLocked(ctx context.Context, user string, job *previewJob, release func()) io.ReadCloser {
 	reader, writer := io.Pipe()
-	sub := &subscriber{manager: m, job: job, user: user, reader: reader, writer: writer, release: release}
+	sub := &subscriber{manager: m, job: job, user: user, reader: reader, writer: writer, detached: make(chan struct{}), copyDone: make(chan struct{}), release: release}
 	job.mu.Lock()
 	job.subscribers[sub] = struct{}{}
 	job.mu.Unlock()
@@ -178,7 +180,7 @@ func (m *PreviewManager) subscribeLocked(ctx context.Context, user string, job *
 		select {
 		case <-ctx.Done():
 			sub.job.remove(sub, ctx.Err())
-		case <-sub.job.finished:
+		case <-sub.detached:
 		}
 	}()
 	return sub
@@ -274,6 +276,7 @@ func (j *previewJob) remove(sub *subscriber, reason error) {
 		return
 	}
 	delete(j.subscribers, sub)
+	close(sub.detached)
 	sub.release()
 	empty := len(j.subscribers) == 0
 	if empty {
@@ -294,13 +297,15 @@ func (j *previewJob) remove(sub *subscriber, reason error) {
 }
 
 type subscriber struct {
-	manager *PreviewManager
-	job     *previewJob
-	user    string
-	reader  *io.PipeReader
-	writer  *io.PipeWriter
-	once    sync.Once
-	release func()
+	manager  *PreviewManager
+	job      *previewJob
+	user     string
+	reader   *io.PipeReader
+	writer   *io.PipeWriter
+	detached chan struct{}
+	copyDone chan struct{}
+	once     sync.Once
+	release  func()
 }
 
 func (s *subscriber) Read(p []byte) (int, error) { return s.reader.Read(p) }
@@ -323,10 +328,19 @@ func (r *limitedReader) Close() error {
 }
 
 func (s *subscriber) copy() {
+	defer close(s.copyDone)
 	for cursor := 0; ; {
 		s.job.mu.Lock()
 		for cursor == len(s.job.chunks) && !s.job.done {
+			if _, ok := s.job.subscribers[s]; !ok {
+				s.job.mu.Unlock()
+				return
+			}
 			s.job.cond.Wait()
+		}
+		if _, ok := s.job.subscribers[s]; !ok {
+			s.job.mu.Unlock()
+			return
 		}
 		if cursor < len(s.job.chunks) {
 			chunk := s.job.chunks[cursor]

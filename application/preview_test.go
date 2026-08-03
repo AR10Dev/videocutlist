@@ -293,6 +293,81 @@ func TestFinishedPreviewRetainsSlowSubscriberQuota(t *testing.T) {
 	_ = replacement.Close()
 }
 
+func TestFinishedPreviewContextCancellationDetachesSubscriber(t *testing.T) {
+	manager := newManagerWithRunner(t, bytesRunner("preview"), 1, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	reader, result, err := manager.Preview(ctx, "a", testSpec("m_context"))
+	if err != nil || result.Status != CacheMiss {
+		t.Fatalf("preview = %v, %+v", err, result)
+	}
+	defer reader.Close()
+
+	manager.mu.Lock()
+	sub := manager.byUser["a"]
+	manager.mu.Unlock()
+	if sub == nil {
+		t.Fatal("subscriber was not registered")
+	}
+	select {
+	case <-sub.job.finished:
+	case <-time.After(time.Second):
+		t.Fatal("preview did not finish")
+	}
+	cancel()
+	select {
+	case <-sub.detached:
+	case <-time.After(time.Second):
+		t.Fatal("context cancellation did not detach subscriber")
+	}
+
+	manager.mu.Lock()
+	registered := manager.byUser["a"] == sub
+	manager.mu.Unlock()
+	if registered {
+		t.Fatal("cancelled subscriber remained registered")
+	}
+	sub.job.mu.Lock()
+	chunks, replayBytes := len(sub.job.chunks), sub.job.replayBytes
+	sub.job.mu.Unlock()
+	if chunks != 0 || replayBytes != 0 {
+		t.Fatalf("cancelled replay = %d chunks, %d bytes", chunks, replayBytes)
+	}
+	if release, err := manager.limits.AcquireUser("a"); err != nil {
+		t.Fatalf("cancelled subscriber quota = %v", err)
+	} else {
+		release()
+	}
+}
+
+func TestSameKeyReplacementStopsStalledCopy(t *testing.T) {
+	runner := newTestRunner()
+	manager := newManager(t, runner, 1, 1)
+	spec := testSpec("m_stalled")
+	first, result, err := manager.Preview(context.Background(), "a", spec)
+	if err != nil || result.Status != CacheMiss {
+		t.Fatalf("first = %v, %+v", err, result)
+	}
+	defer first.Close()
+	manager.mu.Lock()
+	old := manager.byUser["a"]
+	manager.mu.Unlock()
+
+	second, result, err := manager.Preview(context.Background(), "a", spec)
+	if err != nil || result.Status != CacheShared {
+		t.Fatalf("replacement = %v, %+v", err, result)
+	}
+	select {
+	case <-old.copyDone:
+	case <-time.After(time.Second):
+		t.Fatal("detached copy did not stop")
+	}
+	if err := second.Close(); err != nil {
+		t.Fatal(err)
+	}
+	awaitCancel(t, runner)
+}
+
 func TestSupersededPreviewDropsReplay(t *testing.T) {
 	manager := newManagerWithRunner(t, &cancellationReplayRunner{}, 2, 1)
 	first, result, err := manager.Preview(context.Background(), "a", testSpec("m_first"))
