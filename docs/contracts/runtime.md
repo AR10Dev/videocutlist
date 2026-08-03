@@ -123,14 +123,11 @@ EDITAPP_PREVIEW_BEFORE_MS
 EDITAPP_PREVIEW_AFTER_MS
 EDITAPP_PREVIEW_MAX_MS
 EDITAPP_PREVIEW_GRID_MS
-EDITAPP_ENCODER_PREFERENCE
-EDITAPP_LOG_LEVEL
 ```
 
 Listener addresses are IP literals and are joined to the port with
 `net.JoinHostPort`. Production mode permits explicit non-loopback binding;
-development mode remains loopback-only. `EDITAPP_LISTEN_ADDR` is a legacy
-combined-address alias only when neither new listener setting is present.
+development mode remains loopback-only.
 
 Public base URLs and allowed origins accept only absolute HTTP(S) values
 without credentials, query, or fragment; origins also have no path.

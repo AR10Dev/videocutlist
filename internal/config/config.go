@@ -14,21 +14,19 @@ import (
 )
 
 const (
-	defaultListenAddress     = "127.0.0.1"
-	defaultPort              = 8787
-	defaultTrustedProxies    = "127.0.0.0/8,::1/128"
-	defaultFFmpegPath        = "ffmpeg"
-	defaultFFprobePath       = "ffprobe"
-	defaultPreviewGlobal     = 2
-	defaultPreviewPerUser    = 1
-	defaultExportLimit       = 1
-	defaultCacheMaxBytes     = int64(20 << 30)
-	defaultPreviewBeforeMS   = 2_000
-	defaultPreviewAfterMS    = 6_000
-	defaultPreviewMaxMS      = 15_000
-	defaultPreviewGridMS     = 500
-	defaultEncoderPreference = "software"
-	defaultLogLevel          = "info"
+	defaultListenAddress   = "127.0.0.1"
+	defaultPort            = 8787
+	defaultTrustedProxies  = "127.0.0.0/8,::1/128"
+	defaultFFmpegPath      = "ffmpeg"
+	defaultFFprobePath     = "ffprobe"
+	defaultPreviewGlobal   = 2
+	defaultPreviewPerUser  = 1
+	defaultExportLimit     = 1
+	defaultCacheMaxBytes   = int64(20 << 30)
+	defaultPreviewBeforeMS = 2_000
+	defaultPreviewAfterMS  = 6_000
+	defaultPreviewMaxMS    = 15_000
+	defaultPreviewGridMS   = 500
 )
 
 // Config contains process settings only; filesystem access and service setup
@@ -60,8 +58,6 @@ type Config struct {
 	PreviewAfterMS      int
 	PreviewMaxMS        int
 	PreviewGridMS       int
-	EncoderPreference   string
-	LogLevel            string
 }
 
 // Load reads and validates EDITAPP_* environment variables.
@@ -71,16 +67,14 @@ func Load() (Config, error) {
 
 func load(lookup func(string) (string, bool)) (Config, error) {
 	c := Config{
-		DatabasePath:      required(lookup, "EDITAPP_DATABASE_PATH"),
-		CacheDir:          required(lookup, "EDITAPP_CACHE_DIR"),
-		ExportDir:         required(lookup, "EDITAPP_EXPORT_DIR"),
-		AuthMode:          value(lookup, "EDITAPP_AUTH_MODE", "none"),
-		BearerToken:       value(lookup, "EDITAPP_BEARER_TOKEN", ""),
-		BearerSubject:     value(lookup, "EDITAPP_BEARER_SUBJECT", "static-bearer"),
-		FFmpegPath:        value(lookup, "EDITAPP_FFMPEG_PATH", defaultFFmpegPath),
-		FFprobePath:       value(lookup, "EDITAPP_FFPROBE_PATH", defaultFFprobePath),
-		EncoderPreference: value(lookup, "EDITAPP_ENCODER_PREFERENCE", defaultEncoderPreference),
-		LogLevel:          value(lookup, "EDITAPP_LOG_LEVEL", defaultLogLevel),
+		DatabasePath:  required(lookup, "EDITAPP_DATABASE_PATH"),
+		CacheDir:      required(lookup, "EDITAPP_CACHE_DIR"),
+		ExportDir:     required(lookup, "EDITAPP_EXPORT_DIR"),
+		AuthMode:      value(lookup, "EDITAPP_AUTH_MODE", "none"),
+		BearerToken:   value(lookup, "EDITAPP_BEARER_TOKEN", ""),
+		BearerSubject: value(lookup, "EDITAPP_BEARER_SUBJECT", "static-bearer"),
+		FFmpegPath:    value(lookup, "EDITAPP_FFMPEG_PATH", defaultFFmpegPath),
+		FFprobePath:   value(lookup, "EDITAPP_FFPROBE_PATH", defaultFFprobePath),
 	}
 	if err := loadListener(&c, lookup); err != nil {
 		return Config{}, err
@@ -161,42 +155,18 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 	if c.PreviewBeforeMS+c.PreviewAfterMS > c.PreviewMaxMS {
 		return Config{}, fmt.Errorf("EDITAPP_PREVIEW_MAX_MS must cover the default preview window")
 	}
-	if c.LogLevel != "debug" && c.LogLevel != "info" && c.LogLevel != "warn" && c.LogLevel != "error" {
-		return Config{}, fmt.Errorf("EDITAPP_LOG_LEVEL must be debug, info, warn, or error")
-	}
 	return c, nil
 }
 
 func loadListener(c *Config, lookup func(string) (string, bool)) error {
-	legacy, hasLegacy := lookup("EDITAPP_LISTEN_ADDR")
-	_, hasAddress := lookup("EDITAPP_LISTEN_ADDRESS")
-	_, hasPort := lookup("EDITAPP_PORT")
-	if hasLegacy && (hasAddress || hasPort) {
-		return fmt.Errorf("EDITAPP_LISTEN_ADDR cannot be combined with EDITAPP_LISTEN_ADDRESS or EDITAPP_PORT")
+	c.ListenAddress = value(lookup, "EDITAPP_LISTEN_ADDRESS", defaultListenAddress)
+	if net.ParseIP(c.ListenAddress) == nil {
+		return fmt.Errorf("EDITAPP_LISTEN_ADDRESS must be an IP literal")
 	}
-	if hasLegacy {
-		host, parsedPort, err := net.SplitHostPort(strings.TrimSpace(legacy))
-		if err != nil {
-			return fmt.Errorf("EDITAPP_LISTEN_ADDR must be an IP and port: %w", err)
-		}
-		if net.ParseIP(host) == nil {
-			return fmt.Errorf("EDITAPP_LISTEN_ADDR must use an IP literal")
-		}
-		c.ListenAddress = host
-		c.Port, err = parsePort(parsedPort, "EDITAPP_LISTEN_ADDR")
-		if err != nil {
-			return err
-		}
-	} else {
-		c.ListenAddress = value(lookup, "EDITAPP_LISTEN_ADDRESS", defaultListenAddress)
-		if net.ParseIP(c.ListenAddress) == nil {
-			return fmt.Errorf("EDITAPP_LISTEN_ADDRESS must be an IP literal")
-		}
-		var err error
-		c.Port, err = parsePort(value(lookup, "EDITAPP_PORT", strconv.Itoa(defaultPort)), "EDITAPP_PORT")
-		if err != nil {
-			return err
-		}
+	var err error
+	c.Port, err = parsePort(value(lookup, "EDITAPP_PORT", strconv.Itoa(defaultPort)), "EDITAPP_PORT")
+	if err != nil {
+		return err
 	}
 	c.ListenAddr = net.JoinHostPort(c.ListenAddress, strconv.Itoa(c.Port))
 	return nil

@@ -39,16 +39,12 @@ func TestLoadListenerConfiguration(t *testing.T) {
 		{name: "loopback port", changes: map[string]string{"EDITAPP_LISTEN_ADDRESS": "127.0.0.1", "EDITAPP_PORT": "1"}, listenAddr: "127.0.0.1:1"},
 		{name: "LAN", changes: map[string]string{"EDITAPP_LISTEN_ADDRESS": "0.0.0.0", "EDITAPP_PORT": "4000"}, listenAddr: "0.0.0.0:4000"},
 		{name: "IPv6", changes: map[string]string{"EDITAPP_LISTEN_ADDRESS": "::1", "EDITAPP_PORT": "4000"}, listenAddr: "[::1]:4000"},
-		{name: "legacy alias", changes: map[string]string{"EDITAPP_LISTEN_ADDR": "127.0.0.1:9000"}, listenAddr: "127.0.0.1:9000"},
 		{name: "bearer LAN", changes: map[string]string{"EDITAPP_AUTH_MODE": "bearer", "EDITAPP_BEARER_TOKEN": "secret", "EDITAPP_LISTEN_ADDRESS": "0.0.0.0", "EDITAPP_PORT": "4000"}, listenAddr: "0.0.0.0:4000"},
-		{name: "combined new listener settings", changes: map[string]string{"EDITAPP_LISTEN_ADDR": "127.0.0.1:9000", "EDITAPP_PORT": "9001"}, wantErr: true},
-		{name: "combined new address and legacy alias", changes: map[string]string{"EDITAPP_LISTEN_ADDRESS": "127.0.0.1", "EDITAPP_LISTEN_ADDR": "127.0.0.1:9000"}, wantErr: true},
 		{name: "invalid IP", changes: map[string]string{"EDITAPP_LISTEN_ADDRESS": "localhost"}, wantErr: true},
 		{name: "host port is not an IP", changes: map[string]string{"EDITAPP_LISTEN_ADDRESS": "127.0.0.1:9000"}, wantErr: true},
 		{name: "zero port", changes: map[string]string{"EDITAPP_PORT": "0"}, wantErr: true},
 		{name: "high port", changes: map[string]string{"EDITAPP_PORT": "65536"}, wantErr: true},
 		{name: "invalid port", changes: map[string]string{"EDITAPP_PORT": "nope"}, wantErr: true},
-		{name: "invalid legacy address", changes: map[string]string{"EDITAPP_LISTEN_ADDR": "127.0.0.1:not-a-port"}, wantErr: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			values := mergeEnv(baseEnv(), test.changes)
