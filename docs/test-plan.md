@@ -46,8 +46,8 @@ artifacts and run optional rows whenever their encoder is present.
 
 ## Cancellation and cleanup
 
-Each API-level cancellation test sets `EDITAPP_FFMPEG_PATH` to the absolute
-path of `test/harness/fake-ffmpeg.sh` and `EDITAPP_TEST_PID_FILE` to a temporary
+Each API-level cancellation test sets `VIDEOCUTLIST_FFMPEG_PATH` to the absolute
+path of `test/harness/fake-ffmpeg.sh` and `VIDEOCUTLIST_TEST_PID_FILE` to a temporary
 file. After an HTTP disconnect or superseding request, poll both PIDs in that
 file until they have exited. The request must first receive the initial bytes,
 which proves cancellation is not merely a pre-spawn shortcut. Also assert that

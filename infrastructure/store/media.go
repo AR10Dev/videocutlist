@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"time"
 
-	"editapp/infrastructure/media/index"
+	"videocutlist/infrastructure/media/index"
 )
 
 var ErrMediaNotFound = index.ErrNotFound

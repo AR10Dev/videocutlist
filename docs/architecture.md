@@ -4,14 +4,14 @@
 
 The Stage 0 audit found provider-shaped listener, identity, installation,
 verification, runbook, and browser-path assumptions. The completed refactor
-keeps EditApp provider-neutral: localhost/LAN systemd deployment is primary;
+keeps VideoCutlist provider-neutral: localhost/LAN systemd deployment is primary;
 connectivity products are optional deployment examples only.
 
 ## Data flow
 
 `cmd/server` loads configuration, opens SQLite, recovers interrupted jobs,
 resolves configured media roots, constructs adapters, and serves `client/dist`.
-The browser reads optional `window.EDITAPP_CONFIG`, then requests only the
+The browser reads optional `window.VIDEOCUTLIST_CONFIG`, then requests only the
 normalized `/api/v1/` HTTP boundary. CORS first permits exact configured
 origins; trusted-proxy middleware then validates only configured immediate
 peers and strips untrusted forwarded headers; authentication produces a
@@ -29,8 +29,8 @@ exports are preferred, not frame-exact away from keyframes.
 
 | Area | Responsibility and allowed dependencies |
 | --- | --- |
-| `domain/` | Pure business values and rules; no other `editapp` package, `net/http`, `database/sql`, or `os/exec`. |
-| `application/` | Use cases over domain contracts; may import `editapp/domain` only and never `net/http`. |
+| `domain/` | Pure business values and rules; no other `videocutlist` package, `net/http`, `database/sql`, or `os/exec`. |
+| `application/` | Use cases over domain contracts; may import `videocutlist/domain` only and never `net/http`. |
 | `protocol/` | HTTP request/response, authentication, CORS, and proxy trust; may call application/domain, never infrastructure. |
 | `infrastructure/` | SQLite, filesystem, FFmpeg/FFprobe, cache, media, and adapter implementations; never protocol. |
 | `cmd/server/` | Composition root only. |

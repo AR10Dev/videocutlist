@@ -4,11 +4,11 @@ import (
 	"context"
 	"testing"
 
-	"editapp/infrastructure/store"
+	"videocutlist/infrastructure/store"
 )
 
 func TestOpenDatabaseAppliesAllMigrations(t *testing.T) {
-	db, err := store.OpenDatabase(context.Background(), t.TempDir()+"/editapp.db")
+	db, err := store.OpenDatabase(context.Background(), t.TempDir()+"/videocutlist.db")
 	if err != nil {
 		t.Fatal(err)
 	}

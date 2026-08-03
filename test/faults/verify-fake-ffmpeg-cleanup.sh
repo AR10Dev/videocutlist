@@ -5,7 +5,7 @@ set -euo pipefail
 root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
 pid_file=$(mktemp)
 trap 'rm -f "$pid_file"' EXIT
-EDITAPP_TEST_PID_FILE=$pid_file "$root/test/harness/fake-ffmpeg.sh" >/dev/null 2>&1 &
+VIDEOCUTLIST_TEST_PID_FILE=$pid_file "$root/test/harness/fake-ffmpeg.sh" >/dev/null 2>&1 &
 parent=$!
 for _ in $(seq 1 50); do test -s "$pid_file" && break; sleep 0.02; done
 test -s "$pid_file"

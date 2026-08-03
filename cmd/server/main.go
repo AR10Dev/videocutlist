@@ -11,17 +11,17 @@ import (
 	"syscall"
 	"time"
 
-	"editapp/application"
-	"editapp/domain"
-	"editapp/infrastructure/adapters"
-	"editapp/infrastructure/cache"
-	"editapp/infrastructure/config"
-	exporter "editapp/infrastructure/export"
-	"editapp/infrastructure/ffmpeg"
-	"editapp/infrastructure/media/index"
-	"editapp/infrastructure/media/probe"
-	"editapp/infrastructure/store"
-	"editapp/protocol/http"
+	"videocutlist/application"
+	"videocutlist/domain"
+	"videocutlist/infrastructure/adapters"
+	"videocutlist/infrastructure/cache"
+	"videocutlist/infrastructure/config"
+	exporter "videocutlist/infrastructure/export"
+	"videocutlist/infrastructure/ffmpeg"
+	"videocutlist/infrastructure/media/index"
+	"videocutlist/infrastructure/media/probe"
+	"videocutlist/infrastructure/store"
+	"videocutlist/protocol/http"
 )
 
 func main() {

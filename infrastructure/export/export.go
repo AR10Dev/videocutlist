@@ -16,8 +16,8 @@ import (
 	"strconv"
 	"time"
 
-	"editapp/domain"
-	"editapp/infrastructure/media/probe"
+	"videocutlist/domain"
+	"videocutlist/infrastructure/media/probe"
 )
 
 const maxStderrBytes = 64 << 10
@@ -248,7 +248,7 @@ func uniqueName(directory string, at time.Time) (string, error) {
 		if _, err := rand.Read(random[:]); err != nil {
 			return "", err
 		}
-		name := "editapp-" + at.Format("20060102T150405.000000000Z") + "-" + hex.EncodeToString(random[:]) + ".mkv"
+		name := "videocutlist-" + at.Format("20060102T150405.000000000Z") + "-" + hex.EncodeToString(random[:]) + ".mkv"
 		if _, err := os.Stat(filepath.Join(directory, name)); errors.Is(err, os.ErrNotExist) {
 			return name, nil
 		} else if err != nil {

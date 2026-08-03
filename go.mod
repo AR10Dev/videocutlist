@@ -1,4 +1,4 @@
-module editapp
+module videocutlist
 
 go 1.26.0
 

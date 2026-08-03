@@ -8,13 +8,13 @@ import (
 	"io"
 	"os"
 
-	"editapp/application"
-	"editapp/domain"
-	"editapp/infrastructure/cache"
-	exporter "editapp/infrastructure/export"
-	"editapp/infrastructure/ffmpeg"
-	"editapp/infrastructure/media/index"
-	"editapp/infrastructure/store"
+	"videocutlist/application"
+	"videocutlist/domain"
+	"videocutlist/infrastructure/cache"
+	exporter "videocutlist/infrastructure/export"
+	"videocutlist/infrastructure/ffmpeg"
+	"videocutlist/infrastructure/media/index"
+	"videocutlist/infrastructure/store"
 )
 
 type MediaCatalog struct {

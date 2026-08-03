@@ -6,8 +6,8 @@ import (
 	"errors"
 	"testing"
 
-	"editapp/infrastructure/store"
 	_ "modernc.org/sqlite"
+	"videocutlist/infrastructure/store"
 )
 
 func TestJobStateTransitionsAndRecovery(t *testing.T) {

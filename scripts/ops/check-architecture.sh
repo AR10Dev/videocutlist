@@ -11,15 +11,15 @@ check_imports() {
 	while IFS= read -r file; do
 		while IFS= read -r import_path; do
 			case $path:$import_path in
-				domain:editapp/*|domain:net/http|domain:database/sql|domain:os/exec)
+				domain:videocutlist/*|domain:net/http|domain:database/sql|domain:os/exec)
 					fail "$file imports forbidden $import_path" ;;
-				application:editapp/*)
-					[[ $import_path == editapp/domain ]] || fail "$file imports $import_path outside domain" ;;
+				application:videocutlist/*)
+					[[ $import_path == videocutlist/domain ]] || fail "$file imports $import_path outside domain" ;;
 				application:net/http)
 					fail "$file imports forbidden net/http" ;;
-				protocol:editapp/infrastructure/*)
+				protocol:videocutlist/infrastructure/*)
 					fail "$file imports infrastructure $import_path" ;;
-				infrastructure:editapp/protocol/*)
+				infrastructure:videocutlist/protocol/*)
 					fail "$file imports protocol $import_path" ;;
 			esac
 		done < <(awk '

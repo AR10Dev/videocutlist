@@ -5,26 +5,26 @@ Preview-cache entries are disposable. At startup the service removes abandoned `
 For a targeted inspection:
 
 ```bash
-sudo find /var/cache/editapp/previews -type f -name '*.partial' -ls
-sudo du -sh /var/cache/editapp/previews
+sudo find /var/cache/videocutlist/previews -type f -name '*.partial' -ls
+sudo du -sh /var/cache/videocutlist/previews
 ```
 
 To clear only interrupted files, stop the service first so no writer races the deletion:
 
 ```bash
-sudo systemctl stop editapp
-sudo find /var/cache/editapp/previews -type f -name '*.partial' -delete
-sudo systemctl start editapp
+sudo systemctl stop videocutlist
+sudo find /var/cache/videocutlist/previews -type f -name '*.partial' -delete
+sudo systemctl start videocutlist
 sudo scripts/ops/verify-deployment.sh
 ```
 
 For suspected cache corruption or an urgent space recovery, move the exact cache directory aside, recreate it with the original permissions, verify the service, and delete the moved directory only after successful preview regeneration:
 
 ```bash
-sudo systemctl stop editapp
-sudo mv /var/cache/editapp/previews /var/cache/editapp/previews.quarantine
-sudo install -d -o root -g editapp -m 0770 /var/cache/editapp/previews
-sudo systemctl start editapp
+sudo systemctl stop videocutlist
+sudo mv /var/cache/videocutlist/previews /var/cache/videocutlist/previews.quarantine
+sudo install -d -o root -g videocutlist -m 0770 /var/cache/videocutlist/previews
+sudo systemctl start videocutlist
 sudo scripts/ops/verify-deployment.sh
 ```
 

@@ -7,7 +7,7 @@ import (
 	"os"
 	"testing"
 
-	cachepkg "editapp/infrastructure/cache"
+	cachepkg "videocutlist/infrastructure/cache"
 )
 
 func TestInvalidCompleteFileIsNeverAHit(t *testing.T) {

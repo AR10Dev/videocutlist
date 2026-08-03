@@ -4,7 +4,6 @@
 - The integration commands are `make check`, `make test`, and `make smoke`.
 - Go must pass `gofmt`, `go vet`, and `go test -race ./...`.
 - Web code must pass lint, Vitest, build, and Playwright.
-- Use the $sol-advisor:orchestration to build this, verify it, and obtain the final Sol review before reporting done
 
 ## Architecture and security
 

@@ -36,15 +36,15 @@ func TestLoadListenerConfiguration(t *testing.T) {
 		wantErr    bool
 	}{
 		{name: "default", listenAddr: "127.0.0.1:8787"},
-		{name: "loopback port", changes: map[string]string{"EDITAPP_LISTEN_ADDRESS": "127.0.0.1", "EDITAPP_PORT": "1"}, listenAddr: "127.0.0.1:1"},
-		{name: "LAN", changes: map[string]string{"EDITAPP_LISTEN_ADDRESS": "0.0.0.0", "EDITAPP_PORT": "4000"}, listenAddr: "0.0.0.0:4000"},
-		{name: "IPv6", changes: map[string]string{"EDITAPP_LISTEN_ADDRESS": "::1", "EDITAPP_PORT": "4000"}, listenAddr: "[::1]:4000"},
-		{name: "bearer LAN", changes: map[string]string{"EDITAPP_AUTH_MODE": "bearer", "EDITAPP_BEARER_TOKEN": "secret", "EDITAPP_LISTEN_ADDRESS": "0.0.0.0", "EDITAPP_PORT": "4000"}, listenAddr: "0.0.0.0:4000"},
-		{name: "invalid IP", changes: map[string]string{"EDITAPP_LISTEN_ADDRESS": "localhost"}, wantErr: true},
-		{name: "host port is not an IP", changes: map[string]string{"EDITAPP_LISTEN_ADDRESS": "127.0.0.1:9000"}, wantErr: true},
-		{name: "zero port", changes: map[string]string{"EDITAPP_PORT": "0"}, wantErr: true},
-		{name: "high port", changes: map[string]string{"EDITAPP_PORT": "65536"}, wantErr: true},
-		{name: "invalid port", changes: map[string]string{"EDITAPP_PORT": "nope"}, wantErr: true},
+		{name: "loopback port", changes: map[string]string{"VIDEOCUTLIST_LISTEN_ADDRESS": "127.0.0.1", "VIDEOCUTLIST_PORT": "1"}, listenAddr: "127.0.0.1:1"},
+		{name: "LAN", changes: map[string]string{"VIDEOCUTLIST_LISTEN_ADDRESS": "0.0.0.0", "VIDEOCUTLIST_PORT": "4000"}, listenAddr: "0.0.0.0:4000"},
+		{name: "IPv6", changes: map[string]string{"VIDEOCUTLIST_LISTEN_ADDRESS": "::1", "VIDEOCUTLIST_PORT": "4000"}, listenAddr: "[::1]:4000"},
+		{name: "bearer LAN", changes: map[string]string{"VIDEOCUTLIST_AUTH_MODE": "bearer", "VIDEOCUTLIST_BEARER_TOKEN": "secret", "VIDEOCUTLIST_LISTEN_ADDRESS": "0.0.0.0", "VIDEOCUTLIST_PORT": "4000"}, listenAddr: "0.0.0.0:4000"},
+		{name: "invalid IP", changes: map[string]string{"VIDEOCUTLIST_LISTEN_ADDRESS": "localhost"}, wantErr: true},
+		{name: "host port is not an IP", changes: map[string]string{"VIDEOCUTLIST_LISTEN_ADDRESS": "127.0.0.1:9000"}, wantErr: true},
+		{name: "zero port", changes: map[string]string{"VIDEOCUTLIST_PORT": "0"}, wantErr: true},
+		{name: "high port", changes: map[string]string{"VIDEOCUTLIST_PORT": "65536"}, wantErr: true},
+		{name: "invalid port", changes: map[string]string{"VIDEOCUTLIST_PORT": "nope"}, wantErr: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			values := mergeEnv(baseEnv(), test.changes)
@@ -71,22 +71,22 @@ func TestLoadParsesNetworkSettings(t *testing.T) {
 		changes map[string]string
 		wantErr bool
 	}{
-		{name: "valid base URL", changes: map[string]string{"EDITAPP_PUBLIC_BASE_URL": "https://edit.example.test/app"}},
-		{name: "valid exact origins", changes: map[string]string{"EDITAPP_ALLOWED_ORIGINS": "https://edit.example.test,http://localhost:5173"}},
-		{name: "valid CIDRs", changes: map[string]string{"EDITAPP_TRUSTED_PROXY_CIDRS": "10.0.0.0/8,::1/128"}},
-		{name: "bad base scheme", changes: map[string]string{"EDITAPP_PUBLIC_BASE_URL": "ftp://edit.example.test"}, wantErr: true},
-		{name: "relative base URL", changes: map[string]string{"EDITAPP_PUBLIC_BASE_URL": "/app"}, wantErr: true},
-		{name: "base URL credentials", changes: map[string]string{"EDITAPP_PUBLIC_BASE_URL": "https://user:pass@edit.example.test"}, wantErr: true},
-		{name: "base URL query", changes: map[string]string{"EDITAPP_PUBLIC_BASE_URL": "https://edit.example.test/?x=1"}, wantErr: true},
-		{name: "base URL fragment", changes: map[string]string{"EDITAPP_PUBLIC_BASE_URL": "https://edit.example.test/#top"}, wantErr: true},
-		{name: "origin path", changes: map[string]string{"EDITAPP_ALLOWED_ORIGINS": "https://edit.example.test/app"}, wantErr: true},
-		{name: "origin credentials", changes: map[string]string{"EDITAPP_ALLOWED_ORIGINS": "https://user:pass@edit.example.test"}, wantErr: true},
-		{name: "origin query", changes: map[string]string{"EDITAPP_ALLOWED_ORIGINS": "https://edit.example.test/?x=1"}, wantErr: true},
-		{name: "origin fragment", changes: map[string]string{"EDITAPP_ALLOWED_ORIGINS": "https://edit.example.test/#top"}, wantErr: true},
-		{name: "origin bad scheme", changes: map[string]string{"EDITAPP_ALLOWED_ORIGINS": "ftp://edit.example.test"}, wantErr: true},
-		{name: "empty origin entry", changes: map[string]string{"EDITAPP_ALLOWED_ORIGINS": "https://edit.example.test,"}, wantErr: true},
-		{name: "bad CIDR", changes: map[string]string{"EDITAPP_TRUSTED_PROXY_CIDRS": "bad"}, wantErr: true},
-		{name: "empty CIDR", changes: map[string]string{"EDITAPP_TRUSTED_PROXY_CIDRS": "127.0.0.1/32,"}, wantErr: true},
+		{name: "valid base URL", changes: map[string]string{"VIDEOCUTLIST_PUBLIC_BASE_URL": "https://edit.example.test/app"}},
+		{name: "valid exact origins", changes: map[string]string{"VIDEOCUTLIST_ALLOWED_ORIGINS": "https://edit.example.test,http://localhost:5173"}},
+		{name: "valid CIDRs", changes: map[string]string{"VIDEOCUTLIST_TRUSTED_PROXY_CIDRS": "10.0.0.0/8,::1/128"}},
+		{name: "bad base scheme", changes: map[string]string{"VIDEOCUTLIST_PUBLIC_BASE_URL": "ftp://edit.example.test"}, wantErr: true},
+		{name: "relative base URL", changes: map[string]string{"VIDEOCUTLIST_PUBLIC_BASE_URL": "/app"}, wantErr: true},
+		{name: "base URL credentials", changes: map[string]string{"VIDEOCUTLIST_PUBLIC_BASE_URL": "https://user:pass@edit.example.test"}, wantErr: true},
+		{name: "base URL query", changes: map[string]string{"VIDEOCUTLIST_PUBLIC_BASE_URL": "https://edit.example.test/?x=1"}, wantErr: true},
+		{name: "base URL fragment", changes: map[string]string{"VIDEOCUTLIST_PUBLIC_BASE_URL": "https://edit.example.test/#top"}, wantErr: true},
+		{name: "origin path", changes: map[string]string{"VIDEOCUTLIST_ALLOWED_ORIGINS": "https://edit.example.test/app"}, wantErr: true},
+		{name: "origin credentials", changes: map[string]string{"VIDEOCUTLIST_ALLOWED_ORIGINS": "https://user:pass@edit.example.test"}, wantErr: true},
+		{name: "origin query", changes: map[string]string{"VIDEOCUTLIST_ALLOWED_ORIGINS": "https://edit.example.test/?x=1"}, wantErr: true},
+		{name: "origin fragment", changes: map[string]string{"VIDEOCUTLIST_ALLOWED_ORIGINS": "https://edit.example.test/#top"}, wantErr: true},
+		{name: "origin bad scheme", changes: map[string]string{"VIDEOCUTLIST_ALLOWED_ORIGINS": "ftp://edit.example.test"}, wantErr: true},
+		{name: "empty origin entry", changes: map[string]string{"VIDEOCUTLIST_ALLOWED_ORIGINS": "https://edit.example.test,"}, wantErr: true},
+		{name: "bad CIDR", changes: map[string]string{"VIDEOCUTLIST_TRUSTED_PROXY_CIDRS": "bad"}, wantErr: true},
+		{name: "empty CIDR", changes: map[string]string{"VIDEOCUTLIST_TRUSTED_PROXY_CIDRS": "127.0.0.1/32,"}, wantErr: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			_, err := load(env(mergeEnv(baseEnv(), test.changes)))
@@ -99,9 +99,9 @@ func TestLoadParsesNetworkSettings(t *testing.T) {
 
 func TestLoadStoresValidatedNetworkSettings(t *testing.T) {
 	c, err := load(env(mergeEnv(baseEnv(), map[string]string{
-		"EDITAPP_PUBLIC_BASE_URL":     "https://edit.example.test/app",
-		"EDITAPP_ALLOWED_ORIGINS":     "https://edit.example.test, http://localhost:5173",
-		"EDITAPP_TRUSTED_PROXY_CIDRS": "10.0.0.0/8,::1/128",
+		"VIDEOCUTLIST_PUBLIC_BASE_URL":     "https://edit.example.test/app",
+		"VIDEOCUTLIST_ALLOWED_ORIGINS":     "https://edit.example.test, http://localhost:5173",
+		"VIDEOCUTLIST_TRUSTED_PROXY_CIDRS": "10.0.0.0/8,::1/128",
 	})))
 	if err != nil {
 		t.Fatal(err)
@@ -125,14 +125,14 @@ func TestLoadTimeouts(t *testing.T) {
 		idle        time.Duration
 		wantErr     bool
 	}{
-		{name: "overrides", changes: map[string]string{"EDITAPP_READ_TIMEOUT": "2s", "EDITAPP_WRITE_TIMEOUT": "45s", "EDITAPP_IDLE_TIMEOUT": "3m"}, read: 2 * time.Second, write: 45 * time.Second, idle: 3 * time.Minute},
-		{name: "streaming write timeout", changes: map[string]string{"EDITAPP_WRITE_TIMEOUT": "0s"}, read: 15 * time.Second, write: 0, idle: time.Minute},
-		{name: "zero read", changes: map[string]string{"EDITAPP_READ_TIMEOUT": "0s"}, wantErr: true},
-		{name: "negative read", changes: map[string]string{"EDITAPP_READ_TIMEOUT": "-1s"}, wantErr: true},
-		{name: "negative write", changes: map[string]string{"EDITAPP_WRITE_TIMEOUT": "-1s"}, wantErr: true},
-		{name: "zero idle", changes: map[string]string{"EDITAPP_IDLE_TIMEOUT": "0s"}, wantErr: true},
-		{name: "invalid read", changes: map[string]string{"EDITAPP_READ_TIMEOUT": "soon"}, wantErr: true},
-		{name: "invalid idle", changes: map[string]string{"EDITAPP_IDLE_TIMEOUT": "later"}, wantErr: true},
+		{name: "overrides", changes: map[string]string{"VIDEOCUTLIST_READ_TIMEOUT": "2s", "VIDEOCUTLIST_WRITE_TIMEOUT": "45s", "VIDEOCUTLIST_IDLE_TIMEOUT": "3m"}, read: 2 * time.Second, write: 45 * time.Second, idle: 3 * time.Minute},
+		{name: "streaming write timeout", changes: map[string]string{"VIDEOCUTLIST_WRITE_TIMEOUT": "0s"}, read: 15 * time.Second, write: 0, idle: time.Minute},
+		{name: "zero read", changes: map[string]string{"VIDEOCUTLIST_READ_TIMEOUT": "0s"}, wantErr: true},
+		{name: "negative read", changes: map[string]string{"VIDEOCUTLIST_READ_TIMEOUT": "-1s"}, wantErr: true},
+		{name: "negative write", changes: map[string]string{"VIDEOCUTLIST_WRITE_TIMEOUT": "-1s"}, wantErr: true},
+		{name: "zero idle", changes: map[string]string{"VIDEOCUTLIST_IDLE_TIMEOUT": "0s"}, wantErr: true},
+		{name: "invalid read", changes: map[string]string{"VIDEOCUTLIST_READ_TIMEOUT": "soon"}, wantErr: true},
+		{name: "invalid idle", changes: map[string]string{"VIDEOCUTLIST_IDLE_TIMEOUT": "later"}, wantErr: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			c, err := load(env(mergeEnv(baseEnv(), test.changes)))
@@ -154,10 +154,10 @@ func TestLoadTimeouts(t *testing.T) {
 
 func TestLoadRejectsUnsafeConfiguration(t *testing.T) {
 	for name, changes := range map[string]map[string]string{
-		"unknown auth":         {"EDITAPP_AUTH_MODE": "oidc"},
-		"bearer without token": {"EDITAPP_AUTH_MODE": "bearer"},
-		"bad roots":            {"EDITAPP_MEDIA_ROOTS_JSON": "[]"},
-		"window too large":     {"EDITAPP_PREVIEW_BEFORE_MS": "10000", "EDITAPP_PREVIEW_AFTER_MS": "6000"},
+		"unknown auth":         {"VIDEOCUTLIST_AUTH_MODE": "oidc"},
+		"bearer without token": {"VIDEOCUTLIST_AUTH_MODE": "bearer"},
+		"bad roots":            {"VIDEOCUTLIST_MEDIA_ROOTS_JSON": "[]"},
+		"window too large":     {"VIDEOCUTLIST_PREVIEW_BEFORE_MS": "10000", "VIDEOCUTLIST_PREVIEW_AFTER_MS": "6000"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			values := mergeEnv(baseEnv(), changes)
@@ -177,17 +177,17 @@ func env(values map[string]string) func(string) (string, bool) {
 
 func TestLoadErrorNamesSetting(t *testing.T) {
 	_, err := load(env(map[string]string{}))
-	if err == nil || !strings.Contains(err.Error(), "EDITAPP_DATABASE_PATH") {
+	if err == nil || !strings.Contains(err.Error(), "VIDEOCUTLIST_DATABASE_PATH") {
 		t.Fatalf("error = %v", err)
 	}
 }
 
 func baseEnv() map[string]string {
 	return map[string]string{
-		"EDITAPP_DATABASE_PATH":    "data/editapp.db",
-		"EDITAPP_CACHE_DIR":        "data/cache",
-		"EDITAPP_EXPORT_DIR":       "data/exports",
-		"EDITAPP_MEDIA_ROOTS_JSON": `{"camera":"/media/camera"}`,
+		"VIDEOCUTLIST_DATABASE_PATH":    "data/videocutlist.db",
+		"VIDEOCUTLIST_CACHE_DIR":        "data/cache",
+		"VIDEOCUTLIST_EXPORT_DIR":       "data/exports",
+		"VIDEOCUTLIST_MEDIA_ROOTS_JSON": `{"camera":"/media/camera"}`,
 	}
 }
 

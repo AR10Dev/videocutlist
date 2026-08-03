@@ -6,23 +6,23 @@ Run the read-only check after install, restart, or upgrade:
 
 ```bash
 sudo scripts/ops/verify-deployment.sh
-journalctl -u editapp -n 100 --no-pager
+journalctl -u videocutlist -n 100 --no-pager
 ```
 
-It checks `/api/v1/health`, `/api/v1/ready`, the active EditApp service, and the listener configured in `/etc/editapp/editapp.env`. The server address is `http://EDITAPP_LISTEN_ADDRESS:EDITAPP_PORT`; bracket an IPv6 address in a browser URL.
+It checks `/api/v1/health`, `/api/v1/ready`, the active VideoCutlist service, and the listener configured in `/etc/videocutlist/videocutlist.env`. The server address is `http://VIDEOCUTLIST_LISTEN_ADDRESS:VIDEOCUTLIST_PORT`; bracket an IPv6 address in a browser URL.
 
-For the bundled client served by EditApp, no browser configuration is needed: it uses the current page origin and no authentication. For a separately hosted browser client, define `window.EDITAPP_CONFIG` before its application module loads:
+For the bundled client served by VideoCutlist, no browser configuration is needed: it uses the current page origin and no authentication. For a separately hosted browser client, define `window.VIDEOCUTLIST_CONFIG` before its application module loads:
 
 ```html
 <script>
-window.EDITAPP_CONFIG = {
-  serverBaseUrl: "https://editapp.example.test",
+window.VIDEOCUTLIST_CONFIG = {
+  serverBaseUrl: "https://videocutlist.example.test",
   authentication: { type: "bearer", token: "editor-token" }
 };
 </script>
 ```
 
-`serverBaseUrl` must be an absolute HTTP(S) URL without credentials, query, or fragment. Its API requests stay beneath `/api/v1/`. Set `EDITAPP_ALLOWED_ORIGINS` to the exact client origins (comma-separated) for this cross-origin setup; a non-matching cross-origin request is denied, and `*` is never accepted. Use `{ type: "none" }` for application `none`; use `{ type: "bearer", token: "..." }` for `bearer`; use `{ type: "cookie" }` only with a trusted reverse proxy that supplies the browser session and validated `X-Forwarded-User`.
+`serverBaseUrl` must be an absolute HTTP(S) URL without credentials, query, or fragment. Its API requests stay beneath `/api/v1/`. Set `VIDEOCUTLIST_ALLOWED_ORIGINS` to the exact client origins (comma-separated) for this cross-origin setup; a non-matching cross-origin request is denied, and `*` is never accepted. Use `{ type: "none" }` for application `none`; use `{ type: "bearer", token: "..." }` for `bearer`; use `{ type: "cookie" }` only with a trusted reverse proxy that supplies the browser session and validated `X-Forwarded-User`.
 
 ## Upgrade
 
@@ -31,21 +31,21 @@ Use a clean checkout at the desired revision. The release name must be new and c
 ```bash
 git rev-parse HEAD
 sudo scripts/install/install-arch-cachyos.sh 2026-07-29.1
-sudo systemctl restart editapp
+sudo systemctl restart videocutlist
 sudo scripts/ops/verify-deployment.sh
 ```
 
-The installer builds before changing `/opt/editapp/current`; a build failure leaves the active release untouched. Keep the prior release directory for rollback.
+The installer builds before changing `/opt/videocutlist/current`; a build failure leaves the active release untouched. Keep the prior release directory for rollback.
 
 ## Rollback
 
 Identify a known-good release, then atomically repoint the symlink and restart:
 
 ```bash
-sudo ls -1 /opt/editapp/releases
-sudo ln -s /opt/editapp/releases/KNOWN_GOOD /opt/editapp/current.new
-sudo mv -Tf /opt/editapp/current.new /opt/editapp/current
-sudo systemctl restart editapp
+sudo ls -1 /opt/videocutlist/releases
+sudo ln -s /opt/videocutlist/releases/KNOWN_GOOD /opt/videocutlist/current.new
+sudo mv -Tf /opt/videocutlist/current.new /opt/videocutlist/current
+sudo systemctl restart videocutlist
 sudo scripts/ops/verify-deployment.sh
 ```
 
@@ -56,11 +56,11 @@ Do not roll back the binary across an unreviewed database migration. This MVP's 
 Back up configuration, SQLite, and exports. The preview cache is reproducible and excluded. Quiesce the service for a simple consistent file backup:
 
 ```bash
-sudo systemctl stop editapp
-sudo install -d -m 0700 /var/backups/editapp/$(date +%F)
-sudo sqlite3 /var/lib/editapp/data/editapp.db ".backup '/var/backups/editapp/$(date +%F)/editapp.db'"
-sudo cp -a /etc/editapp/editapp.env /var/lib/editapp/exports /var/backups/editapp/$(date +%F)/
-sudo systemctl start editapp
+sudo systemctl stop videocutlist
+sudo install -d -m 0700 /var/backups/videocutlist/$(date +%F)
+sudo sqlite3 /var/lib/videocutlist/data/videocutlist.db ".backup '/var/backups/videocutlist/$(date +%F)/videocutlist.db'"
+sudo cp -a /etc/videocutlist/videocutlist.env /var/lib/videocutlist/exports /var/backups/videocutlist/$(date +%F)/
+sudo systemctl start videocutlist
 sudo scripts/ops/verify-deployment.sh
 ```
 

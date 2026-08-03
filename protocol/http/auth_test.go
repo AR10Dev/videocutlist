@@ -5,7 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"editapp/domain"
+	"videocutlist/domain"
 )
 
 func TestPrincipalAllows(t *testing.T) {

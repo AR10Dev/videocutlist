@@ -7,7 +7,7 @@ import (
 	"strings"
 	"unicode"
 
-	"editapp/domain"
+	"videocutlist/domain"
 )
 
 var ErrUnauthenticated = errors.New("unauthenticated")

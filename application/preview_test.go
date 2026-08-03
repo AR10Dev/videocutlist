@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"editapp/domain"
-	cache "editapp/infrastructure/cache"
+	"videocutlist/domain"
+	cache "videocutlist/infrastructure/cache"
 )
 
 type bytesRunner []byte

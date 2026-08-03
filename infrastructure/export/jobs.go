@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"os"
 
-	"editapp/domain"
-	"editapp/infrastructure/store"
+	"videocutlist/domain"
+	"videocutlist/infrastructure/store"
 )
 
 // Coordinator connects durable state transitions to one cancellable FFmpeg run.

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://editapp.local/contracts/project-v1.json",
-  "title": "EditApp Project",
+  "$id": "https://videocutlist.local/contracts/project-v1.json",
+  "title": "VideoCutlist Project",
   "type": "object",
   "additionalProperties": false,
   "required": ["mediaId", "revision", "segments", "uiState"],

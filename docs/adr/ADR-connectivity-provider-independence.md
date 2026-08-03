@@ -5,7 +5,7 @@ Status: accepted
 ## Context
 
 The Stage 0 audit found provider-shaped listener validation, authentication
-naming, API assumptions, installation, health checks, and runbooks. EditApp
+naming, API assumptions, installation, health checks, and runbooks. VideoCutlist
 must work over any reachable standard IP network while retaining its media and
 process-security controls.
 

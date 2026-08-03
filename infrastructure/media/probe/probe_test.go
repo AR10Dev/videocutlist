@@ -8,10 +8,10 @@ import (
 )
 
 func init() {
-	if os.Getenv("EDITAPP_TEST_FFPROBE") != "1" {
+	if os.Getenv("VIDEOCUTLIST_TEST_FFPROBE") != "1" {
 		return
 	}
-	if os.Getenv("EDITAPP_TEST_FFPROBE_FD") == "1" {
+	if os.Getenv("VIDEOCUTLIST_TEST_FFPROBE_FD") == "1" {
 		data, err := os.ReadFile("/proc/self/fd/3")
 		if err != nil || string(data) != "opened-media" {
 			os.Exit(2)
@@ -22,8 +22,8 @@ func init() {
 }
 
 func TestClientProbesOpenFile(t *testing.T) {
-	t.Setenv("EDITAPP_TEST_FFPROBE", "1")
-	t.Setenv("EDITAPP_TEST_FFPROBE_FD", "1")
+	t.Setenv("VIDEOCUTLIST_TEST_FFPROBE", "1")
+	t.Setenv("VIDEOCUTLIST_TEST_FFPROBE_FD", "1")
 	source, err := os.CreateTemp(t.TempDir(), "media-*.mp4")
 	if err != nil {
 		t.Fatal(err)
@@ -41,7 +41,7 @@ func TestClientProbesOpenFile(t *testing.T) {
 }
 
 func TestClientNormalizesOutput(t *testing.T) {
-	t.Setenv("EDITAPP_TEST_FFPROBE", "1")
+	t.Setenv("VIDEOCUTLIST_TEST_FFPROBE", "1")
 	metadata, err := (Client{Path: os.Args[0]}).Probe(context.Background(), "-not-a-shell-command.mp4")
 	if err != nil {
 		t.Fatal(err)

@@ -8,11 +8,11 @@ import (
 	"path/filepath"
 	"testing"
 
-	"editapp/application"
-	"editapp/infrastructure/ffmpeg"
-	"editapp/infrastructure/media/index"
-	"editapp/infrastructure/media/probe"
-	"editapp/infrastructure/store"
+	"videocutlist/application"
+	"videocutlist/infrastructure/ffmpeg"
+	"videocutlist/infrastructure/media/index"
+	"videocutlist/infrastructure/media/probe"
+	"videocutlist/infrastructure/store"
 )
 
 func TestMediaAPIShapeHidesStorageAndProviderMetadata(t *testing.T) {
@@ -66,7 +66,7 @@ func TestMediaCatalogPreviewRejectsChangedSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	db, err := store.OpenDatabase(ctx, filepath.Join(t.TempDir(), "editapp.db"))
+	db, err := store.OpenDatabase(ctx, filepath.Join(t.TempDir(), "videocutlist.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +99,7 @@ func TestPreviewRunnerRejectsRefreshedSourceForOldSpec(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	db, err := store.OpenDatabase(ctx, filepath.Join(t.TempDir(), "editapp.db"))
+	db, err := store.OpenDatabase(ctx, filepath.Join(t.TempDir(), "videocutlist.db"))
 	if err != nil {
 		t.Fatal(err)
 	}

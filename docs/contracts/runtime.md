@@ -2,7 +2,7 @@
 
 ## Identity and media
 
-- Go module: `editapp`.
+- Go module: `videocutlist`.
 - A media ID is `m_` plus unpadded base64url SHA-256 of
   `rootAlias + "\x00" + slash-normalized relative path`.
 - A source fingerprint is media ID, byte size, and nanosecond mtime.
@@ -67,8 +67,8 @@ Modes are `none`, `bearer`, and `trusted_proxy`.
 
 - `none` ignores credentials and returns subject `anonymous`.
 - `bearer` requires exactly one `Authorization: Bearer <token>` value and uses
-  constant-time comparison with `EDITAPP_BEARER_TOKEN`. The principal subject
-  is `EDITAPP_BEARER_SUBJECT`, default `static-bearer`.
+  constant-time comparison with `VIDEOCUTLIST_BEARER_TOKEN`. The principal subject
+  is `VIDEOCUTLIST_BEARER_SUBJECT`, default `static-bearer`.
 - `trusted_proxy` consumes only the validated `X-Forwarded-User` value already
   placed in request context by the trusted-proxy middleware. It never reads a
   raw identity header.
@@ -98,31 +98,31 @@ before preview, refresh, project, job, or export application services run.
 All settings use environment variables:
 
 ```text
-EDITAPP_LISTEN_ADDRESS=127.0.0.1
-EDITAPP_PORT=8787
-EDITAPP_PUBLIC_BASE_URL
-EDITAPP_ALLOWED_ORIGINS
-EDITAPP_READ_TIMEOUT=15s
-EDITAPP_WRITE_TIMEOUT=0s
-EDITAPP_IDLE_TIMEOUT=60s
-EDITAPP_DATABASE_PATH
-EDITAPP_CACHE_DIR
-EDITAPP_EXPORT_DIR
-EDITAPP_MEDIA_ROOTS_JSON
-EDITAPP_AUTH_MODE=none|bearer|trusted_proxy
-EDITAPP_BEARER_TOKEN
-EDITAPP_BEARER_SUBJECT=static-bearer
-EDITAPP_TRUSTED_PROXY_CIDRS
-EDITAPP_FFMPEG_PATH
-EDITAPP_FFPROBE_PATH
-EDITAPP_PREVIEW_GLOBAL_LIMIT
-EDITAPP_PREVIEW_PER_USER_LIMIT
-EDITAPP_EXPORT_LIMIT
-EDITAPP_CACHE_MAX_BYTES
-EDITAPP_PREVIEW_BEFORE_MS
-EDITAPP_PREVIEW_AFTER_MS
-EDITAPP_PREVIEW_MAX_MS
-EDITAPP_PREVIEW_GRID_MS
+VIDEOCUTLIST_LISTEN_ADDRESS=127.0.0.1
+VIDEOCUTLIST_PORT=8787
+VIDEOCUTLIST_PUBLIC_BASE_URL
+VIDEOCUTLIST_ALLOWED_ORIGINS
+VIDEOCUTLIST_READ_TIMEOUT=15s
+VIDEOCUTLIST_WRITE_TIMEOUT=0s
+VIDEOCUTLIST_IDLE_TIMEOUT=60s
+VIDEOCUTLIST_DATABASE_PATH
+VIDEOCUTLIST_CACHE_DIR
+VIDEOCUTLIST_EXPORT_DIR
+VIDEOCUTLIST_MEDIA_ROOTS_JSON
+VIDEOCUTLIST_AUTH_MODE=none|bearer|trusted_proxy
+VIDEOCUTLIST_BEARER_TOKEN
+VIDEOCUTLIST_BEARER_SUBJECT=static-bearer
+VIDEOCUTLIST_TRUSTED_PROXY_CIDRS
+VIDEOCUTLIST_FFMPEG_PATH
+VIDEOCUTLIST_FFPROBE_PATH
+VIDEOCUTLIST_PREVIEW_GLOBAL_LIMIT
+VIDEOCUTLIST_PREVIEW_PER_USER_LIMIT
+VIDEOCUTLIST_EXPORT_LIMIT
+VIDEOCUTLIST_CACHE_MAX_BYTES
+VIDEOCUTLIST_PREVIEW_BEFORE_MS
+VIDEOCUTLIST_PREVIEW_AFTER_MS
+VIDEOCUTLIST_PREVIEW_MAX_MS
+VIDEOCUTLIST_PREVIEW_GRID_MS
 ```
 
 Listener addresses are IP literals and are joined to the port with
@@ -131,7 +131,7 @@ development mode remains loopback-only.
 
 Public base URLs and allowed origins accept only absolute HTTP(S) values
 without credentials, query, or fragment; origins also have no path.
-`EDITAPP_ALLOWED_ORIGINS` is comma-separated and empty by default. CORS is
+`VIDEOCUTLIST_ALLOWED_ORIGINS` is comma-separated and empty by default. CORS is
 deny-by-default: requests without `Origin` remain ordinary same-origin or
 non-browser requests, while a request with `Origin` must exactly match the
 configured list. Allowed responses echo that origin, set
@@ -151,7 +151,7 @@ cross-origin requests return 403 before application services run.
 
 `X-Forwarded-For`, `X-Forwarded-Host`, `X-Forwarded-Proto`, and
 `X-Forwarded-User` are consumed only when the immediate transport peer belongs
-to `EDITAPP_TRUSTED_PROXY_CIDRS`. The middleware strips these headers before
+to `VIDEOCUTLIST_TRUSTED_PROXY_CIDRS`. The middleware strips these headers before
 calling application code and exposes validated values through request context.
 Untrusted peers retain their transport address, request host, and transport
 scheme; their forwarded values and identity are ignored.
@@ -172,7 +172,7 @@ zero so streamed previews are not terminated by a whole-response deadline.
 
 ## Browser client
 
-The browser reads an optional `window.EDITAPP_CONFIG` before application module
+The browser reads an optional `window.VIDEOCUTLIST_CONFIG` before application module
 loading:
 
 ```text

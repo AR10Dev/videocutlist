@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"editapp/domain"
+	"videocutlist/domain"
 )
 
 type catalogStub struct{ refreshes int }

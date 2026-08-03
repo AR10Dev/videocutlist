@@ -264,9 +264,9 @@ export function App() {
 
   const duration = mediaDuration(selected);
   return (
-    <main aria-label="EditApp segment selection">
+    <main aria-label="VideoCutlist segment selection">
       <header>
-        <h1>EditApp</h1>
+        <h1>VideoCutlist</h1>
         <p id="status" role="status" aria-live="polite">
           {status}
         </p>

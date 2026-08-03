@@ -11,7 +11,7 @@ import (
 	"sync"
 	"time"
 
-	"editapp/domain"
+	"videocutlist/domain"
 )
 
 var ErrJobState = errors.New("invalid export job transition")

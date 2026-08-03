@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"editapp/domain"
+	"videocutlist/domain"
 )
 
 var accept = ValidatorFunc(func(_ context.Context, path string) error {

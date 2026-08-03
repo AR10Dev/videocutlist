@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"editapp/domain"
-	ffmpegrunner "editapp/infrastructure/ffmpeg"
+	"videocutlist/domain"
+	ffmpegrunner "videocutlist/infrastructure/ffmpeg"
 )
 
 func TestSoftwarePreviewStreamsAndValidates(t *testing.T) {

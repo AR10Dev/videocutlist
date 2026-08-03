@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"editapp/domain"
-	"editapp/infrastructure/export"
-	"editapp/infrastructure/media/probe"
+	"videocutlist/domain"
+	"videocutlist/infrastructure/export"
+	"videocutlist/infrastructure/media/probe"
 )
 
 func TestStreamCopySegmentsMergeWithWarningAndAtomicPublish(t *testing.T) {

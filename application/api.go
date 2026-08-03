@@ -7,7 +7,7 @@ import (
 	"io"
 	"time"
 
-	"editapp/domain"
+	"videocutlist/domain"
 )
 
 var ErrBusy = errors.New("service is busy")

@@ -1,13 +1,13 @@
 openapi: 3.1.0
 info:
-  title: EditApp API
+  title: VideoCutlist API
   version: 1.0.0
 servers:
   - url: "{serverBaseUrl}/api/v1"
     variables:
       serverBaseUrl:
         default: http://localhost:8787
-        description: Reachable EditApp server base URL; transport provider independent.
+        description: Reachable VideoCutlist server base URL; transport provider independent.
 security:
   - bearerAuth: []
   - {}

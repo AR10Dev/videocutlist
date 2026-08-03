@@ -1,4 +1,4 @@
-// Package config loads the process configuration from EDITAPP_* variables.
+// Package config loads the process configuration from VIDEOCUTLIST_* variables.
 package config
 
 import (
@@ -60,111 +60,111 @@ type Config struct {
 	PreviewGridMS       int
 }
 
-// Load reads and validates EDITAPP_* environment variables.
+// Load reads and validates VIDEOCUTLIST_* environment variables.
 func Load() (Config, error) {
 	return load(os.LookupEnv)
 }
 
 func load(lookup func(string) (string, bool)) (Config, error) {
 	c := Config{
-		DatabasePath:  required(lookup, "EDITAPP_DATABASE_PATH"),
-		CacheDir:      required(lookup, "EDITAPP_CACHE_DIR"),
-		ExportDir:     required(lookup, "EDITAPP_EXPORT_DIR"),
-		AuthMode:      value(lookup, "EDITAPP_AUTH_MODE", "none"),
-		BearerToken:   value(lookup, "EDITAPP_BEARER_TOKEN", ""),
-		BearerSubject: value(lookup, "EDITAPP_BEARER_SUBJECT", "static-bearer"),
-		FFmpegPath:    value(lookup, "EDITAPP_FFMPEG_PATH", defaultFFmpegPath),
-		FFprobePath:   value(lookup, "EDITAPP_FFPROBE_PATH", defaultFFprobePath),
+		DatabasePath:  required(lookup, "VIDEOCUTLIST_DATABASE_PATH"),
+		CacheDir:      required(lookup, "VIDEOCUTLIST_CACHE_DIR"),
+		ExportDir:     required(lookup, "VIDEOCUTLIST_EXPORT_DIR"),
+		AuthMode:      value(lookup, "VIDEOCUTLIST_AUTH_MODE", "none"),
+		BearerToken:   value(lookup, "VIDEOCUTLIST_BEARER_TOKEN", ""),
+		BearerSubject: value(lookup, "VIDEOCUTLIST_BEARER_SUBJECT", "static-bearer"),
+		FFmpegPath:    value(lookup, "VIDEOCUTLIST_FFMPEG_PATH", defaultFFmpegPath),
+		FFprobePath:   value(lookup, "VIDEOCUTLIST_FFPROBE_PATH", defaultFFprobePath),
 	}
 	if err := loadListener(&c, lookup); err != nil {
 		return Config{}, err
 	}
 	var err error
-	if c.PublicBaseURL, err = absoluteHTTPURL(lookup, "EDITAPP_PUBLIC_BASE_URL", false); err != nil {
+	if c.PublicBaseURL, err = absoluteHTTPURL(lookup, "VIDEOCUTLIST_PUBLIC_BASE_URL", false); err != nil {
 		return Config{}, err
 	}
 	if c.AllowedOrigins, err = allowedOrigins(lookup); err != nil {
 		return Config{}, err
 	}
-	if c.ReadTimeout, err = duration(lookup, "EDITAPP_READ_TIMEOUT", 15*time.Second, true); err != nil {
+	if c.ReadTimeout, err = duration(lookup, "VIDEOCUTLIST_READ_TIMEOUT", 15*time.Second, true); err != nil {
 		return Config{}, err
 	}
-	if c.WriteTimeout, err = duration(lookup, "EDITAPP_WRITE_TIMEOUT", 0, false); err != nil {
+	if c.WriteTimeout, err = duration(lookup, "VIDEOCUTLIST_WRITE_TIMEOUT", 0, false); err != nil {
 		return Config{}, err
 	}
-	if c.IdleTimeout, err = duration(lookup, "EDITAPP_IDLE_TIMEOUT", time.Minute, true); err != nil {
+	if c.IdleTimeout, err = duration(lookup, "VIDEOCUTLIST_IDLE_TIMEOUT", time.Minute, true); err != nil {
 		return Config{}, err
 	}
 	if c.DatabasePath == "" || c.CacheDir == "" || c.ExportDir == "" {
-		return Config{}, fmt.Errorf("EDITAPP_DATABASE_PATH, EDITAPP_CACHE_DIR, and EDITAPP_EXPORT_DIR are required")
+		return Config{}, fmt.Errorf("VIDEOCUTLIST_DATABASE_PATH, VIDEOCUTLIST_CACHE_DIR, and VIDEOCUTLIST_EXPORT_DIR are required")
 	}
-	if err := json.Unmarshal([]byte(required(lookup, "EDITAPP_MEDIA_ROOTS_JSON")), &c.MediaRoots); err != nil || len(c.MediaRoots) == 0 {
-		return Config{}, fmt.Errorf("EDITAPP_MEDIA_ROOTS_JSON must be a non-empty JSON object")
+	if err := json.Unmarshal([]byte(required(lookup, "VIDEOCUTLIST_MEDIA_ROOTS_JSON")), &c.MediaRoots); err != nil || len(c.MediaRoots) == 0 {
+		return Config{}, fmt.Errorf("VIDEOCUTLIST_MEDIA_ROOTS_JSON must be a non-empty JSON object")
 	}
 	for alias, path := range c.MediaRoots {
 		if strings.TrimSpace(alias) == "" || strings.TrimSpace(path) == "" {
-			return Config{}, fmt.Errorf("EDITAPP_MEDIA_ROOTS_JSON contains an empty alias or path")
+			return Config{}, fmt.Errorf("VIDEOCUTLIST_MEDIA_ROOTS_JSON contains an empty alias or path")
 		}
 	}
 	if c.AuthMode != "none" && c.AuthMode != "bearer" && c.AuthMode != "trusted_proxy" {
-		return Config{}, fmt.Errorf("EDITAPP_AUTH_MODE must be none, bearer, or trusted_proxy")
+		return Config{}, fmt.Errorf("VIDEOCUTLIST_AUTH_MODE must be none, bearer, or trusted_proxy")
 	}
 	if c.AuthMode == "bearer" {
 		if c.BearerToken == "" || containsControl(c.BearerToken) {
-			return Config{}, fmt.Errorf("EDITAPP_BEARER_TOKEN must be non-empty and control-free in bearer mode")
+			return Config{}, fmt.Errorf("VIDEOCUTLIST_BEARER_TOKEN must be non-empty and control-free in bearer mode")
 		}
 		if c.BearerSubject == "" || c.BearerSubject != strings.TrimSpace(c.BearerSubject) || len(c.BearerSubject) > 320 || containsControl(c.BearerSubject) {
-			return Config{}, fmt.Errorf("EDITAPP_BEARER_SUBJECT must be a trimmed, non-empty, control-free subject of at most 320 bytes")
+			return Config{}, fmt.Errorf("VIDEOCUTLIST_BEARER_SUBJECT must be a trimmed, non-empty, control-free subject of at most 320 bytes")
 		}
 	}
-	trusted := value(lookup, "EDITAPP_TRUSTED_PROXY_CIDRS", defaultTrustedProxies)
+	trusted := value(lookup, "VIDEOCUTLIST_TRUSTED_PROXY_CIDRS", defaultTrustedProxies)
 	for _, cidr := range strings.Split(trusted, ",") {
 		cidr = strings.TrimSpace(cidr)
 		if cidr == "" {
-			return Config{}, fmt.Errorf("EDITAPP_TRUSTED_PROXY_CIDRS contains an empty CIDR")
+			return Config{}, fmt.Errorf("VIDEOCUTLIST_TRUSTED_PROXY_CIDRS contains an empty CIDR")
 		}
 		if _, _, err := net.ParseCIDR(cidr); err != nil {
-			return Config{}, fmt.Errorf("EDITAPP_TRUSTED_PROXY_CIDRS: %w", err)
+			return Config{}, fmt.Errorf("VIDEOCUTLIST_TRUSTED_PROXY_CIDRS: %w", err)
 		}
 		c.TrustedProxyCIDRs = append(c.TrustedProxyCIDRs, cidr)
 	}
-	if c.PreviewGlobalLimit, err = positiveInt(lookup, "EDITAPP_PREVIEW_GLOBAL_LIMIT", defaultPreviewGlobal); err != nil {
+	if c.PreviewGlobalLimit, err = positiveInt(lookup, "VIDEOCUTLIST_PREVIEW_GLOBAL_LIMIT", defaultPreviewGlobal); err != nil {
 		return Config{}, err
 	}
-	if c.PreviewPerUserLimit, err = positiveInt(lookup, "EDITAPP_PREVIEW_PER_USER_LIMIT", defaultPreviewPerUser); err != nil {
+	if c.PreviewPerUserLimit, err = positiveInt(lookup, "VIDEOCUTLIST_PREVIEW_PER_USER_LIMIT", defaultPreviewPerUser); err != nil {
 		return Config{}, err
 	}
-	if c.ExportLimit, err = positiveInt(lookup, "EDITAPP_EXPORT_LIMIT", defaultExportLimit); err != nil {
+	if c.ExportLimit, err = positiveInt(lookup, "VIDEOCUTLIST_EXPORT_LIMIT", defaultExportLimit); err != nil {
 		return Config{}, err
 	}
-	if c.CacheMaxBytes, err = positiveInt64(lookup, "EDITAPP_CACHE_MAX_BYTES", defaultCacheMaxBytes); err != nil {
+	if c.CacheMaxBytes, err = positiveInt64(lookup, "VIDEOCUTLIST_CACHE_MAX_BYTES", defaultCacheMaxBytes); err != nil {
 		return Config{}, err
 	}
-	if c.PreviewBeforeMS, err = positiveInt(lookup, "EDITAPP_PREVIEW_BEFORE_MS", defaultPreviewBeforeMS); err != nil {
+	if c.PreviewBeforeMS, err = positiveInt(lookup, "VIDEOCUTLIST_PREVIEW_BEFORE_MS", defaultPreviewBeforeMS); err != nil {
 		return Config{}, err
 	}
-	if c.PreviewAfterMS, err = positiveInt(lookup, "EDITAPP_PREVIEW_AFTER_MS", defaultPreviewAfterMS); err != nil {
+	if c.PreviewAfterMS, err = positiveInt(lookup, "VIDEOCUTLIST_PREVIEW_AFTER_MS", defaultPreviewAfterMS); err != nil {
 		return Config{}, err
 	}
-	if c.PreviewMaxMS, err = positiveInt(lookup, "EDITAPP_PREVIEW_MAX_MS", defaultPreviewMaxMS); err != nil {
+	if c.PreviewMaxMS, err = positiveInt(lookup, "VIDEOCUTLIST_PREVIEW_MAX_MS", defaultPreviewMaxMS); err != nil {
 		return Config{}, err
 	}
-	if c.PreviewGridMS, err = positiveInt(lookup, "EDITAPP_PREVIEW_GRID_MS", defaultPreviewGridMS); err != nil {
+	if c.PreviewGridMS, err = positiveInt(lookup, "VIDEOCUTLIST_PREVIEW_GRID_MS", defaultPreviewGridMS); err != nil {
 		return Config{}, err
 	}
 	if c.PreviewBeforeMS+c.PreviewAfterMS > c.PreviewMaxMS {
-		return Config{}, fmt.Errorf("EDITAPP_PREVIEW_MAX_MS must cover the default preview window")
+		return Config{}, fmt.Errorf("VIDEOCUTLIST_PREVIEW_MAX_MS must cover the default preview window")
 	}
 	return c, nil
 }
 
 func loadListener(c *Config, lookup func(string) (string, bool)) error {
-	c.ListenAddress = value(lookup, "EDITAPP_LISTEN_ADDRESS", defaultListenAddress)
+	c.ListenAddress = value(lookup, "VIDEOCUTLIST_LISTEN_ADDRESS", defaultListenAddress)
 	if net.ParseIP(c.ListenAddress) == nil {
-		return fmt.Errorf("EDITAPP_LISTEN_ADDRESS must be an IP literal")
+		return fmt.Errorf("VIDEOCUTLIST_LISTEN_ADDRESS must be an IP literal")
 	}
 	var err error
-	c.Port, err = parsePort(value(lookup, "EDITAPP_PORT", strconv.Itoa(defaultPort)), "EDITAPP_PORT")
+	c.Port, err = parsePort(value(lookup, "VIDEOCUTLIST_PORT", strconv.Itoa(defaultPort)), "VIDEOCUTLIST_PORT")
 	if err != nil {
 		return err
 	}
@@ -231,7 +231,7 @@ func validURLPort(u *url.URL) error {
 }
 
 func allowedOrigins(lookup func(string) (string, bool)) ([]string, error) {
-	raw := value(lookup, "EDITAPP_ALLOWED_ORIGINS", "")
+	raw := value(lookup, "VIDEOCUTLIST_ALLOWED_ORIGINS", "")
 	if raw == "" {
 		return nil, nil
 	}
@@ -239,9 +239,9 @@ func allowedOrigins(lookup func(string) (string, bool)) ([]string, error) {
 	for i, origin := range origins {
 		origin = strings.TrimSpace(origin)
 		if origin == "" {
-			return nil, fmt.Errorf("EDITAPP_ALLOWED_ORIGINS contains an empty origin")
+			return nil, fmt.Errorf("VIDEOCUTLIST_ALLOWED_ORIGINS contains an empty origin")
 		}
-		parsed, err := parseHTTPURL(origin, "EDITAPP_ALLOWED_ORIGINS", true)
+		parsed, err := parseHTTPURL(origin, "VIDEOCUTLIST_ALLOWED_ORIGINS", true)
 		if err != nil {
 			return nil, err
 		}

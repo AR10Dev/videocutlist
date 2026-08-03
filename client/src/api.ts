@@ -8,7 +8,7 @@ export type ClientConfiguration = {
 
 declare global {
   interface Window {
-    EDITAPP_CONFIG?: ClientConfiguration;
+    VIDEOCUTLIST_CONFIG?: ClientConfiguration;
   }
 }
 
@@ -62,7 +62,7 @@ function validateAuthentication(authentication: Authentication) {
 export function resolveBrowserConfiguration(
   browser: Window = window,
 ): ClientConfiguration {
-  const configuration = browser.EDITAPP_CONFIG ?? {
+  const configuration = browser.VIDEOCUTLIST_CONFIG ?? {
     serverBaseUrl: browser.location.origin,
     authentication: { type: "none" as const },
   };

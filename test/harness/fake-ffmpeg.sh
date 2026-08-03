@@ -2,7 +2,7 @@
 # A controllable stand-in for cancellation and failure integration tests.
 set -euo pipefail
 
-pid_file=${EDITAPP_TEST_PID_FILE:-}
+pid_file=${VIDEOCUTLIST_TEST_PID_FILE:-}
 child=''
 cleanup() {
   test -z "$child" || kill "$child" 2>/dev/null || true
@@ -11,12 +11,12 @@ cleanup() {
 }
 trap cleanup INT TERM
 
-case ${EDITAPP_FAKE_FFMPEG_FAIL:-} in
+case ${VIDEOCUTLIST_FAKE_FFMPEG_FAIL:-} in
   corrupt) printf '%s\n' 'invalid media data' >&2; exit 1 ;;
   enospc) printf '%s\n' 'No space left on device' >&2; exit 1 ;;
   permission) printf '%s\n' 'Permission denied' >&2; exit 1 ;;
   '') ;;
-  *) echo "unknown EDITAPP_FAKE_FFMPEG_FAIL" >&2; exit 2 ;;
+  *) echo "unknown VIDEOCUTLIST_FAKE_FFMPEG_FAIL" >&2; exit 2 ;;
 esac
 
 sleep 300 &

@@ -6,7 +6,7 @@ import (
 	"io"
 	"sync"
 
-	"editapp/domain"
+	"videocutlist/domain"
 )
 
 type CacheStatus string

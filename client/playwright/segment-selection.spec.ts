@@ -14,7 +14,7 @@ const apiOrigin = "http://127.0.0.1:8787";
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
-    window.EDITAPP_CONFIG = {
+    window.VIDEOCUTLIST_CONFIG = {
       serverBaseUrl: "http://127.0.0.1:8787",
       authentication: { type: "none" },
     };

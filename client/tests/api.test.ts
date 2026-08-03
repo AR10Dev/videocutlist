@@ -17,9 +17,9 @@ describe("client API boundary", () => {
   });
 
   it("normalizes trailing slashes and keeps API paths below a prefix", () => {
-    const client = api("https://video.example.com/editapp///");
+    const client = api("https://video.example.com/videocutlist///");
     expect(client.url("media/m_a%2Fb?label=two%20words")).toBe(
-      "https://video.example.com/editapp/api/v1/media/m_a%2Fb?label=two%20words",
+      "https://video.example.com/videocutlist/api/v1/media/m_a%2Fb?label=two%20words",
     );
   });
 

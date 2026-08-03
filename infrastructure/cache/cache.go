@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"editapp/domain"
+	"videocutlist/domain"
 )
 
 var (

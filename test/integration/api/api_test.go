@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	auth "editapp/domain"
-	api "editapp/protocol/http"
+	auth "videocutlist/domain"
+	api "videocutlist/protocol/http"
 )
 
 const validMedia = "m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"

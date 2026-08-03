@@ -17,7 +17,7 @@
       [installation runbook](runbooks/install-arch-cachyos.md).
 - [ ] LAN binds use a specific IP literal, firewall policy, and suitable
       application authentication.
-- [ ] Cross-origin clients use exact `EDITAPP_ALLOWED_ORIGINS`; proxy identity
+- [ ] Cross-origin clients use exact `VIDEOCUTLIST_ALLOWED_ORIGINS`; proxy identity
       is enabled only for configured trusted peer CIDRs.
 - [ ] Preview and export publication remain validated and atomic.
 - [ ] Release notes say stream-copy exports are not frame-exact away from

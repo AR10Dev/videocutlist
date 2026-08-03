@@ -8,11 +8,11 @@ import (
 	"testing"
 	"time"
 
-	"editapp/domain"
+	"videocutlist/domain"
 )
 
 func init() {
-	if os.Getenv("EDITAPP_FFMPEG_HELPER") != "1" {
+	if os.Getenv("VIDEOCUTLIST_FFMPEG_HELPER") != "1" {
 		return
 	}
 	_, _ = fmt.Fprint(os.Stdout, "ftyp")
@@ -38,7 +38,7 @@ func TestBuildPreviewArgsUsesInheritedFD(t *testing.T) {
 }
 
 func TestStartHonorsCancellation(t *testing.T) {
-	t.Setenv("EDITAPP_FFMPEG_HELPER", "1")
+	t.Setenv("VIDEOCUTLIST_FFMPEG_HELPER", "1")
 	source, err := os.CreateTemp(t.TempDir(), "source")
 	if err != nil {
 		t.Fatal(err)

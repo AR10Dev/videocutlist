@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"editapp/application"
-	"editapp/domain"
+	"videocutlist/application"
+	"videocutlist/domain"
 )
 
 var (

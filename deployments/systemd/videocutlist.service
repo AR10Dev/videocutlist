@@ -1,18 +1,18 @@
 [Unit]
-Description=EditApp video preview service
-Documentation=file:///opt/editapp/current/docs/runbooks/install-arch-cachyos.md
+Description=VideoCutlist video preview service
+Documentation=file:///opt/videocutlist/current/docs/runbooks/install-arch-cachyos.md
 Wants=network-online.target
 After=network-online.target
-ConditionPathExists=/etc/editapp/editapp.env
+ConditionPathExists=/etc/videocutlist/videocutlist.env
 
 [Service]
 Type=simple
-User=editapp
-Group=editapp
-SupplementaryGroups=editapp-media
-WorkingDirectory=/opt/editapp/current
-EnvironmentFile=/etc/editapp/editapp.env
-ExecStart=/opt/editapp/current/bin/editapp
+User=videocutlist
+Group=videocutlist
+SupplementaryGroups=videocutlist-media
+WorkingDirectory=/opt/videocutlist/current
+EnvironmentFile=/etc/videocutlist/videocutlist.env
+ExecStart=/opt/videocutlist/current/bin/videocutlist
 Restart=on-failure
 RestartSec=2s
 TimeoutStopSec=15s
@@ -41,8 +41,8 @@ MemoryDenyWriteExecute=yes
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 RestrictNamespaces=yes
 SystemCallArchitectures=native
-ReadWritePaths=/var/lib/editapp/data /var/lib/editapp/exports /var/cache/editapp/previews
-ReadOnlyPaths=/srv/editapp/media
+ReadWritePaths=/var/lib/videocutlist/data /var/lib/videocutlist/exports /var/cache/videocutlist/previews
+ReadOnlyPaths=/srv/videocutlist/media
 
 [Install]
 WantedBy=multi-user.target

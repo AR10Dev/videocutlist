@@ -13,8 +13,8 @@ import (
 	"syscall"
 	"time"
 
-	"editapp/application"
-	"editapp/domain"
+	"videocutlist/application"
+	"videocutlist/domain"
 )
 
 const (

@@ -14,7 +14,7 @@ import (
 	"sort"
 	"strings"
 
-	"editapp/infrastructure/media/probe"
+	"videocutlist/infrastructure/media/probe"
 )
 
 var (

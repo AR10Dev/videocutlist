@@ -16,36 +16,36 @@ esac
 for command in pacman systemctl install git; do command -v "$command" >/dev/null || { echo "missing $command" >&2; exit 1; }; done
 pacman -S --needed --noconfirm base-devel go nodejs npm ffmpeg sqlite curl
 
-getent group editapp-media >/dev/null || groupadd --system editapp-media
-id -u editapp >/dev/null 2>&1 || useradd --system --user-group --home-dir /nonexistent --shell /usr/bin/nologin editapp
-usermod -a -G editapp-media editapp
+getent group videocutlist-media >/dev/null || groupadd --system videocutlist-media
+id -u videocutlist >/dev/null 2>&1 || useradd --system --user-group --home-dir /nonexistent --shell /usr/bin/nologin videocutlist
+usermod -a -G videocutlist-media videocutlist
 
-install -d -o root -g root -m 0755 /opt/editapp/releases
-install -d -o root -g editapp -m 0750 /etc/editapp
-install -d -o root -g editapp -m 0770 /var/lib/editapp/data /var/lib/editapp/exports /var/cache/editapp/previews
-install -d -o root -g editapp-media -m 0750 /srv/editapp/media
+install -d -o root -g root -m 0755 /opt/videocutlist/releases
+install -d -o root -g videocutlist -m 0750 /etc/videocutlist
+install -d -o root -g videocutlist -m 0770 /var/lib/videocutlist/data /var/lib/videocutlist/exports /var/cache/videocutlist/previews
+install -d -o root -g videocutlist-media -m 0750 /srv/videocutlist/media
 
-stage=$(mktemp -d /opt/editapp/.install.XXXXXX)
+stage=$(mktemp -d /opt/videocutlist/.install.XXXXXX)
 trap 'rm -rf "$stage"' EXIT
 mkdir -p "$stage/bin" "$stage/client/dist"
-go -C "$root" build -trimpath -buildvcs=true -o "$stage/bin/editapp" ./cmd/server
+go -C "$root" build -trimpath -buildvcs=true -o "$stage/bin/videocutlist" ./cmd/server
 npm --prefix "$root/client" ci
 npm --prefix "$root/client" run build
 cp -a "$root/client/dist/." "$stage/client/dist/"
 cp -a "$root/docs" "$stage/docs"
 
-release_dir="/opt/editapp/releases/$release"
+release_dir="/opt/videocutlist/releases/$release"
 if [[ -e $release_dir ]]; then
   echo "release already exists: $release_dir" >&2
   exit 1
 fi
 mv "$stage" "$release_dir"
-ln -s "$release_dir" /opt/editapp/current.new
-mv -Tf /opt/editapp/current.new /opt/editapp/current
-install -m 0644 "$root/deployments/systemd/editapp.service" /etc/systemd/system/editapp.service
-if [[ ! -e /etc/editapp/editapp.env ]]; then
-  install -o root -g editapp -m 0640 "$root/deployments/systemd/editapp.env.example" /etc/editapp/editapp.env
+ln -s "$release_dir" /opt/videocutlist/current.new
+mv -Tf /opt/videocutlist/current.new /opt/videocutlist/current
+install -m 0644 "$root/deployments/systemd/videocutlist.service" /etc/systemd/system/videocutlist.service
+if [[ ! -e /etc/videocutlist/videocutlist.env ]]; then
+  install -o root -g videocutlist -m 0640 "$root/deployments/systemd/videocutlist.env.example" /etc/videocutlist/videocutlist.env
 fi
 systemctl daemon-reload
-echo "Installed $release_dir. Set EDITAPP_MEDIA_ROOTS_JSON in /etc/editapp/editapp.env, then run:"
-echo "  systemctl enable --now editapp"
+echo "Installed $release_dir. Set VIDEOCUTLIST_MEDIA_ROOTS_JSON in /etc/videocutlist/videocutlist.env, then run:"
+echo "  systemctl enable --now videocutlist"

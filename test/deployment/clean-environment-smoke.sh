@@ -22,8 +22,8 @@ if PATH=$path systemctl is-active --quiet tailscaled; then
 	exit 1
 fi
 echo "provider service lookup rejected"
-env_file=$tmp/editapp.env
-printf '%s\n' 'EDITAPP_LISTEN_ADDRESS=127.0.0.1' 'EDITAPP_PORT=8787' 'EDITAPP_AUTH_MODE=none' >"$env_file"
-env -i PATH=$path EDITAPP_VERIFY_ENV_FILE="$env_file" \
+env_file=$tmp/videocutlist.env
+printf '%s\n' 'VIDEOCUTLIST_LISTEN_ADDRESS=127.0.0.1' 'VIDEOCUTLIST_PORT=8787' 'VIDEOCUTLIST_AUTH_MODE=none' >"$env_file"
+env -i PATH=$path VIDEOCUTLIST_VERIFY_ENV_FILE="$env_file" \
 	bash "$root/scripts/ops/verify-deployment.sh"
 echo "clean environment smoke passed"

@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"editapp/infrastructure/media/probe"
+	"videocutlist/infrastructure/media/probe"
 )
 
 type fakeProbe struct{}
