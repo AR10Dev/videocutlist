@@ -49,4 +49,6 @@ accepts that proxy through `EDITAPP_TRUSTED_PROXY_CIDRS`.
 Do not place bearer tokens in build-time frontend environment variables or a
 public static page. See [installation](docs/runbooks/install-arch-cachyos.md)
 and [operations](docs/runbooks/operations.md) for the filesystem, rollback,
-backup, and health-check procedures.
+backup, and health-check procedures. Optional connectivity examples, including
+private networks and public HTTPS proxies, live in
+[deployments/connectivity-examples](deployments/connectivity-examples/README.md).

@@ -75,8 +75,8 @@ Modes are `none`, `bearer`, and `trusted_proxy`.
 - Built-in authenticated principals receive role `editor` and capability `*`.
   A capability allows an action when it equals `*`, the action, or
   `<action>:<resource>`.
-- The interface is the OIDC-ready adapter boundary; Stage 4 adds no OIDC
-  dependency or speculative implementation.
+- The interface is an adapter boundary; it adds no OIDC dependency or
+  speculative implementation.
 
 Subjects are opaque, case-sensitive, trimmed, non-empty, at most 320 bytes, and
 contain no control characters. Failed authentication and authorization return

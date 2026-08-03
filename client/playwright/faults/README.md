@@ -1,7 +1,7 @@
 # Browser fault scenarios
 
 Keep these tests deterministic by routing only the preview request in
-Playwright; do not depend on a live Tailscale path.
+Playwright; do not depend on a live connectivity-provider path.
 
 | Scenario | Route behavior | Browser assertion |
 | --- | --- | --- |

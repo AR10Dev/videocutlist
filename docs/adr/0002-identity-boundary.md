@@ -1,10 +1,11 @@
-# ADR 0002: Tailscale Identity Boundary
+# ADR 0002: Provider-Neutral Identity Boundary
 
 Status: accepted
 
-The production service listens only on loopback and trusts Tailscale headers
-only from configured loopback proxy ranges. Local OS users are inside this
-trust boundary. Development authentication is explicit, fixed-user, and
-loopback-only. Projects and exports are owner-only. In production, preview,
-export, and media-refresh work additionally require a matching Tailscale app
-capability forwarded by Serve. Funnel is prohibited.
+The production service binds to loopback by default and may use an explicit
+firewall-protected LAN IP. Authentication is explicit: `none`, fixed-token
+`bearer`, or `trusted_proxy`. The last mode accepts a bounded
+`X-Forwarded-User` only after generic proxy middleware verifies the immediate
+peer CIDR; no network product or raw header establishes identity. Projects and
+exports remain owner-only. Optional connectivity products stay outside runtime
+and primary deployment. Funnel is prohibited in optional examples.

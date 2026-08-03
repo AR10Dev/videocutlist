@@ -1,6 +1,6 @@
 # Install on Arch/CachyOS
 
-Run this on the host holding the original media. The installer uses Arch packages, builds the checked-out Go and web sources, installs an immutable release under `/opt/editapp/releases`, and atomically repoints `/opt/editapp/current`. It does not start the service or configure connectivity.
+Run this on the host holding the original media. The installer uses Arch packages, builds the checked-out Go and `client` sources, installs an immutable release under `/opt/editapp/releases`, and atomically repoints `/opt/editapp/current`. It does not start the service or configure connectivity.
 
 ```bash
 sudo scripts/install/install-arch-cachyos.sh 2026-07-29
@@ -39,3 +39,6 @@ Use `{ type: "none" }` for `EDITAPP_AUTH_MODE=none`. For `trusted_proxy`, use `{
 The systemd sandbox permits writes only to the database, cache, and export paths and mounts media read-only. Do not make originals writable by `editapp`. Keep the default loopback listener unless you have deliberately configured a firewall-protected LAN address.
 
 After changing the environment file, run `sudo systemctl restart editapp` and `sudo scripts/ops/verify-deployment.sh`.
+
+Optional private-network and public-HTTPS examples are separate from this
+primary systemd flow; see [connectivity examples](../../deployments/connectivity-examples/README.md).

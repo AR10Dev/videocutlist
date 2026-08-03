@@ -32,7 +32,7 @@ authentication unless the LAN itself is the complete access boundary.
 
 ## Tailscale Serve (optional)
 
-Keep EditApp on loopback and use the [Tailscale Serve runbook](../../docs/runbooks/tailscale-serve.md)
+Keep EditApp on loopback and use the [Tailscale example](tailscale/README.md)
 for private HTTPS. Serve is a transport choice, not an application dependency,
 and Funnel is never enabled.
 

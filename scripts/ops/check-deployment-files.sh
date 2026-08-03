@@ -7,7 +7,7 @@ env_file=$root/deployments/systemd/editapp.env.example
 unit=$root/deployments/systemd/editapp.service
 installer=$root/scripts/install/install-arch-cachyos.sh
 verifier=$root/scripts/ops/verify-deployment.sh
-optional=$root/scripts/ops/setup-tailscale-serve.sh
+optional=$root/deployments/connectivity-examples/tailscale/setup-tailscale-serve.sh
 
 fail() { echo "deployment check: $*" >&2; exit 1; }
 require_line() { grep -Fqx "$1" "$2" || fail "missing $1 in $2"; }
@@ -17,7 +17,7 @@ forbid_provider() {
 	fi
 }
 
-for script in "$root"/scripts/install/*.sh "$root"/scripts/ops/*.sh "$root"/test/deployment/*.sh; do
+for script in "$root"/scripts/install/*.sh "$root"/scripts/ops/*.sh "$root"/test/deployment/*.sh "$root"/deployments/connectivity-examples/tailscale/*.sh; do
 	bash -n "$script"
 done
 
@@ -33,6 +33,9 @@ grep -Eq '^After=.*tailscaled|^Wants=.*tailscaled' "$unit" && fail "systemd unit
 forbid_provider "$installer"
 forbid_provider "$verifier"
 grep -F 'systemctl enable --now editapp' "$installer" >/dev/null || fail "installer does not start EditApp"
+grep -F 'client/dist' "$installer" >/dev/null || fail "installer does not stage client/dist"
+legacy_client_dir=web
+grep -F "$legacy_client_dir/dist" "$installer" >/dev/null && fail "installer stages obsolete client directory"
 grep -F '/api/v1/health' "$verifier" >/dev/null || fail "neutral verifier does not check health"
 grep -F '/api/v1/ready' "$verifier" >/dev/null || fail "neutral verifier does not check readiness"
 grep -F 'systemctl is-active --quiet editapp' "$verifier" >/dev/null || fail "neutral verifier does not check EditApp"

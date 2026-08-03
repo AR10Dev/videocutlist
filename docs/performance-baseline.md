@@ -12,9 +12,9 @@ fragmented MP4.
 | Equivalent preview over loopback HTTP | hit | 57 ms | success |
 
 These are single local observations, not regression thresholds or throughput
-claims. CPU/GPU utilization, queue wait, remote Tailscale latency, and direct
-versus DERP-relayed paths were not measurable in this workspace. Establish
-repeated production-host samples before defining an SLO or CI performance gate.
+claims. CPU/GPU utilization, queue wait, and remote-network latency were not
+measurable in this workspace. Establish repeated production-host samples before
+defining an SLO or CI performance gate.
 
 Reproduce a record with:
 

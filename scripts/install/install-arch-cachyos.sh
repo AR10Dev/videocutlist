@@ -14,7 +14,7 @@ case $release in
 esac
 
 for command in pacman systemctl install git; do command -v "$command" >/dev/null || { echo "missing $command" >&2; exit 1; }; done
-pacman -S --needed --noconfirm base-devel go nodejs npm ffmpeg sqlite curl jq
+pacman -S --needed --noconfirm base-devel go nodejs npm ffmpeg sqlite curl
 
 getent group editapp-media >/dev/null || groupadd --system editapp-media
 id -u editapp >/dev/null 2>&1 || useradd --system --user-group --home-dir /nonexistent --shell /usr/bin/nologin editapp
@@ -27,11 +27,11 @@ install -d -o root -g editapp-media -m 0750 /srv/editapp/media
 
 stage=$(mktemp -d /opt/editapp/.install.XXXXXX)
 trap 'rm -rf "$stage"' EXIT
-mkdir -p "$stage/bin" "$stage/web/dist"
+mkdir -p "$stage/bin" "$stage/client/dist"
 go -C "$root" build -trimpath -buildvcs=true -o "$stage/bin/editapp" ./cmd/server
-npm --prefix "$root/web" ci
-npm --prefix "$root/web" run build
-cp -a "$root/web/dist/." "$stage/web/dist/"
+npm --prefix "$root/client" ci
+npm --prefix "$root/client" run build
+cp -a "$root/client/dist/." "$stage/client/dist/"
 cp -a "$root/docs" "$stage/docs"
 
 release_dir="/opt/editapp/releases/$release"

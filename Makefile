@@ -4,7 +4,7 @@ NPM ?= npm
 GO_PACKAGES = ./cmd/... ./domain/... ./application/... ./protocol/... ./infrastructure/...
 GO_TEST_PACKAGES = $(GO_PACKAGES) ./test/...
 
-.PHONY: build check client-install e2e format lint smoke test
+.PHONY: architecture-check build check client-install deployment-check e2e format lint smoke test
 
 build:
 	$(GO) build $(GO_PACKAGES)
@@ -24,7 +24,13 @@ lint:
 e2e:
 	$(NPM) --prefix client run test:e2e
 
-smoke: check e2e
+architecture-check:
+	GO=$(GO) scripts/ops/check-architecture.sh
+
+deployment-check:
+	scripts/ops/check-deployment-files.sh
+
+smoke: check architecture-check deployment-check e2e
 
 test:
 	$(GO) test -race $(GO_TEST_PACKAGES)

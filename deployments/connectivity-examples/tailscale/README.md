@@ -14,7 +14,7 @@ Run the optional helper as root after EditApp is healthy:
 
 ```bash
 sudo EDITAPP_TAILSCALE_APP_CAPS='example.com/cap/editapp' \
-  scripts/ops/setup-tailscale-serve.sh
+./deployments/connectivity-examples/tailscale/setup-tailscale-serve.sh
 ```
 
 It configures persistent HTTPS on port 443 and proxies only to
