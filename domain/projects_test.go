@@ -16,13 +16,3 @@ func TestValidateRejectsOverlappingAndOutOfRangeSegments(t *testing.T) {
 		t.Fatal("overlapping and out-of-range segments were accepted")
 	}
 }
-
-func TestDecodeRejectsUnknownAndMissingSchemaFields(t *testing.T) {
-	valid := `{"mediaId":"` + mediaID + `","revision":0,"segments":[],"uiState":{"playheadMs":0,"zoom":1,"muted":false}}`
-	if _, err := Decode([]byte(valid), 1_000); err != nil {
-		t.Fatalf("valid document rejected: %v", err)
-	}
-	if _, err := Decode([]byte(`{"mediaId":"`+mediaID+`","revision":0,"segments":[],"uiState":{"playheadMs":0,"zoom":1,"muted":false},"extra":true}`), 1_000); err == nil {
-		t.Fatal("unknown field accepted")
-	}
-}

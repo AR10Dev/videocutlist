@@ -1,11 +1,8 @@
 package domain
 
 import (
-	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"math"
 	"regexp"
 	"unicode/utf8"
@@ -61,63 +58,6 @@ func Validate(document Document, durationMS int64) error {
 			return fmt.Errorf("segment %d label exceeds 200 characters", i)
 		}
 		previousEnd = segment.EndMS
-	}
-	return nil
-}
-
-// Decode validates the closed JSON schema before turning an API body into a document.
-func Decode(data []byte, durationMS int64) (Document, error) {
-	var top map[string]json.RawMessage
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	if err := decoder.Decode(&top); err != nil {
-		return Document{}, fmt.Errorf("decode project JSON: %w", err)
-	}
-	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return Document{}, errors.New("project JSON has trailing data")
-	}
-	if err := exactKeys(top, []string{"mediaId", "revision", "segments", "uiState"}, nil); err != nil {
-		return Document{}, err
-	}
-	var segmentObjects []map[string]json.RawMessage
-	if err := json.Unmarshal(top["segments"], &segmentObjects); err != nil {
-		return Document{}, errors.New("segments must be an array")
-	}
-	for _, segment := range segmentObjects {
-		if err := exactKeys(segment, []string{"startMs", "endMs"}, []string{"label"}); err != nil {
-			return Document{}, fmt.Errorf("invalid segment: %w", err)
-		}
-	}
-	var ui map[string]json.RawMessage
-	if err := json.Unmarshal(top["uiState"], &ui); err != nil || exactKeys(ui, []string{"playheadMs", "zoom", "muted"}, nil) != nil {
-		return Document{}, errors.New("invalid uiState")
-	}
-	var document Document
-	strict := json.NewDecoder(bytes.NewReader(data))
-	strict.DisallowUnknownFields()
-	if err := strict.Decode(&document); err != nil {
-		return Document{}, fmt.Errorf("decode project JSON: %w", err)
-	}
-	if err := Validate(document, durationMS); err != nil {
-		return Document{}, err
-	}
-	return document, nil
-}
-
-func exactKeys(object map[string]json.RawMessage, required, optional []string) error {
-	allowed := make(map[string]bool, len(required)+len(optional))
-	for _, key := range required {
-		allowed[key] = true
-		if _, ok := object[key]; !ok {
-			return fmt.Errorf("missing %q", key)
-		}
-	}
-	for _, key := range optional {
-		allowed[key] = true
-	}
-	for key := range object {
-		if !allowed[key] {
-			return fmt.Errorf("unknown %q", key)
-		}
 	}
 	return nil
 }

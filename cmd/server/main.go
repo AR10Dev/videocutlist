@@ -81,19 +81,21 @@ func run(ctx context.Context) error {
 	validator := cache.ValidatorFunc(func(ctx context.Context, path string) error {
 		return ffmpeg.ValidateFile(ctx, cfg.FFprobePath, path)
 	})
-	refreshJobs := adapters.NewRefreshJobs()
-	mediaAdapter := &adapters.MediaAdapter{Scanner: scanner, Store: mediaStore, Refresh: refreshJobs}
+	refreshJobs := application.NewRefreshJobs()
+	mediaCatalog := adapters.MediaCatalog{Scanner: scanner, Store: mediaStore}
 	previewRunner := adapters.PreviewRunner{Scanner: scanner, Media: mediaStore, FFmpeg: ffmpeg.Runner{Path: cfg.FFmpegPath}}
 	previewManager, err := application.NewPreviewManager(adapters.PreviewCache{Store: cacheStore}, previewRunner, application.Validator(validator), limiter)
 	if err != nil {
 		return err
 	}
-	previewAdapter := adapters.PreviewAdapter{Scanner: scanner, Media: mediaStore, Manager: previewManager, Cache: cacheStore, Validator: validator}
-	projectAdapter := adapters.ProjectAdapter{Store: projectStore}
-	exportAdapter := adapters.NewExportAdapter(jobStore, scanner, mediaStore, exporter.Service{
+	mediaService := &application.MediaUseCase{Catalog: mediaCatalog, Refresh: refreshJobs}
+	previewService := application.PreviewUseCase{Catalog: mediaCatalog, Manager: previewManager}
+	projectService := application.ProjectUseCase{Repository: adapters.ProjectRepository{Store: projectStore}}
+	exportExecutor := adapters.NewExportExecutor(jobStore, scanner, mediaStore, exporter.Service{
 		FFmpegPath: cfg.FFmpegPath, FFprobePath: cfg.FFprobePath, OutputDir: cfg.ExportDir,
-	}, cfg.ExportLimit)
-	jobAdapter := adapters.JobAdapter{Exports: exportAdapter, Refresh: refreshJobs}
+	})
+	exportService := application.NewExportUseCase(adapters.ExportJobs{Store: jobStore}, exportExecutor, cfg.ExportLimit)
+	jobService := application.JobUseCase{Exports: exportService, Refresh: refreshJobs}
 	authenticator, err := httpapi.NewAuthenticator(httpapi.AuthConfig{
 		Mode: cfg.AuthMode, BearerToken: cfg.BearerToken, BearerSubject: cfg.BearerSubject,
 	})
@@ -101,8 +103,8 @@ func run(ctx context.Context) error {
 		return err
 	}
 	apiServer, err := httpapi.New(httpapi.Config{
-		Authenticator: authenticator, Media: mediaAdapter, Preview: previewAdapter,
-		Projects: projectAdapter, Exports: exportAdapter, Jobs: jobAdapter,
+		Authenticator: authenticator, Media: mediaService, Preview: previewService,
+		Projects: projectService, Exports: exportService, Jobs: jobService,
 		Authorize: httpapi.AuthorizerFunc(func(principal domain.Principal, action, resource string) bool {
 			return principal.Allows(action, resource)
 		}),
