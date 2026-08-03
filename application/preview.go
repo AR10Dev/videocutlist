@@ -257,12 +257,6 @@ func (j *previewJob) finish(err error) {
 	j.cond.Broadcast()
 	j.mu.Unlock()
 	delete(j.manager.jobs, j.key)
-	for sub := range j.subscribers {
-		sub.release()
-		if j.manager.byUser[sub.user] == sub {
-			delete(j.manager.byUser, sub.user)
-		}
-	}
 	j.manager.mu.Unlock()
 	close(j.finished)
 }

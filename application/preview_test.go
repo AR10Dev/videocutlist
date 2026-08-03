@@ -233,6 +233,47 @@ func TestReplayBufferLimitCancelsPreview(t *testing.T) {
 	_ = reader.Close()
 }
 
+func TestFinishedPreviewRetainsSlowSubscriberQuota(t *testing.T) {
+	manager := newManagerWithRunner(t, bytesRunner("preview"), 1, 1)
+	spec := testSpec("m_slow")
+	reader, result, err := manager.Preview(context.Background(), "a", spec)
+	if err != nil || result.Status != CacheMiss {
+		t.Fatalf("preview = %v, %+v", err, result)
+	}
+	defer reader.Close()
+
+	manager.mu.Lock()
+	sub := manager.byUser["a"]
+	manager.mu.Unlock()
+	if sub == nil {
+		t.Fatal("slow subscriber was not registered")
+	}
+	select {
+	case <-sub.job.finished:
+	case <-time.After(time.Second):
+		t.Fatal("preview did not finish")
+	}
+
+	manager.mu.Lock()
+	registered := manager.byUser["a"] == sub
+	manager.mu.Unlock()
+	if !registered {
+		t.Fatal("finished preview released slow subscriber registration")
+	}
+	if release, err := manager.limits.AcquireUser("a"); !errors.Is(err, ErrUserLimit) {
+		if release != nil {
+			release()
+		}
+		t.Fatalf("slow subscriber quota = %v, want %v", err, ErrUserLimit)
+	}
+
+	replacement, result, err := manager.Preview(context.Background(), "a", spec)
+	if err != nil || result.Status != CacheShared {
+		t.Fatalf("replacement = %v, %+v", err, result)
+	}
+	_ = replacement.Close()
+}
+
 func newManager(t *testing.T, runner *testRunner, global, perUser int) *PreviewManager {
 	return newManagerWithRunner(t, runner, global, perUser)
 }
