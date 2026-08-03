@@ -71,6 +71,25 @@ func (r *testRunner) counts() (int, int) {
 	return r.starts, r.cancels
 }
 
+type cancellationReplayRunner struct{ starts int }
+
+func (r *cancellationReplayRunner) Start(ctx context.Context, spec domain.PreviewSpec) (*RunningPreview, error) {
+	r.starts++
+	if r.starts > 1 {
+		return bytesRunner("preview").Start(ctx, spec)
+	}
+	reader, writer := io.Pipe()
+	done := make(chan error, 1)
+	go func() {
+		_, _ = writer.Write([]byte("first"))
+		<-ctx.Done()
+		_, _ = writer.Write([]byte("late"))
+		_ = writer.CloseWithError(ctx.Err())
+		done <- ctx.Err()
+	}()
+	return &RunningPreview{Stdout: reader, Wait: func() error { return <-done }}, nil
+}
+
 func TestDuplicateRequestsShareRunnerAndPublishCache(t *testing.T) {
 	runner := newTestRunner()
 	manager := newManager(t, runner, 1, 1)
@@ -272,6 +291,36 @@ func TestFinishedPreviewRetainsSlowSubscriberQuota(t *testing.T) {
 		t.Fatalf("replacement = %v, %+v", err, result)
 	}
 	_ = replacement.Close()
+}
+
+func TestSupersededPreviewDropsReplay(t *testing.T) {
+	manager := newManagerWithRunner(t, &cancellationReplayRunner{}, 2, 1)
+	first, result, err := manager.Preview(context.Background(), "a", testSpec("m_first"))
+	if err != nil || result.Status != CacheMiss {
+		t.Fatalf("first = %v, %+v", err, result)
+	}
+	defer first.Close()
+
+	manager.mu.Lock()
+	job := manager.byUser["a"].job
+	manager.mu.Unlock()
+	second, result, err := manager.Preview(context.Background(), "a", testSpec("m_second"))
+	if err != nil || result.Status != CacheMiss {
+		t.Fatalf("second = %v, %+v", err, result)
+	}
+	defer second.Close()
+	select {
+	case <-job.finished:
+	case <-time.After(time.Second):
+		t.Fatal("superseded preview did not finish")
+	}
+
+	job.mu.Lock()
+	chunks, replayBytes := len(job.chunks), job.replayBytes
+	job.mu.Unlock()
+	if chunks != 0 || replayBytes != 0 {
+		t.Fatalf("detached replay = %d chunks, %d bytes", chunks, replayBytes)
+	}
 }
 
 func newManager(t *testing.T, runner *testRunner, global, perUser int) *PreviewManager {

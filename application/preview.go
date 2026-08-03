@@ -254,6 +254,10 @@ func (j *previewJob) finish(err error) {
 	j.manager.mu.Lock()
 	j.mu.Lock()
 	j.done, j.err = true, err
+	if len(j.subscribers) == 0 {
+		j.chunks = nil
+		j.replayBytes = 0
+	}
 	j.cond.Broadcast()
 	j.mu.Unlock()
 	delete(j.manager.jobs, j.key)
@@ -271,7 +275,12 @@ func (j *previewJob) remove(sub *subscriber, reason error) {
 	}
 	delete(j.subscribers, sub)
 	sub.release()
-	empty := len(j.subscribers) == 0 && !j.done
+	empty := len(j.subscribers) == 0
+	if empty {
+		j.chunks = nil
+		j.replayBytes = 0
+	}
+	cancel := empty && !j.done
 	j.cond.Broadcast()
 	j.mu.Unlock()
 	if j.manager.byUser[sub.user] == sub {
@@ -279,7 +288,7 @@ func (j *previewJob) remove(sub *subscriber, reason error) {
 	}
 	j.manager.mu.Unlock()
 	_ = sub.writer.CloseWithError(reason)
-	if empty {
+	if cancel {
 		j.cancel()
 	}
 }
