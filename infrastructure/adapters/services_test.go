@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"editapp/application"
+	"editapp/infrastructure/ffmpeg"
 	"editapp/infrastructure/media/index"
 	"editapp/infrastructure/media/probe"
 	"editapp/infrastructure/store"
@@ -84,5 +85,49 @@ func TestMediaCatalogPreviewRejectsChangedSource(t *testing.T) {
 	_, err = catalog.Preview(ctx, application.PreviewSpec{MediaID: index.MediaID("camera", "clip.mp4")})
 	if !errors.Is(err, index.ErrSourceChanged) {
 		t.Fatalf("preview error = %v, want %v", err, index.ErrSourceChanged)
+	}
+}
+
+func TestPreviewRunnerRejectsRefreshedSourceForOldSpec(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	path := filepath.Join(root, "clip.mp4")
+	if err := os.WriteFile(path, []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	scanner, err := index.NewScanner([]index.Root{{Alias: "camera", Path: root}}, adapterProbe{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := store.OpenDatabase(ctx, filepath.Join(t.TempDir(), "editapp.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	mediaStore, err := store.NewMediaStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog := MediaCatalog{Scanner: scanner, Store: mediaStore}
+	if err := catalog.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	id := index.MediaID("camera", "clip.mp4")
+	spec, err := catalog.Preview(ctx, application.PreviewSpec{MediaID: id, WindowMS: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("changed"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	runner := PreviewRunner{Scanner: scanner, Media: mediaStore, FFmpeg: ffmpeg.Runner{Path: filepath.Join(t.TempDir(), "missing-ffmpeg")}}
+	if running, err := runner.Start(ctx, spec); !errors.Is(err, index.ErrSourceChanged) {
+		if running != nil {
+			_ = running.Stdout.Close()
+		}
+		t.Fatalf("runner error = %v, want %v", err, index.ErrSourceChanged)
 	}
 }

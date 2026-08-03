@@ -84,11 +84,14 @@ type PreviewRunner struct {
 }
 
 func (r PreviewRunner) Start(ctx context.Context, spec domain.PreviewSpec) (*application.RunningPreview, error) {
-	source, _, err := r.Scanner.Open(ctx, r.Media, spec.MediaID)
+	source, item, err := r.Scanner.Open(ctx, r.Media, spec.MediaID)
 	if err != nil {
 		return nil, err
 	}
 	defer source.Close()
+	if item.ID != spec.MediaID || item.SizeBytes != spec.SizeBytes || item.MtimeNS != spec.MtimeNS {
+		return nil, index.ErrSourceChanged
+	}
 	file, ok := source.(*os.File)
 	if !ok {
 		return nil, errors.New("media source is not a file")
