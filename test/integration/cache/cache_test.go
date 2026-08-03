@@ -7,7 +7,7 @@ import (
 	"os"
 	"testing"
 
-	cachepkg "editapp/internal/cache"
+	cachepkg "editapp/infrastructure/cache"
 )
 
 func TestInvalidCompleteFileIsNeverAHit(t *testing.T) {

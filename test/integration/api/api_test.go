@@ -11,9 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"editapp/internal/api"
-	"editapp/internal/auth"
-	"editapp/internal/httpx"
+	auth "editapp/domain"
+	api "editapp/protocol/http"
 )
 
 const validMedia = "m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -57,9 +56,9 @@ func (p *projectStub) Get(context.Context, auth.Principal, string) (api.Project,
 	p.getCalls++
 	return p.get, nil
 }
-func (p *projectStub) Save(_ context.Context, _ auth.Principal, id string, input api.ProjectInput, _ int64) (api.Project, error) {
+func (p *projectStub) Save(_ context.Context, _ auth.Principal, id string, input auth.Document, _ int64) (api.Project, error) {
 	p.saveCalls++
-	return api.Project{ID: id, ProjectInput: input}, nil
+	return api.Project{ID: id, Document: input}, nil
 }
 
 type exportStub struct{ calls int }
@@ -80,11 +79,11 @@ func (j *jobsStub) Cancel(context.Context, auth.Principal, string) error {
 	return errors.New("missing")
 }
 
-func server(t *testing.T, authenticator auth.Authenticator, media *mediaStub, preview api.PreviewService, exports *exportStub, authorize api.Authorizer) *api.Server {
+func server(t *testing.T, authenticator api.Authenticator, media *mediaStub, preview api.PreviewService, exports *exportStub, authorize api.Authorizer) *api.Server {
 	return serverWith(t, authenticator, media, preview, &projectStub{get: api.Project{ID: validProject}}, exports, &jobsStub{}, authorize)
 }
 
-func serverWith(t *testing.T, authenticator auth.Authenticator, media *mediaStub, preview api.PreviewService, projects api.ProjectService, exports *exportStub, jobs api.JobService, authorize api.Authorizer) *api.Server {
+func serverWith(t *testing.T, authenticator api.Authenticator, media *mediaStub, preview api.PreviewService, projects api.ProjectService, exports *exportStub, jobs api.JobService, authorize api.Authorizer) *api.Server {
 	t.Helper()
 	result, err := api.New(api.Config{Authenticator: authenticator, Media: media, Preview: preview, Projects: projects, Exports: exports, Jobs: jobs, Authorize: authorize})
 	if err != nil {
@@ -93,9 +92,9 @@ func serverWith(t *testing.T, authenticator auth.Authenticator, media *mediaStub
 	return result
 }
 
-func noneAuth(t *testing.T) auth.Authenticator {
+func noneAuth(t *testing.T) api.Authenticator {
 	t.Helper()
-	result, err := auth.New(auth.Config{Mode: "none"})
+	result, err := api.NewAuthenticator(api.AuthConfig{Mode: "none"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +102,7 @@ func noneAuth(t *testing.T) auth.Authenticator {
 }
 
 func TestUntrustedForwardedUserIsRejectedBeforeMedia(t *testing.T) {
-	authenticator, err := auth.New(auth.Config{Mode: "trusted_proxy"})
+	authenticator, err := api.NewAuthenticator(api.AuthConfig{Mode: "trusted_proxy"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,20 +125,20 @@ func TestUntrustedForwardedUserIsRejectedBeforeMedia(t *testing.T) {
 func TestAPIAuthenticationModesRejectBeforeServices(t *testing.T) {
 	for _, test := range []struct {
 		name       string
-		config     auth.Config
+		config     api.AuthConfig
 		authorize  string
 		wantStatus int
 	}{
-		{name: "none ignores bearer", config: auth.Config{Mode: "none"}, authorize: "Bearer ignored", wantStatus: http.StatusOK},
-		{name: "correct bearer with internal space", config: auth.Config{Mode: "bearer", BearerToken: "alpha beta"}, authorize: "Bearer alpha beta", wantStatus: http.StatusOK},
-		{name: "missing bearer", config: auth.Config{Mode: "bearer", BearerToken: "alpha beta"}, wantStatus: http.StatusUnauthorized},
-		{name: "missing bearer suffix", config: auth.Config{Mode: "bearer", BearerToken: "alpha beta"}, authorize: "Bearer", wantStatus: http.StatusUnauthorized},
-		{name: "wrong bearer", config: auth.Config{Mode: "bearer", BearerToken: "alpha beta"}, authorize: "Bearer alpha gamma", wantStatus: http.StatusUnauthorized},
-		{name: "malformed scheme", config: auth.Config{Mode: "bearer", BearerToken: "alpha beta"}, authorize: "Basic alpha beta", wantStatus: http.StatusUnauthorized},
-		{name: "multiple bearer", config: auth.Config{Mode: "bearer", BearerToken: "alpha beta"}, wantStatus: http.StatusUnauthorized},
+		{name: "none ignores bearer", config: api.AuthConfig{Mode: "none"}, authorize: "Bearer ignored", wantStatus: http.StatusOK},
+		{name: "correct bearer with internal space", config: api.AuthConfig{Mode: "bearer", BearerToken: "alpha beta"}, authorize: "Bearer alpha beta", wantStatus: http.StatusOK},
+		{name: "missing bearer", config: api.AuthConfig{Mode: "bearer", BearerToken: "alpha beta"}, wantStatus: http.StatusUnauthorized},
+		{name: "missing bearer suffix", config: api.AuthConfig{Mode: "bearer", BearerToken: "alpha beta"}, authorize: "Bearer", wantStatus: http.StatusUnauthorized},
+		{name: "wrong bearer", config: api.AuthConfig{Mode: "bearer", BearerToken: "alpha beta"}, authorize: "Bearer alpha gamma", wantStatus: http.StatusUnauthorized},
+		{name: "malformed scheme", config: api.AuthConfig{Mode: "bearer", BearerToken: "alpha beta"}, authorize: "Basic alpha beta", wantStatus: http.StatusUnauthorized},
+		{name: "multiple bearer", config: api.AuthConfig{Mode: "bearer", BearerToken: "alpha beta"}, wantStatus: http.StatusUnauthorized},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			authenticator, err := auth.New(test.config)
+			authenticator, err := api.NewAuthenticator(test.config)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -162,7 +161,7 @@ func TestAPIAuthenticationModesRejectBeforeServices(t *testing.T) {
 }
 
 func TestTrustedProxyPrincipalReachesPreview(t *testing.T) {
-	authenticator, err := auth.New(auth.Config{Mode: "trusted_proxy"})
+	authenticator, err := api.NewAuthenticator(api.AuthConfig{Mode: "trusted_proxy"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -171,7 +170,7 @@ func TestTrustedProxyPrincipalReachesPreview(t *testing.T) {
 		return api.PreviewResult{Reader: io.NopCloser(strings.NewReader("preview")), CacheStatus: "hit", DurationMS: 8_000}, nil
 	}}
 	service := server(t, authenticator, media, preview, exports, nil)
-	handler, err := httpx.TrustedProxy([]string{"127.0.0.0/8"}, service)
+	handler, err := api.TrustedProxy([]string{"127.0.0.0/8"}, service)
 	if err != nil {
 		t.Fatal(err)
 	}

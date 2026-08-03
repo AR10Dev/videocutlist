@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"editapp/internal/export"
-	"editapp/internal/media/probe"
-	"editapp/internal/projects"
+	"editapp/domain"
+	"editapp/infrastructure/export"
+	"editapp/infrastructure/media/probe"
 )
 
 func TestStreamCopySegmentsMergeWithWarningAndAtomicPublish(t *testing.T) {
@@ -39,7 +39,7 @@ func TestStreamCopySegmentsMergeWithWarningAndAtomicPublish(t *testing.T) {
 	}
 	outputDir := filepath.Join(directory, "exports")
 	service := export.Service{FFmpegPath: ffmpeg, OutputDir: outputDir, Retention: time.Hour}
-	document := projects.Document{Segments: []projects.Segment{{StartMS: 0, EndMS: 700}, {StartMS: 1_000, EndMS: 1_700}}}
+	document := domain.Document{Segments: []domain.Segment{{StartMS: 0, EndMS: 700}, {StartMS: 1_000, EndMS: 1_700}}}
 	result, err := service.Run(context.Background(), source, document, export.Request{Mode: "merge", CutStrategy: "stream_copy_preferred", Container: "mkv"})
 	if err != nil {
 		t.Fatal(err)
@@ -80,7 +80,7 @@ func TestCancellationRemovesIncompleteOutput(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	service := export.Service{FFmpegPath: ffmpeg, OutputDir: filepath.Join(directory, "exports")}
-	_, err = service.Run(ctx, source, projects.Document{Segments: []projects.Segment{{StartMS: 0, EndMS: 1}}}, export.Request{Mode: "merge", CutStrategy: "stream_copy_preferred", Container: "mkv"})
+	_, err = service.Run(ctx, source, domain.Document{Segments: []domain.Segment{{StartMS: 0, EndMS: 1}}}, export.Request{Mode: "merge", CutStrategy: "stream_copy_preferred", Container: "mkv"})
 	if !errors.Is(err, export.ErrCancelled) {
 		t.Fatalf("cancellation error = %v", err)
 	}

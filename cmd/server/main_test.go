@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"editapp/internal/config"
+	"editapp/infrastructure/config"
 )
 
 func TestNewHTTPServerUsesConfiguredAddressAndTimeouts(t *testing.T) {

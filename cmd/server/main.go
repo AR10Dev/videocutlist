@@ -11,21 +11,17 @@ import (
 	"syscall"
 	"time"
 
-	"editapp/internal/api"
-	"editapp/internal/app"
-	"editapp/internal/auth"
-	"editapp/internal/cache"
-	"editapp/internal/config"
-	exporter "editapp/internal/export"
-	"editapp/internal/ffmpeg"
-	"editapp/internal/httpx"
-	"editapp/internal/jobs"
-	"editapp/internal/limits"
-	"editapp/internal/media/index"
-	"editapp/internal/media/probe"
-	"editapp/internal/metrics"
-	"editapp/internal/projects"
-	"editapp/internal/store"
+	"editapp/application"
+	"editapp/domain"
+	"editapp/infrastructure/adapters"
+	"editapp/infrastructure/cache"
+	"editapp/infrastructure/config"
+	exporter "editapp/infrastructure/export"
+	"editapp/infrastructure/ffmpeg"
+	"editapp/infrastructure/media/index"
+	"editapp/infrastructure/media/probe"
+	"editapp/infrastructure/store"
+	"editapp/protocol/http"
 )
 
 func main() {
@@ -78,39 +74,39 @@ func run(ctx context.Context) error {
 	if err := cacheStore.CleanupPartials(); err != nil {
 		return err
 	}
-	limiter, err := limits.NewPreview(cfg.PreviewGlobalLimit, cfg.PreviewPerUserLimit)
+	limiter, err := application.NewPreviewLimits(cfg.PreviewGlobalLimit, cfg.PreviewPerUserLimit)
 	if err != nil {
 		return err
 	}
 	validator := cache.ValidatorFunc(func(ctx context.Context, path string) error {
 		return ffmpeg.ValidateFile(ctx, cfg.FFprobePath, path)
 	})
-	previewManager, err := jobs.NewPreviewManager(cacheStore, ffmpeg.Runner{Path: cfg.FFmpegPath}, validator, limiter)
+	refreshJobs := adapters.NewRefreshJobs()
+	mediaAdapter := &adapters.MediaAdapter{Scanner: scanner, Store: mediaStore, Refresh: refreshJobs}
+	previewRunner := adapters.PreviewRunner{Scanner: scanner, Media: mediaStore, FFmpeg: ffmpeg.Runner{Path: cfg.FFmpegPath}}
+	previewManager, err := application.NewPreviewManager(adapters.PreviewCache{Store: cacheStore}, previewRunner, application.Validator(validator), limiter)
 	if err != nil {
 		return err
 	}
-	projectService, _ := projects.NewService(projectStore)
-	refreshJobs := app.NewRefreshJobs()
-	mediaAdapter := &app.MediaAdapter{Scanner: scanner, Store: mediaStore, Refresh: refreshJobs}
-	previewAdapter := app.PreviewAdapter{Scanner: scanner, Media: mediaStore, Manager: previewManager, Cache: cacheStore, Validator: validator}
-	projectAdapter := app.ProjectAdapter{Service: projectService, Store: projectStore}
-	exportAdapter := app.NewExportAdapter(jobStore, scanner, mediaStore, exporter.Service{
+	previewAdapter := adapters.PreviewAdapter{Scanner: scanner, Media: mediaStore, Manager: previewManager, Cache: cacheStore, Validator: validator}
+	projectAdapter := adapters.ProjectAdapter{Store: projectStore}
+	exportAdapter := adapters.NewExportAdapter(jobStore, scanner, mediaStore, exporter.Service{
 		FFmpegPath: cfg.FFmpegPath, FFprobePath: cfg.FFprobePath, OutputDir: cfg.ExportDir,
 	}, cfg.ExportLimit)
-	jobAdapter := app.JobAdapter{Exports: exportAdapter, Refresh: refreshJobs}
-	authenticator, err := auth.New(auth.Config{
+	jobAdapter := adapters.JobAdapter{Exports: exportAdapter, Refresh: refreshJobs}
+	authenticator, err := httpapi.NewAuthenticator(httpapi.AuthConfig{
 		Mode: cfg.AuthMode, BearerToken: cfg.BearerToken, BearerSubject: cfg.BearerSubject,
 	})
 	if err != nil {
 		return err
 	}
-	apiServer, err := api.New(api.Config{
+	apiServer, err := httpapi.New(httpapi.Config{
 		Authenticator: authenticator, Media: mediaAdapter, Preview: previewAdapter,
 		Projects: projectAdapter, Exports: exportAdapter, Jobs: jobAdapter,
-		Authorize: api.AuthorizerFunc(func(principal auth.Principal, action, resource string) bool {
+		Authorize: httpapi.AuthorizerFunc(func(principal domain.Principal, action, resource string) bool {
 			return principal.Allows(action, resource)
 		}),
-		Ready: db.PingContext, Logger: logger, Metrics: metrics.New(),
+		Ready: db.PingContext, Logger: logger, Metrics: httpapi.NewMetrics(),
 		BeforeMS: int64(cfg.PreviewBeforeMS), AfterMS: int64(cfg.PreviewAfterMS),
 		MaxPreviewMS: int64(cfg.PreviewMaxMS), GridMS: int64(cfg.PreviewGridMS),
 	})
@@ -122,11 +118,11 @@ func run(ctx context.Context) error {
 	mux.Handle("/api/", apiServer)
 	mux.Handle("/metrics", apiServer)
 	mux.Handle("/", http.FileServer(http.Dir("web/dist")))
-	proxied, err := httpx.TrustedProxy(cfg.TrustedProxyCIDRs, mux)
+	proxied, err := httpapi.TrustedProxy(cfg.TrustedProxyCIDRs, mux)
 	if err != nil {
 		return err
 	}
-	server := newHTTPServer(cfg, httpx.CORS(cfg.AllowedOrigins, proxied))
+	server := newHTTPServer(cfg, httpapi.CORS(cfg.AllowedOrigins, proxied))
 	failed := make(chan error, 1)
 	go func() {
 		logger.Printf(`{"event":"server_started","listen_addr":%q}`, server.Addr)
