@@ -2,11 +2,13 @@ package adapters
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"videocutlist/application"
 	"videocutlist/infrastructure/ffmpeg"
@@ -14,6 +16,14 @@ import (
 	"videocutlist/infrastructure/media/probe"
 	"videocutlist/infrastructure/store"
 )
+
+func TestExportJobCarriesDurableErrorCode(t *testing.T) {
+	created := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
+	job := exportJob(store.ExportJob{ID: "j_aaaaaaaaaaaa", OwnerLogin: "editor", State: store.JobFailed, ErrorCode: sql.NullString{String: "media_unavailable", Valid: true}, CreatedAt: created, UpdatedAt: created})
+	if job.ErrorCode == nil || *job.ErrorCode != "media_unavailable" {
+		t.Fatalf("job error code = %#v", job.ErrorCode)
+	}
+}
 
 func TestMediaAPIShapeHidesStorageAndProviderMetadata(t *testing.T) {
 	item := index.Media{

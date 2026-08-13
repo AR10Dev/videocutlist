@@ -20,6 +20,20 @@ export type PreviewDiagnostics = {
 
 export const previewMime = 'video/mp4; codecs="avc1.42E01E, mp4a.40.2"';
 
+export const clampMediaPosition = (positionMs: number, durationMs: number) =>
+  Math.max(0, Math.min(durationMs, Math.round(Number.isFinite(positionMs) ? positionMs : 0)));
+
+export const formatTime = (positionMs: number, durationMs: number) => {
+  const ms = clampMediaPosition(positionMs, durationMs);
+  return `${Math.floor(ms / 60_000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, "0")}.${String(ms % 1000).padStart(3, "0")}`;
+};
+
+export const watchedMediaPosition = (
+  previewStartMs: number,
+  currentTimeSeconds: number,
+  durationMs: number,
+) => clampMediaPosition(previewStartMs + currentTimeSeconds * 1000, durationMs);
+
 export function validateSegments(
   segments: Segment[],
   durationMs: number,
@@ -63,36 +77,64 @@ export function streamPreview(
   video: HTMLVideoElement,
   request: () => Promise<Response>,
   onDiagnostics: (diagnostics: PreviewDiagnostics) => void,
+  onError: (error: Error) => void,
 ): () => void {
-  const mediaSource = new MediaSource();
-  const objectURL = URL.createObjectURL(mediaSource);
+  let mediaSource: MediaSource;
+  try {
+    mediaSource = new MediaSource();
+  } catch {
+    onError(new Error("Preview is not supported by this browser."));
+    return () => undefined;
+  }
+  let objectURL: string;
+  try {
+    objectURL = URL.createObjectURL(mediaSource);
+  } catch {
+    onError(new Error("Preview could not be started. Try again."));
+    return () => undefined;
+  }
   let sourceBuffer: SourceBuffer | undefined;
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   let disposed = false;
   let completed = false;
   let seekApplied = false;
+  let failed = false;
   let previewOffsetMs = 0;
   const queued: Uint8Array[] = [];
   const clean = () => {
+    if (disposed) return;
     disposed = true;
     void reader?.cancel();
     mediaSource.removeEventListener("sourceopen", open);
     sourceBuffer?.removeEventListener("updateend", updateEnd);
+    sourceBuffer?.removeEventListener("error", sourceError);
     video.removeAttribute("src");
     video.load();
     URL.revokeObjectURL(objectURL);
   };
+  const fail = (message: string) => {
+    if (disposed || failed) return;
+    failed = true;
+    onError(new Error(message));
+    clean();
+  };
+  const sourceError = () => fail("Preview data could not be played. Try again.");
   const appendNext = () => {
     if (disposed || !sourceBuffer || sourceBuffer.updating) return;
     if (queued.length === 0) {
-      if (completed && mediaSource.readyState === "open")
-        mediaSource.endOfStream();
+      if (completed && mediaSource.readyState === "open") {
+        try {
+          mediaSource.endOfStream();
+        } catch {
+          fail("Preview could not be completed. Try again.");
+        }
+      }
       return;
     }
     try {
       sourceBuffer.appendBuffer(new Uint8Array(queued.shift()!).buffer);
     } catch {
-      clean();
+      fail("Preview data could not be played. Try again.");
     }
   };
   const updateEnd = () => {
@@ -107,10 +149,17 @@ export function streamPreview(
     try {
       sourceBuffer = mediaSource.addSourceBuffer(previewMime);
       sourceBuffer.addEventListener("updateend", updateEnd);
+      sourceBuffer.addEventListener("error", sourceError);
       const started = performance.now();
       const response = await request();
-      if (!response.ok || !response.body)
-        throw new Error(`Preview request failed (${response.status}).`);
+      if (!response.ok) {
+        fail("Preview request failed. Try again.");
+        return;
+      }
+      if (!response.body) {
+        fail("Preview returned no playable data. Try again.");
+        return;
+      }
       const diagnostics = headersToDiagnostics(
         response.headers,
         Math.round(performance.now() - started),
@@ -127,7 +176,7 @@ export function streamPreview(
       completed = true;
       appendNext();
     } catch {
-      // The caller owns status messaging; aborts are expected during scrubbing.
+      fail(sourceBuffer ? "Preview data could not be read. Try again." : "Preview is not supported by this browser.");
     }
   };
   video.src = objectURL;

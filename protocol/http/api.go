@@ -269,7 +269,7 @@ func (s *Server) refreshMedia(writer http.ResponseWriter, request *http.Request,
 		internalError(writer, id)
 		return
 	}
-	httpx.WriteJSON(writer, http.StatusAccepted, job)
+	httpx.WriteJSON(writer, http.StatusOK, job)
 }
 func (s *Server) getMedia(writer http.ResponseWriter, request *http.Request, media string, id string) {
 	if !mediaID.MatchString(media) {

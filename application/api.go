@@ -40,13 +40,20 @@ type ExportInput struct {
 	SmartBoundaryReencode *bool  `json:"smartBoundaryReencode,omitempty"`
 }
 type Job struct {
-	ID        string    `json:"id"`
-	Type      string    `json:"type"`
-	State     string    `json:"state"`
-	Progress  float64   `json:"progress"`
-	Warnings  []string  `json:"warnings,omitempty"`
-	CreatedAt time.Time `json:"createdAt"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	ID        string     `json:"id"`
+	Type      string     `json:"type"`
+	State     string     `json:"state"`
+	Progress  float64    `json:"progress"`
+	Result    *JobResult `json:"result,omitempty"`
+	Warnings  []string   `json:"warnings,omitempty"`
+	ErrorCode *string    `json:"errorCode,omitempty"`
+	CreatedAt time.Time  `json:"createdAt"`
+	UpdatedAt time.Time  `json:"updatedAt"`
+}
+type JobResult struct {
+	OutputName  string    `json:"outputName"`
+	SizeBytes   int64     `json:"sizeBytes"`
+	RetainUntil time.Time `json:"retainUntil"`
 }
 type PreviewSpec struct {
 	MediaID                                 string

@@ -36,6 +36,7 @@ type ExportJob struct {
 	ID, Owner, ProjectID, State, RequestJSON string
 	ProjectRevision                          int64
 	ResultJSON                               *string
+	ErrorCode                                *string
 	CreatedAt, UpdatedAt                     time.Time
 }
 type ExportJobs interface {
@@ -266,20 +267,45 @@ func jobResult(record ExportJob) Job {
 	if record.State == "succeeded" || record.State == "failed" || record.State == "cancelled" {
 		progress = 1
 	}
-	var warnings []string
-	if record.ResultJSON != nil {
+	job := Job{ID: record.ID, Type: "export", State: record.State, Progress: progress, CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt}
+	if record.State == "failed" {
+		job.ErrorCode = record.ErrorCode
+	}
+	if record.State == "succeeded" && record.ResultJSON != nil {
 		var result struct {
-			Warnings []struct {
+			OutputName  string    `json:"outputName"`
+			SizeBytes   int64     `json:"sizeBytes"`
+			RetainUntil time.Time `json:"retainUntil"`
+			Warnings    []struct {
 				Message string `json:"message"`
 			} `json:"warnings"`
 		}
-		if json.Unmarshal([]byte(*record.ResultJSON), &result) == nil {
+		if json.Unmarshal([]byte(*record.ResultJSON), &result) == nil && safeOutputName(result.OutputName) && result.SizeBytes >= 0 && !result.RetainUntil.IsZero() {
+			job.Result = &JobResult{OutputName: result.OutputName, SizeBytes: result.SizeBytes, RetainUntil: result.RetainUntil}
 			for _, warning := range result.Warnings {
-				warnings = append(warnings, warning.Message)
+				if len(job.Warnings) == 10 {
+					break
+				}
+				if len(warning.Message) > 500 {
+					warning.Message = warning.Message[:500]
+				}
+				job.Warnings = append(job.Warnings, warning.Message)
 			}
 		}
 	}
-	return Job{ID: record.ID, Type: "export", State: record.State, Progress: progress, Warnings: warnings, CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt}
+	return job
+}
+
+func safeOutputName(name string) bool {
+	if name == "" || name == "." || name == ".." || len(name) > 255 {
+		return false
+	}
+	for _, r := range name {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '.' || r == '-' || r == '_') {
+			return false
+		}
+	}
+	return true
 }
 func newID(prefix string) (string, error) {
 	var value [18]byte

@@ -160,7 +160,12 @@ func exportJob(record store.ExportJob) application.ExportJob {
 		value := record.ResultJSON.String
 		result = &value
 	}
-	return application.ExportJob{ID: record.ID, Owner: record.OwnerLogin, ProjectID: record.ProjectID, ProjectRevision: record.ProjectRevision, State: string(record.State), RequestJSON: record.RequestJSON, ResultJSON: result, CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt}
+	var errorCode *string
+	if record.ErrorCode.Valid {
+		value := record.ErrorCode.String
+		errorCode = &value
+	}
+	return application.ExportJob{ID: record.ID, Owner: record.OwnerLogin, ProjectID: record.ProjectID, ProjectRevision: record.ProjectRevision, State: string(record.State), RequestJSON: record.RequestJSON, ResultJSON: result, ErrorCode: errorCode, CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt}
 }
 
 type ExportExecutor struct {

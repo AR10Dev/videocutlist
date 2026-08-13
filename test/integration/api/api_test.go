@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"videocutlist/application"
 	auth "videocutlist/domain"
 	api "videocutlist/protocol/http"
 )
@@ -20,6 +21,8 @@ const validProject = "p_aaaaaaaaaaaa"
 
 type mediaStub struct {
 	calls, refreshCalls int
+	refreshJob          api.Job
+	refreshErr          error
 }
 
 func (m *mediaStub) List(context.Context, string, int) (api.MediaPage, error) {
@@ -31,7 +34,7 @@ func (m *mediaStub) Get(context.Context, string) (api.Media, error) {
 }
 func (m *mediaStub) RefreshMedia(_ context.Context, _ auth.Principal) (api.Job, error) {
 	m.refreshCalls++
-	return api.Job{}, nil
+	return m.refreshJob, m.refreshErr
 }
 
 type previewStub struct {
@@ -68,10 +71,22 @@ func (e *exportStub) Create(context.Context, auth.Principal, string, api.Project
 	return api.Job{ID: "j_aaaaaaaaaaaa", Type: "export", State: "queued"}, nil
 }
 
-type jobsStub struct{ getCalls, cancelCalls int }
+type jobsStub struct {
+	getCalls, cancelCalls int
+	get                   func(context.Context, auth.Principal, string) (api.Job, error)
+}
 
-func (j *jobsStub) Get(context.Context, auth.Principal, string) (api.Job, error) {
+type headerAuthenticator struct{}
+
+func (headerAuthenticator) Authenticate(request *http.Request) (auth.Principal, error) {
+	return auth.Principal{Subject: request.Header.Get("X-Test-User"), Capabilities: []string{"job_read"}}, nil
+}
+
+func (j *jobsStub) Get(ctx context.Context, principal auth.Principal, id string) (api.Job, error) {
 	j.getCalls++
+	if j.get != nil {
+		return j.get(ctx, principal, id)
+	}
 	return api.Job{}, errors.New("missing")
 }
 func (j *jobsStub) Cancel(context.Context, auth.Principal, string) error {
@@ -221,6 +236,22 @@ func TestUnauthorizedExportNeverQueuesWork(t *testing.T) {
 	}
 }
 
+func TestRefreshReturnsCompletedJobAndBusyRemainsRetryable(t *testing.T) {
+	media := &mediaStub{refreshJob: api.Job{ID: "j_aaaaaaaaaaaa", Type: "media_refresh", State: "succeeded", Progress: 1}}
+	service := server(t, noneAuth(t), media, &previewStub{start: func(context.Context) (api.PreviewResult, error) { return api.PreviewResult{}, nil }}, &exportStub{}, nil)
+	response := httptest.NewRecorder()
+	service.ServeHTTP(response, localRequest(http.MethodPost, "/api/v1/media/refresh", nil))
+	if response.Code != http.StatusOK || media.refreshCalls != 1 || !strings.Contains(response.Body.String(), `"state":"succeeded"`) {
+		t.Fatalf("status=%d calls=%d body=%s", response.Code, media.refreshCalls, response.Body.String())
+	}
+	media.refreshErr = application.ErrBusy
+	response = httptest.NewRecorder()
+	service.ServeHTTP(response, localRequest(http.MethodPost, "/api/v1/media/refresh", nil))
+	if response.Code != http.StatusTooManyRequests || media.refreshCalls != 2 {
+		t.Fatalf("busy status=%d calls=%d", response.Code, media.refreshCalls)
+	}
+}
+
 func TestForbiddenRequestsDoNotInvokePrincipalBoundServices(t *testing.T) {
 	media, exports, projects, jobs := &mediaStub{}, &exportStub{}, &projectStub{get: api.Project{ID: validProject}}, &jobsStub{}
 	preview := &previewStub{start: func(context.Context) (api.PreviewResult, error) { return api.PreviewResult{}, nil }}
@@ -244,6 +275,58 @@ func TestForbiddenRequestsDoNotInvokePrincipalBoundServices(t *testing.T) {
 	}
 	if media.refreshCalls != 0 || preview.calls != 0 || projects.getCalls != 0 || projects.saveCalls != 0 || exports.calls != 0 || jobs.getCalls != 0 || jobs.cancelCalls != 0 {
 		t.Fatalf("service calls: media=%d preview=%d projects=(%d,%d) exports=%d jobs=(%d,%d)", media.refreshCalls, preview.calls, projects.getCalls, projects.saveCalls, exports.calls, jobs.getCalls, jobs.cancelCalls)
+	}
+}
+
+func TestJobResponsesExposeOnlySafeTerminalMetadata(t *testing.T) {
+	retainUntil := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	code := "media_unavailable"
+	jobs := &jobsStub{get: func(_ context.Context, principal auth.Principal, _ string) (api.Job, error) {
+		if principal.Subject == "other" {
+			return api.Job{}, errors.New("missing")
+		}
+		return api.Job{ID: "j_aaaaaaaaaaaa", Type: "export", State: "succeeded", Progress: 1, Result: &application.JobResult{OutputName: "export.mkv", SizeBytes: 42, RetainUntil: retainUntil}, Warnings: []string{"Cut may start at an earlier keyframe."}}, nil
+	}}
+	service := serverWith(t, headerAuthenticator{}, &mediaStub{}, &previewStub{start: func(context.Context) (api.PreviewResult, error) { return api.PreviewResult{}, nil }}, &projectStub{get: api.Project{ID: validProject}}, &exportStub{}, jobs, nil)
+	response := httptest.NewRecorder()
+	request := localRequest(http.MethodGet, "/api/v1/jobs/j_aaaaaaaaaaaa", nil)
+	request.Header.Set("X-Test-User", "owner")
+	service.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("succeeded status=%d body=%s", response.Code, response.Body.String())
+	}
+	for _, forbidden := range []string{"outputDir", "stderr", "errorCode", "/exports"} {
+		if strings.Contains(response.Body.String(), forbidden) {
+			t.Fatalf("succeeded response exposed %q: %s", forbidden, response.Body.String())
+		}
+	}
+	if !strings.Contains(response.Body.String(), `"result":{"outputName":"export.mkv","sizeBytes":42,"retainUntil":"2026-08-20T12:00:00Z"}`) {
+		t.Fatalf("missing safe result: %s", response.Body.String())
+	}
+
+	jobs.get = func(context.Context, auth.Principal, string) (api.Job, error) {
+		return api.Job{ID: "j_aaaaaaaaaaaa", Type: "export", State: "failed", Progress: 1, ErrorCode: &code}, nil
+	}
+	response = httptest.NewRecorder()
+	request = localRequest(http.MethodGet, "/api/v1/jobs/j_aaaaaaaaaaaa", nil)
+	request.Header.Set("X-Test-User", "owner")
+	service.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"errorCode":"media_unavailable"`) || strings.Contains(response.Body.String(), `"result"`) || strings.Contains(response.Body.String(), `"warnings"`) {
+		t.Fatalf("failed response=%d %s", response.Code, response.Body.String())
+	}
+
+	jobs.get = func(_ context.Context, principal auth.Principal, _ string) (api.Job, error) {
+		if principal.Subject != "owner" {
+			return api.Job{}, errors.New("missing")
+		}
+		return api.Job{ID: "j_aaaaaaaaaaaa", Type: "export", State: "queued"}, nil
+	}
+	request = localRequest(http.MethodGet, "/api/v1/jobs/j_aaaaaaaaaaaa", nil)
+	request.Header.Set("X-Test-User", "other")
+	response = httptest.NewRecorder()
+	service.ServeHTTP(response, request)
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("cross-owner status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 

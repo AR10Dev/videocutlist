@@ -58,8 +58,8 @@ paths:
       summary: Refresh the media index
       operationId: refreshMedia
       responses:
-        "202":
-          description: Refresh queued
+        "200":
+          description: Refresh completed
           content:
             application/json:
               schema: {$ref: "#/components/schemas/Job"}
@@ -271,6 +271,16 @@ components:
         type: {type: string, enum: [media_refresh, export]}
         state: {type: string, enum: [queued, running, succeeded, failed, cancelled]}
         progress: {type: number, minimum: 0, maximum: 1}
+        result:
+          description: Present only when an export job succeeded.
+          type: object
+          additionalProperties: false
+          required: [outputName, sizeBytes, retainUntil]
+          properties:
+            outputName: {type: string, description: Published export filename, never a filesystem path.}
+            sizeBytes: {type: integer, format: int64, minimum: 0}
+            retainUntil: {type: string, format: date-time}
         warnings: {type: array, items: {type: string}}
+        errorCode: {type: string, description: Stable export failure code; present only when state is failed.}
         createdAt: {type: string, format: date-time}
         updatedAt: {type: string, format: date-time}

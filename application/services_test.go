@@ -3,6 +3,8 @@ package application
 import (
 	"context"
 	"errors"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -157,3 +159,43 @@ func TestJobCancellationOrchestratesExecutorAndRepository(t *testing.T) {
 		t.Fatalf("repository cancels = %d", cancels)
 	}
 }
+
+func TestExportJobResultIsSafeAndStateCompatible(t *testing.T) {
+	retainUntil := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
+	record := ExportJob{ID: "j_aaaaaaaaaaaa", State: "succeeded", ResultJSON: stringPtr(`{"outputName":"export.mkv","sizeBytes":42,"retainUntil":"` + retainUntil.Format(time.RFC3339) + `","warnings":[{"message":"Cut may start at an earlier keyframe."}],"outputDir":"/exports/private","stderr":"secret"}`)}
+	job := jobResult(record)
+	if job.Result == nil || *job.Result != (JobResult{OutputName: "export.mkv", SizeBytes: 42, RetainUntil: retainUntil}) || len(job.Warnings) != 1 || job.Warnings[0] != "Cut may start at an earlier keyframe." || job.ErrorCode != nil {
+		t.Fatalf("job = %#v", job)
+	}
+
+	code := "media_unavailable"
+	failed := jobResult(ExportJob{ID: record.ID, State: "failed", ErrorCode: &code, ResultJSON: record.ResultJSON})
+	if failed.Result != nil || len(failed.Warnings) != 0 || failed.ErrorCode == nil || *failed.ErrorCode != code {
+		t.Fatalf("failed job = %#v", failed)
+	}
+}
+
+func TestExportJobMalformedResultFailsClosed(t *testing.T) {
+	job := jobResult(ExportJob{ID: "j_aaaaaaaaaaaa", State: "succeeded", ResultJSON: stringPtr(`{"outputName":"/exports/private.mkv","warnings":[`)})
+	if job.Result != nil || len(job.Warnings) != 0 {
+		t.Fatalf("malformed result leaked: %#v", job)
+	}
+	job = jobResult(ExportJob{ID: "j_aaaaaaaaaaaa", State: "succeeded", ResultJSON: stringPtr(`{"outputName":"/exports/private.mkv","sizeBytes":1,"retainUntil":"2026-08-20T12:00:00Z","warnings":[{"message":"secret"}]}`)})
+	if job.Result != nil || len(job.Warnings) != 0 {
+		t.Fatalf("unsafe result leaked: %#v", job)
+	}
+	for _, name := range []string{".", "..", "C:export.mkv", "dir/export.mkv", `dir\\export.mkv`, "export\x00.mkv", strings.Repeat("x", 256)} {
+		job = jobResult(ExportJob{ID: "j_aaaaaaaaaaaa", State: "succeeded", ResultJSON: stringPtr(`{"outputName":` + strconv.Quote(name) + `,"sizeBytes":1,"retainUntil":"2026-08-20T12:00:00Z","warnings":[{"message":"secret"}]}`)})
+		if job.Result != nil || len(job.Warnings) != 0 {
+			t.Fatalf("unsafe %q leaked: %#v", name, job)
+		}
+	}
+
+	message := strings.Repeat("x", 501)
+	job = jobResult(ExportJob{ID: "j_aaaaaaaaaaaa", State: "succeeded", ResultJSON: stringPtr(`{"outputName":"export.mkv","sizeBytes":1,"retainUntil":"2026-08-20T12:00:00Z","warnings":[{"message":"` + message + `"}]}`)})
+	if len(job.Warnings) != 1 || len(job.Warnings[0]) != 500 {
+		t.Fatalf("warnings = %#v", job.Warnings)
+	}
+}
+
+func stringPtr(value string) *string { return &value }
