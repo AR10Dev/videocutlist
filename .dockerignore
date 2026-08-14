@@ -1,0 +1,8 @@
+.git
+client/node_modules
+client/dist
+client/test-results
+node_modules
+test-results
+*.db
+*.partial

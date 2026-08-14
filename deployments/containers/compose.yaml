@@ -1,0 +1,15 @@
+services:
+  videocutlist:
+    build:
+      context: ../..
+      dockerfile: deployments/containers/Dockerfile
+    image: videocutlist:local
+    env_file: videocutlist.env
+    ports:
+      - "${VIDEOCUTLIST_BIND_ADDRESS:-127.0.0.1}:${VIDEOCUTLIST_HOST_PORT:-8787}:8787"
+    volumes:
+      - "${VIDEOCUTLIST_DATA_DIR:-./data}:/var/lib/videocutlist/data"
+      - "${VIDEOCUTLIST_CACHE_DIR:-./cache}:/var/cache/videocutlist/previews"
+      - "${VIDEOCUTLIST_EXPORT_DIR:-./exports}:/var/lib/videocutlist/exports"
+      - "${VIDEOCUTLIST_MEDIA_DIR:-./media}:/srv/videocutlist/media:ro"
+    restart: unless-stopped

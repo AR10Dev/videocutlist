@@ -1,31 +1,27 @@
 # Cache recovery
 
-Preview-cache entries are disposable. At startup the service removes abandoned `.partial` files; a cache miss regenerates a valid preview and atomically publishes it only after validation.
+Preview-cache entries are disposable. At startup the service removes abandoned
+`.partial` files; a cache miss regenerates a valid preview and publishes it only
+after validation.
 
-For a targeted inspection:
-
-```bash
-sudo find /var/cache/videocutlist/previews -type f -name '*.partial' -ls
-sudo du -sh /var/cache/videocutlist/previews
-```
-
-To clear only interrupted files, stop the service first so no writer races the deletion:
+Run from `deployments/containers`:
 
 ```bash
-sudo systemctl stop videocutlist
-sudo find /var/cache/videocutlist/previews -type f -name '*.partial' -delete
-sudo systemctl start videocutlist
-sudo scripts/ops/verify-deployment.sh
+docker compose stop
+find cache -type f -name '*.partial' -delete
+docker compose start
 ```
 
-For suspected cache corruption or an urgent space recovery, move the exact cache directory aside, recreate it with the original permissions, verify the service, and delete the moved directory only after successful preview regeneration:
+For urgent space recovery, stop the service, move `cache` aside, recreate it,
+and start the service again:
 
 ```bash
-sudo systemctl stop videocutlist
-sudo mv /var/cache/videocutlist/previews /var/cache/videocutlist/previews.quarantine
-sudo install -d -o root -g videocutlist -m 0770 /var/cache/videocutlist/previews
-sudo systemctl start videocutlist
-sudo scripts/ops/verify-deployment.sh
+docker compose stop
+mv cache cache.quarantine
+mkdir cache
+docker compose start
 ```
 
-Never expose, archive, or serve cache paths as original-media paths.
+Delete the quarantine only after successful preview regeneration. Never expose,
+archive, or serve cache paths as original-media paths. Use `podman compose`
+instead of `docker compose` with Podman.

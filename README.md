@@ -19,7 +19,7 @@ files. Original-media filesystem paths never leave the server.
 - Node.js 26+
 - pnpm 10.34.5+
 - FFmpeg and FFprobe
-- Linux with systemd for the packaged deployment
+- Docker or Podman with Compose
 
 ## Run locally
 
@@ -35,19 +35,22 @@ VIDEOCUTLIST_MEDIA_ROOTS_JSON='[{"id":"media","path":"/path/to/media"}]' \
 The server listens on `127.0.0.1:8787` by default. The bundled client is served
 from the same origin.
 
-## Deploy on Arch/CachyOS
+## Deploy with Docker or Podman
 
-The supported deployment path installs an immutable release and a systemd unit:
+The container image includes the server, bundled client, FFmpeg, and FFprobe.
+The Compose file works with either Docker Compose or Podman Compose:
 
 ```bash
-sudo scripts/install/install-arch-cachyos.sh 2026-07-29
-sudoedit /etc/videocutlist/videocutlist.env
-sudo systemctl enable --now videocutlist
-sudo scripts/ops/verify-deployment.sh
+cd deployments/containers
+cp videocutlist.env.example videocutlist.env
+# Put originals in ./media, or set VIDEOCUTLIST_MEDIA_DIR to another directory.
+docker compose up -d --build
+# podman compose up -d --build
 ```
 
-Keep the default loopback listener unless access is deliberately protected by a
-firewall and authentication. See the [installation guide](docs/runbooks/install-arch-cachyos.md).
+Open <http://127.0.0.1:8787>. The default port binding is loopback-only; set
+`VIDEOCUTLIST_BIND_ADDRESS=0.0.0.0` only with authentication and a firewall.
+See the [container deployment guide](docs/runbooks/containers.md).
 
 ## Development
 
@@ -62,7 +65,7 @@ See [Contributing](CONTRIBUTING.md) before opening a pull request.
 ## Documentation
 
 - [Documentation index](docs/README.md)
-- [Installation](docs/runbooks/install-arch-cachyos.md)
+- [Container deployment](docs/runbooks/containers.md)
 - [Operations, upgrades, rollback, and backup](docs/runbooks/operations.md)
 - [Connectivity examples](deployments/connectivity-examples/README.md)
 - [API contract](docs/contracts/api.openapi.yaml)

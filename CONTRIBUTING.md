@@ -10,7 +10,7 @@ Thanks for helping improve VideoCutlist.
 
    ```bash
    make check
-   make smoke
+   make smoke (requires Docker or Podman for container checks)
    ```
 
 4. Do not commit media originals, previews, exports, caches, databases, secrets,

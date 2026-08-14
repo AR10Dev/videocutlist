@@ -2,7 +2,7 @@
 
 ## Getting started
 
-- [Install on Arch/CachyOS](runbooks/install-arch-cachyos.md)
+- [Container deployment](runbooks/containers.md)
 - [Operations](runbooks/operations.md)
 - [Connectivity examples](../deployments/connectivity-examples/README.md)
 
