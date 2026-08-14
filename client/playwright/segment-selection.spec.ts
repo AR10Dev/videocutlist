@@ -136,11 +136,11 @@ test("MVP browser behavior: list, metadata, settle, cancel, offset, markers, res
   ); // 6 returned offset is used
 
   await page.getByLabel("Preview player").evaluate((video) => {
-    video.currentTime = 0.1;
+    (video as HTMLVideoElement).currentTime = 0.1;
   });
   await page.keyboard.press("i");
   await page.getByLabel("Preview player").evaluate((video) => {
-    video.currentTime = 0.7;
+    (video as HTMLVideoElement).currentTime = 0.7;
   });
   await page.keyboard.press("o");
   await page.getByRole("button", { name: "Add In/Out segment" }).click();
@@ -182,7 +182,7 @@ test("shows a safe preview failure and maps markers from the watched preview", a
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   await expect(page.getByText("Preview ready.")).toBeVisible();
   await page.getByLabel("Preview player").evaluate((video) => {
-    video.currentTime = 0.5;
+    (video as HTMLVideoElement).currentTime = 0.5;
   });
   await page.getByRole("button", { name: "Set In marker" }).click();
   await expect(page.getByText("In: 0:01.500")).toBeVisible();

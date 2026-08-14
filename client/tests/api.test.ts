@@ -52,7 +52,7 @@ describe("client API boundary", () => {
   );
 
   it("keeps the request signal and caller headers for no-auth requests", async () => {
-    const fetch = vi.fn(() => Promise.resolve(new Response()));
+    const fetch = vi.fn<typeof globalThis.fetch>(() => Promise.resolve(new Response()));
     const signal = new AbortController().signal;
     const client = createApiClient(
       {
@@ -77,7 +77,7 @@ describe("client API boundary", () => {
   });
 
   it("owns the bearer authorization header without losing caller headers", async () => {
-    const fetch = vi.fn(() => Promise.resolve(new Response()));
+    const fetch = vi.fn<typeof globalThis.fetch>(() => Promise.resolve(new Response()));
     const client = createApiClient(
       {
         serverBaseUrl: "https://video.example.com",
@@ -105,7 +105,7 @@ describe("client API boundary", () => {
   });
 
   it("uses cookies while centrally removing authorization", async () => {
-    const fetch = vi.fn(() => Promise.resolve(new Response()));
+    const fetch = vi.fn<typeof globalThis.fetch>(() => Promise.resolve(new Response()));
     const client = createApiClient(
       {
         serverBaseUrl: "https://video.example.com",

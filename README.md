@@ -1,12 +1,42 @@
 # VideoCutlist
 
-VideoCutlist indexes read-only original media, creates short browser previews, and
-creates stream-copy-preferred MKV exports. Original-media paths are never sent
-to the browser.
+VideoCutlist is a local-first video review tool. It indexes original media without
+copying it, creates short browser previews, and exports selected segments as MKV
+files. Original-media filesystem paths never leave the server.
 
-## Start
+## Features
 
-On the media host, install and configure VideoCutlist:
+- Read-only media indexing below configured media roots
+- Browser previews for selecting segments
+- Stream-copy-preferred MKV exports
+- Loopback-only service by default
+- Bearer and trusted-proxy authentication options
+- SQLite-backed state and reproducible preview cache
+
+## Requirements
+
+- Go 1.26+
+- Node.js 26+
+- FFmpeg and FFprobe
+- Linux with systemd for the packaged deployment
+
+## Run locally
+
+```bash
+cp deployments/systemd/videocutlist.env.example /tmp/videocutlist.env
+# Edit VIDEOCUTLIST_MEDIA_ROOTS_JSON in /tmp/videocutlist.env.
+make client-install
+make build
+VIDEOCUTLIST_MEDIA_ROOTS_JSON='[{"id":"media","path":"/path/to/media"}]' \
+  go run ./cmd/server
+```
+
+The server listens on `127.0.0.1:8787` by default. The bundled client is served
+from the same origin.
+
+## Deploy on Arch/CachyOS
+
+The supported deployment path installs an immutable release and a systemd unit:
 
 ```bash
 sudo scripts/install/install-arch-cachyos.sh 2026-07-29
@@ -15,40 +45,30 @@ sudo systemctl enable --now videocutlist
 sudo scripts/ops/verify-deployment.sh
 ```
 
-Set `VIDEOCUTLIST_MEDIA_ROOTS_JSON` before starting. The default listener is
-`127.0.0.1:8787`, so open `http://127.0.0.1:8787` from that host. The bundled
-browser client uses the current page origin and `{ type: "none" }` by default.
+Keep the default loopback listener unless access is deliberately protected by a
+firewall and authentication. See the [installation guide](docs/runbooks/install-arch-cachyos.md).
 
-For LAN access, set `VIDEOCUTLIST_LISTEN_ADDRESS` to the host's specific LAN IP
-literal and restart the service. Restrict the chosen `VIDEOCUTLIST_PORT` in the host
-firewall, use `VIDEOCUTLIST_AUTH_MODE=bearer` with a non-empty
-`VIDEOCUTLIST_BEARER_TOKEN`, then open `http://LAN_IP:PORT` from an allowed client.
+## Development
 
-## Separate browser client
-
-When the browser is served from a different origin, set
-`VIDEOCUTLIST_ALLOWED_ORIGINS` to the exact comma-separated client origins. It is
-deny-by-default; wildcards and paths are not valid. Define this before the app
-module runs:
-
-```html
-<script>
-window.VIDEOCUTLIST_CONFIG = {
-  serverBaseUrl: "https://videocutlist.example.test",
-  authentication: { type: "bearer", token: "editor-token" }
-};
-</script>
+```bash
+make client-install
+make check       # format, lint, tests, and build
+make smoke       # check plus architecture, deployment, and browser checks
 ```
 
-`serverBaseUrl` is an absolute HTTP(S) URL without credentials, query, or
-fragment; requests resolve below `/api/v1/`. Set authentication to
-`{ type: "none" }` for `VIDEOCUTLIST_AUTH_MODE=none`. Use `{ type: "cookie" }`
-only when a trusted reverse proxy supplies the browser session and the service
-accepts that proxy through `VIDEOCUTLIST_TRUSTED_PROXY_CIDRS`.
+See [Contributing](CONTRIBUTING.md) before opening a pull request.
 
-Do not place bearer tokens in build-time frontend environment variables or a
-public static page. See [installation](docs/runbooks/install-arch-cachyos.md)
-and [operations](docs/runbooks/operations.md) for the filesystem, rollback,
-backup, and health-check procedures. Optional connectivity examples, including
-private networks and public HTTPS proxies, live in
-[deployments/connectivity-examples](deployments/connectivity-examples/README.md).
+## Documentation
+
+- [Documentation index](docs/README.md)
+- [Installation](docs/runbooks/install-arch-cachyos.md)
+- [Operations, upgrades, rollback, and backup](docs/runbooks/operations.md)
+- [Connectivity examples](deployments/connectivity-examples/README.md)
+- [API contract](docs/contracts/api.openapi.yaml)
+- [Runtime contract](docs/contracts/runtime.md)
+
+## Security
+
+VideoCutlist handles paths to original media and should not be exposed directly
+to the public internet. Review the [security policy](SECURITY.md) before
+configuring network access.
