@@ -1,9 +1,6 @@
 services:
   videocutlist:
-    build:
-      context: ../..
-      dockerfile: deployments/containers/Dockerfile
-    image: videocutlist:local
+    image: "${VIDEOCUTLIST_IMAGE:-ghcr.io/ar10dev/videocutlist:latest}"
     env_file: videocutlist.env
     ports:
       - "${VIDEOCUTLIST_BIND_ADDRESS:-127.0.0.1}:${VIDEOCUTLIST_HOST_PORT:-8787}:8787"
