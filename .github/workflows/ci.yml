@@ -15,11 +15,15 @@ jobs:
       - uses: actions/setup-go@v6.5.0
         with:
           go-version: "1.26.5"
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10.34.5
       - uses: actions/setup-node@v4.4.0
         with:
           node-version: "26.5.0"
-          cache: npm
-          cache-dependency-path: client/package-lock.json
-      - run: npm --prefix client ci
-      - run: npm --prefix client exec playwright install --with-deps chromium
+          cache: pnpm
+          cache-dependency-path: client/pnpm-lock.yaml
+      - run: pnpm --dir client install --frozen-lockfile
+      - run: pnpm --dir client audit --audit-level high
+      - run: pnpm --dir client exec playwright install --with-deps chromium
       - run: make smoke

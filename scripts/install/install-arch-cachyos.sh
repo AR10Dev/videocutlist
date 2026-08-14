@@ -14,7 +14,7 @@ case $release in
 esac
 
 for command in pacman systemctl install git; do command -v "$command" >/dev/null || { echo "missing $command" >&2; exit 1; }; done
-pacman -S --needed --noconfirm base-devel go nodejs npm ffmpeg sqlite curl
+pacman -S --needed --noconfirm base-devel go nodejs pnpm ffmpeg sqlite curl
 
 getent group videocutlist-media >/dev/null || groupadd --system videocutlist-media
 id -u videocutlist >/dev/null 2>&1 || useradd --system --user-group --home-dir /nonexistent --shell /usr/bin/nologin videocutlist
@@ -29,8 +29,8 @@ stage=$(mktemp -d /opt/videocutlist/.install.XXXXXX)
 trap 'rm -rf "$stage"' EXIT
 mkdir -p "$stage/bin" "$stage/client/dist"
 go -C "$root" build -trimpath -buildvcs=true -o "$stage/bin/videocutlist" ./cmd/server
-npm --prefix "$root/client" ci
-npm --prefix "$root/client" run build
+pnpm --dir "$root/client" install --frozen-lockfile
+pnpm --dir "$root/client" run build
 cp -a "$root/client/dist/." "$stage/client/dist/"
 cp -a "$root/docs" "$stage/docs"
 

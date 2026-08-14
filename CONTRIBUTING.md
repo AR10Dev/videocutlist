@@ -15,6 +15,7 @@ Thanks for helping improve VideoCutlist.
 
 4. Do not commit media originals, previews, exports, caches, databases, secrets,
    or worktrees.
+5. Use pnpm and keep `client/pnpm-lock.yaml` synchronized with `client/package.json`.
 
 ## Project boundaries
 

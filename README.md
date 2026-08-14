@@ -17,6 +17,7 @@ files. Original-media filesystem paths never leave the server.
 
 - Go 1.26+
 - Node.js 26+
+- pnpm 10.34.5+
 - FFmpeg and FFprobe
 - Linux with systemd for the packaged deployment
 
