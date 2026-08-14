@@ -2,6 +2,7 @@ package application
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"strconv"
 	"strings"
@@ -10,28 +11,41 @@ import (
 	"time"
 
 	"videocutlist/domain"
+	"videocutlist/infrastructure/store"
 )
 
-type catalogStub struct{ refreshes int }
+type catalogStub struct {
+	refreshes  int
+	refreshErr error
+}
 
 func (c *catalogStub) List(context.Context, string, int) (MediaPage, error) { return MediaPage{}, nil }
 func (c *catalogStub) Get(context.Context, string) (Media, error)           { return Media{}, nil }
-func (c *catalogStub) Refresh(context.Context) error                        { c.refreshes++; return nil }
+func (c *catalogStub) Refresh(context.Context) error                        { c.refreshes++; return c.refreshErr }
 func (c *catalogStub) Preview(context.Context, PreviewSpec) (domain.PreviewSpec, error) {
 	return domain.PreviewSpec{}, nil
 }
 
-func TestMediaRefreshThrottleLivesInUseCase(t *testing.T) {
+func TestMediaRefreshIsSynchronous(t *testing.T) {
 	catalog := &catalogStub{}
-	useCase := &MediaUseCase{Catalog: catalog, Refresh: NewRefreshJobs()}
-	if _, err := useCase.RefreshMedia(context.Background(), domain.Principal{Subject: "editor"}); err != nil {
+	useCase := &MediaUseCase{Catalog: catalog}
+	if err := useCase.RefreshMedia(context.Background()); err != nil {
 		t.Fatal(err)
-	}
-	if _, err := useCase.RefreshMedia(context.Background(), domain.Principal{Subject: "editor"}); !errors.Is(err, ErrBusy) {
-		t.Fatalf("second refresh = %v", err)
 	}
 	if catalog.refreshes != 1 {
 		t.Fatalf("refreshes = %d", catalog.refreshes)
+	}
+}
+
+func TestMediaRefreshFailureCanRetry(t *testing.T) {
+	catalog := &catalogStub{refreshErr: errors.New("refresh failed")}
+	useCase := &MediaUseCase{Catalog: catalog}
+	if err := useCase.RefreshMedia(context.Background()); err == nil {
+		t.Fatal("failed refresh succeeded")
+	}
+	catalog.refreshErr = nil
+	if err := useCase.RefreshMedia(context.Background()); err != nil {
+		t.Fatalf("retry = %v", err)
 	}
 }
 
@@ -68,29 +82,29 @@ func TestProjectUseCaseValidatesBeforeRevisionSave(t *testing.T) {
 type jobsStub struct {
 	mu               sync.Mutex
 	creates, cancels int
-	job              ExportJob
+	job              store.ExportJob
 }
 
-func (j *jobsStub) Create(_ context.Context, job ExportJob) (ExportJob, error) {
+func (j *jobsStub) Create(_ context.Context, job store.ExportJob) (store.ExportJob, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	j.creates++
-	job.State = "queued"
+	job.State = store.JobQueued
 	job.CreatedAt = time.Now()
 	job.UpdatedAt = job.CreatedAt
 	j.job = job
 	return job, nil
 }
-func (j *jobsStub) Get(context.Context, string, string) (ExportJob, error) {
+func (j *jobsStub) Get(context.Context, string, string) (store.ExportJob, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	return j.job, nil
 }
-func (j *jobsStub) Cancel(context.Context, string, string) (ExportJob, error) {
+func (j *jobsStub) Cancel(context.Context, string, string) (store.ExportJob, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	j.cancels++
-	j.job.State = "cancelled"
+	j.job.State = store.JobCancelled
 	return j.job, nil
 }
 
@@ -148,7 +162,7 @@ func TestJobCancellationOrchestratesExecutorAndRepository(t *testing.T) {
 	jobs.mu.Lock()
 	jobs.job.State = "running"
 	jobs.mu.Unlock()
-	if err := (JobUseCase{Exports: useCase, Refresh: NewRefreshJobs()}).Cancel(context.Background(), domain.Principal{Subject: "editor"}, job.ID); err != nil {
+	if err := (JobUseCase{Exports: useCase}).Cancel(context.Background(), domain.Principal{Subject: "editor"}, job.ID); err != nil {
 		t.Fatal(err)
 	}
 	<-executor.cancelled
@@ -162,37 +176,36 @@ func TestJobCancellationOrchestratesExecutorAndRepository(t *testing.T) {
 
 func TestExportJobResultIsSafeAndStateCompatible(t *testing.T) {
 	retainUntil := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
-	record := ExportJob{ID: "j_aaaaaaaaaaaa", State: "succeeded", ResultJSON: stringPtr(`{"outputName":"export.mkv","sizeBytes":42,"retainUntil":"` + retainUntil.Format(time.RFC3339) + `","warnings":[{"message":"Cut may start at an earlier keyframe."}],"outputDir":"/exports/private","stderr":"secret"}`)}
+	record := store.ExportJob{ID: "j_aaaaaaaaaaaa", State: store.JobSucceeded, ResultJSON: sql.NullString{String: `{"outputName":"export.mkv","sizeBytes":42,"retainUntil":"` + retainUntil.Format(time.RFC3339) + `","warnings":[{"message":"Cut may start at an earlier keyframe."}],"outputDir":"/exports/private","stderr":"secret"}`, Valid: true}}
 	job := jobResult(record)
 	if job.Result == nil || *job.Result != (JobResult{OutputName: "export.mkv", SizeBytes: 42, RetainUntil: retainUntil}) || len(job.Warnings) != 1 || job.Warnings[0] != "Cut may start at an earlier keyframe." || job.ErrorCode != nil {
 		t.Fatalf("job = %#v", job)
 	}
 
-	code := "media_unavailable"
-	failed := jobResult(ExportJob{ID: record.ID, State: "failed", ErrorCode: &code, ResultJSON: record.ResultJSON})
-	if failed.Result != nil || len(failed.Warnings) != 0 || failed.ErrorCode == nil || *failed.ErrorCode != code {
+	failed := jobResult(store.ExportJob{ID: record.ID, State: store.JobFailed, ErrorCode: sql.NullString{String: "media_unavailable", Valid: true}, ResultJSON: record.ResultJSON})
+	if failed.Result != nil || len(failed.Warnings) != 0 || failed.ErrorCode == nil || *failed.ErrorCode != "media_unavailable" {
 		t.Fatalf("failed job = %#v", failed)
 	}
 }
 
 func TestExportJobMalformedResultFailsClosed(t *testing.T) {
-	job := jobResult(ExportJob{ID: "j_aaaaaaaaaaaa", State: "succeeded", ResultJSON: stringPtr(`{"outputName":"/exports/private.mkv","warnings":[`)})
+	job := jobResult(store.ExportJob{ID: "j_aaaaaaaaaaaa", State: store.JobSucceeded, ResultJSON: sql.NullString{String: `{"outputName":"/exports/private.mkv","warnings":[`, Valid: true}})
 	if job.Result != nil || len(job.Warnings) != 0 {
 		t.Fatalf("malformed result leaked: %#v", job)
 	}
-	job = jobResult(ExportJob{ID: "j_aaaaaaaaaaaa", State: "succeeded", ResultJSON: stringPtr(`{"outputName":"/exports/private.mkv","sizeBytes":1,"retainUntil":"2026-08-20T12:00:00Z","warnings":[{"message":"secret"}]}`)})
+	job = jobResult(store.ExportJob{ID: "j_aaaaaaaaaaaa", State: store.JobSucceeded, ResultJSON: sql.NullString{String: `{"outputName":"/exports/private.mkv","sizeBytes":1,"retainUntil":"2026-08-20T12:00:00Z","warnings":[{"message":"secret"}]}`, Valid: true}})
 	if job.Result != nil || len(job.Warnings) != 0 {
 		t.Fatalf("unsafe result leaked: %#v", job)
 	}
 	for _, name := range []string{".", "..", "C:export.mkv", "dir/export.mkv", `dir\\export.mkv`, "export\x00.mkv", strings.Repeat("x", 256)} {
-		job = jobResult(ExportJob{ID: "j_aaaaaaaaaaaa", State: "succeeded", ResultJSON: stringPtr(`{"outputName":` + strconv.Quote(name) + `,"sizeBytes":1,"retainUntil":"2026-08-20T12:00:00Z","warnings":[{"message":"secret"}]}`)})
+		job = jobResult(store.ExportJob{ID: "j_aaaaaaaaaaaa", State: store.JobSucceeded, ResultJSON: sql.NullString{String: `{"outputName":` + strconv.Quote(name) + `,"sizeBytes":1,"retainUntil":"2026-08-20T12:00:00Z","warnings":[{"message":"secret"}]}`, Valid: true}})
 		if job.Result != nil || len(job.Warnings) != 0 {
 			t.Fatalf("unsafe %q leaked: %#v", name, job)
 		}
 	}
 
 	message := strings.Repeat("x", 501)
-	job = jobResult(ExportJob{ID: "j_aaaaaaaaaaaa", State: "succeeded", ResultJSON: stringPtr(`{"outputName":"export.mkv","sizeBytes":1,"retainUntil":"2026-08-20T12:00:00Z","warnings":[{"message":"` + message + `"}]}`)})
+	job = jobResult(store.ExportJob{ID: "j_aaaaaaaaaaaa", State: store.JobSucceeded, ResultJSON: sql.NullString{String: `{"outputName":"export.mkv","sizeBytes":1,"retainUntil":"2026-08-20T12:00:00Z","warnings":[{"message":"` + message + `"}]}`, Valid: true}})
 	if len(job.Warnings) != 1 || len(job.Warnings[0]) != 500 {
 		t.Fatalf("warnings = %#v", job.Warnings)
 	}

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"videocutlist/domain"
 )
@@ -51,6 +52,129 @@ func TestCommitOpenAndEvict(t *testing.T) {
 	}
 	if _, err := store.Open(context.Background(), key2, accept); !errors.Is(err, ErrMiss) {
 		t.Fatalf("new entry error = %v, want miss after bounded eviction", err)
+	}
+}
+
+func TestOpenDoesNotLockDuringValidation(t *testing.T) {
+	store, err := New(t.TempDir(), 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key1, key2 := stringsOf('6'), stringsOf('7')
+	writePartial(t, store, key1, "one")
+	writePartial(t, store, key2, "two")
+	started := make(chan struct{})
+	release := make(chan struct{})
+	firstOpened := make(chan error, 1)
+	go func() {
+		reader, err := store.Open(context.Background(), key1, func(context.Context, string) error {
+			close(started)
+			<-release
+			return nil
+		})
+		if err == nil {
+			err = reader.Close()
+		}
+		firstOpened <- err
+	}()
+	<-started
+	opened := make(chan error, 1)
+	go func() {
+		reader, err := store.Open(context.Background(), key2, accept)
+		if err == nil {
+			err = reader.Close()
+		}
+		opened <- err
+	}()
+	select {
+	case err := <-opened:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cache open blocked on validation")
+	}
+	close(release)
+	if err := <-firstOpened; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOpenCancellationPreservesEntry(t *testing.T) {
+	store, err := New(t.TempDir(), 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := stringsOf('8')
+	writePartial(t, store, key, "valid")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = store.Open(ctx, key, func(context.Context, string) error { return context.Canceled })
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Open error = %v, want cancellation", err)
+	}
+	path, _ := store.path(key)
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("cancelled validation removed valid entry: %v", err)
+	}
+}
+
+func TestOpenCoordinatesReplacementAfterValidation(t *testing.T) {
+	store, err := New(t.TempDir(), 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := stringsOf('9')
+	writePartial(t, store, key, "old")
+	started := make(chan struct{})
+	release := make(chan struct{})
+	opened := make(chan []byte, 1)
+	openErr := make(chan error, 1)
+	go func() {
+		reader, err := store.Open(context.Background(), key, func(context.Context, string) error {
+			close(started)
+			<-release
+			return nil
+		})
+		if err != nil {
+			openErr <- err
+			return
+		}
+		body, readErr := io.ReadAll(reader)
+		_ = reader.Close()
+		if readErr != nil {
+			openErr <- readErr
+			return
+		}
+		opened <- body
+		openErr <- nil
+	}()
+	<-started
+	replacementDone := make(chan error, 1)
+	go func() {
+		p, err := store.Begin(key)
+		if err == nil {
+			_, err = p.Write([]byte("new"))
+		}
+		if err == nil {
+			err = p.Commit(context.Background(), accept)
+		}
+		replacementDone <- err
+	}()
+	select {
+	case err := <-replacementDone:
+		t.Fatalf("replacement completed during validation: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	if err := <-openErr; err != nil {
+		t.Fatal(err)
+	}
+	if body := <-opened; string(body) != "old" {
+		t.Fatalf("opened replacement during validation: %q", body)
+	}
+	if err := <-replacementDone; err != nil {
+		t.Fatal(err)
 	}
 }
 

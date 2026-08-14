@@ -69,7 +69,7 @@ type PreviewResult struct {
 type MediaService interface {
 	List(context.Context, string, int) (MediaPage, error)
 	Get(context.Context, string) (Media, error)
-	RefreshMedia(context.Context, domain.Principal) (Job, error)
+	RefreshMedia(context.Context) error
 }
 type PreviewService interface {
 	Start(context.Context, domain.Principal, PreviewSpec) (PreviewResult, error)

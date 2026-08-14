@@ -84,14 +84,14 @@ before preview, refresh, project, job, or export application services run.
 
 ## Cancellation and streaming
 
-- HTTP request context cancellation detaches that subscriber.
-- A newer foreground request supersedes the same user's previous subscription.
-- Identical normalized previews share one process. The process is cancelled
-  when no subscribers remain.
-- A shared preview retains at most 64 MiB for replay to late subscribers.
+- Each preview request is independent: a cache miss starts one FFmpeg process
+  and does not share, replay, or single-flight another request.
+- HTTP request cancellation, or closing the response stream, cancels FFmpeg and
+  discards the incomplete cache output.
 - FFmpeg receives SIGTERM, a bounded grace period, then forced termination.
 - Streaming begins from stdout without waiting for process completion.
-- Cache completion requires FFmpeg success and FFprobe validation.
+- Cache completion requires FFmpeg success and FFprobe validation, followed by
+  atomic publication; incomplete `.partial` files are never cache hits.
 
 ## Configuration
 

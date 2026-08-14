@@ -81,21 +81,20 @@ func run(ctx context.Context) error {
 	validator := cache.ValidatorFunc(func(ctx context.Context, path string) error {
 		return ffmpeg.ValidateFile(ctx, cfg.FFprobePath, path)
 	})
-	refreshJobs := application.NewRefreshJobs()
 	mediaCatalog := adapters.MediaCatalog{Scanner: scanner, Store: mediaStore}
 	previewRunner := adapters.PreviewRunner{Scanner: scanner, Media: mediaStore, FFmpeg: ffmpeg.Runner{Path: cfg.FFmpegPath}}
 	previewManager, err := application.NewPreviewManager(adapters.PreviewCache{Store: cacheStore}, previewRunner, application.Validator(validator), limiter)
 	if err != nil {
 		return err
 	}
-	mediaService := &application.MediaUseCase{Catalog: mediaCatalog, Refresh: refreshJobs}
+	mediaService := &application.MediaUseCase{Catalog: mediaCatalog}
 	previewService := application.PreviewUseCase{Catalog: mediaCatalog, Manager: previewManager}
 	projectService := application.ProjectUseCase{Repository: adapters.ProjectRepository{Store: projectStore}}
 	exportExecutor := adapters.NewExportExecutor(jobStore, scanner, mediaStore, exporter.Service{
 		FFmpegPath: cfg.FFmpegPath, FFprobePath: cfg.FFprobePath, OutputDir: cfg.ExportDir,
 	})
-	exportService := application.NewExportUseCase(adapters.ExportJobs{Store: jobStore}, exportExecutor, cfg.ExportLimit)
-	jobService := application.JobUseCase{Exports: exportService, Refresh: refreshJobs}
+	exportService := application.NewExportUseCase(jobStore, exportExecutor, cfg.ExportLimit)
+	jobService := application.JobUseCase{Exports: exportService}
 	authenticator, err := httpapi.NewAuthenticator(httpapi.AuthConfig{
 		Mode: cfg.AuthMode, BearerToken: cfg.BearerToken, BearerSubject: cfg.BearerSubject,
 	})

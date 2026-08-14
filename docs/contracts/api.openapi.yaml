@@ -24,50 +24,49 @@ paths:
           description: Prometheus text exposition
           content:
             text/plain:
-              schema: {type: string}
+              schema: { type: string }
   /health:
     get:
       summary: Check process health
       operationId: health
       security: []
       responses:
-        "200": {description: Alive}
+        "200": { description: Alive }
   /ready:
     get:
       summary: Check dependency readiness
       operationId: ready
       security: []
       responses:
-        "200": {description: Ready}
-        "503": {$ref: "#/components/responses/Error"}
+        "200": { description: Ready }
+        "503": { $ref: "#/components/responses/Error" }
   /media:
     get:
       summary: List indexed media
       operationId: listMedia
       parameters:
-        - {name: limit, in: query, schema: {type: integer, minimum: 1, maximum: 100, default: 50}}
-        - {name: cursor, in: query, schema: {type: string}}
+        - {
+            name: limit,
+            in: query,
+            schema: { type: integer, minimum: 1, maximum: 100, default: 50 },
+          }
+        - { name: cursor, in: query, schema: { type: string } }
       responses:
         "200":
           description: Media page
           content:
             application/json:
-              schema: {$ref: "#/components/schemas/MediaPage"}
+              schema: { $ref: "#/components/schemas/MediaPage" }
   /media/refresh:
     post:
       summary: Refresh the media index
       operationId: refreshMedia
       responses:
-        "200":
-          description: Refresh completed
-          content:
-            application/json:
-              schema: {$ref: "#/components/schemas/Job"}
-        "403": {$ref: "#/components/responses/Error"}
-        "429": {$ref: "#/components/responses/Error"}
+        "204": { description: Refresh completed }
+        "403": { $ref: "#/components/responses/Error" }
   /media/{mediaId}:
     parameters:
-      - {$ref: "#/components/parameters/MediaId"}
+      - { $ref: "#/components/parameters/MediaId" }
     get:
       summary: Read media metadata
       operationId: getMedia
@@ -76,15 +75,20 @@ paths:
           description: Media metadata
           content:
             application/json:
-              schema: {$ref: "#/components/schemas/Media"}
-        "404": {$ref: "#/components/responses/Error"}
+              schema: { $ref: "#/components/schemas/Media" }
+        "404": { $ref: "#/components/responses/Error" }
   /media/{mediaId}/preview:
     parameters:
-      - {$ref: "#/components/parameters/MediaId"}
-      - {name: centerMs, in: query, required: true, schema: {type: integer, minimum: 0}}
-      - {name: beforeMs, in: query, schema: {type: integer, minimum: 0}}
-      - {name: afterMs, in: query, schema: {type: integer, minimum: 0}}
-      - {name: mute, in: query, schema: {type: boolean, default: false}}
+      - { $ref: "#/components/parameters/MediaId" }
+      - {
+          name: centerMs,
+          in: query,
+          required: true,
+          schema: { type: integer, minimum: 0 },
+        }
+      - { name: beforeMs, in: query, schema: { type: integer, minimum: 0 } }
+      - { name: afterMs, in: query, schema: { type: integer, minimum: 0 } }
+      - { name: mute, in: query, schema: { type: boolean, default: false } }
     get:
       summary: Stream a normalized preview
       operationId: streamPreview
@@ -92,27 +96,27 @@ paths:
         "200":
           description: Fragmented MP4 preview
           headers:
-            X-Preview-Start: {schema: {type: integer}}
-            X-Preview-Duration: {schema: {type: integer}}
-            X-Preview-Offset: {schema: {type: integer}}
-            X-Preview-Cache: {schema: {type: string, enum: [hit, miss, shared]}}
-            X-Request-ID: {schema: {type: string}}
+            X-Preview-Start: { schema: { type: integer } }
+            X-Preview-Duration: { schema: { type: integer } }
+            X-Preview-Offset: { schema: { type: integer } }
+            X-Preview-Cache: { schema: { type: string, enum: [hit, miss] } }
+            X-Request-ID: { schema: { type: string } }
           content:
             video/mp4:
-              schema: {type: string, format: binary}
-        "404": {$ref: "#/components/responses/Error"}
-        "422": {$ref: "#/components/responses/Error"}
-        "403": {$ref: "#/components/responses/Error"}
-        "429": {$ref: "#/components/responses/Error"}
+              schema: { type: string, format: binary }
+        "404": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
     head:
       summary: Check for a cached preview
       operationId: previewStatus
       responses:
-        "200": {description: Complete cached preview exists}
-        "404": {description: No complete cached preview}
+        "200": { description: Complete cached preview exists }
+        "404": { description: No complete cached preview }
   /projects/{projectId}:
     parameters:
-      - {$ref: "#/components/parameters/ProjectId"}
+      - { $ref: "#/components/parameters/ProjectId" }
     get:
       summary: Read an owned project
       operationId: getProject
@@ -121,8 +125,8 @@ paths:
           description: Project
           content:
             application/json:
-              schema: {$ref: "#/components/schemas/Project"}
-        "404": {$ref: "#/components/responses/Error"}
+              schema: { $ref: "#/components/schemas/Project" }
+        "404": { $ref: "#/components/responses/Error" }
     put:
       summary: Save an owned project
       operationId: putProject
@@ -130,18 +134,18 @@ paths:
         required: true
         content:
           application/json:
-            schema: {$ref: "#/components/schemas/ProjectInput"}
+            schema: { $ref: "#/components/schemas/ProjectInput" }
       responses:
         "200":
           description: Saved project
           content:
             application/json:
-              schema: {$ref: "#/components/schemas/Project"}
-        "409": {$ref: "#/components/responses/Error"}
-        "422": {$ref: "#/components/responses/Error"}
+              schema: { $ref: "#/components/schemas/Project" }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
   /projects/{projectId}/exports:
     parameters:
-      - {$ref: "#/components/parameters/ProjectId"}
+      - { $ref: "#/components/parameters/ProjectId" }
     post:
       summary: Create a durable export
       operationId: createExport
@@ -149,20 +153,20 @@ paths:
         required: true
         content:
           application/json:
-            schema: {$ref: "#/components/schemas/ExportInput"}
+            schema: { $ref: "#/components/schemas/ExportInput" }
       responses:
         "202":
           description: Export queued
           content:
             application/json:
-              schema: {$ref: "#/components/schemas/Job"}
-        "404": {$ref: "#/components/responses/Error"}
-        "403": {$ref: "#/components/responses/Error"}
-        "429": {$ref: "#/components/responses/Error"}
-        "422": {$ref: "#/components/responses/Error"}
+              schema: { $ref: "#/components/schemas/Job" }
+        "404": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
   /jobs/{jobId}:
     parameters:
-      - {$ref: "#/components/parameters/JobId"}
+      - { $ref: "#/components/parameters/JobId" }
     get:
       summary: Read an owned job
       operationId: getJob
@@ -171,14 +175,14 @@ paths:
           description: Job
           content:
             application/json:
-              schema: {$ref: "#/components/schemas/Job"}
-        "404": {$ref: "#/components/responses/Error"}
+              schema: { $ref: "#/components/schemas/Job" }
+        "404": { $ref: "#/components/responses/Error" }
     delete:
       summary: Cancel an owned job
       operationId: cancelJob
       responses:
-        "204": {description: Cancelled or already terminal}
-        "404": {$ref: "#/components/responses/Error"}
+        "204": { description: Cancelled or already terminal }
+        "404": { $ref: "#/components/responses/Error" }
 components:
   securitySchemes:
     bearerAuth:
@@ -186,15 +190,33 @@ components:
       scheme: bearer
       description: Used only when the server selects static bearer mode.
   parameters:
-    MediaId: {name: mediaId, in: path, required: true, schema: {type: string, pattern: "^m_[A-Za-z0-9_-]{43}$"}}
-    ProjectId: {name: projectId, in: path, required: true, schema: {type: string, pattern: "^p_[A-Za-z0-9_-]{12,64}$"}}
-    JobId: {name: jobId, in: path, required: true, schema: {type: string, pattern: "^j_[A-Za-z0-9_-]{12,64}$"}}
+    MediaId:
+      {
+        name: mediaId,
+        in: path,
+        required: true,
+        schema: { type: string, pattern: "^m_[A-Za-z0-9_-]{43}$" },
+      }
+    ProjectId:
+      {
+        name: projectId,
+        in: path,
+        required: true,
+        schema: { type: string, pattern: "^p_[A-Za-z0-9_-]{12,64}$" },
+      }
+    JobId:
+      {
+        name: jobId,
+        in: path,
+        required: true,
+        schema: { type: string, pattern: "^j_[A-Za-z0-9_-]{12,64}$" },
+      }
   responses:
     Error:
       description: Safe error
       content:
         application/json:
-          schema: {$ref: "#/components/schemas/Error"}
+          schema: { $ref: "#/components/schemas/Error" }
   schemas:
     Error:
       type: object
@@ -204,83 +226,97 @@ components:
           type: object
           required: [code, message, requestId]
           properties:
-            code: {type: string}
-            message: {type: string}
-            requestId: {type: string}
+            code: { type: string }
+            message: { type: string }
+            requestId: { type: string }
     Media:
       type: object
       required: [id, name, durationMs, sizeBytes, container, streams, etag]
       properties:
-        id: {type: string}
-        name: {type: string}
-        durationMs: {type: integer}
-        sizeBytes: {type: integer}
-        container: {type: string}
-        streams: {type: object, additionalProperties: true}
-        etag: {type: string}
+        id: { type: string }
+        name: { type: string }
+        durationMs: { type: integer }
+        sizeBytes: { type: integer }
+        container: { type: string }
+        streams: { type: object, additionalProperties: true }
+        etag: { type: string }
     MediaPage:
       type: object
       required: [items]
       properties:
-        items: {type: array, items: {$ref: "#/components/schemas/Media"}}
-        nextCursor: {type: [string, "null"]}
+        items: { type: array, items: { $ref: "#/components/schemas/Media" } }
+        nextCursor: { type: [string, "null"] }
     ProjectInput:
       type: object
       required: [mediaId, revision, segments, uiState]
       properties:
-        mediaId: {type: string}
-        revision: {type: integer, minimum: 0}
-        segments: {type: array, items: {$ref: "#/components/schemas/Segment"}}
-        uiState: {$ref: "#/components/schemas/UIState"}
+        mediaId: { type: string }
+        revision: { type: integer, minimum: 0 }
+        segments:
+          { type: array, items: { $ref: "#/components/schemas/Segment" } }
+        uiState: { $ref: "#/components/schemas/UIState" }
     Project:
       allOf:
-        - {$ref: "#/components/schemas/ProjectInput"}
+        - { $ref: "#/components/schemas/ProjectInput" }
         - type: object
           required: [id, updatedAt]
           properties:
-            id: {type: string}
-            updatedAt: {type: string, format: date-time}
+            id: { type: string }
+            updatedAt: { type: string, format: date-time }
     Segment:
       type: object
       required: [startMs, endMs]
       properties:
-        startMs: {type: integer, minimum: 0}
-        endMs: {type: integer, minimum: 1}
-        label: {type: string, maxLength: 200}
+        startMs: { type: integer, minimum: 0 }
+        endMs: { type: integer, minimum: 1 }
+        label: { type: string, maxLength: 200 }
     UIState:
       type: object
       required: [playheadMs, zoom, muted]
       properties:
-        playheadMs: {type: integer, minimum: 0}
-        zoom: {type: number, exclusiveMinimum: 0}
-        muted: {type: boolean}
+        playheadMs: { type: integer, minimum: 0 }
+        zoom: { type: number, exclusiveMinimum: 0 }
+        muted: { type: boolean }
     ExportInput:
       type: object
       additionalProperties: false
       required: [mode, cutStrategy, container]
       properties:
-        mode: {type: string, enum: [merge]}
-        cutStrategy: {type: string, enum: [stream_copy_preferred]}
-        container: {type: string, enum: [mkv]}
-        smartBoundaryReencode: {type: boolean, const: false, default: false}
+        mode: { type: string, enum: [merge] }
+        cutStrategy: { type: string, enum: [stream_copy_preferred] }
+        container: { type: string, enum: [mkv] }
+        smartBoundaryReencode: { type: boolean, const: false, default: false }
     Job:
       type: object
       required: [id, type, state, createdAt, updatedAt]
       properties:
-        id: {type: string}
-        type: {type: string, enum: [media_refresh, export]}
-        state: {type: string, enum: [queued, running, succeeded, failed, cancelled]}
-        progress: {type: number, minimum: 0, maximum: 1}
+        id: { type: string }
+        type: { type: string, enum: [export] }
+        state:
+          {
+            type: string,
+            enum: [queued, running, succeeded, failed, cancelled],
+          }
+        progress: { type: number, minimum: 0, maximum: 1 }
         result:
           description: Present only when an export job succeeded.
           type: object
           additionalProperties: false
           required: [outputName, sizeBytes, retainUntil]
           properties:
-            outputName: {type: string, description: Published export filename, never a filesystem path.}
-            sizeBytes: {type: integer, format: int64, minimum: 0}
-            retainUntil: {type: string, format: date-time}
-        warnings: {type: array, items: {type: string}}
-        errorCode: {type: string, description: Stable export failure code; present only when state is failed.}
-        createdAt: {type: string, format: date-time}
-        updatedAt: {type: string, format: date-time}
+            outputName:
+              {
+                type: string,
+                description: Published export filename,
+                never a filesystem path.,
+              }
+            sizeBytes: { type: integer, format: int64, minimum: 0 }
+            retainUntil: { type: string, format: date-time }
+        warnings: { type: array, items: { type: string } }
+        errorCode:
+          {
+            type: string,
+            description: Stable export failure code; present only when state is failed.,
+          }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }

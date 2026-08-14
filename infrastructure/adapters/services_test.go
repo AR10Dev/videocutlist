@@ -2,28 +2,19 @@ package adapters
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 
 	"videocutlist/application"
+	"videocutlist/domain"
 	"videocutlist/infrastructure/ffmpeg"
 	"videocutlist/infrastructure/media/index"
 	"videocutlist/infrastructure/media/probe"
 	"videocutlist/infrastructure/store"
 )
-
-func TestExportJobCarriesDurableErrorCode(t *testing.T) {
-	created := time.Date(2026, 8, 13, 12, 0, 0, 0, time.UTC)
-	job := exportJob(store.ExportJob{ID: "j_aaaaaaaaaaaa", OwnerLogin: "editor", State: store.JobFailed, ErrorCode: sql.NullString{String: "media_unavailable", Valid: true}, CreatedAt: created, UpdatedAt: created})
-	if job.ErrorCode == nil || *job.ErrorCode != "media_unavailable" {
-		t.Fatalf("job error code = %#v", job.ErrorCode)
-	}
-}
 
 func TestMediaAPIShapeHidesStorageAndProviderMetadata(t *testing.T) {
 	item := index.Media{
@@ -65,7 +56,7 @@ func (adapterProbe) ProbeFile(context.Context, *os.File) (probe.Metadata, error)
 	return probe.Metadata{}, nil
 }
 
-func TestMediaCatalogPreviewRejectsChangedSource(t *testing.T) {
+func TestMediaCatalogPreviewUsesCatalogMetadata(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	path := filepath.Join(root, "clip.mp4")
@@ -92,13 +83,69 @@ func TestMediaCatalogPreviewRejectsChangedSource(t *testing.T) {
 	if err := os.WriteFile(path, []byte("changed"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, err = catalog.Preview(ctx, application.PreviewSpec{MediaID: index.MediaID("camera", "clip.mp4")})
-	if !errors.Is(err, index.ErrSourceChanged) {
-		t.Fatalf("preview error = %v, want %v", err, index.ErrSourceChanged)
+	spec, err := catalog.Preview(ctx, application.PreviewSpec{MediaID: index.MediaID("camera", "clip.mp4")})
+	if err != nil {
+		t.Fatalf("Preview error = %v", err)
+	}
+	if spec.SizeBytes != 3 || spec.MtimeNS == 0 {
+		t.Fatalf("preview spec fingerprint = (%d, %d), want catalog metadata", spec.SizeBytes, spec.MtimeNS)
 	}
 }
 
-func TestPreviewRunnerRejectsRefreshedSourceForOldSpec(t *testing.T) {
+func TestExportSourceCancellationPersistsCancelled(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	path := filepath.Join(root, "clip.mp4")
+	if err := os.WriteFile(path, []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	scanner, err := index.NewScanner([]index.Root{{Alias: "camera", Path: root}}, adapterProbe{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := store.OpenDatabase(ctx, filepath.Join(t.TempDir(), "videocutlist.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	mediaStore, err := store.NewMediaStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mediaStore.Sync(ctx, "camera", []index.Record{{Media: index.Media{ID: index.MediaID("camera", "clip.mp4"), SizeBytes: 3, MtimeNS: 1}}}); err != nil {
+		t.Fatal(err)
+	}
+	projects, err := store.NewProjectStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := projects.Save(ctx, "owner", "project", 0, `{}`); err != nil {
+		t.Fatal(err)
+	}
+	jobs, err := store.NewJobStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobID := "j_cancel_open"
+	if _, err := jobs.Create(ctx, store.ExportJob{ID: jobID, OwnerLogin: "owner", ProjectID: "project", ProjectRevision: 1, RequestJSON: `{}`}); err != nil {
+		t.Fatal(err)
+	}
+	executor := ExportExecutor{Jobs: jobs, Scanner: scanner, Media: mediaStore}
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	if err := executor.Execute(cancelled, "owner", jobID, domain.Document{MediaID: index.MediaID("camera", "clip.mp4")}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Execute error = %v, want cancellation", err)
+	}
+	job, err := jobs.Get(ctx, "owner", jobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.State != store.JobCancelled {
+		t.Fatalf("job state = %q, want cancelled", job.State)
+	}
+}
+
+func TestPreviewRunnerRejectsChangedSourceForOldSpec(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
 	path := filepath.Join(root, "clip.mp4")
@@ -128,9 +175,6 @@ func TestPreviewRunnerRejectsRefreshedSourceForOldSpec(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(path, []byte("changed"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := catalog.Refresh(ctx); err != nil {
 		t.Fatal(err)
 	}
 	runner := PreviewRunner{Scanner: scanner, Media: mediaStore, FFmpeg: ffmpeg.Runner{Path: filepath.Join(t.TempDir(), "missing-ffmpeg")}}
