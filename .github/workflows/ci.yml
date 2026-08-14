@@ -10,6 +10,7 @@ permissions:
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4.3.0
       - uses: actions/setup-go@v6.5.0
@@ -25,5 +26,18 @@ jobs:
           cache-dependency-path: client/pnpm-lock.yaml
       - run: pnpm --dir client install --frozen-lockfile
       - run: pnpm --dir client audit --audit-level high
-      - run: pnpm --dir client exec playwright install --with-deps chromium
+      - run: pnpm --dir client exec playwright install-deps chromium
+      - name: Download Chromium
+        shell: bash
+        run: |
+          for attempt in 1 2 3; do
+            if timeout 10m pnpm --dir client exec playwright install \
+              chromium; then
+              exit 0
+            fi
+            echo "Chromium download attempt $attempt failed" >&2
+            sleep 5
+          done
+          echo "Chromium download failed after 3 attempts" >&2
+          exit 1
       - run: make smoke

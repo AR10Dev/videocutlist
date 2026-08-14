@@ -18,15 +18,22 @@ in the [container deployment guide](containers.md).
 
 ## Upgrade and rollback
 
-Pull or check out the desired revision, then rebuild the image:
+Pull the desired published image, then recreate the container. Pin a release
+with `VIDEOCUTLIST_IMAGE` when rollback control matters:
 
 ```bash
-docker compose up -d --build
+docker compose pull
+VIDEOCUTLIST_IMAGE=ghcr.io/ar10dev/videocutlist:v1.2.3 docker compose up -d
 ```
 
 Compose recreates the container while retaining the `data`, `cache`, and
-`exports` bind mounts. To roll back, check out the previous revision and run
-the same command. Do not roll back across an unreviewed database migration.
+`exports` bind mounts. To roll back, set `VIDEOCUTLIST_IMAGE` to the previous
+release and run the same command. Do not roll back across an unreviewed
+database migration.
+
+If the registry is unavailable, use the source-build fallback from
+[the container deployment guide](containers.md), then set
+`VIDEOCUTLIST_IMAGE=videocutlist:local`.
 
 ## Backup
 
