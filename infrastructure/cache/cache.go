@@ -35,6 +35,7 @@ type Store struct {
 	mu      sync.Mutex
 	open    map[string]int
 	partial map[string]struct{}
+	paths   map[string]*sync.Mutex
 }
 
 func New(root string, maxBytes int64) (*Store, error) {
@@ -44,7 +45,7 @@ func New(root string, maxBytes int64) (*Store, error) {
 	if err := os.MkdirAll(filepath.Join(root, "previews"), 0o750); err != nil {
 		return nil, fmt.Errorf("create cache directory: %w", err)
 	}
-	return &Store{root: root, max: maxBytes, open: make(map[string]int), partial: make(map[string]struct{})}, nil
+	return &Store{root: root, max: maxBytes, open: make(map[string]int), partial: make(map[string]struct{}), paths: make(map[string]*sync.Mutex)}, nil
 }
 
 // Key is the frozen v1 compact JSON identity. Do not add implementation
@@ -78,8 +79,9 @@ func (s *Store) Open(ctx context.Context, key string, validator Validator) (io.R
 	if err != nil {
 		return nil, err
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	pathMu := s.pathMutex(path)
+	pathMu.Lock()
+	defer pathMu.Unlock()
 	info, err := os.Stat(path)
 	if errors.Is(err, fs.ErrNotExist) || err == nil && (!info.Mode().IsRegular() || info.Size() == 0) {
 		if err == nil {
@@ -91,8 +93,27 @@ func (s *Store) Open(ctx context.Context, key string, validator Validator) (io.R
 		return nil, err
 	}
 	if err := validator(ctx, path); err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, err
+		}
 		_ = os.Remove(path)
 		return nil, ErrMiss
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	info, err = os.Stat(path)
+	if errors.Is(err, fs.ErrNotExist) || err == nil && (!info.Mode().IsRegular() || info.Size() == 0) {
+		if err == nil {
+			_ = os.Remove(path)
+		}
+		return nil, ErrMiss
+	}
+	if err != nil {
+		return nil, err
 	}
 	f, err := os.Open(path)
 	if err != nil {
@@ -104,6 +125,17 @@ func (s *Store) Open(ctx context.Context, key string, validator Validator) (io.R
 	}
 	s.open[path]++
 	return &leasedFile{File: f, done: func() { s.release(path) }}, nil
+}
+
+func (s *Store) pathMutex(path string) *sync.Mutex {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	mutex := s.paths[path]
+	if mutex == nil {
+		mutex = &sync.Mutex{}
+		s.paths[path] = mutex
+	}
+	return mutex
 }
 
 func (s *Store) release(path string) {
@@ -202,6 +234,9 @@ func (p *Partial) Commit(ctx context.Context, validator Validator) error {
 			_ = os.Remove(p.path)
 			return
 		}
+		pathMu := p.store.pathMutex(final)
+		pathMu.Lock()
+		defer pathMu.Unlock()
 		p.store.mu.Lock()
 		defer p.store.mu.Unlock()
 		if err := os.Rename(p.path, final); err != nil {

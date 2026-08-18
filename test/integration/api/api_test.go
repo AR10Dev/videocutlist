@@ -21,7 +21,6 @@ const validProject = "p_aaaaaaaaaaaa"
 
 type mediaStub struct {
 	calls, refreshCalls int
-	refreshJob          api.Job
 	refreshErr          error
 }
 
@@ -32,9 +31,9 @@ func (m *mediaStub) Get(context.Context, string) (api.Media, error) {
 	m.calls++
 	return api.Media{ID: validMedia, Name: "clip.mp4", DurationMS: 10_000, SizeBytes: 1, Container: "mp4", Streams: map[string]any{}, ETag: "e"}, nil
 }
-func (m *mediaStub) RefreshMedia(_ context.Context, _ auth.Principal) (api.Job, error) {
+func (m *mediaStub) RefreshMedia(_ context.Context) error {
 	m.refreshCalls++
-	return m.refreshJob, m.refreshErr
+	return m.refreshErr
 }
 
 type previewStub struct {
@@ -236,19 +235,19 @@ func TestUnauthorizedExportNeverQueuesWork(t *testing.T) {
 	}
 }
 
-func TestRefreshReturnsCompletedJobAndBusyRemainsRetryable(t *testing.T) {
-	media := &mediaStub{refreshJob: api.Job{ID: "j_aaaaaaaaaaaa", Type: "media_refresh", State: "succeeded", Progress: 1}}
+func TestRefreshReturnsNoContentAndPropagatesFailure(t *testing.T) {
+	media := &mediaStub{}
 	service := server(t, noneAuth(t), media, &previewStub{start: func(context.Context) (api.PreviewResult, error) { return api.PreviewResult{}, nil }}, &exportStub{}, nil)
 	response := httptest.NewRecorder()
 	service.ServeHTTP(response, localRequest(http.MethodPost, "/api/v1/media/refresh", nil))
-	if response.Code != http.StatusOK || media.refreshCalls != 1 || !strings.Contains(response.Body.String(), `"state":"succeeded"`) {
+	if response.Code != http.StatusNoContent || media.refreshCalls != 1 || response.Body.Len() != 0 {
 		t.Fatalf("status=%d calls=%d body=%s", response.Code, media.refreshCalls, response.Body.String())
 	}
-	media.refreshErr = application.ErrBusy
+	media.refreshErr = errors.New("refresh failed")
 	response = httptest.NewRecorder()
 	service.ServeHTTP(response, localRequest(http.MethodPost, "/api/v1/media/refresh", nil))
-	if response.Code != http.StatusTooManyRequests || media.refreshCalls != 2 {
-		t.Fatalf("busy status=%d calls=%d", response.Code, media.refreshCalls)
+	if response.Code != http.StatusInternalServerError || media.refreshCalls != 2 {
+		t.Fatalf("failure status=%d calls=%d", response.Code, media.refreshCalls)
 	}
 }
 

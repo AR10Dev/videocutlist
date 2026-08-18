@@ -45,14 +45,11 @@ func (m MediaCatalog) Get(ctx context.Context, id string) (application.Media, er
 }
 func (m MediaCatalog) Refresh(ctx context.Context) error { return m.Scanner.Refresh(ctx, m.Store) }
 func (m MediaCatalog) Preview(ctx context.Context, request application.PreviewSpec) (domain.PreviewSpec, error) {
-	source, item, err := m.Scanner.Open(ctx, m.Store, request.MediaID)
+	item, err := m.Store.Get(ctx, request.MediaID)
 	if err != nil {
 		return domain.PreviewSpec{}, err
 	}
-	if err := source.Close(); err != nil {
-		return domain.PreviewSpec{}, err
-	}
-	return preview(item, request), nil
+	return preview(item.Media, request), nil
 }
 func media(item index.Media) application.Media {
 	streams := map[string]any{}
@@ -128,46 +125,6 @@ func project(record store.ProjectRecord) (application.ProjectRecord, error) {
 	return application.ProjectRecord{Document: document, UpdatedAt: record.UpdatedAt}, nil
 }
 
-type ExportJobs struct{ Store *store.JobStore }
-
-func (e ExportJobs) Create(ctx context.Context, job application.ExportJob) (application.ExportJob, error) {
-	record, err := e.Store.Create(ctx, store.ExportJob{ID: job.ID, OwnerLogin: job.Owner, ProjectID: job.ProjectID, ProjectRevision: job.ProjectRevision, RequestJSON: job.RequestJSON})
-	if err != nil {
-		return application.ExportJob{}, err
-	}
-	return exportJob(record), nil
-}
-func (e ExportJobs) Get(ctx context.Context, owner, id string) (application.ExportJob, error) {
-	record, err := e.Store.Get(ctx, owner, id)
-	if err != nil {
-		return application.ExportJob{}, err
-	}
-	return exportJob(record), nil
-}
-func (e ExportJobs) Cancel(ctx context.Context, owner, id string) (application.ExportJob, error) {
-	record, err := e.Store.Cancel(ctx, owner, id)
-	if errors.Is(err, store.ErrJobState) {
-		return application.ExportJob{}, application.ErrJobState
-	}
-	if err != nil {
-		return application.ExportJob{}, err
-	}
-	return exportJob(record), nil
-}
-func exportJob(record store.ExportJob) application.ExportJob {
-	var result *string
-	if record.ResultJSON.Valid {
-		value := record.ResultJSON.String
-		result = &value
-	}
-	var errorCode *string
-	if record.ErrorCode.Valid {
-		value := record.ErrorCode.String
-		errorCode = &value
-	}
-	return application.ExportJob{ID: record.ID, Owner: record.OwnerLogin, ProjectID: record.ProjectID, ProjectRevision: record.ProjectRevision, State: string(record.State), RequestJSON: record.RequestJSON, ResultJSON: result, ErrorCode: errorCode, CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt}
-}
-
 type ExportExecutor struct {
 	Jobs        *store.JobStore
 	Scanner     *index.Scanner
@@ -181,8 +138,13 @@ func NewExportExecutor(jobs *store.JobStore, scanner *index.Scanner, media *stor
 func (e ExportExecutor) Execute(ctx context.Context, owner, id string, document domain.Document) error {
 	source, _, err := e.Scanner.Open(ctx, e.Media, document.MediaID)
 	if err != nil {
-		_, _ = e.Jobs.Start(context.Background(), owner, id)
-		_, _ = e.Jobs.Fail(context.Background(), owner, id, "media_unavailable")
+		stateContext := context.Background()
+		_, _ = e.Jobs.Start(stateContext, owner, id)
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
+			_, _ = e.Jobs.Cancel(stateContext, owner, id)
+		} else {
+			_, _ = e.Jobs.Fail(stateContext, owner, id, "media_unavailable")
+		}
 		return err
 	}
 	defer source.Close()

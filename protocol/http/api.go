@@ -260,16 +260,11 @@ func (s *Server) refreshMedia(writer http.ResponseWriter, request *http.Request,
 	if !s.allowed(writer, principal, "media_refresh", "*", id) {
 		return
 	}
-	job, err := s.config.Media.RefreshMedia(request.Context(), principal)
-	if err != nil {
-		if errors.Is(err, application.ErrBusy) {
-			httpx.Error(writer, http.StatusTooManyRequests, "refresh_busy", "A media refresh is already in progress.", id)
-			return
-		}
+	if err := s.config.Media.RefreshMedia(request.Context()); err != nil {
 		internalError(writer, id)
 		return
 	}
-	httpx.WriteJSON(writer, http.StatusOK, job)
+	writer.WriteHeader(http.StatusNoContent)
 }
 func (s *Server) getMedia(writer http.ResponseWriter, request *http.Request, media string, id string) {
 	if !mediaID.MatchString(media) {
@@ -414,10 +409,6 @@ func (s *Server) putProject(writer http.ResponseWriter, request *http.Request, p
 	}
 	media, err := s.config.Media.Get(request.Context(), input.MediaID)
 	if err != nil {
-		httpx.Error(writer, 422, "invalid_project", "Project is invalid.", id)
-		return
-	}
-	if err := domain.Validate(domain.Document(input), media.DurationMS); err != nil {
 		httpx.Error(writer, 422, "invalid_project", "Project is invalid.", id)
 		return
 	}

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import { createApiClient, resolveBrowserConfiguration } from "./api";
 import {
   canStreamPreview,
@@ -43,15 +43,43 @@ const api = createApiClient(resolveBrowserConfiguration());
 const mediaDuration = (media?: Media) => media?.durationMs ?? 0;
 
 const exportFailures: Record<string, string> = {
-    interrupted_by_restart: "Export was interrupted by a server restart. Try again.",
-    invalid_export_request: "Export request was invalid. Try again.",
-    media_unavailable: "Selected media is unavailable. Choose media and try again.",
-    export_failed: "Export failed. Try again.",
-    result_encoding_failed: "Export failed while preparing its result. Try again.",
-  };
+  interrupted_by_restart:
+    "Export was interrupted by a server restart. Try again.",
+  invalid_export_request: "Export request was invalid. Try again.",
+  media_unavailable:
+    "Selected media is unavailable. Choose media and try again.",
+  export_failed: "Export failed. Try again.",
+  result_encoding_failed:
+    "Export failed while preparing its result. Try again.",
+};
 
 const exportFailure = (code?: string) =>
   exportFailures[code ?? ""] ?? "Export failed. Try again.";
+
+type EditorState = {
+  selected?: Media;
+  playheadMs: number;
+  segments: Segment[];
+  inMs: number;
+  outMs: number;
+  segmentLabel: string;
+  projectId: string;
+  revision: number;
+  zoom: number;
+  muted: boolean;
+  diagnostics?: PreviewDiagnostics;
+  dirty: boolean;
+};
+
+type EditorAction = { type: "change"; changes: Partial<EditorState> };
+
+const editorReducer = (
+  state: EditorState,
+  action: EditorAction,
+): EditorState => ({
+  ...state,
+  ...action.changes,
+});
 
 export function App() {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -61,39 +89,60 @@ export function App() {
   const exportRequestRef = useRef(0);
   const exportTimerRef = useRef<number | undefined>(undefined);
   const loadRequestRef = useRef<AbortController | undefined>(undefined);
-  const loadRequestVersionRef = useRef(0);
-  const editorVersionRef = useRef(0);
-  const saveRequestVersionRef = useRef(0);
+  const editorRequestsRef = useRef({
+    editor: 0,
+    load: 0,
+    save: 0,
+    metadata: 0,
+  });
   const mediaRequestRef = useRef<AbortController | undefined>(undefined);
   const mediaRequestVersionRef = useRef(0);
   const refreshRequestRef = useRef<AbortController | undefined>(undefined);
   const refreshRequestVersionRef = useRef(0);
   const metadataRequestRef = useRef<AbortController | undefined>(undefined);
-  const metadataRequestVersionRef = useRef(0);
   const selectedRef = useRef<Media | undefined>(undefined);
   const [media, setMedia] = useState<Media[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const [refreshingMedia, setRefreshingMedia] = useState(false);
-  const [selected, setSelected] = useState<Media>();
-  const [playheadMs, setPlayheadMs] = useState(0);
-  const [segments, setSegments] = useState<Segment[]>([]);
-  const [inMs, setInMs] = useState(0);
-  const [outMs, setOutMs] = useState(0);
-  const [segmentLabel, setSegmentLabel] = useState("");
-  const [projectId, setProjectId] = useState(newProjectId);
+  const [editor, dispatchEditor] = useReducer(editorReducer, undefined, () => ({
+    selected: undefined,
+    playheadMs: 0,
+    segments: [],
+    inMs: 0,
+    outMs: 0,
+    segmentLabel: "",
+    projectId: newProjectId(),
+    revision: 0,
+    zoom: 1,
+    muted: false,
+    diagnostics: undefined,
+    dirty: false,
+  }));
+  const {
+    selected,
+    playheadMs,
+    segments,
+    inMs,
+    outMs,
+    segmentLabel,
+    projectId,
+    revision,
+    zoom,
+    muted,
+    diagnostics,
+    dirty,
+  } = editor;
   const projectIdRef = useRef(projectId);
-  const [revision, setRevision] = useState(0);
+  const editorRef = useRef(editor);
   const [status, setStatus] = useState("Loading media…");
-  const [diagnostics, setDiagnostics] = useState<PreviewDiagnostics>();
-  const [zoom, setZoom] = useState(1);
-  const [muted, setMuted] = useState(false);
   const [exportJob, setExportJob] = useState<ExportJob>();
   const [exportStatus, setExportStatus] = useState("");
-  const [dirty, setDirty] = useState(false);
   const [recent, setRecent] = useState<RecentProject[]>(() => {
     try {
-      return recentProjects(JSON.parse(localStorage.getItem(recentProjectsKey) ?? "[]"));
+      return recentProjects(
+        JSON.parse(localStorage.getItem(recentProjectsKey) ?? "[]"),
+      );
     } catch {
       return [];
     }
@@ -102,6 +151,7 @@ export function App() {
 
   useEffect(() => {
     mountedRef.current = true;
+    const requestVersions = editorRequestsRef.current;
     return () => {
       mountedRef.current = false;
       abortRef.current?.abort();
@@ -113,43 +163,115 @@ export function App() {
       if (exportTimerRef.current) window.clearTimeout(exportTimerRef.current);
       selectionRef.current += 1;
       exportRequestRef.current += 1;
-      loadRequestVersionRef.current += 1;
-      editorVersionRef.current += 1;
-      saveRequestVersionRef.current += 1;
+      requestVersions.load += 1;
+      requestVersions.editor += 1;
+      requestVersions.save += 1;
       mediaRequestVersionRef.current += 1;
       refreshRequestVersionRef.current += 1;
-      metadataRequestVersionRef.current += 1;
+      requestVersions.metadata += 1;
     };
   }, []);
 
   useEffect(() => {
+    editorRef.current = editor;
     selectedRef.current = selected;
-  }, [selected]);
-
-  useEffect(() => {
     projectIdRef.current = projectId;
-  }, [projectId]);
+  }, [editor, projectId, selected]);
 
   const invalidateEditor = useCallback(() => {
-    editorVersionRef.current += 1;
+    editorRequestsRef.current.editor += 1;
     loadRequestRef.current?.abort();
     metadataRequestRef.current?.abort();
-    metadataRequestVersionRef.current += 1;
+    editorRequestsRef.current.metadata += 1;
   }, []);
 
-  const rememberProject = useCallback((id: string, label: string) => {
-    if (!validProjectId(id)) return;
-    const next = recentProjects([
-      { id, label: label.slice(0, 120) || id, lastOpened: Date.now() },
-      ...recent,
-    ]);
-    setRecent(next);
-    try {
-      localStorage.setItem(recentProjectsKey, JSON.stringify(next));
-    } catch {
-      // Storage is optional and untrusted.
-    }
-  }, [recent]);
+  const changeEditor = useCallback(
+    (changes: Partial<EditorState>, invalidate = false) => {
+      if (invalidate) invalidateEditor();
+      const action: EditorAction = { type: "change", changes };
+      editorRef.current = editorReducer(editorRef.current, action);
+      dispatchEditor(action);
+    },
+    [invalidateEditor],
+  );
+  const setSelected = useCallback(
+    (value: Media | undefined) => changeEditor({ selected: value }),
+    [changeEditor],
+  );
+  const setPlayheadMs = useCallback(
+    (value: number | ((current: number) => number)) =>
+      changeEditor({
+        playheadMs:
+          typeof value === "function"
+            ? value(editorRef.current.playheadMs)
+            : value,
+      }),
+    [changeEditor],
+  );
+  const setSegments = useCallback(
+    (value: Segment[] | ((current: Segment[]) => Segment[])) =>
+      changeEditor({
+        segments:
+          typeof value === "function"
+            ? value(editorRef.current.segments)
+            : value,
+      }),
+    [changeEditor],
+  );
+  const setInMs = useCallback(
+    (value: number) => changeEditor({ inMs: value }),
+    [changeEditor],
+  );
+  const setOutMs = useCallback(
+    (value: number) => changeEditor({ outMs: value }),
+    [changeEditor],
+  );
+  const setSegmentLabel = useCallback(
+    (value: string) => changeEditor({ segmentLabel: value }),
+    [changeEditor],
+  );
+  const setProjectId = useCallback(
+    (value: string) => changeEditor({ projectId: value }),
+    [changeEditor],
+  );
+  const setRevision = useCallback(
+    (value: number) => changeEditor({ revision: value }),
+    [changeEditor],
+  );
+  const setDiagnostics = useCallback(
+    (value: PreviewDiagnostics | undefined) =>
+      changeEditor({ diagnostics: value }),
+    [changeEditor],
+  );
+  const setZoom = useCallback(
+    (value: number) => changeEditor({ zoom: value }),
+    [changeEditor],
+  );
+  const setMuted = useCallback(
+    (value: boolean) => changeEditor({ muted: value }),
+    [changeEditor],
+  );
+  const setDirty = useCallback(
+    (value: boolean) => changeEditor({ dirty: value }),
+    [changeEditor],
+  );
+
+  const rememberProject = useCallback(
+    (id: string, label: string) => {
+      if (!validProjectId(id)) return;
+      const next = recentProjects([
+        { id, label: label.slice(0, 120) || id, lastOpened: Date.now() },
+        ...recent,
+      ]);
+      setRecent(next);
+      try {
+        localStorage.setItem(recentProjectsKey, JSON.stringify(next));
+      } catch {
+        // Storage is optional and untrusted.
+      }
+    },
+    [recent],
+  );
 
   const clearExport = useCallback(() => {
     exportRequestRef.current += 1;
@@ -165,102 +287,172 @@ export function App() {
     return () => window.removeEventListener("beforeunload", warn);
   }, [dirty]);
 
-  const chooseMedia = useCallback((item: Media) => {
-    if (!confirmDiscard(dirty, () => window.confirm("Discard unsaved changes?")))
-      return;
-    clearExport();
-    invalidateEditor();
-    selectedRef.current = item;
-    setSelected(item);
-    setPlayheadMs(0);
-    setInMs(0);
-    setOutMs(0);
-    setSegments([]);
-    setDiagnostics(undefined);
-    setDirty(true);
-    setStatus(`Selected ${item.name}.`);
-    const controller = new AbortController();
-    metadataRequestRef.current = controller;
-    const request = ++metadataRequestVersionRef.current;
-    void api
-      .request(`media/${encodeURIComponent(item.id)}`, { signal: controller.signal })
-      .then((response) =>
-        response.ok
-          ? (response.json() as Promise<Media>)
-          : Promise.reject(
-              new Error(`Metadata request failed (${response.status}).`),
-            ),
+  const chooseMedia = useCallback(
+    (item: Media) => {
+      if (
+        !confirmDiscard(dirty, () => window.confirm("Discard unsaved changes?"))
       )
-      .then((metadata) => {
-        if (mountedRef.current && !controller.signal.aborted && request === metadataRequestVersionRef.current && selectedRef.current?.id === metadata.id) {
-          selectedRef.current = metadata;
-          setSelected(metadata);
-        }
-      })
-      .catch((error: unknown) => {
-        if (mountedRef.current && !controller.signal.aborted && request === metadataRequestVersionRef.current && selectedRef.current?.id === item.id)
-          setStatus(error instanceof Error ? error.message : "Metadata request failed.");
-      });
-  }, [clearExport, dirty, invalidateEditor]);
+        return;
+      clearExport();
+      invalidateEditor();
+      selectedRef.current = item;
+      setSelected(item);
+      setPlayheadMs(0);
+      setInMs(0);
+      setOutMs(0);
+      setSegments([]);
+      setDiagnostics(undefined);
+      setDirty(true);
+      setStatus(`Selected ${item.name}.`);
+      const controller = new AbortController();
+      metadataRequestRef.current = controller;
+      const request = ++editorRequestsRef.current.metadata;
+      void api
+        .request(`media/${encodeURIComponent(item.id)}`, {
+          signal: controller.signal,
+        })
+        .then((response) =>
+          response.ok
+            ? (response.json() as Promise<Media>)
+            : Promise.reject(
+                new Error(`Metadata request failed (${response.status}).`),
+              ),
+        )
+        .then((metadata) => {
+          if (
+            mountedRef.current &&
+            !controller.signal.aborted &&
+            request === editorRequestsRef.current.metadata &&
+            selectedRef.current?.id === metadata.id
+          ) {
+            selectedRef.current = metadata;
+            setSelected(metadata);
+          }
+        })
+        .catch((error: unknown) => {
+          if (
+            mountedRef.current &&
+            !controller.signal.aborted &&
+            request === editorRequestsRef.current.metadata &&
+            selectedRef.current?.id === item.id
+          )
+            setStatus(
+              error instanceof Error
+                ? error.message
+                : "Metadata request failed.",
+            );
+        });
+    },
+    [
+      clearExport,
+      dirty,
+      invalidateEditor,
+      setDiagnostics,
+      setDirty,
+      setInMs,
+      setOutMs,
+      setPlayheadMs,
+      setSegments,
+      setSelected,
+    ],
+  );
 
-  const loadMedia = useCallback(async (cursor?: string, refreshed = false) => {
-    mediaRequestRef.current?.abort();
-    const controller = new AbortController();
-    mediaRequestRef.current = controller;
-    const request = ++mediaRequestVersionRef.current;
-    if (cursor) setLoadingMore(true);
-    const query = new URLSearchParams({ limit: "50" });
-    if (cursor) query.set("cursor", cursor);
-    try {
-      const response = await api
-      .request(`media?${query}`, { signal: controller.signal })
-      .then((response) =>
-        response.ok
-          ? response.json()
-          : Promise.reject(
-              new Error(`Media request failed (${response.status}).`),
+  const loadMedia = useCallback(
+    async (cursor?: string, refreshed = false) => {
+      mediaRequestRef.current?.abort();
+      const controller = new AbortController();
+      mediaRequestRef.current = controller;
+      const request = ++mediaRequestVersionRef.current;
+      if (cursor) setLoadingMore(true);
+      const query = new URLSearchParams({ limit: "50" });
+      if (cursor) query.set("cursor", cursor);
+      try {
+        const response = await api
+          .request(`media?${query}`, { signal: controller.signal })
+          .then((response) =>
+            response.ok
+              ? response.json()
+              : Promise.reject(
+                  new Error(`Media request failed (${response.status}).`),
+                ),
+          );
+        const page = (await response) as MediaPage;
+        if (!mountedRef.current || request !== mediaRequestVersionRef.current)
+          return;
+        setNextCursor(page.nextCursor || null);
+        if (cursor) {
+          setMedia((current) => [
+            ...current,
+            ...page.items.filter(
+              (item) => !current.some((known) => known.id === item.id),
             ),
-      )
-      const page = (await response) as MediaPage;
-      if (!mountedRef.current || request !== mediaRequestVersionRef.current) return;
-      setNextCursor(page.nextCursor || null);
-      if (cursor) {
-        setMedia((current) => [
-          ...current,
-          ...page.items.filter((item) => !current.some((known) => known.id === item.id)),
-        ]);
-      } else {
-        setMedia(page.items);
-        setStatus(
-          page.items.length
-            ? refreshed ? "Media refreshed. Choose media to begin." : "Choose media to begin."
-            : "No media found.",
-        );
-        const selectedItem = selectedRef.current;
-        if (refreshed && selectedItem) {
-          const item = page.items.find((candidate) => candidate.id === selectedItem.id);
-          if (item) setSelected(item);
-          else {
-            const metadata = await api.request(`media/${encodeURIComponent(selectedItem.id)}`, { signal: controller.signal });
-            if (!mountedRef.current || request !== mediaRequestVersionRef.current || controller.signal.aborted) return;
-            if (metadata.ok) {
-              const item = await metadata.json() as Media;
-              if (mountedRef.current && selectedRef.current?.id === selectedItem.id && request === mediaRequestVersionRef.current)
-                setSelected(item);
+          ]);
+        } else {
+          setMedia(page.items);
+          setStatus(
+            page.items.length
+              ? refreshed
+                ? "Media refreshed. Choose media to begin."
+                : "Choose media to begin."
+              : "No media found.",
+          );
+          const selectedItem = selectedRef.current;
+          if (refreshed && selectedItem) {
+            const item = page.items.find(
+              (candidate) => candidate.id === selectedItem.id,
+            );
+            if (item) setSelected(item);
+            else {
+              const metadata = await api.request(
+                `media/${encodeURIComponent(selectedItem.id)}`,
+                { signal: controller.signal },
+              );
+              if (
+                !mountedRef.current ||
+                request !== mediaRequestVersionRef.current ||
+                controller.signal.aborted
+              )
+                return;
+              if (metadata.ok) {
+                const item = (await metadata.json()) as Media;
+                if (
+                  mountedRef.current &&
+                  selectedRef.current?.id === selectedItem.id &&
+                  request === mediaRequestVersionRef.current
+                )
+                  setSelected(item);
+              } else if (metadata.status === 404)
+                if (
+                  mountedRef.current &&
+                  selectedRef.current?.id === selectedItem.id
+                )
+                  setStatus(
+                    "Selected media is no longer indexed. Unsaved project changes were kept.",
+                  );
             }
-            else if (metadata.status === 404)
-              if (mountedRef.current && selectedRef.current?.id === selectedItem.id)
-                setStatus("Selected media is no longer indexed. Unsaved project changes were kept.");
           }
         }
+      } catch (error) {
+        if (
+          mountedRef.current &&
+          !controller.signal.aborted &&
+          request === mediaRequestVersionRef.current &&
+          !cursor
+        )
+          setStatus(
+            error instanceof Error ? error.message : "Unable to load media.",
+          );
+      } finally {
+        if (
+          mountedRef.current &&
+          request === mediaRequestVersionRef.current &&
+          cursor
+        )
+          setLoadingMore(false);
       }
-    } catch (error) {
-      if (mountedRef.current && !controller.signal.aborted && request === mediaRequestVersionRef.current && !cursor)
-        setStatus(error instanceof Error ? error.message : "Unable to load media.");
-    } finally {
-      if (mountedRef.current && request === mediaRequestVersionRef.current && cursor) setLoadingMore(false);
-    }
-  }, []);
+    },
+    [setSelected],
+  );
 
   useEffect(() => {
     const timer = window.setTimeout(() => void loadMedia(), 0);
@@ -274,24 +466,39 @@ export function App() {
     if (!mountedRef.current) return;
     mediaRequestRef.current?.abort();
     metadataRequestRef.current?.abort();
-    metadataRequestVersionRef.current += 1;
+    editorRequestsRef.current.metadata += 1;
     refreshRequestRef.current?.abort();
     const controller = new AbortController();
     refreshRequestRef.current = controller;
     const request = ++refreshRequestVersionRef.current;
     setRefreshingMedia(true);
     try {
-      const response = await api.request("media/refresh", { method: "POST", signal: controller.signal });
-      if (!mountedRef.current || controller.signal.aborted || request !== refreshRequestVersionRef.current) return;
-      if (response.status === 403) setStatus("You are not allowed to refresh media.");
-      else if (response.status === 429) setStatus("Media refresh is already in progress. Try again shortly.");
+      const response = await api.request("media/refresh", {
+        method: "POST",
+        signal: controller.signal,
+      });
+      if (
+        !mountedRef.current ||
+        controller.signal.aborted ||
+        request !== refreshRequestVersionRef.current
+      )
+        return;
+      if (response.status === 403)
+        setStatus("You are not allowed to refresh media.");
+      else if (response.status === 429)
+        setStatus("Media refresh is already in progress. Try again shortly.");
       else if (!response.ok) setStatus("Media refresh failed. Try again.");
       else await loadMedia(undefined, true);
     } catch {
-      if (mountedRef.current && !controller.signal.aborted && request === refreshRequestVersionRef.current)
+      if (
+        mountedRef.current &&
+        !controller.signal.aborted &&
+        request === refreshRequestVersionRef.current
+      )
         setStatus("Media refresh failed. Try again.");
     } finally {
-      if (mountedRef.current && request === refreshRequestVersionRef.current) setRefreshingMedia(false);
+      if (mountedRef.current && request === refreshRequestVersionRef.current)
+        setRefreshingMedia(false);
     }
   };
 
@@ -324,13 +531,21 @@ export function App() {
               { signal: controller.signal },
             ),
           (next) => {
-            if (!mountedRef.current || request !== selectionRef.current || controller.signal.aborted)
+            if (
+              !mountedRef.current ||
+              request !== selectionRef.current ||
+              controller.signal.aborted
+            )
               return;
             setDiagnostics(next);
             setStatus("Preview ready.");
           },
           (error) => {
-            if (!mountedRef.current || request !== selectionRef.current || controller.signal.aborted)
+            if (
+              !mountedRef.current ||
+              request !== selectionRef.current ||
+              controller.signal.aborted
+            )
               return;
             setDiagnostics(undefined);
             setStatus(error.message);
@@ -346,8 +561,7 @@ export function App() {
       abortRef.current?.abort();
       cleanupRef.current?.();
     };
-  }, [muted, playheadMs, selected]);
-
+  }, [muted, playheadMs, selected, setDiagnostics]);
 
   const markerPosition = useCallback(
     () =>
@@ -405,7 +619,16 @@ export function App() {
     };
     window.addEventListener("keydown", keyboard);
     return () => window.removeEventListener("keydown", keyboard);
-  }, [invalidateEditor, markerPosition, playheadMs, selected]);
+  }, [
+    invalidateEditor,
+    markerPosition,
+    playheadMs,
+    selected,
+    setDirty,
+    setInMs,
+    setOutMs,
+    setPlayheadMs,
+  ]);
 
   const addSegment = () => {
     const next = [
@@ -426,23 +649,29 @@ export function App() {
       setStatus("Project ID is invalid.");
       return;
     }
-    if (!confirmDiscard(dirty, () => window.confirm("Discard unsaved changes?")))
+    if (
+      !confirmDiscard(dirty, () => window.confirm("Discard unsaved changes?"))
+    )
       return;
     invalidateEditor();
     loadRequestRef.current?.abort();
     const controller = new AbortController();
     loadRequestRef.current = controller;
-    const request = ++loadRequestVersionRef.current;
-    const editorVersion = editorVersionRef.current;
+    const request = ++editorRequestsRef.current.load;
+    const editorVersion = editorRequestsRef.current.editor;
     try {
-      const response = await api.request(
-        `projects/${encodeURIComponent(id)}`,
-        { signal: controller.signal },
-      );
+      const response = await api.request(`projects/${encodeURIComponent(id)}`, {
+        signal: controller.signal,
+      });
       if (!response.ok)
         throw new Error(`Project load failed (${response.status}).`);
       const project = (await response.json()) as Project;
-      if (!mountedRef.current || controller.signal.aborted || request !== loadRequestVersionRef.current || editorVersion !== editorVersionRef.current)
+      if (
+        !mountedRef.current ||
+        controller.signal.aborted ||
+        request !== editorRequestsRef.current.load ||
+        editorVersion !== editorRequestsRef.current.editor
+      )
         return;
       if (!validProjectId(project.id) || !project.mediaId)
         throw new Error("Project load returned invalid data.");
@@ -455,7 +684,12 @@ export function App() {
       const item = (await mediaResponse.json()) as Media;
       if (item.id !== project.mediaId)
         throw new Error("Project media did not match the loaded project.");
-      if (!mountedRef.current || controller.signal.aborted || request !== loadRequestVersionRef.current || editorVersion !== editorVersionRef.current)
+      if (
+        !mountedRef.current ||
+        controller.signal.aborted ||
+        request !== editorRequestsRef.current.load ||
+        editorVersion !== editorRequestsRef.current.editor
+      )
         return;
       clearExport();
       projectIdRef.current = project.id;
@@ -480,13 +714,22 @@ export function App() {
       rememberProject(project.id, item.name);
       setStatus("Project loaded.");
     } catch (error) {
-      if (mountedRef.current && !controller.signal.aborted && request === loadRequestVersionRef.current && editorVersion === editorVersionRef.current)
-        setStatus(error instanceof Error ? error.message : "Project load failed.");
+      if (
+        mountedRef.current &&
+        !controller.signal.aborted &&
+        request === editorRequestsRef.current.load &&
+        editorVersion === editorRequestsRef.current.editor
+      )
+        setStatus(
+          error instanceof Error ? error.message : "Project load failed.",
+        );
     }
   };
 
   const newProject = () => {
-    if (!confirmDiscard(dirty, () => window.confirm("Discard unsaved changes?")))
+    if (
+      !confirmDiscard(dirty, () => window.confirm("Discard unsaved changes?"))
+    )
       return;
     invalidateEditor();
     clearExport();
@@ -523,8 +766,8 @@ export function App() {
       return undefined;
     }
     const snapshot = {
-      editorVersion: editorVersionRef.current,
-      request: ++saveRequestVersionRef.current,
+      editorVersion: editorRequestsRef.current.editor,
+      request: ++editorRequestsRef.current.save,
       id: projectId,
       revision,
       mediaId: selected.id,
@@ -543,10 +786,18 @@ export function App() {
           }),
         },
       );
-      if (!mountedRef.current || snapshot.id !== projectIdRef.current || snapshot.request !== saveRequestVersionRef.current)
+      if (
+        !mountedRef.current ||
+        snapshot.id !== projectIdRef.current ||
+        snapshot.request !== editorRequestsRef.current.save
+      )
         return undefined;
       if (response.status === 409) {
-        if (!mountedRef.current || snapshot.editorVersion !== editorVersionRef.current || snapshot.request !== saveRequestVersionRef.current)
+        if (
+          !mountedRef.current ||
+          snapshot.editorVersion !== editorRequestsRef.current.editor ||
+          snapshot.request !== editorRequestsRef.current.save
+        )
           return undefined;
         setStatus(
           "Project changed on another client. Load latest before saving.",
@@ -554,14 +805,22 @@ export function App() {
         return undefined;
       }
       if (!response.ok) {
-        if (!mountedRef.current || snapshot.editorVersion !== editorVersionRef.current || snapshot.request !== saveRequestVersionRef.current)
+        if (
+          !mountedRef.current ||
+          snapshot.editorVersion !== editorRequestsRef.current.editor ||
+          snapshot.request !== editorRequestsRef.current.save
+        )
           return undefined;
         throw new Error(`Project save failed (${response.status}).`);
       }
       const project = (await response.json()) as Project;
-      if (!mountedRef.current || snapshot.id !== projectIdRef.current || snapshot.request !== saveRequestVersionRef.current)
+      if (
+        !mountedRef.current ||
+        snapshot.id !== projectIdRef.current ||
+        snapshot.request !== editorRequestsRef.current.save
+      )
         return undefined;
-      if (snapshot.editorVersion !== editorVersionRef.current) {
+      if (snapshot.editorVersion !== editorRequestsRef.current.editor) {
         setRevision(project.revision);
         return undefined;
       }
@@ -571,8 +830,15 @@ export function App() {
       setStatus(`Project saved (revision ${project.revision}).`);
       return project;
     } catch (error) {
-      if (mountedRef.current && snapshot.id === projectIdRef.current && snapshot.editorVersion === editorVersionRef.current && snapshot.request === saveRequestVersionRef.current)
-        setStatus(error instanceof Error ? error.message : "Project save failed.");
+      if (
+        mountedRef.current &&
+        snapshot.id === projectIdRef.current &&
+        snapshot.editorVersion === editorRequestsRef.current.editor &&
+        snapshot.request === editorRequestsRef.current.save
+      )
+        setStatus(
+          error instanceof Error ? error.message : "Project save failed.",
+        );
       return undefined;
     }
   };
@@ -624,17 +890,20 @@ export function App() {
       );
       const poll = async () => {
         try {
-          if (!mountedRef.current || request !== exportRequestRef.current) return;
+          if (!mountedRef.current || request !== exportRequestRef.current)
+            return;
           const nextResponse = await api.request(
             `jobs/${encodeURIComponent(job.id)}`,
           );
-          if (!mountedRef.current || request !== exportRequestRef.current) return;
+          if (!mountedRef.current || request !== exportRequestRef.current)
+            return;
           if (!nextResponse.ok) {
             setExportStatus("Export status could not be updated. Try again.");
             return;
           }
           const next = (await nextResponse.json()) as ExportJob;
-          if (!mountedRef.current || request !== exportRequestRef.current) return;
+          if (!mountedRef.current || request !== exportRequestRef.current)
+            return;
           setExportJob(next);
           if (next.state === "queued" || next.state === "running") {
             setExportStatus(
@@ -663,7 +932,10 @@ export function App() {
   };
 
   const cancelExport = async () => {
-    if (!exportJob || (exportJob.state !== "queued" && exportJob.state !== "running"))
+    if (
+      !exportJob ||
+      (exportJob.state !== "queued" && exportJob.state !== "running")
+    )
       return;
     const job = exportJob;
     const request = ++exportRequestRef.current;
@@ -707,14 +979,18 @@ export function App() {
               >
                 {item.name}
                 <span>
-                  {formatTime(item.durationMs, item.durationMs)} · {item.container}
+                  {formatTime(item.durationMs, item.durationMs)} ·{" "}
+                  {item.container}
                 </span>
               </button>
             </li>
           ))}
         </ul>
         {nextCursor && (
-          <button disabled={loadingMore} onClick={() => void loadMedia(nextCursor)}>
+          <button
+            disabled={loadingMore}
+            onClick={() => void loadMedia(nextCursor)}
+          >
             {loadingMore ? "Loading more…" : "Load more"}
           </button>
         )}
@@ -731,7 +1007,9 @@ export function App() {
               {formatTime(selected.durationMs, duration)} ·{" "}
               {selected.sizeBytes.toLocaleString()} bytes
             </p>
-            <label htmlFor="playhead">Playhead: {formatTime(playheadMs, duration)}</label>
+            <label htmlFor="playhead">
+              Playhead: {formatTime(playheadMs, duration)}
+            </label>
             <input
               id="playhead"
               aria-label="Timeline playhead"
@@ -789,7 +1067,8 @@ export function App() {
               </button>
             </div>
             <p>
-              In: {formatTime(inMs, duration)} · Out: {formatTime(outMs, duration)}
+              In: {formatTime(inMs, duration)} · Out:{" "}
+              {formatTime(outMs, duration)}
             </p>
             {previewSupported ? (
               <video
@@ -800,7 +1079,10 @@ export function App() {
                 data-preview-offset={diagnostics?.offsetMs ?? 0}
               />
             ) : (
-              <p role="status">Preview is unavailable in this browser. Use the timeline controls to set markers manually.</p>
+              <p role="status">
+                Preview is unavailable in this browser. Use the timeline
+                controls to set markers manually.
+              </p>
             )}
           </>
         ) : (
@@ -822,7 +1104,8 @@ export function App() {
         <ol>
           {segments.map((segment, index) => (
             <li key={`${segment.startMs}-${segment.endMs}`}>
-              {formatTime(segment.startMs, duration)} – {formatTime(segment.endMs, duration)}{" "}
+              {formatTime(segment.startMs, duration)} –{" "}
+              {formatTime(segment.endMs, duration)}{" "}
               {segment.label ? `(${segment.label})` : ""}
               <button
                 onClick={() => {
@@ -880,14 +1163,18 @@ export function App() {
           Export MKV
         </button>
         {exportStatus && <p role="status">{exportStatus}</p>}
-        {exportJob && (exportJob.state === "queued" || exportJob.state === "running") && (
-          <button onClick={() => void cancelExport()}>Cancel export</button>
-        )}
+        {exportJob &&
+          (exportJob.state === "queued" || exportJob.state === "running") && (
+            <button onClick={() => void cancelExport()}>Cancel export</button>
+          )}
         {exportJob?.state === "succeeded" && exportJob.result && (
           <div aria-label="Export result">
             <p>Export: {exportJob.result.outputName}</p>
             <p>Size: {exportJob.result.sizeBytes.toLocaleString()} bytes</p>
-            <p>Retained until: {new Date(exportJob.result.retainUntil).toLocaleString()}</p>
+            <p>
+              Retained until:{" "}
+              {new Date(exportJob.result.retainUntil).toLocaleString()}
+            </p>
             {exportJob.warnings?.length ? (
               <ul aria-label="Export warnings">
                 {exportJob.warnings.map((warning, index) => (

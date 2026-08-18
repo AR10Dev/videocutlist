@@ -12,9 +12,10 @@ import (
 	"time"
 
 	"videocutlist/domain"
+	"videocutlist/infrastructure/store"
 )
 
-var ErrJobState = errors.New("invalid export job transition")
+var ErrJobState = store.ErrJobState
 
 type MediaCatalog interface {
 	List(context.Context, string, int) (MediaPage, error)
@@ -32,50 +33,17 @@ type ProjectRepository interface {
 	Save(context.Context, string, string, domain.Document) (ProjectRecord, error)
 }
 
-type ExportJob struct {
-	ID, Owner, ProjectID, State, RequestJSON string
-	ProjectRevision                          int64
-	ResultJSON                               *string
-	ErrorCode                                *string
-	CreatedAt, UpdatedAt                     time.Time
-}
 type ExportJobs interface {
-	Create(context.Context, ExportJob) (ExportJob, error)
-	Get(context.Context, string, string) (ExportJob, error)
-	Cancel(context.Context, string, string) (ExportJob, error)
+	Create(context.Context, store.ExportJob) (store.ExportJob, error)
+	Get(context.Context, string, string) (store.ExportJob, error)
+	Cancel(context.Context, string, string) (store.ExportJob, error)
 }
 type ExportExecutor interface {
 	Execute(context.Context, string, string, domain.Document) error
 }
 
-type RefreshJobs struct {
-	mu   sync.Mutex
-	jobs map[string]ownedJob
-}
-type ownedJob struct {
-	owner string
-	job   Job
-}
-
-func NewRefreshJobs() *RefreshJobs { return &RefreshJobs{jobs: map[string]ownedJob{}} }
-func (r *RefreshJobs) Put(owner string, job Job) {
-	r.mu.Lock()
-	r.jobs[job.ID] = ownedJob{owner, job}
-	r.mu.Unlock()
-}
-func (r *RefreshJobs) Get(owner, id string) (Job, bool) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	job, ok := r.jobs[id]
-	return job.job, ok && job.owner == owner
-}
-
 type MediaUseCase struct {
-	Catalog    MediaCatalog
-	Refresh    *RefreshJobs
-	mu         sync.Mutex
-	refreshing bool
-	refreshed  time.Time
+	Catalog MediaCatalog
 }
 
 func (m *MediaUseCase) List(ctx context.Context, cursor string, limit int) (MediaPage, error) {
@@ -84,26 +52,8 @@ func (m *MediaUseCase) List(ctx context.Context, cursor string, limit int) (Medi
 func (m *MediaUseCase) Get(ctx context.Context, id string) (Media, error) {
 	return m.Catalog.Get(ctx, id)
 }
-func (m *MediaUseCase) RefreshMedia(ctx context.Context, principal domain.Principal) (Job, error) {
-	m.mu.Lock()
-	if m.refreshing || !m.refreshed.IsZero() && time.Since(m.refreshed) < time.Minute {
-		m.mu.Unlock()
-		return Job{}, ErrBusy
-	}
-	m.refreshing = true
-	m.mu.Unlock()
-	defer func() { m.mu.Lock(); m.refreshing = false; m.refreshed = time.Now(); m.mu.Unlock() }()
-	id, err := newID("j_")
-	if err != nil {
-		return Job{}, err
-	}
-	started := time.Now().UTC()
-	if err := m.Catalog.Refresh(ctx); err != nil {
-		return Job{}, err
-	}
-	job := Job{ID: id, Type: "media_refresh", State: "succeeded", Progress: 1, CreatedAt: started, UpdatedAt: time.Now().UTC()}
-	m.Refresh.Put(principal.Subject, job)
-	return job, nil
+func (m *MediaUseCase) RefreshMedia(ctx context.Context) error {
+	return m.Catalog.Refresh(ctx)
 }
 
 type PreviewUseCase struct {
@@ -196,7 +146,7 @@ func (e *ExportUseCase) Create(ctx context.Context, principal domain.Principal, 
 	if err != nil {
 		return Job{}, err
 	}
-	record, err := e.Jobs.Create(ctx, ExportJob{ID: id, Owner: principal.Subject, ProjectID: projectID, ProjectRevision: project.Revision, RequestJSON: string(data)})
+	record, err := e.Jobs.Create(ctx, store.ExportJob{ID: id, OwnerLogin: principal.Subject, ProjectID: projectID, ProjectRevision: project.Revision, RequestJSON: string(data)})
 	if err != nil {
 		return Job{}, err
 	}
@@ -225,7 +175,7 @@ func (e *ExportUseCase) Cancel(ctx context.Context, owner, id string) error {
 	if err != nil {
 		return err
 	}
-	if record.State == "succeeded" || record.State == "failed" || record.State == "cancelled" {
+	if record.State == store.JobSucceeded || record.State == store.JobFailed || record.State == store.JobCancelled {
 		return nil
 	}
 	e.mu.Lock()
@@ -235,43 +185,35 @@ func (e *ExportUseCase) Cancel(ctx context.Context, owner, id string) error {
 		cancel()
 	}
 	_, err = e.Jobs.Cancel(ctx, owner, id)
-	if errors.Is(err, ErrJobState) {
+	if errors.Is(err, store.ErrJobState) {
 		return nil
 	}
 	return err
 }
 
-type JobUseCase struct {
-	Exports *ExportUseCase
-	Refresh *RefreshJobs
-}
+type JobUseCase struct{ Exports *ExportUseCase }
 
 func (j JobUseCase) Get(ctx context.Context, principal domain.Principal, id string) (Job, error) {
-	if job, ok := j.Refresh.Get(principal.Subject, id); ok {
-		return job, nil
-	}
 	return j.Exports.Get(ctx, principal.Subject, id)
 }
 func (j JobUseCase) Cancel(ctx context.Context, principal domain.Principal, id string) error {
-	if _, ok := j.Refresh.Get(principal.Subject, id); ok {
-		return nil
-	}
 	return j.Exports.Cancel(ctx, principal.Subject, id)
 }
 
-func jobResult(record ExportJob) Job {
+func jobResult(record store.ExportJob) Job {
 	progress := 0.0
-	if record.State == "running" {
+	if record.State == store.JobRunning {
 		progress = .5
 	}
-	if record.State == "succeeded" || record.State == "failed" || record.State == "cancelled" {
+	if record.State == store.JobSucceeded || record.State == store.JobFailed || record.State == store.JobCancelled {
 		progress = 1
 	}
-	job := Job{ID: record.ID, Type: "export", State: record.State, Progress: progress, CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt}
-	if record.State == "failed" {
-		job.ErrorCode = record.ErrorCode
+	job := Job{ID: record.ID, Type: "export", State: string(record.State), Progress: progress, CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt}
+	if record.State == store.JobFailed && record.ErrorCode.Valid {
+		value := record.ErrorCode.String
+		job.ErrorCode = &value
 	}
-	if record.State == "succeeded" && record.ResultJSON != nil {
+	if record.State == store.JobSucceeded && record.ResultJSON.Valid {
 		var result struct {
 			OutputName  string    `json:"outputName"`
 			SizeBytes   int64     `json:"sizeBytes"`
@@ -280,7 +222,7 @@ func jobResult(record ExportJob) Job {
 				Message string `json:"message"`
 			} `json:"warnings"`
 		}
-		if json.Unmarshal([]byte(*record.ResultJSON), &result) == nil && safeOutputName(result.OutputName) && result.SizeBytes >= 0 && !result.RetainUntil.IsZero() {
+		if json.Unmarshal([]byte(record.ResultJSON.String), &result) == nil && safeOutputName(result.OutputName) && result.SizeBytes >= 0 && !result.RetainUntil.IsZero() {
 			job.Result = &JobResult{OutputName: result.OutputName, SizeBytes: result.SizeBytes, RetainUntil: result.RetainUntil}
 			for _, warning := range result.Warnings {
 				if len(job.Warnings) == 10 {
