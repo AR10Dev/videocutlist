@@ -8,19 +8,12 @@ import (
 	"io"
 	"log"
 	"net/http"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
 	"videocutlist/application"
 	"videocutlist/domain"
-)
-
-var (
-	mediaID   = regexp.MustCompile(`^m_[A-Za-z0-9_-]{43}$`)
-	projectID = regexp.MustCompile(`^p_[A-Za-z0-9_-]{12,64}$`)
-	jobID     = regexp.MustCompile(`^j_[A-Za-z0-9_-]{12,64}$`)
 )
 
 const maxQueryBytes = 4 << 10
@@ -164,50 +157,35 @@ func (s *Server) dispatch(writer http.ResponseWriter, request *http.Request, id 
 	if !ok {
 		return routeFor(request.URL.Path), ""
 	}
-	path := strings.TrimPrefix(request.URL.Path, "/api/v1")
-	switch {
-	case path == "/media" && request.Method == http.MethodGet:
+	r := parseRoute(request.Method, request.URL.EscapedPath())
+	switch r.kind {
+	case routeListMedia:
 		s.listMedia(writer, request, id)
 		return "/api/v1/media", principal.Subject
-	case path == "/media/refresh" && request.Method == http.MethodPost:
+	case routeRefreshMedia:
 		s.refreshMedia(writer, request, principal, id)
 		return "/api/v1/media/refresh", principal.Subject
-	case path == "/media" && request.Method != http.MethodGet:
-		break
-	case strings.HasPrefix(path, "/media/"):
-		parts := strings.Split(strings.TrimPrefix(path, "/media/"), "/")
-		if len(parts) == 1 && request.Method == http.MethodGet {
-			s.getMedia(writer, request, parts[0], id)
-			return "/api/v1/media/{mediaId}", principal.Subject
-		}
-		if len(parts) == 2 && parts[1] == "preview" && (request.Method == http.MethodGet || request.Method == http.MethodHead) {
-			s.preview(writer, request, principal, parts[0], id)
-			return "/api/v1/media/{mediaId}/preview", principal.Subject
-		}
-	case strings.HasPrefix(path, "/projects/"):
-		parts := strings.Split(strings.TrimPrefix(path, "/projects/"), "/")
-		if len(parts) == 1 && request.Method == http.MethodGet {
-			s.getProject(writer, request, principal, parts[0], id)
-			return "/api/v1/projects/{projectId}", principal.Subject
-		}
-		if len(parts) == 1 && request.Method == http.MethodPut {
-			s.putProject(writer, request, principal, parts[0], id)
-			return "/api/v1/projects/{projectId}", principal.Subject
-		}
-		if len(parts) == 2 && parts[1] == "exports" && request.Method == http.MethodPost {
-			s.createExport(writer, request, principal, parts[0], id)
-			return "/api/v1/projects/{projectId}/exports", principal.Subject
-		}
-	case strings.HasPrefix(path, "/jobs/"):
-		parts := strings.Split(strings.TrimPrefix(path, "/jobs/"), "/")
-		if len(parts) == 1 && request.Method == http.MethodGet {
-			s.getJob(writer, request, principal, parts[0], id)
-			return "/api/v1/jobs/{jobId}", principal.Subject
-		}
-		if len(parts) == 1 && request.Method == http.MethodDelete {
-			s.cancelJob(writer, request, principal, parts[0], id)
-			return "/api/v1/jobs/{jobId}", principal.Subject
-		}
+	case routeGetMedia:
+		s.getMedia(writer, request, r.id, id)
+		return "/api/v1/media/{mediaId}", principal.Subject
+	case routePreview:
+		s.preview(writer, request, principal, r.id, id)
+		return "/api/v1/media/{mediaId}/preview", principal.Subject
+	case routeGetProject:
+		s.getProject(writer, request, principal, r.id, id)
+		return "/api/v1/projects/{projectId}", principal.Subject
+	case routePutProject:
+		s.putProject(writer, request, principal, r.id, id)
+		return "/api/v1/projects/{projectId}", principal.Subject
+	case routeCreateExport:
+		s.createExport(writer, request, principal, r.id, id)
+		return "/api/v1/projects/{projectId}/exports", principal.Subject
+	case routeGetJob:
+		s.getJob(writer, request, principal, r.id, id)
+		return "/api/v1/jobs/{jobId}", principal.Subject
+	case routeCancelJob:
+		s.cancelJob(writer, request, principal, r.id, id)
+		return "/api/v1/jobs/{jobId}", principal.Subject
 	}
 	httpx.Error(writer, http.StatusNotFound, "not_found", "Resource not found.", id)
 	return routeFor(request.URL.Path), principal.Subject
@@ -244,7 +222,7 @@ func (s *Server) listMedia(writer http.ResponseWriter, request *http.Request, id
 		}
 	}
 	cursor := request.URL.Query().Get("cursor")
-	if len(cursor) > 128 || cursor != "" && !mediaID.MatchString(cursor) {
+	if len(cursor) > 128 || cursor != "" && !validMediaID(cursor) {
 		httpx.Error(writer, 422, "invalid_query", "Query parameters are invalid.", id)
 		return
 	}
@@ -267,10 +245,6 @@ func (s *Server) refreshMedia(writer http.ResponseWriter, request *http.Request,
 	writer.WriteHeader(http.StatusNoContent)
 }
 func (s *Server) getMedia(writer http.ResponseWriter, request *http.Request, media string, id string) {
-	if !mediaID.MatchString(media) {
-		notFound(writer, id)
-		return
-	}
 	result, err := s.config.Media.Get(request.Context(), media)
 	if err != nil {
 		notFound(writer, id)
@@ -280,10 +254,6 @@ func (s *Server) getMedia(writer http.ResponseWriter, request *http.Request, med
 }
 
 func (s *Server) preview(writer http.ResponseWriter, request *http.Request, principal domain.Principal, media string, id string) {
-	if !mediaID.MatchString(media) {
-		notFound(writer, id)
-		return
-	}
 	if !s.allowed(writer, principal, "preview", media, id) {
 		return
 	}
@@ -376,10 +346,6 @@ func (s *Server) previewSpec(request *http.Request, item Media) (PreviewSpec, er
 }
 
 func (s *Server) getProject(writer http.ResponseWriter, request *http.Request, principal domain.Principal, project string, id string) {
-	if !projectID.MatchString(project) {
-		notFound(writer, id)
-		return
-	}
 	if !s.allowed(writer, principal, "project_read", project, id) {
 		return
 	}
@@ -391,10 +357,6 @@ func (s *Server) getProject(writer http.ResponseWriter, request *http.Request, p
 	httpx.WriteJSON(writer, 200, value)
 }
 func (s *Server) putProject(writer http.ResponseWriter, request *http.Request, principal domain.Principal, project string, id string) {
-	if !projectID.MatchString(project) {
-		notFound(writer, id)
-		return
-	}
 	if !s.allowed(writer, principal, "project_save", project, id) {
 		return
 	}
@@ -403,7 +365,7 @@ func (s *Server) putProject(writer http.ResponseWriter, request *http.Request, p
 		httpx.Error(writer, 422, "invalid_project", "Project is invalid.", id)
 		return
 	}
-	if !mediaID.MatchString(input.MediaID) {
+	if !validMediaID(input.MediaID) {
 		httpx.Error(writer, 422, "invalid_project", "Project is invalid.", id)
 		return
 	}
@@ -420,10 +382,6 @@ func (s *Server) putProject(writer http.ResponseWriter, request *http.Request, p
 	httpx.WriteJSON(writer, 200, saved)
 }
 func (s *Server) createExport(writer http.ResponseWriter, request *http.Request, principal domain.Principal, project string, id string) {
-	if !projectID.MatchString(project) {
-		notFound(writer, id)
-		return
-	}
 	if !s.allowed(writer, principal, "export", project, id) {
 		return
 	}
@@ -450,10 +408,6 @@ func (s *Server) createExport(writer http.ResponseWriter, request *http.Request,
 	httpx.WriteJSON(writer, http.StatusAccepted, job)
 }
 func (s *Server) getJob(writer http.ResponseWriter, request *http.Request, principal domain.Principal, job string, id string) {
-	if !jobID.MatchString(job) {
-		notFound(writer, id)
-		return
-	}
 	if !s.allowed(writer, principal, "job_read", job, id) {
 		return
 	}
@@ -465,10 +419,6 @@ func (s *Server) getJob(writer http.ResponseWriter, request *http.Request, princ
 	httpx.WriteJSON(writer, 200, value)
 }
 func (s *Server) cancelJob(writer http.ResponseWriter, request *http.Request, principal domain.Principal, job string, id string) {
-	if !jobID.MatchString(job) {
-		notFound(writer, id)
-		return
-	}
 	if !s.allowed(writer, principal, "job_cancel", job, id) {
 		return
 	}
