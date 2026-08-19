@@ -76,7 +76,7 @@ FROM media WHERE available = 1 AND id > ? ORDER BY id LIMIT ?`, cursor, limit+1)
 		return index.Page{}, err
 	}
 	defer rows.Close()
-	page := index.Page{Items: make([]index.Media, 0, limit)}
+	page := index.Page{}
 	for rows.Next() {
 		record, err := scanMedia(rows)
 		if err != nil {
