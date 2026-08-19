@@ -56,3 +56,9 @@ func TestNormalizeRejectsAudioOnly(t *testing.T) {
 		t.Fatal("expected no-video error")
 	}
 }
+
+func TestNormalizeRejectsZeroDuration(t *testing.T) {
+	if _, err := normalize([]byte(`{"format":{"duration":"0.0004"},"streams":[{"codec_type":"video"}]}`)); err == nil {
+		t.Fatal("expected invalid duration error")
+	}
+}

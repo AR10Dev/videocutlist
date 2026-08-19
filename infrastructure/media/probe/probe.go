@@ -135,6 +135,9 @@ func normalize(data []byte) (Metadata, error) {
 		return Metadata{}, fmt.Errorf("invalid duration %q", parsed.Format.Duration)
 	}
 	result := Metadata{DurationMS: int64(math.Round(duration * 1000)), Container: parsed.Format.Name}
+	if result.DurationMS < 1 {
+		return Metadata{}, fmt.Errorf("invalid duration %q", parsed.Format.Duration)
+	}
 	for _, stream := range parsed.Streams {
 		switch stream.Type {
 		case "video":

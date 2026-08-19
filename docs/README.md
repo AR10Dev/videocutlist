@@ -17,6 +17,3 @@
 
 - [Preview cache recovery](runbooks/cache-recovery.md)
 - [Export recovery](runbooks/export-recovery.md)
-
-Architecture decisions belong in [ADR](adr/). Keep operational procedures in
-`runbooks/` and externally consumed interfaces in `contracts/`.

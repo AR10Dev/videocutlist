@@ -69,8 +69,8 @@ func frameRate(value string) (float64, error) {
 		return 0, fmt.Errorf("invalid frame rate %q", value)
 	}
 	numerator, err := strconv.ParseFloat(parts[0], 64)
-	if err != nil {
-		return 0, err
+	if err != nil || numerator <= 0 {
+		return 0, fmt.Errorf("invalid frame rate %q", value)
 	}
 	denominator, err := strconv.ParseFloat(parts[1], 64)
 	if err != nil || denominator <= 0 {

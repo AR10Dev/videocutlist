@@ -24,11 +24,14 @@ files. Original-media filesystem paths never leave the server.
 ## Run locally
 
 ```bash
-cp deployments/systemd/videocutlist.env.example /tmp/videocutlist.env
-# Edit VIDEOCUTLIST_MEDIA_ROOTS_JSON in /tmp/videocutlist.env.
+DATA_DIR="$(mktemp -d)"
+# Replace /path/to/media with the local directory containing originals.
 make client-install
 make build
-VIDEOCUTLIST_MEDIA_ROOTS_JSON='[{"id":"media","path":"/path/to/media"}]' \
+VIDEOCUTLIST_DATABASE_PATH="$DATA_DIR/videocutlist.db" \
+VIDEOCUTLIST_CACHE_DIR="$DATA_DIR/cache" \
+VIDEOCUTLIST_EXPORT_DIR="$DATA_DIR/exports" \
+VIDEOCUTLIST_MEDIA_ROOTS_JSON='{"media":"/path/to/media"}' \
   go run ./cmd/server
 ```
 
@@ -64,12 +67,7 @@ See [Contributing](CONTRIBUTING.md) before opening a pull request.
 
 ## Documentation
 
-- [Documentation index](docs/README.md)
-- [Container deployment](docs/runbooks/containers.md)
-- [Operations, upgrades, rollback, and backup](docs/runbooks/operations.md)
-- [Connectivity examples](deployments/connectivity-examples/README.md)
-- [API contract](docs/contracts/api.openapi.yaml)
-- [Runtime contract](docs/contracts/runtime.md)
+See the [documentation index](docs/README.md).
 
 ## Security
 
