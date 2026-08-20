@@ -245,9 +245,20 @@ export function App() {
     setExportJob();
     setExportStatus("");
   };
+  const clearDetectionContext = () => {
+    detectionController?.abort();
+    detectionController = undefined;
+    detectionRequest++;
+    if (detectionTimer) window.clearTimeout(detectionTimer);
+    detectionTimer = undefined;
+    setDetectionJob();
+    setDetectionCandidates([]);
+    setDetectionStatus("");
+  };
   const chooseMedia = (item: Media) => {
     if (!confirmDiscard(dirty(), () => window.confirm("Discard unsaved changes?"))) return;
     clearExportContext();
+    clearDetectionContext();
     invalidateSaveContext();
     metadataRequest?.abort();
     const controller = new AbortController();
@@ -485,6 +496,7 @@ export function App() {
     )
       return;
     clearExportContext();
+    clearDetectionContext();
     invalidateSaveContext();
     setDiagnostics();
     projectRequest?.abort();
@@ -540,6 +552,7 @@ export function App() {
     )
       return;
     clearExportContext();
+    clearDetectionContext();
     invalidateSaveContext();
     projectRequest?.abort();
     metadataRequest?.abort();
@@ -574,16 +587,14 @@ export function App() {
     cleanupPreview?.();
     if (thumbnailObjectURL) URL.revokeObjectURL(thumbnailObjectURL);
     if (exportTimer) window.clearTimeout(exportTimer);
-    if (detectionTimer) window.clearTimeout(detectionTimer);
+    clearDetectionContext();
     requestVersion++;
     metadataRequestVersion++;
     projectRequestVersion++;
     refreshRequestVersion++;
     saveVersion++;
     exportRequest++;
-    detectionRequest++;
     exportController?.abort();
-    detectionController?.abort();
   });
   const exportFailure = exportFailureMessage;
   const exportProject = async () => {
