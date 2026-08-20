@@ -23,6 +23,8 @@ import (
 	"videocutlist/infrastructure/store"
 )
 
+const maxWaveformSamples = 4096
+
 type Service struct {
 	Scanner    *index.Scanner
 	Media      *store.MediaStore
@@ -100,7 +102,8 @@ func (s *Service) Waveform(ctx context.Context, _ domain.Principal, spec applica
 	if err != nil {
 		return application.AssetResult{}, err
 	}
-	peaks := make([]float64, spec.Samples)
+	var peakBuffer [maxWaveformSamples]float64
+	peaks := peakBuffer[:spec.Samples]
 	for i := range peaks {
 		start := len(raw) * i / spec.Samples
 		end := len(raw) * (i + 1) / spec.Samples
@@ -127,7 +130,7 @@ func validate(s application.AssetSpec, wave bool) error {
 		return errors.New("invalid asset range")
 	}
 	if wave {
-		if s.Samples < 16 || s.Samples > 4096 {
+		if s.Samples < 16 || s.Samples > maxWaveformSamples {
 			return errors.New("invalid samples")
 		}
 	} else if s.Count < 1 || s.Count > 32 || s.Width < 80 || s.Width > 320 {

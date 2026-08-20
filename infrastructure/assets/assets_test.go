@@ -2,10 +2,18 @@ package assets
 
 import (
 	"context"
+
 	"os"
 	"os/exec"
 	"testing"
+	"videocutlist/application"
 )
+
+func TestValidateRejectsExcessiveWaveformSamples(t *testing.T) {
+	if err := validate(application.AssetSpec{DurationMS: 1, Samples: maxWaveformSamples + 1}, true); err == nil {
+		t.Fatal("validate accepted excessive waveform samples")
+	}
+}
 
 func TestRunRejectsOversizedOutput(t *testing.T) {
 	if _, err := exec.LookPath("sh"); err != nil {
