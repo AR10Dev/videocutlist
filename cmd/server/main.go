@@ -124,7 +124,7 @@ func run(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.Handle("/api/", apiServer)
 	mux.Handle("/metrics", apiServer)
-	mux.Handle("/", webassets.Handler("client/dist"))
+	mux.Handle("/", webassets.DefaultHandler())
 	proxied, err := httpapi.TrustedProxy(cfg.TrustedProxyCIDRs, mux)
 	if err != nil {
 		return err

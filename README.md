@@ -35,12 +35,14 @@ VIDEOCUTLIST_MEDIA_ROOTS_JSON='{"media":"/path/to/media"}' \
   go run ./cmd/server
 ```
 
-The server listens on `127.0.0.1:8787` by default. The bundled client is served
-from the same origin.
+The server listens on `127.0.0.1:8787` by default. Release builds embed the bundled
+client in the Go binary and serve it from the same origin. Local development builds
+serve the generated `client/dist` directory.
 
 ## Deploy with Docker or Podman
 
-The container image includes the server, bundled client, FFmpeg, and FFprobe.
+The container image includes the server with the frontend embedded in its binary,
+plus FFmpeg and FFprobe.
 The Compose file works with either Docker Compose or Podman Compose:
 
 ```bash

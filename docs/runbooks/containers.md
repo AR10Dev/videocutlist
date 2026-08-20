@@ -1,7 +1,8 @@
 # Container deployment
 
 VideoCutlist supports Docker and Podman through the same Compose definition.
-The image contains the Go service, browser client, FFmpeg, and FFprobe.
+The image contains the Go service with the browser client embedded in its binary,
+plus FFmpeg and FFprobe.
 
 ```bash
 cd deployments/containers
@@ -43,8 +44,8 @@ docker compose logs -f videocutlist
 # podman compose logs -f videocutlist
 ```
 
-For a source-build fallback, build the existing Dockerfile and point Compose
-at the local image:
+For a source-build fallback, the Dockerfile builds the frontend first and embeds it
+in the Go binary. Build it and point Compose at the local image:
 
 ```bash
 docker build -f Dockerfile -t videocutlist:local ../..

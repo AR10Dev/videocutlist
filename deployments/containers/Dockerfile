@@ -11,7 +11,8 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -o /videocutlist ./cmd/server
+COPY --from=client /src/client/dist /src/infrastructure/webassets/dist
+RUN CGO_ENABLED=0 go build -tags embed_frontend -trimpath -o /videocutlist ./cmd/server
 
 FROM debian:bookworm-slim
 RUN apt-get update \
@@ -20,7 +21,6 @@ RUN apt-get update \
     && useradd --system --uid 10001 --home-dir /nonexistent --shell /usr/sbin/nologin videocutlist \
     && mkdir -p /var/lib/videocutlist/data /var/lib/videocutlist/exports /var/cache/videocutlist/previews /srv/videocutlist/media
 COPY --from=server /videocutlist /usr/local/bin/videocutlist
-COPY --from=client /src/client/dist /opt/videocutlist/client/dist
 RUN chown -R videocutlist:videocutlist /var/lib/videocutlist /var/cache/videocutlist /srv/videocutlist
 USER videocutlist
 WORKDIR /opt/videocutlist

@@ -7,10 +7,14 @@ GO_TEST_PACKAGES := $(GO_PACKAGES) ./test/...
 .PHONY: build check client-install e2e format lint smoke test
 
 build:
-	$(GO) build $(GO_PACKAGES)
 	$(PNPM) --dir client run build
+	rm -rf infrastructure/webassets/dist
+	cp -a client/dist infrastructure/webassets/dist
+	$(GO) build -tags embed_frontend $(GO_PACKAGES)
 
 check: lint test build
+	$(GO) test -tags embed_frontend ./...
+	$(GO) vet -tags embed_frontend ./...
 
 format:
 	$(GO) fmt $(GO_TEST_PACKAGES)
