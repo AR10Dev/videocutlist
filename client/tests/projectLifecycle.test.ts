@@ -1,9 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  confirmDiscard,
-  newProjectId,
-  recentProjects,
-} from "../src/projectLifecycle";
+import { confirmDiscard, newProjectId, recentProjects } from "../src/projectLifecycle";
 
 describe("project lifecycle helpers", () => {
   it("generates server-compatible project IDs", () => {

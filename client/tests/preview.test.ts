@@ -24,13 +24,27 @@ describe("hybrid Smart Cut eligibility", () => {
   });
 
   it("rejects known non-H.264, non-MKV, and VFR metadata", () => {
-    expect(hybridSmartCutKnownIneligible(media({ codec: "hevc", avgFrameRate: "25/1", frameRate: "25/1" }))).toBe(true);
-    expect(hybridSmartCutKnownIneligible(media({ codec: "h264", avgFrameRate: "25/1", frameRate: "25/1" }, { name: "clip.webm" }))).toBe(true);
-    expect(hybridSmartCutKnownIneligible(media({ codec: "h264", avgFrameRate: "25/1", frameRate: "30/1" }))).toBe(true);
+    expect(
+      hybridSmartCutKnownIneligible(
+        media({ codec: "hevc", avgFrameRate: "25/1", frameRate: "25/1" }),
+      ),
+    ).toBe(true);
+    expect(
+      hybridSmartCutKnownIneligible(
+        media({ codec: "h264", avgFrameRate: "25/1", frameRate: "25/1" }, { name: "clip.webm" }),
+      ),
+    ).toBe(true);
+    expect(
+      hybridSmartCutKnownIneligible(
+        media({ codec: "h264", avgFrameRate: "25/1", frameRate: "30/1" }),
+      ),
+    ).toBe(true);
   });
 
   it("does not disable when metadata is incomplete", () => {
-    expect(hybridSmartCutKnownIneligible(media({ codec: "h264", avgFrameRate: "25/1" }))).toBe(false);
+    expect(hybridSmartCutKnownIneligible(media({ codec: "h264", avgFrameRate: "25/1" }))).toBe(
+      false,
+    );
   });
 });
 
@@ -48,9 +62,7 @@ describe("segment validation", () => {
   });
 
   it("rejects invalid bounds and overlap before a project save", () => {
-    expect(validateSegments([{ startMs: 1200, endMs: 1200 }], 2000)).toContain(
-      "In before Out",
-    );
+    expect(validateSegments([{ startMs: 1200, endMs: 1200 }], 2000)).toContain("In before Out");
     expect(
       validateSegments(
         [
@@ -170,23 +182,57 @@ describe("preview streaming", () => {
       removeAttribute: vi.fn(),
     } as unknown as HTMLVideoElement;
     const errors = vi.fn();
-    streamPreview(video, () => Promise.resolve(new Response(null, { status: 500 })), vi.fn(), errors);
+    streamPreview(
+      video,
+      () => Promise.resolve(new Response(null, { status: 500 })),
+      vi.fn(),
+      errors,
+    );
     instances[0].dispatchEvent(new Event("sourceopen"));
-    await vi.waitFor(() => expect(errors).toHaveBeenCalledWith(expect.objectContaining({ message: "Preview request failed. Try again." })));
+    await vi.waitFor(() =>
+      expect(errors).toHaveBeenCalledWith(
+        expect.objectContaining({ message: "Preview request failed. Try again." }),
+      ),
+    );
 
     const readErrors = vi.fn();
-    const badBody = { getReader: () => ({ read: () => Promise.reject(new Error("read")), cancel: vi.fn() }) } as unknown as ReadableStream<Uint8Array>;
-    streamPreview(video, () => Promise.resolve({ ok: true, body: badBody, headers: new Headers() } as Response), vi.fn(), readErrors);
+    const badBody = {
+      getReader: () => ({ read: () => Promise.reject(new Error("read")), cancel: vi.fn() }),
+    } as unknown as ReadableStream<Uint8Array>;
+    streamPreview(
+      video,
+      () => Promise.resolve({ ok: true, body: badBody, headers: new Headers() } as Response),
+      vi.fn(),
+      readErrors,
+    );
     instances[1].dispatchEvent(new Event("sourceopen"));
-    await vi.waitFor(() => expect(readErrors).toHaveBeenCalledWith(expect.objectContaining({ message: "Preview data could not be read. Try again." })));
+    await vi.waitFor(() =>
+      expect(readErrors).toHaveBeenCalledWith(
+        expect.objectContaining({ message: "Preview data could not be read. Try again." }),
+      ),
+    );
 
     const appendErrors = vi.fn();
-    streamPreview(video, () => Promise.resolve(new Response(new Uint8Array([1]))), vi.fn(), appendErrors);
+    streamPreview(
+      video,
+      () => Promise.resolve(new Response(new Uint8Array([1]))),
+      vi.fn(),
+      appendErrors,
+    );
     instances[2].dispatchEvent(new Event("sourceopen"));
-    await vi.waitFor(() => expect(appendErrors).toHaveBeenCalledWith(expect.objectContaining({ message: "Preview data could not be played. Try again." })));
+    await vi.waitFor(() =>
+      expect(appendErrors).toHaveBeenCalledWith(
+        expect.objectContaining({ message: "Preview data could not be played. Try again." }),
+      ),
+    );
 
     const cancelled = vi.fn();
-    const stop = streamPreview(video, () => Promise.resolve(new Response(new Uint8Array([1]))), vi.fn(), cancelled);
+    const stop = streamPreview(
+      video,
+      () => Promise.resolve(new Response(new Uint8Array([1]))),
+      vi.fn(),
+      cancelled,
+    );
     stop();
     instances[3].dispatchEvent(new Event("sourceopen"));
     await Promise.resolve();
@@ -214,7 +260,11 @@ describe("preview streaming", () => {
     const setupErrors = vi.fn();
     streamPreview(video, () => Promise.resolve(new Response(null)), vi.fn(), setupErrors);
     instances[0].dispatchEvent(new Event("sourceopen"));
-    await vi.waitFor(() => expect(setupErrors).toHaveBeenCalledWith(expect.objectContaining({ message: "Preview is not supported by this browser." })));
+    await vi.waitFor(() =>
+      expect(setupErrors).toHaveBeenCalledWith(
+        expect.objectContaining({ message: "Preview is not supported by this browser." }),
+      ),
+    );
 
     const bodyErrors = vi.fn();
     class BodyMediaSource extends EventTarget {
@@ -230,6 +280,10 @@ describe("preview streaming", () => {
     vi.stubGlobal("MediaSource", BodyMediaSource);
     streamPreview(video, () => Promise.resolve(new Response(null)), vi.fn(), bodyErrors);
     instances[1].dispatchEvent(new Event("sourceopen"));
-    await vi.waitFor(() => expect(bodyErrors).toHaveBeenCalledWith(expect.objectContaining({ message: "Preview returned no playable data. Try again." })));
+    await vi.waitFor(() =>
+      expect(bodyErrors).toHaveBeenCalledWith(
+        expect.objectContaining({ message: "Preview returned no playable data. Try again." }),
+      ),
+    );
   });
 });

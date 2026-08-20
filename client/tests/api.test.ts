@@ -1,9 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import {
-  createApiClient,
-  MAX_INTERCHANGE_FILE_BYTES,
-  validInterchangeFileSize,
-} from "../src/api";
+import { createApiClient, MAX_INTERCHANGE_FILE_BYTES, validInterchangeFileSize } from "../src/api";
 
 describe("client API boundary", () => {
   it("bounds interchange files before reading them", () => {
@@ -20,9 +16,7 @@ describe("client API boundary", () => {
     "http://100.80.20.10:8787",
     "https://video.example.com",
   ])("accepts the configured server URL %s", (serverBaseUrl) => {
-    expect(api(serverBaseUrl).url("media")).toBe(
-      `${serverBaseUrl}/api/v1/media`,
-    );
+    expect(api(serverBaseUrl).url("media")).toBe(`${serverBaseUrl}/api/v1/media`);
   });
 
   it("normalizes trailing slashes and keeps API paths below a prefix", () => {
@@ -53,12 +47,9 @@ describe("client API boundary", () => {
     "media%2f..%2f..%2fadmin",
     "media%5c..%5c..%5cadmin",
     "media%",
-  ])(
-    "rejects a request path that could escape the API boundary: %s",
-    (path) => {
-      expect(() => api("https://video.example.com").url(path)).toThrow();
-    },
-  );
+  ])("rejects a request path that could escape the API boundary: %s", (path) => {
+    expect(() => api("https://video.example.com").url(path)).toThrow();
+  });
 
   it("keeps the request signal and caller headers for no-auth requests", async () => {
     const fetch = vi.fn<typeof globalThis.fetch>(() => Promise.resolve(new Response()));
@@ -107,9 +98,7 @@ describe("client API boundary", () => {
       expect.objectContaining({ credentials: "omit" }),
     );
     const init = fetch.mock.calls[0][1] as RequestInit;
-    expect(new Headers(init.headers).get("authorization")).toBe(
-      "Bearer editor-token",
-    );
+    expect(new Headers(init.headers).get("authorization")).toBe("Bearer editor-token");
     expect(new Headers(init.headers).get("x-trace")).toBe("yes");
   });
 

@@ -31,7 +31,7 @@ describe("Solid parity editing helpers", () => {
   });
 
   it("normalizes bounded timeline assets independently of preview position", () => {
-    expect(normalizePeaks([-.5, 0.5, 2, Number.NaN])).toEqual([0, 0.5, 1]);
+    expect(normalizePeaks([-0.5, 0.5, 2, Number.NaN])).toEqual([0, 0.5, 1]);
     expect(viewportScale(4)).toBe(4);
     expect(viewportScale(0)).toBe(1);
   });
@@ -60,7 +60,9 @@ describe("Solid parity editing helpers", () => {
   });
 
   it("maps unsupported hybrid exports to actionable guidance", () => {
-    expect(exportFailureMessage("hybrid_smart_cut_unsupported_media")).toContain("H.264 constant-frame-rate video in MKV");
+    expect(exportFailureMessage("hybrid_smart_cut_unsupported_media")).toContain(
+      "H.264 constant-frame-rate video in MKV",
+    );
   });
 
   it("reorders and removes labelled segments without mutating input", () => {

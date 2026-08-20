@@ -26,9 +26,11 @@ const copy = (snapshot: TimelineSnapshot): TimelineSnapshot => ({
   segments: snapshot.segments.map((segment) => ({ ...segment })),
 });
 
-export const createTimelineHistory = (
-  initial: TimelineSnapshot,
-): TimelineHistory => ({ present: copy(initial), past: [], future: [] });
+export const createTimelineHistory = (initial: TimelineSnapshot): TimelineHistory => ({
+  present: copy(initial),
+  past: [],
+  future: [],
+});
 
 export const editTimeline = (
   history: TimelineHistory,
@@ -59,11 +61,8 @@ export const redoTimeline = (history: TimelineHistory): TimelineHistory => {
   };
 };
 
-export const resetTimelineHistory = (
-  snapshot: TimelineSnapshot,
-): TimelineHistory => createTimelineHistory(snapshot);
+export const resetTimelineHistory = (snapshot: TimelineSnapshot): TimelineHistory =>
+  createTimelineHistory(snapshot);
 
-export const canUndoTimeline = (history: TimelineHistory) =>
-  history.past.length > 0;
-export const canRedoTimeline = (history: TimelineHistory) =>
-  history.future.length > 0;
+export const canUndoTimeline = (history: TimelineHistory) => history.past.length > 0;
+export const canRedoTimeline = (history: TimelineHistory) => history.future.length > 0;

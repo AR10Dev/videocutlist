@@ -20,10 +20,13 @@ const initial: TimelineSnapshot = {
 
 describe("timeline history", () => {
   it("restores the complete timeline snapshot and redoes it", () => {
-    const changed = editTimeline(
-      createTimelineHistory(initial),
-      { playheadMs: 400, inMs: 200, outMs: 800, segments: [], zoom: 2 },
-    );
+    const changed = editTimeline(createTimelineHistory(initial), {
+      playheadMs: 400,
+      inMs: 200,
+      outMs: 800,
+      segments: [],
+      zoom: 2,
+    });
     expect(canUndoTimeline(changed)).toBe(true);
     const undone = undoTimeline(changed);
     expect(undone.present).toEqual(initial);

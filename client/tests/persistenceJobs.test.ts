@@ -21,16 +21,12 @@ describe("Solid persistence and jobs contracts", () => {
       confidence: 0.9,
     };
     expect(acceptCandidate(candidate, project, 1000)?.segments).toHaveLength(1);
-    expect(
-      acceptCandidate({ ...candidate, projectRevision: 1 }, project, 1000),
-    ).toBeNull();
+    expect(acceptCandidate({ ...candidate, projectRevision: 1 }, project, 1000)).toBeNull();
   });
 
   it("keeps recent projects bounded and confirms clean/discard behavior", () => {
     const id = "p_12345678-1234-4234-8234-123456789012";
-    expect(recentProjects([{ id, label: "Demo", lastOpened: 1 }])).toHaveLength(
-      1,
-    );
+    expect(recentProjects([{ id, label: "Demo", lastOpened: 1 }])).toHaveLength(1);
     expect(confirmDiscard(false, () => false)).toBe(true);
     expect(confirmDiscard(true, () => false)).toBe(false);
   });

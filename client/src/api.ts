@@ -1,5 +1,7 @@
 export type Authentication =
-  { type: "none" } | { type: "bearer"; token: string } | { type: "cookie" };
+  | { type: "none" }
+  | { type: "bearer"; token: string }
+  | { type: "cookie" };
 
 export type ClientConfiguration = {
   serverBaseUrl: string;
@@ -16,10 +18,7 @@ declare global {
   }
 }
 
-type Fetch = (
-  input: RequestInfo | URL,
-  init?: RequestInit,
-) => Promise<Response>;
+type Fetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
 const hasControlCharacter = (value: string) =>
   Array.from(value).some((character) => {
@@ -41,9 +40,7 @@ function apiBase(serverBaseUrl: string) {
     base.search ||
     base.hash
   )
-    throw new Error(
-      "serverBaseUrl must not contain credentials, a query, or a fragment.",
-    );
+    throw new Error("serverBaseUrl must not contain credentials, a query, or a fragment.");
   base.pathname = `${base.pathname.replace(/\/+$/, "")}/api/v1/`;
   return base;
 }
@@ -51,8 +48,7 @@ function apiBase(serverBaseUrl: string) {
 function validateAuthentication(authentication: Authentication) {
   if (!authentication || typeof authentication !== "object")
     throw new Error("authentication is required.");
-  if (authentication.type === "none" || authentication.type === "cookie")
-    return authentication;
+  if (authentication.type === "none" || authentication.type === "cookie") return authentication;
   if (
     authentication.type === "bearer" &&
     typeof authentication.token === "string" &&
@@ -63,9 +59,7 @@ function validateAuthentication(authentication: Authentication) {
   throw new Error("Invalid authentication configuration.");
 }
 
-export function resolveBrowserConfiguration(
-  browser: Window = window,
-): ClientConfiguration {
+export function resolveBrowserConfiguration(browser: Window = window): ClientConfiguration {
   const configuration = browser.VIDEOCUTLIST_CONFIG ?? {
     serverBaseUrl: browser.location.origin,
     authentication: { type: "none" as const },
@@ -101,17 +95,10 @@ export function createApiClient(
     } catch {
       throw new Error("API paths must use valid percent encoding.");
     }
-    if (
-      decodedPath
-        .split(/[\\/]/)
-        .some((segment) => segment === "." || segment === "..")
-    )
+    if (decodedPath.split(/[\\/]/).some((segment) => segment === "." || segment === ".."))
       throw new Error("API paths must not contain parent-escaping segments.");
     const target = new URL(relativePath, base);
-    if (
-      target.origin !== base.origin ||
-      !target.pathname.startsWith(base.pathname)
-    )
+    if (target.origin !== base.origin || !target.pathname.startsWith(base.pathname))
       throw new Error("API paths must remain within /api/v1/.");
     return target.toString();
   };
@@ -129,11 +116,21 @@ export function createApiClient(
     });
   };
 
-  const assetRequest = (mediaId: string, kind: "thumbnails" | "waveform", params: Record<string, number>, init: RequestInit = {}) => {
-    const query = new URLSearchParams(Object.entries(params).map(([key, value]) => [key, String(value)]));
+  const assetRequest = (
+    mediaId: string,
+    kind: "thumbnails" | "waveform",
+    params: Record<string, number>,
+    init: RequestInit = {},
+  ) => {
+    const query = new URLSearchParams(
+      Object.entries(params).map(([key, value]) => [key, String(value)]),
+    );
     return request(`media/${encodeURIComponent(mediaId)}/${kind}?${query}`, init);
   };
-  const interchangeRequest = (projectId: string, format: "csv" | "chapters", init: RequestInit = {}) =>
-    request(`projects/${encodeURIComponent(projectId)}/interchange/${format}`, init);
+  const interchangeRequest = (
+    projectId: string,
+    format: "csv" | "chapters",
+    init: RequestInit = {},
+  ) => request(`projects/${encodeURIComponent(projectId)}/interchange/${format}`, init);
   return { url, request, assetRequest, interchangeRequest };
 }

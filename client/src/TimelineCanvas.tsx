@@ -40,5 +40,7 @@ export function TimelineCanvas(props: Props) {
     () => [props.thumbnailURL, props.waveform] as const,
     ([thumbnailURL, waveform]) => draw(thumbnailURL, waveform),
   );
-  return <canvas class="timeline-canvas" ref={(element) => (canvas = element)} aria-hidden="true" />;
+  return (
+    <canvas class="timeline-canvas" ref={(element) => (canvas = element)} aria-hidden="true" />
+  );
 }

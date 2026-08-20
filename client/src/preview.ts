@@ -17,7 +17,12 @@ type VideoMetadata = {
 const frameRate = (value: unknown) => {
   if (typeof value !== "string") return undefined;
   const [numerator, denominator] = value.split("/").map(Number);
-  if (!Number.isFinite(numerator) || !Number.isFinite(denominator) || denominator <= 0 || numerator <= 0)
+  if (
+    !Number.isFinite(numerator) ||
+    !Number.isFinite(denominator) ||
+    denominator <= 0 ||
+    numerator <= 0
+  )
     return undefined;
   return numerator / denominator;
 };
@@ -27,7 +32,11 @@ export const hybridSmartCutKnownIneligible = (media?: Media) => {
   const video = media.streams.video as VideoMetadata | undefined;
   if (!video || typeof video.codec !== "string") return false;
   if (video.codec.toLowerCase() !== "h264") return true;
-  if (media.container.toLowerCase() !== "matroska,webm" || !media.name.toLowerCase().endsWith(".mkv")) return true;
+  if (
+    media.container.toLowerCase() !== "matroska,webm" ||
+    !media.name.toLowerCase().endsWith(".mkv")
+  )
+    return true;
   const average = frameRate(video.avgFrameRate);
   const nominal = frameRate(video.frameRate);
   return average !== undefined && nominal !== undefined && average !== nominal;
@@ -74,37 +83,23 @@ export const watchedMediaPosition = (
   durationMs: number,
 ) => clampMediaPosition(previewStartMs + currentTimeSeconds * 1000, durationMs);
 
-export function validateSegments(
-  segments: Segment[],
-  durationMs: number,
-): string | undefined {
+export function validateSegments(segments: Segment[], durationMs: number): string | undefined {
   const ordered = [...segments].sort((a, b) => a.startMs - b.startMs);
   for (let index = 0; index < ordered.length; index += 1) {
     const segment = ordered[index];
     if (!Number.isInteger(segment.startMs) || !Number.isInteger(segment.endMs))
       return "Markers use whole milliseconds.";
-    if (
-      segment.startMs < 0 ||
-      segment.endMs > durationMs ||
-      segment.startMs >= segment.endMs
-    )
+    if (segment.startMs < 0 || segment.endMs > durationMs || segment.startMs >= segment.endMs)
       return "Each segment must be inside the media and have In before Out.";
-    if (index > 0 && ordered[index - 1].endMs > segment.startMs)
-      return "Segments cannot overlap.";
+    if (index > 0 && ordered[index - 1].endMs > segment.startMs) return "Segments cannot overlap.";
   }
 }
 
 export function canStreamPreview() {
-  return (
-    typeof MediaSource !== "undefined" &&
-    MediaSource.isTypeSupported(previewMime)
-  );
+  return typeof MediaSource !== "undefined" && MediaSource.isTypeSupported(previewMime);
 }
 
-const headersToDiagnostics = (
-  headers: Headers,
-  elapsedMs: number,
-): PreviewDiagnostics => ({
+const headersToDiagnostics = (headers: Headers, elapsedMs: number): PreviewDiagnostics => ({
   cache: headers.get("X-Preview-Cache") ?? "unknown",
   requestId: headers.get("X-Request-ID") ?? "unknown",
   startMs: Number(headers.get("X-Preview-Start") ?? 0),
@@ -216,7 +211,11 @@ export function streamPreview(
       completed = true;
       appendNext();
     } catch {
-      fail(sourceBuffer ? "Preview data could not be read. Try again." : "Preview is not supported by this browser.");
+      fail(
+        sourceBuffer
+          ? "Preview data could not be read. Try again."
+          : "Preview is not supported by this browser.",
+      );
     }
   };
   video.src = objectURL;

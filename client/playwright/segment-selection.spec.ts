@@ -62,8 +62,7 @@ test.beforeEach(async ({ page }) => {
     const url = new URL(request.url());
     if (url.pathname === "/api/v1/media")
       return route.fulfill({ json: { items: [media, secondMedia] } });
-    if (url.pathname === `/api/v1/media/${media.id}`)
-      return route.fulfill({ json: media });
+    if (url.pathname === `/api/v1/media/${media.id}`) return route.fulfill({ json: media });
     if (url.pathname.endsWith("/thumbnails"))
       return route.fulfill({
         headers: { "content-type": "image/png" },
@@ -75,8 +74,7 @@ test.beforeEach(async ({ page }) => {
       });
     if (url.pathname.includes("/preview")) {
       const center = url.searchParams.get("centerMs") ?? "0";
-      if (center === "1000")
-        await new Promise((resolve) => setTimeout(resolve, 100));
+      if (center === "1000") await new Promise((resolve) => setTimeout(resolve, 100));
       return route.fulfill({
         headers: {
           "content-type": "video/mp4",
@@ -92,8 +90,7 @@ test.beforeEach(async ({ page }) => {
       });
     }
     if (url.pathname.endsWith("/detections") && request.method() === "POST") {
-      const kind =
-        (request.postDataJSON() as { kind?: string }).kind ?? "silence";
+      const kind = (request.postDataJSON() as { kind?: string }).kind ?? "silence";
       const projectId = url.pathname.split("/")[4];
       detectionProjectId = projectId;
       detectionRevision = savedRevision;
@@ -110,10 +107,7 @@ test.beforeEach(async ({ page }) => {
         },
       });
     }
-    if (
-      url.pathname.includes("/jobs/j_detection-black") &&
-      request.method() === "GET"
-    )
+    if (url.pathname.includes("/jobs/j_detection-black") && request.method() === "GET")
       return route.fulfill({
         json: {
           id: "j_detection-black",
@@ -126,10 +120,7 @@ test.beforeEach(async ({ page }) => {
           errorCode: "detection_failed",
         },
       });
-    if (
-      url.pathname.includes("/jobs/j_detection-silence") &&
-      request.method() === "GET"
-    ) {
+    if (url.pathname.includes("/jobs/j_detection-silence") && request.method() === "GET") {
       detectionPoll += 1;
       if (detectionPoll === 1)
         return route.fulfill({
@@ -167,10 +158,7 @@ test.beforeEach(async ({ page }) => {
         },
       });
     }
-    if (
-      url.pathname.includes("/jobs/j_detection-") &&
-      request.method() === "DELETE"
-    )
+    if (url.pathname.includes("/jobs/j_detection-") && request.method() === "DELETE")
       return route.fulfill({ status: 204 });
     if (request.method() === "GET")
       return route.fulfill({
@@ -206,9 +194,7 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
-test("detection polls, presents candidates, and supports reject and accept", async ({
-  page,
-}) => {
+test("detection polls, presents candidates, and supports reject and accept", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   await page.getByRole("button", { name: "Detect silence" }).click();
@@ -219,9 +205,7 @@ test("detection polls, presents candidates, and supports reject and accept", asy
   await page.getByRole("button", { name: "Detect silence" }).click();
   await expect(page.getByText(/1 candidates found/)).toBeVisible();
   await page.getByRole("button", { name: "Accept" }).click();
-  await expect(
-    page.getByText("Candidate accepted; save the project to persist it."),
-  ).toBeVisible();
+  await expect(page.getByText("Candidate accepted; save the project to persist it.")).toBeVisible();
   await expect(page.getByText(/1 segment selected/)).toBeVisible();
 });
 
@@ -229,20 +213,14 @@ test("detection can be cancelled and reports failed jobs", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   await page.getByRole("button", { name: "Detect silence" }).click();
-  await expect(
-    page.getByRole("button", { name: "Cancel detection" }),
-  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "Cancel detection" })).toBeVisible();
   await page.getByRole("button", { name: "Cancel detection" }).click();
   await expect(page.getByText("Detection cancelled.")).toBeVisible();
   await page.getByRole("button", { name: "Detect black frames" }).click();
-  await expect(
-    page.getByText("Detection failed: detection_failed."),
-  ).toBeVisible();
+  await expect(page.getByText("Detection failed: detection_failed.")).toBeVisible();
 });
 
-test("clears detection results when media context changes", async ({
-  page,
-}) => {
+test("clears detection results when media context changes", async ({ page }) => {
   let pollStartedResolve!: () => void;
   const pollStarted = new Promise<void>((resolve) => {
     pollStartedResolve = resolve;
@@ -251,61 +229,49 @@ test("clears detection results when media context changes", async ({
   const releasePoll = new Promise<void>((resolve) => {
     releasePollResolve = resolve;
   });
-  await page.route(
-    `${apiOrigin}/api/v1/jobs/j_detection-silence`,
-    async (route) => {
-      pollStartedResolve();
-      await releasePoll;
-      await route.fulfill({
-        json: {
-          id: "j_detection-silence",
-          type: "detection",
-          state: "succeeded",
-          mediaId: media.id,
-          projectId: "p_demo-project",
-          projectRevision: 0,
-          kind: "silence",
-          candidates: [
-            {
-              id: "stale-candidate",
-              mediaId: media.id,
-              projectId: "p_demo-project",
-              projectRevision: 0,
-              startMs: 1000,
-              endMs: 1500,
-              source: "silence",
-              confidence: 0.9,
-            },
-          ],
-        },
-      });
-    },
-  );
+  await page.route(`${apiOrigin}/api/v1/jobs/j_detection-silence`, async (route) => {
+    pollStartedResolve();
+    await releasePoll;
+    await route.fulfill({
+      json: {
+        id: "j_detection-silence",
+        type: "detection",
+        state: "succeeded",
+        mediaId: media.id,
+        projectId: "p_demo-project",
+        projectRevision: 0,
+        kind: "silence",
+        candidates: [
+          {
+            id: "stale-candidate",
+            mediaId: media.id,
+            projectId: "p_demo-project",
+            projectRevision: 0,
+            startMs: 1000,
+            endMs: 1500,
+            source: "silence",
+            confidence: 0.9,
+          },
+        ],
+      },
+    });
+  });
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   await page.getByRole("button", { name: "Detect silence" }).click();
-  await expect(
-    page.getByRole("button", { name: "Cancel detection" }),
-  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "Cancel detection" })).toBeVisible();
   await pollStarted;
   await page.getByRole("button", { name: /second.mp4/ }).click();
-  await expect(
-    page.getByRole("button", { name: "Cancel detection" }),
-  ).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Cancel detection" })).toHaveCount(0);
   await expect(page.getByText(/candidates found/)).toHaveCount(0);
   releasePollResolve();
   await expect(page.getByText(/candidates found/)).toHaveCount(0);
 });
 
-test("loads timeline assets through independent fixture routes", async ({
-  page,
-}) => {
+test("loads timeline assets through independent fixture routes", async ({ page }) => {
   const requests: string[] = [];
   page.on("request", (request) => {
-    if (
-      request.url().includes("/thumbnails") ||
-      request.url().includes("/waveform")
-    )
+    if (request.url().includes("/thumbnails") || request.url().includes("/waveform"))
       requests.push(request.url());
   });
   await page.goto("/");
@@ -325,8 +291,7 @@ test("MVP browser behavior: list, metadata, settle, cancel, offset, markers, res
 }) => {
   const requestOrigins: string[] = [];
   page.on("request", (request) => {
-    if (request.url().includes("/api/v1/"))
-      requestOrigins.push(new URL(request.url()).origin);
+    if (request.url().includes("/api/v1/")) requestOrigins.push(new URL(request.url()).origin);
   });
   await page.goto("/");
   expect(new URL(page.url()).origin).toBe("http://127.0.0.1:5173");
@@ -342,10 +307,7 @@ test("MVP browser behavior: list, metadata, settle, cancel, offset, markers, res
   await playhead.fill("2000");
   await expect(page.getByText("preview-2000")).toBeVisible(); // 4 rapid reselection never presents the stale response
   await expect(page.getByText("Preview ready.")).toBeVisible(); // 4 stale request is cancelled/ignored; 5 preview begins
-  await expect(page.getByLabel("Preview player")).toHaveAttribute(
-    "data-preview-offset",
-    "2000",
-  ); // 6 returned offset is used
+  await expect(page.getByLabel("Preview player")).toHaveAttribute("data-preview-offset", "2000"); // 6 returned offset is used
 
   await playhead.fill("100");
   await page.getByRole("button", { name: "Set In marker" }).click();
@@ -365,16 +327,12 @@ test("MVP browser behavior: list, metadata, settle, cancel, offset, markers, res
   expect(new Set(requestOrigins)).toEqual(new Set([apiOrigin]));
 });
 
-test("shows a safe preview failure and maps markers from the watched preview", async ({
-  page,
-}) => {
+test("shows a safe preview failure and maps markers from the watched preview", async ({ page }) => {
   await page.unroute(`${apiOrigin}/api/v1/**`);
   await page.route(`${apiOrigin}/api/v1/**`, (route) => {
     const url = new URL(route.request().url());
-    if (url.pathname === "/api/v1/media")
-      return route.fulfill({ json: { items: [media] } });
-    if (url.pathname === `/api/v1/media/${media.id}`)
-      return route.fulfill({ json: media });
+    if (url.pathname === "/api/v1/media") return route.fulfill({ json: { items: [media] } });
+    if (url.pathname === `/api/v1/media/${media.id}`) return route.fulfill({ json: media });
     if (url.pathname.endsWith("/preview"))
       return route.fulfill({
         headers: {
@@ -405,14 +363,10 @@ test("shows a safe preview request failure", async ({ page }) => {
   );
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
-  await expect(
-    page.getByText("Preview request failed. Try again."),
-  ).toBeVisible();
+  await expect(page.getByText("Preview request failed. Try again.")).toBeVisible();
 });
 
-test("shows unsupported preview guidance without making a preview request", async ({
-  page,
-}) => {
+test("shows unsupported preview guidance without making a preview request", async ({ page }) => {
   await page.goto("/");
   await page.evaluate(() => {
     Object.defineProperty(window.MediaSource, "isTypeSupported", {
@@ -441,14 +395,10 @@ test("save reports an optimistic revision conflict", async ({ page }) => {
   await expect(page.getByText(/Load latest before saving/)).toBeVisible();
 });
 
-test("exports the saved segments, polls to a safe result, and shows warnings", async ({
-  page,
-}) => {
+test("exports the saved segments, polls to a safe result, and shows warnings", async ({ page }) => {
   const requests: string[] = [];
   let polls = 0;
-  page.on("request", (request) =>
-    requests.push(new URL(request.url()).pathname),
-  );
+  page.on("request", (request) => requests.push(new URL(request.url()).pathname));
   await page.route(`${apiOrigin}/api/v1/projects/*/exports`, async (route) => {
     expect(route.request().method()).toBe("POST");
     expect(route.request().postDataJSON()).toEqual({
@@ -494,22 +444,16 @@ test("exports the saved segments, polls to a safe result, and shows warnings", a
   await expect(page.getByText("Export complete.")).toBeVisible({
     timeout: 4_000,
   });
-  expect(
-    requests.findIndex((path) => /\/projects\/p_[^/]+$/.test(path)),
-  ).toBeLessThan(requests.findIndex((path) => path.endsWith("/exports")));
-  await expect(page.getByLabel("Export result")).toContainText(
-    "camera-cut.mkv",
+  expect(requests.findIndex((path) => /\/projects\/p_[^/]+$/.test(path))).toBeLessThan(
+    requests.findIndex((path) => path.endsWith("/exports")),
   );
+  await expect(page.getByLabel("Export result")).toContainText("camera-cut.mkv");
   await expect(page.getByLabel("Export result")).toContainText("42 bytes");
-  await expect(page.getByLabel("Export warnings")).toContainText(
-    "earlier keyframe",
-  );
+  await expect(page.getByLabel("Export warnings")).toContainText("earlier keyframe");
   await expect(page.locator("main")).not.toContainText("/private/export");
 });
 
-test("shows stable failed and capacity messages and permits retry", async ({
-  page,
-}) => {
+test("shows stable failed and capacity messages and permits retry", async ({ page }) => {
   let creates = 0;
   await page.route(`${apiOrigin}/api/v1/projects/*/exports`, async (route) => {
     creates += 1;
@@ -538,9 +482,7 @@ test("shows stable failed and capacity messages and permits retry", async ({
   await page.getByRole("button", { name: "Add In/Out segment" }).click();
   const exportButton = page.getByRole("button", { name: "Start export" });
   await exportButton.click();
-  await expect(
-    page.getByText("Export capacity is busy. Try again shortly."),
-  ).toBeVisible();
+  await expect(page.getByText("Export capacity is busy. Try again shortly.")).toBeVisible();
   await expect(exportButton).toBeEnabled();
   await exportButton.click();
   await expect(
@@ -573,30 +515,25 @@ test("cancels an active export without showing a path", async ({ page }) => {
   await expect(page.locator("main")).not.toContainText("/private/export");
 });
 
-test("delayed project loads cannot replace a newer editor", async ({
-  page,
-}) => {
+test("delayed project loads cannot replace a newer editor", async ({ page }) => {
   let release!: () => void;
   const delayed = new Promise<void>((resolve) => {
     release = resolve;
   });
-  await page.route(
-    `${apiOrigin}/api/v1/projects/p_race-load012`,
-    async (route) => {
-      await delayed;
-      await route
-        .fulfill({
-          json: {
-            id: "p_race-load012",
-            mediaId: media.id,
-            revision: 1,
-            segments: [],
-            uiState: { playheadMs: 0, zoom: 1, muted: false },
-          },
-        })
-        .catch(() => {});
-    },
-  );
+  await page.route(`${apiOrigin}/api/v1/projects/p_race-load012`, async (route) => {
+    await delayed;
+    await route
+      .fulfill({
+        json: {
+          id: "p_race-load012",
+          mediaId: media.id,
+          revision: 1,
+          segments: [],
+          uiState: { playheadMs: 0, zoom: 1, muted: false },
+        },
+      })
+      .catch(() => {});
+  });
   await page.goto("/");
   await page.getByLabel("Project ID").fill("p_race-load012");
   await page.getByRole("button", { name: "Load project" }).click();
@@ -607,9 +544,7 @@ test("delayed project loads cannot replace a newer editor", async ({
   await expect(page.getByText("Project loaded.")).toHaveCount(0);
 });
 
-test("delayed saves stay dirty and cannot launch obsolete exports", async ({
-  page,
-}) => {
+test("delayed saves stay dirty and cannot launch obsolete exports", async ({ page }) => {
   let saves = 0;
   let exports = 0;
   let release!: () => void;
@@ -754,25 +689,22 @@ test("unmounting a deferred export save cannot start export, poll, or remember a
     if (path.endsWith("/exports")) exports += 1;
     if (path.includes("/jobs/")) polls += 1;
   });
-  await page.route(
-    `${apiOrigin}/api/v1/projects/p_unmount-save12`,
-    async (route) => {
-      if (route.request().method() !== "PUT") return route.fallback();
-      saveStarted();
-      await delayed;
-      await route
-        .fulfill({
-          json: {
-            id: "p_unmount-save12",
-            mediaId: media.id,
-            revision: 1,
-            segments: [],
-            uiState: { playheadMs: 0, zoom: 1, muted: false },
-          },
-        })
-        .catch(() => {});
-    },
-  );
+  await page.route(`${apiOrigin}/api/v1/projects/p_unmount-save12`, async (route) => {
+    if (route.request().method() !== "PUT") return route.fallback();
+    saveStarted();
+    await delayed;
+    await route
+      .fulfill({
+        json: {
+          id: "p_unmount-save12",
+          mediaId: media.id,
+          revision: 1,
+          segments: [],
+          uiState: { playheadMs: 0, zoom: 1, muted: false },
+        },
+      })
+      .catch(() => {});
+  });
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   await page.getByLabel("Project ID").fill("p_unmount-save12");
@@ -791,11 +723,7 @@ test("unmounting a deferred export save cannot start export, poll, or remember a
   expect(exports).toBe(0);
   expect(polls).toBe(0);
   await expect
-    .poll(() =>
-      next.evaluate(() =>
-        localStorage.getItem("videocutlist.recent-projects.v1"),
-      ),
-    )
+    .poll(() => next.evaluate(() => localStorage.getItem("videocutlist.recent-projects.v1")))
     .toBeNull();
   await next.close();
 });
@@ -817,9 +745,10 @@ test("stale selection metadata cannot replace a refresh or newer selection statu
   await page.getByRole("button", { name: /second.mp4/ }).click();
   await page.getByRole("button", { name: "Refresh media" }).click();
   release();
-  await expect(
-    page.getByRole("button", { name: /second.mp4/ }),
-  ).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("button", { name: /second.mp4/ })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
   await expect(page.getByText(/Metadata request failed/)).toHaveCount(0);
 });
 
@@ -855,14 +784,13 @@ test("refresh metadata cannot restore an old selection", async ({ page }) => {
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: /second.mp4/ }).click();
   release();
-  await expect(
-    page.getByRole("button", { name: /second.mp4/ }),
-  ).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("button", { name: /second.mp4/ })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
 });
 
-test("delayed cancellation cannot overwrite a replacement export", async ({
-  page,
-}) => {
+test("delayed cancellation cannot overwrite a replacement export", async ({ page }) => {
   let releases!: () => void;
   const delayed = new Promise<void>((resolve) => {
     releases = resolve;
@@ -903,17 +831,14 @@ test("delayed cancellation cannot overwrite a replacement export", async ({
   await expect(page.getByText("Export cancelled.")).toHaveCount(0);
 });
 
-test("new projects reset the editor and dirty changes need confirmation", async ({
-  page,
-}) => {
+test("new projects reset the editor and dirty changes need confirmation", async ({ page }) => {
   await page.goto("/");
   const projectId = page.getByLabel("Project ID");
   await expect(projectId).toHaveValue(/^p_[A-Za-z0-9_-]{12,64}$/);
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   let projectLoads = 0;
   page.on("request", (request) => {
-    if (/\/api\/v1\/projects\/p_/.test(new URL(request.url()).pathname))
-      projectLoads += 1;
+    if (/\/api\/v1\/projects\/p_/.test(new URL(request.url()).pathname)) projectLoads += 1;
   });
   page.once("dialog", (dialog) => dialog.dismiss());
   await page.getByRole("button", { name: "Load project" }).click();
@@ -921,9 +846,10 @@ test("new projects reset the editor and dirty changes need confirmation", async 
   expect(projectLoads).toBe(0);
   page.once("dialog", (dialog) => dialog.dismiss());
   await page.getByRole("button", { name: /second.mp4/ }).click();
-  await expect(
-    page.getByRole("button", { name: /camera.mp4/ }),
-  ).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("button", { name: /camera.mp4/ })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
   page.once("dialog", (dialog) => dialog.dismiss());
   await page.getByRole("button", { name: "New project" }).click();
   await expect(page.getByText("New project ready.")).not.toBeVisible();
@@ -972,9 +898,7 @@ test("load fetches project media directly and corrupt recents do not block start
   await expect(page.locator(".media-list")).toContainText("outside.mp4");
 });
 
-test("loads cursor pages once and removes Load more at the end", async ({
-  page,
-}) => {
+test("loads cursor pages once and removes Load more at the end", async ({ page }) => {
   await page.route(`${apiOrigin}/api/v1/media**`, async (route) => {
     const url = new URL(route.request().url());
     if (route.request().method() !== "GET") return route.fallback();
@@ -998,9 +922,7 @@ test("loads cursor pages once and removes Load more at the end", async ({
   ).toBeGreaterThan(0);
 });
 
-test("keeps the first page after a later-page failure and permits retry", async ({
-  page,
-}) => {
+test("keeps the first page after a later-page failure and permits retry", async ({ page }) => {
   let attempts = 0;
   await page.route(`${apiOrigin}/api/v1/media**`, (route) => {
     const url = new URL(route.request().url());
@@ -1009,9 +931,7 @@ test("keeps the first page after a later-page failure and permits retry", async 
       return route.fulfill({ json: { items: [media], nextCursor: "next" } });
     attempts += 1;
     return route.fulfill(
-      attempts === 1
-        ? { status: 500 }
-        : { json: { items: [secondMedia], nextCursor: null } },
+      attempts === 1 ? { status: 500 } : { json: { items: [secondMedia], nextCursor: null } },
     );
   });
   await page.goto("/");
@@ -1022,9 +942,7 @@ test("keeps the first page after a later-page failure and permits retry", async 
   await expect(page.getByRole("button", { name: /second.mp4/ })).toBeVisible();
 });
 
-test("refresh replaces the first page and selected metadata", async ({
-  page,
-}) => {
+test("refresh replaces the first page and selected metadata", async ({ page }) => {
   const refreshed = { ...media, name: "refreshed.mp4", etag: "v2" };
   let refreshes = 0;
   await page.route(`${apiOrigin}/api/v1/media**`, async (route) => {
@@ -1047,11 +965,7 @@ test("refresh replaces the first page and selected metadata", async ({
       return route.fulfill({
         json: { items: refreshes ? [refreshed] : [media], nextCursor: null },
       });
-    if (
-      refreshes &&
-      (url.pathname.endsWith("/thumbnails") ||
-        url.pathname.endsWith("/waveform"))
-    ) {
+    if (refreshes && (url.pathname.endsWith("/thumbnails") || url.pathname.endsWith("/waveform"))) {
       await new Promise((resolve) => setTimeout(resolve, 300));
       return route.fulfill(
         url.pathname.endsWith("/thumbnails")
@@ -1068,12 +982,8 @@ test("refresh replaces the first page and selected metadata", async ({
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   await expect(page.locator("canvas.timeline-canvas")).toBeVisible();
   await page.getByRole("button", { name: "Refresh media" }).click();
-  await expect(
-    page.getByRole("button", { name: /refreshed.mp4/ }),
-  ).toBeVisible();
-  await expect(
-    page.getByText("Media refreshed. Choose media to begin."),
-  ).toBeVisible();
+  await expect(page.getByRole("button", { name: /refreshed.mp4/ })).toBeVisible();
+  await expect(page.getByText("Media refreshed. Choose media to begin.")).toBeVisible();
   await expect(page.locator("canvas.timeline-canvas")).toHaveCount(1);
 });
 
@@ -1082,9 +992,7 @@ for (const [status, message] of [
   [429, "Media refresh is already in progress. Try again shortly."],
 ] as const) {
   test(`refresh reports ${status}`, async ({ page }) => {
-    await page.route(`${apiOrigin}/api/v1/media/refresh`, (route) =>
-      route.fulfill({ status }),
-    );
+    await page.route(`${apiOrigin}/api/v1/media/refresh`, (route) => route.fulfill({ status }));
     await page.goto("/");
     const refresh = page.getByRole("button", { name: "Refresh media" });
     await refresh.click();

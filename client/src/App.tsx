@@ -26,11 +26,7 @@ import { TimelineCanvas } from "./TimelineCanvas";
 import { exportFailureMessage } from "./jobUi";
 import { saveIsCurrent } from "./saveGuards";
 import { moveSegment as moveSegments, removeSegment as removeSegments } from "./segmentEditing";
-import {
-  acceptCandidate,
-  type Candidate,
-  type DetectionKind,
-} from "./detection";
+import { acceptCandidate, type Candidate, type DetectionKind } from "./detection";
 import {
   confirmDiscard,
   newProjectId,
@@ -54,7 +50,7 @@ type ExportJob = {
   id: string;
   state: "queued" | "running" | "succeeded" | "failed" | "cancelled";
   progress: number;
-    result?: {
+  result?: {
     outputName?: string;
     outputNames?: string[];
     sizeBytes: number;
@@ -92,28 +88,20 @@ export function App() {
   const [dirty, setDirty] = createSignal(false);
   const [recent, setRecent] = createSignal<RecentProject[]>(() => {
     try {
-      return recentProjects(
-        JSON.parse(localStorage.getItem(recentProjectsKey) ?? "[]"),
-      );
+      return recentProjects(JSON.parse(localStorage.getItem(recentProjectsKey) ?? "[]"));
     } catch {
       return [];
     }
   });
   const [exportJob, setExportJob] = createSignal<ExportJob>();
   const [exportStatus, setExportStatus] = createSignal("");
-  const [exportMode, setExportMode] = createSignal<"merge" | "separate">(
-    "merge",
-  );
-  const [exportSelection, setExportSelection] = createSignal<
-    "segments" | "gaps"
-  >("segments");
+  const [exportMode, setExportMode] = createSignal<"merge" | "separate">("merge");
+  const [exportSelection, setExportSelection] = createSignal<"segments" | "gaps">("segments");
   const [cutStrategy, setCutStrategy] = createSignal("stream_copy_preferred");
   const [streamIndexes, setStreamIndexes] = createSignal<number[]>([]);
   const [detectionJob, setDetectionJob] = createSignal<DetectionJob>();
   const [detectionStatus, setDetectionStatus] = createSignal("");
-  const [detectionCandidates, setDetectionCandidates] = createSignal<
-    Candidate[]
-  >([]);
+  const [detectionCandidates, setDetectionCandidates] = createSignal<Candidate[]>([]);
   const [timeline, setTimeline] = createSignal<TimelineHistory>(
     createTimelineHistory({
       playheadMs: 0,
@@ -169,25 +157,27 @@ export function App() {
         `media?limit=50${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`,
         { signal: controller.signal },
       );
-      if (!response.ok)
-        throw new Error(`Media request failed (${response.status}).`);
+      if (!response.ok) throw new Error(`Media request failed (${response.status}).`);
       const page = (await response.json()) as MediaPage;
       if (controller.signal.aborted || request !== requestVersion) return;
       setMedia(cursor ? [...media(), ...page.items] : page.items);
       setNextCursor(page.nextCursor ?? undefined);
-      setStatus(
-        refreshed
-          ? "Media refreshed. Choose media to begin."
-          : "Choose media to begin.",
-      );
+      setStatus(refreshed ? "Media refreshed. Choose media to begin." : "Choose media to begin.");
       if (refreshed && !cursor) {
         const current = selected();
         if (current && !page.items.some((item) => item.id === current.id)) {
-          const metadata = await api.request(`media/${encodeURIComponent(current.id)}`, { signal: controller.signal });
+          const metadata = await api.request(`media/${encodeURIComponent(current.id)}`, {
+            signal: controller.signal,
+          });
           if (controller.signal.aborted || request !== requestVersion) return;
           if (metadata.ok) {
             const item = (await metadata.json()) as Media;
-            if (controller.signal.aborted || request !== requestVersion || selected()?.id !== current.id) return;
+            if (
+              controller.signal.aborted ||
+              request !== requestVersion ||
+              selected()?.id !== current.id
+            )
+              return;
             setSelected(item);
           } else if (metadata.status === 404) {
             setStatus("Selected media is no longer indexed. Unsaved project changes were kept.");
@@ -199,9 +189,7 @@ export function App() {
       }
     } catch (error) {
       if (!controller.signal.aborted && request === requestVersion)
-        setStatus(
-          error instanceof Error ? error.message : "Media request failed.",
-        );
+        setStatus(error instanceof Error ? error.message : "Media request failed.");
     } finally {
       if (request === requestVersion) setLoadingMore(false);
     }
@@ -217,10 +205,14 @@ export function App() {
     const request = ++refreshRequestVersion;
     setRefreshing(true);
     try {
-      const response = await api.request("media/refresh", { method: "POST", signal: controller.signal });
+      const response = await api.request("media/refresh", {
+        method: "POST",
+        signal: controller.signal,
+      });
       if (controller.signal.aborted || request !== refreshRequestVersion) return;
       if (response.status === 403) setStatus("You are not allowed to refresh media.");
-      else if (response.status === 429) setStatus("Media refresh is already in progress. Try again shortly.");
+      else if (response.status === 429)
+        setStatus("Media refresh is already in progress. Try again shortly.");
       else if (!response.ok) setStatus("Media refresh failed. Try again.");
       else await loadMedia(undefined, true);
     } catch {
@@ -285,11 +277,23 @@ export function App() {
         return response.json() as Promise<Media>;
       })
       .then((metadata) => {
-        if (acceptsMediaMetadata(controller.signal.aborted, request, metadataRequestVersion, selected()?.id, metadata.id))
+        if (
+          acceptsMediaMetadata(
+            controller.signal.aborted,
+            request,
+            metadataRequestVersion,
+            selected()?.id,
+            metadata.id,
+          )
+        )
           setSelected(metadata);
       })
       .catch((error: unknown) => {
-        if (!controller.signal.aborted && request === metadataRequestVersion && selected()?.id === item.id)
+        if (
+          !controller.signal.aborted &&
+          request === metadataRequestVersion &&
+          selected()?.id === item.id
+        )
           setStatus(error instanceof Error ? error.message : "Metadata request failed.");
       });
   };
@@ -299,87 +303,103 @@ export function App() {
   createEffect(
     () => selected(),
     (item) => {
-    assetRequest?.abort();
-    if (thumbnailObjectURL) URL.revokeObjectURL(thumbnailObjectURL);
-    thumbnailObjectURL = undefined;
-    setThumbnailURL();
-    setWaveform([]);
-    setAssetStatus("");
-    if (!item) return;
-    const controller = new AbortController();
-    assetRequest = controller;
-    const durationMs = Math.max(1, Math.min(120000, item.durationMs));
-    void api
-      .assetRequest(item.id, "thumbnails", { startMs: 0, durationMs, count: 16, width: 320 }, { signal: controller.signal })
-      .then((response) => {
-        if (!response.ok) throw new Error();
-        return response.blob();
-      })
-      .then((blob) => {
-        if (!controller.signal.aborted) {
-          thumbnailObjectURL = URL.createObjectURL(blob);
-          setThumbnailURL(thumbnailObjectURL);
-        }
-      })
-      .catch(() => {
-        if (!controller.signal.aborted) setAssetStatus("Thumbnails unavailable; editing remains available.");
-      });
-    void api
-      .assetRequest(item.id, "waveform", { startMs: 0, durationMs, samples: 256 }, { signal: controller.signal })
-      .then(async (response) => {
-        const value = (await response.json()) as { peaks?: unknown };
-        if (!response.ok) throw new Error();
-        return normalizePeaks(value.peaks);
-      })
-      .then((peaks) => {
-        if (!controller.signal.aborted) setWaveform(peaks);
-      })
-      .catch(() => {
-        if (!controller.signal.aborted) setAssetStatus("Waveform unavailable; editing remains available.");
-      });
-    return () => controller.abort();
+      assetRequest?.abort();
+      if (thumbnailObjectURL) URL.revokeObjectURL(thumbnailObjectURL);
+      thumbnailObjectURL = undefined;
+      setThumbnailURL();
+      setWaveform([]);
+      setAssetStatus("");
+      if (!item) return;
+      const controller = new AbortController();
+      assetRequest = controller;
+      const durationMs = Math.max(1, Math.min(120000, item.durationMs));
+      void api
+        .assetRequest(
+          item.id,
+          "thumbnails",
+          { startMs: 0, durationMs, count: 16, width: 320 },
+          { signal: controller.signal },
+        )
+        .then((response) => {
+          if (!response.ok) throw new Error();
+          return response.blob();
+        })
+        .then((blob) => {
+          if (!controller.signal.aborted) {
+            thumbnailObjectURL = URL.createObjectURL(blob);
+            setThumbnailURL(thumbnailObjectURL);
+          }
+        })
+        .catch(() => {
+          if (!controller.signal.aborted)
+            setAssetStatus("Thumbnails unavailable; editing remains available.");
+        });
+      void api
+        .assetRequest(
+          item.id,
+          "waveform",
+          { startMs: 0, durationMs, samples: 256 },
+          { signal: controller.signal },
+        )
+        .then(async (response) => {
+          const value = (await response.json()) as { peaks?: unknown };
+          if (!response.ok) throw new Error();
+          return normalizePeaks(value.peaks);
+        })
+        .then((peaks) => {
+          if (!controller.signal.aborted) setWaveform(peaks);
+        })
+        .catch(() => {
+          if (!controller.signal.aborted)
+            setAssetStatus("Waveform unavailable; editing remains available.");
+        });
+      return () => controller.abort();
     },
   );
   createEffect(
     () => [selected(), playheadMs(), muted()] as const,
     ([item, position, isMuted]) => {
-    cleanupPreview?.();
-    cleanupPreview = undefined;
-    previewRequest?.abort();
-    setDiagnostics();
-    const player = video;
-    if (!item || !player || !canStreamPreview()) return;
-    const timer = window.setTimeout(() => {
-      const request = new AbortController();
-      previewRequest = request;
-      const params = new URLSearchParams({
-        centerMs: String(Math.round(position)),
-        beforeMs: "2000",
-        afterMs: "6000",
-        mute: String(isMuted),
-      });
-      setStatus("Loading preview…");
-      cleanupPreview = streamPreview(
-        player,
-        () => api.request(`media/${encodeURIComponent(item.id)}/preview?${params}`, { signal: request.signal }),
-        (value) => {
-          if (!request.signal.aborted) {
-            setDiagnostics(value);
-            setStatus("Preview ready.");
-          }
-        },
-        (error) => {
-          if (!request.signal.aborted) setStatus(error.message);
-        },
-      );
-    }, 200);
-    return () => {
-      window.clearTimeout(timer);
-      previewRequest?.abort();
       cleanupPreview?.();
       cleanupPreview = undefined;
-    };
-  });
+      previewRequest?.abort();
+      setDiagnostics();
+      const player = video;
+      if (!item || !player || !canStreamPreview()) return;
+      const timer = window.setTimeout(() => {
+        const request = new AbortController();
+        previewRequest = request;
+        const params = new URLSearchParams({
+          centerMs: String(Math.round(position)),
+          beforeMs: "2000",
+          afterMs: "6000",
+          mute: String(isMuted),
+        });
+        setStatus("Loading preview…");
+        cleanupPreview = streamPreview(
+          player,
+          () =>
+            api.request(`media/${encodeURIComponent(item.id)}/preview?${params}`, {
+              signal: request.signal,
+            }),
+          (value) => {
+            if (!request.signal.aborted) {
+              setDiagnostics(value);
+              setStatus("Preview ready.");
+            }
+          },
+          (error) => {
+            if (!request.signal.aborted) setStatus(error.message);
+          },
+        );
+      }, 200);
+      return () => {
+        window.clearTimeout(timer);
+        previewRequest?.abort();
+        cleanupPreview?.();
+        cleanupPreview = undefined;
+      };
+    },
+  );
   const watchedPosition = () => {
     const item = selected();
     const info = diagnostics();
@@ -407,22 +427,33 @@ export function App() {
   const duration = () => durationOf(selected());
   const tracks = () => {
     const value = selected()?.streams.tracks;
-    return Array.isArray(value) ? value.filter((track): track is { index: number; type: string; codec: string } => !!track && typeof track === "object" && Number.isInteger((track as { index?: unknown }).index) && typeof (track as { type?: unknown }).type === "string" && typeof (track as { codec?: unknown }).codec === "string") : [];
+    return Array.isArray(value)
+      ? value.filter(
+          (track): track is { index: number; type: string; codec: string } =>
+            !!track &&
+            typeof track === "object" &&
+            Number.isInteger((track as { index?: unknown }).index) &&
+            typeof (track as { type?: unknown }).type === "string" &&
+            typeof (track as { codec?: unknown }).codec === "string",
+        )
+      : [];
   };
   createEffect(
     () => dirty(),
     (isDirty) => {
-    if (!isDirty) return;
-    const handler = (event: BeforeUnloadEvent) => {
-      event.preventDefault();
-      event.returnValue = "";
-    };
-    window.addEventListener("beforeunload", handler);
-    return () => window.removeEventListener("beforeunload", handler);
+      if (!isDirty) return;
+      const handler = (event: BeforeUnloadEvent) => {
+        event.preventDefault();
+        event.returnValue = "";
+      };
+      window.addEventListener("beforeunload", handler);
+      return () => window.removeEventListener("beforeunload", handler);
     },
   );
-  const removeSegment = (index: number) => updateTimeline({ segments: removeSegments(present().segments, index) });
-  const moveSegment = (index: number, direction: -1 | 1) => updateTimeline({ segments: moveSegments(present().segments, index, direction) });
+  const removeSegment = (index: number) =>
+    updateTimeline({ segments: removeSegments(present().segments, index) });
+  const moveSegment = (index: number, direction: -1 | 1) =>
+    updateTimeline({ segments: moveSegments(present().segments, index, direction) });
   const remember = (id: string, label: string) => {
     const next = [
       { id, label, lastOpened: Date.now() },
@@ -440,20 +471,17 @@ export function App() {
     saveRequest?.abort();
     const controller = new AbortController();
     saveRequest = controller;
-    if (!validProjectId(projectId()))
-      return void setStatus("Project ID is invalid.");
+    if (!validProjectId(projectId())) return void setStatus("Project ID is invalid.");
     if (!item) return void setStatus("Select media before saving.");
     const error = validateSegments(present().segments, item.durationMs);
     if (error) return void setStatus(error);
     let response: Response;
     try {
-      response = await api.request(
-        `projects/${encodeURIComponent(snapshotProject)}`,
-        {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          signal: controller.signal,
-          body: JSON.stringify({
+      response = await api.request(`projects/${encodeURIComponent(snapshotProject)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
+        body: JSON.stringify({
           mediaId: item.id,
           revision: revision(),
           segments: present().segments,
@@ -462,19 +490,29 @@ export function App() {
             zoom: present().zoom,
             muted: muted(),
           },
-          }),
-        },
-      );
+        }),
+      });
     } catch (error) {
       if (!controller.signal.aborted && request === saveVersion)
         setStatus(error instanceof Error ? error.message : "Project save failed.");
       return;
     }
-    if (!saveIsCurrent(controller.signal.aborted, request, saveVersion, editorVersion, snapshotEditorVersion, snapshotProject, projectId(), snapshotMedia, selected()?.id)) return;
+    if (
+      !saveIsCurrent(
+        controller.signal.aborted,
+        request,
+        saveVersion,
+        editorVersion,
+        snapshotEditorVersion,
+        snapshotProject,
+        projectId(),
+        snapshotMedia,
+        selected()?.id,
+      )
+    )
+      return;
     if (response.status === 409) {
-      setStatus(
-        "Project changed on another client. Load latest before saving.",
-      );
+      setStatus("Project changed on another client. Load latest before saving.");
       return;
     }
     if (!response.ok) {
@@ -482,7 +520,20 @@ export function App() {
       return;
     }
     const project = (await response.json()) as Project;
-    if (!saveIsCurrent(controller.signal.aborted, request, saveVersion, editorVersion, snapshotEditorVersion, snapshotProject, projectId(), snapshotMedia, selected()?.id)) return;
+    if (
+      !saveIsCurrent(
+        controller.signal.aborted,
+        request,
+        saveVersion,
+        editorVersion,
+        snapshotEditorVersion,
+        snapshotProject,
+        projectId(),
+        snapshotMedia,
+        selected()?.id,
+      )
+    )
+      return;
     setRevision(project.revision);
     setDirty(false);
     remember(project.id, item.name);
@@ -491,10 +542,7 @@ export function App() {
   };
   const loadProject = async (id = projectId()) => {
     if (!validProjectId(id)) return void setStatus("Project ID is invalid.");
-    if (
-      !confirmDiscard(dirty(), () => window.confirm("Discard unsaved changes?"))
-    )
-      return;
+    if (!confirmDiscard(dirty(), () => window.confirm("Discard unsaved changes?"))) return;
     clearExportContext();
     clearDetectionContext();
     invalidateSaveContext();
@@ -507,24 +555,19 @@ export function App() {
       const response = await api.request(`projects/${encodeURIComponent(id)}`, {
         signal: controller.signal,
       });
-      if (!response.ok)
-        throw new Error(`Project load failed (${response.status}).`);
+      if (!response.ok) throw new Error(`Project load failed (${response.status}).`);
       const project = (await response.json()) as Project;
       if (controller.signal.aborted || request !== projectRequestVersion) return;
-      const mediaResponse = await api.request(
-        `media/${encodeURIComponent(project.mediaId)}`,
-        { signal: controller.signal },
-      );
-      if (!mediaResponse.ok)
-        throw new Error(`Media request failed (${mediaResponse.status}).`);
+      const mediaResponse = await api.request(`media/${encodeURIComponent(project.mediaId)}`, {
+        signal: controller.signal,
+      });
+      if (!mediaResponse.ok) throw new Error(`Media request failed (${mediaResponse.status}).`);
       const item = (await mediaResponse.json()) as Media;
       if (controller.signal.aborted || request !== projectRequestVersion) return;
       setProjectId(project.id);
       setRevision(project.revision);
       setSelected(item);
-      setMedia((items) =>
-        items.some((known) => known.id === item.id) ? items : [...items, item],
-      );
+      setMedia((items) => (items.some((known) => known.id === item.id) ? items : [...items, item]));
       setTimeline(
         createTimelineHistory({
           playheadMs: project.uiState.playheadMs,
@@ -541,16 +584,11 @@ export function App() {
       setStatus("Project loaded.");
     } catch (error) {
       if (!controller.signal.aborted && request === projectRequestVersion)
-        setStatus(
-          error instanceof Error ? error.message : "Project load failed.",
-        );
+        setStatus(error instanceof Error ? error.message : "Project load failed.");
     }
   };
   const newProject = () => {
-    if (
-      !confirmDiscard(dirty(), () => window.confirm("Discard unsaved changes?"))
-    )
-      return;
+    if (!confirmDiscard(dirty(), () => window.confirm("Discard unsaved changes?"))) return;
     clearExportContext();
     clearDetectionContext();
     invalidateSaveContext();
@@ -608,24 +646,23 @@ export function App() {
     setExportStatus("Starting export…");
     let response: Response;
     try {
-      response = await api.request(
-        `projects/${encodeURIComponent(saved.id)}/exports`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            mode: exportMode(),
-            selection: exportSelection(),
-            streamIndexes: streamIndexes(),
-            cutStrategy: cutStrategy(),
-            container: "mkv",
-          }),
-          signal: controller.signal,
-        },
-      );
+      response = await api.request(`projects/${encodeURIComponent(saved.id)}/exports`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mode: exportMode(),
+          selection: exportSelection(),
+          streamIndexes: streamIndexes(),
+          cutStrategy: cutStrategy(),
+          container: "mkv",
+        }),
+        signal: controller.signal,
+      });
     } catch (error) {
       if (controller.signal.aborted || request !== exportRequest) return;
-      return setExportStatus(error instanceof Error ? error.message : "Export could not be started. Try again.");
+      return setExportStatus(
+        error instanceof Error ? error.message : "Export could not be started. Try again.",
+      );
     }
     if (controller.signal.aborted || request !== exportRequest) return;
     if (!response.ok)
@@ -642,23 +679,23 @@ export function App() {
       if (controller.signal.aborted || request !== exportRequest) return;
       let nextResponse: Response;
       try {
-        nextResponse = await api.request(`jobs/${encodeURIComponent(job.id)}`, { signal: controller.signal });
+        nextResponse = await api.request(`jobs/${encodeURIComponent(job.id)}`, {
+          signal: controller.signal,
+        });
       } catch (error) {
         if (controller.signal.aborted || request !== exportRequest) return;
-        return setExportStatus(error instanceof Error ? error.message : "Export status could not be updated. Try again.");
+        return setExportStatus(
+          error instanceof Error ? error.message : "Export status could not be updated. Try again.",
+        );
       }
       if (controller.signal.aborted || request !== exportRequest) return;
       if (!nextResponse.ok)
-        return setExportStatus(
-          "Export status could not be updated. Try again.",
-        );
+        return setExportStatus("Export status could not be updated. Try again.");
       const next = (await nextResponse.json()) as ExportJob;
       if (controller.signal.aborted || request !== exportRequest) return;
       setExportJob(next);
       if (next.state === "queued" || next.state === "running") {
-        setExportStatus(
-          next.state === "queued" ? "Export queued." : "Export running.",
-        );
+        setExportStatus(next.state === "queued" ? "Export queued." : "Export running.");
         exportTimer = window.setTimeout(() => void poll(), 1000);
       } else
         setExportStatus(
@@ -669,8 +706,16 @@ export function App() {
               : exportFailure(next.errorCode),
         );
     };
-      setExportStatus(
-      job.state === "queued" ? "Export queued." : job.state === "running" ? "Export running." : job.state === "succeeded" ? "Export complete." : job.state === "cancelled" ? "Export cancelled." : exportFailure(job.errorCode),
+    setExportStatus(
+      job.state === "queued"
+        ? "Export queued."
+        : job.state === "running"
+          ? "Export running."
+          : job.state === "succeeded"
+            ? "Export complete."
+            : job.state === "cancelled"
+              ? "Export cancelled."
+              : exportFailure(job.errorCode),
     );
     if (job.state === "queued" || job.state === "running")
       exportTimer = window.setTimeout(() => void poll(), 1000);
@@ -682,13 +727,18 @@ export function App() {
     exportController?.abort();
     if (exportTimer) clearTimeout(exportTimer);
     try {
-      const response = await api.request(`jobs/${encodeURIComponent(job.id)}`, { method: "DELETE" });
+      const response = await api.request(`jobs/${encodeURIComponent(job.id)}`, {
+        method: "DELETE",
+      });
       if (request !== exportRequest) return;
       if (!response.ok) throw new Error("Export could not be cancelled. Try again.");
       setExportJob({ ...job, state: "cancelled" });
       setExportStatus("Export cancelled.");
     } catch (error) {
-      if (request === exportRequest) setExportStatus(error instanceof Error ? error.message : "Export could not be cancelled. Try again.");
+      if (request === exportRequest)
+        setExportStatus(
+          error instanceof Error ? error.message : "Export could not be cancelled. Try again.",
+        );
     }
   };
   const startDetection = async (kind: DetectionKind) => {
@@ -702,22 +752,21 @@ export function App() {
     setDetectionStatus(`Starting ${kind} detection…`);
     let response: Response;
     try {
-      response = await api.request(
-        `projects/${encodeURIComponent(saved.id)}/detections`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            mediaId: saved.mediaId,
-            projectRevision: saved.revision,
-            kind,
-          }),
-          signal: controller.signal,
-        },
-      );
+      response = await api.request(`projects/${encodeURIComponent(saved.id)}/detections`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mediaId: saved.mediaId,
+          projectRevision: saved.revision,
+          kind,
+        }),
+        signal: controller.signal,
+      });
     } catch (error) {
       if (controller.signal.aborted || request !== detectionRequest) return;
-      return setDetectionStatus(error instanceof Error ? error.message : "Detection could not be started.");
+      return setDetectionStatus(
+        error instanceof Error ? error.message : "Detection could not be started.",
+      );
     }
     if (controller.signal.aborted || request !== detectionRequest) return;
     if (!response.ok)
@@ -734,21 +783,22 @@ export function App() {
       if (controller.signal.aborted || request !== detectionRequest) return;
       let result: Response;
       try {
-        result = await api.request(`jobs/${encodeURIComponent(job.id)}`, { signal: controller.signal });
+        result = await api.request(`jobs/${encodeURIComponent(job.id)}`, {
+          signal: controller.signal,
+        });
       } catch (error) {
         if (controller.signal.aborted || request !== detectionRequest) return;
-        return setDetectionStatus(error instanceof Error ? error.message : "Detection status could not be updated.");
+        return setDetectionStatus(
+          error instanceof Error ? error.message : "Detection status could not be updated.",
+        );
       }
       if (controller.signal.aborted || request !== detectionRequest) return;
-      if (!result.ok)
-        return setDetectionStatus("Detection status could not be updated.");
+      if (!result.ok) return setDetectionStatus("Detection status could not be updated.");
       const next = (await result.json()) as DetectionJob;
       if (controller.signal.aborted || request !== detectionRequest) return;
       setDetectionJob(next);
       if (next.state === "queued" || next.state === "running") {
-        setDetectionStatus(
-          next.state === "queued" ? "Detection queued." : "Detection running.",
-        );
+        setDetectionStatus(next.state === "queued" ? "Detection queued." : "Detection running.");
         detectionTimer = window.setTimeout(() => void poll(), 500);
       } else if (next.state === "succeeded") {
         setDetectionCandidates(next.candidates ?? []);
@@ -766,7 +816,9 @@ export function App() {
       detectionTimer = window.setTimeout(() => void poll(), 500);
     else if (job.state === "succeeded") {
       setDetectionCandidates(job.candidates ?? []);
-      setDetectionStatus(`${job.candidates?.length ?? 0} candidates found. Review each before accepting.`);
+      setDetectionStatus(
+        `${job.candidates?.length ?? 0} candidates found. Review each before accepting.`,
+      );
     } else if (job.state === "cancelled") setDetectionStatus("Detection cancelled.");
     else setDetectionStatus(`Detection failed${job.errorCode ? `: ${job.errorCode}.` : "."}`);
   };
@@ -777,13 +829,18 @@ export function App() {
     detectionController?.abort();
     if (detectionTimer) clearTimeout(detectionTimer);
     try {
-      const response = await api.request(`jobs/${encodeURIComponent(job.id)}`, { method: "DELETE" });
+      const response = await api.request(`jobs/${encodeURIComponent(job.id)}`, {
+        method: "DELETE",
+      });
       if (request !== detectionRequest) return;
       if (!response.ok) throw new Error("Detection could not be cancelled. Try again.");
       setDetectionJob({ ...job, state: "cancelled" });
       setDetectionStatus("Detection cancelled.");
     } catch (error) {
-      if (request === detectionRequest) setDetectionStatus(error instanceof Error ? error.message : "Detection could not be cancelled. Try again.");
+      if (request === detectionRequest)
+        setDetectionStatus(
+          error instanceof Error ? error.message : "Detection could not be cancelled. Try again.",
+        );
     }
   };
   const acceptDetection = (candidate: Candidate) => {
@@ -800,9 +857,7 @@ export function App() {
       item.durationMs,
     );
     if (!next)
-      return setDetectionStatus(
-        "Candidate is stale, invalid, or overlaps an existing segment.",
-      );
+      return setDetectionStatus("Candidate is stale, invalid, or overlaps an existing segment.");
     updateTimeline({ segments: next.segments });
     markDirty();
     setDetectionCandidates((items) => items.filter((item) => item.id !== candidate.id));
@@ -818,21 +873,34 @@ export function App() {
     if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
       event.preventDefault();
       const step = frameDuration(selected()) || 1000;
-      updateTimeline({ playheadMs: Math.max(0, Math.min(duration(), playheadMs() + (event.key === "ArrowLeft" ? -step : step))) });
+      updateTimeline({
+        playheadMs: Math.max(
+          0,
+          Math.min(duration(), playheadMs() + (event.key === "ArrowLeft" ? -step : step)),
+        ),
+      });
     } else if (event.key === " ") {
       event.preventDefault();
-      if (video?.paused) void video.play(); else video?.pause();
+      if (video?.paused) void video.play();
+      else video?.pause();
     } else if (event.key.toLowerCase() === "i") {
-      event.preventDefault(); setMarker("inMs", watchedPosition());
+      event.preventDefault();
+      setMarker("inMs", watchedPosition());
     } else if (event.key.toLowerCase() === "o") {
-      event.preventDefault(); setMarker("outMs", watchedPosition());
+      event.preventDefault();
+      setMarker("outMs", watchedPosition());
     } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") {
       event.preventDefault();
       const next = event.shiftKey ? redoTimeline(timeline()) : undoTimeline(timeline());
-      setTimeline(next); setPlayheadMs(next.present.playheadMs); markDirty();
+      setTimeline(next);
+      setPlayheadMs(next.present.playheadMs);
+      markDirty();
     } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "y") {
       event.preventDefault();
-      const next = redoTimeline(timeline()); setTimeline(next); setPlayheadMs(next.present.playheadMs); markDirty();
+      const next = redoTimeline(timeline());
+      setTimeline(next);
+      setPlayheadMs(next.present.playheadMs);
+      markDirty();
     }
   };
   return (
@@ -855,8 +923,7 @@ export function App() {
                 >
                   {item.name}
                   <span>
-                    {formatTime(item.durationMs, item.durationMs)} ·{" "}
-                    {item.container}
+                    {formatTime(item.durationMs, item.durationMs)} · {item.container}
                   </span>
                 </button>
               </li>
@@ -864,10 +931,7 @@ export function App() {
           </For>
         </ul>
         <Show when={nextCursor()}>
-          <button
-            disabled={loadingMore()}
-            onClick={() => void loadMedia(nextCursor())}
-          >
+          <button disabled={loadingMore()} onClick={() => void loadMedia(nextCursor())}>
             {loadingMore() ? "Loading more…" : "Load more"}
           </button>
         </Show>
@@ -881,14 +945,13 @@ export function App() {
           {(item) => (
             <>
               <p>
-                <strong>{item().name}</strong> ·{" "}
-                {formatTime(item().durationMs, duration())}
+                <strong>{item().name}</strong> · {formatTime(item().durationMs, duration())}
               </p>
               <p id="timeline-description">
                 Playhead {formatTime(playheadMs(), duration())}. In marker{" "}
                 {formatTime(present().inMs, duration())}. Out marker{" "}
                 {formatTime(present().outMs, duration())}.{" "}
-{present().segments.length
+                {present().segments.length
                   ? `${present().segments.length} segment${present().segments.length === 1 ? "" : "s"} selected.`
                   : "No segments selected."}
               </p>
@@ -898,10 +961,7 @@ export function App() {
                 aria-labelledby="timeline-heading timeline-description"
                 style={{ width: `${viewportScale(present().zoom) * 100}%` }}
               >
-                <TimelineCanvas
-                  thumbnailURL={thumbnailURL()}
-                  waveform={waveform()}
-                />
+                <TimelineCanvas thumbnailURL={thumbnailURL()} waveform={waveform()} />
                 <span
                   class="timeline-overlay timeline-in"
                   style={{
@@ -951,7 +1011,10 @@ export function App() {
                   markDirty();
                 }}
               />
-              <p>In: {formatTime(present().inMs, duration())} · Out: {formatTime(present().outMs, duration())}</p>
+              <p>
+                In: {formatTime(present().inMs, duration())} · Out:{" "}
+                {formatTime(present().outMs, duration())}
+              </p>
               <div class="controls">
                 <button
                   onClick={() => {
@@ -1001,17 +1064,67 @@ export function App() {
                 </button>
                 <button onClick={addSegment}>Add In/Out segment</button>
                 <button onClick={() => setMarker("inMs", watchedPosition())}>Set In marker</button>
-                <button onClick={() => setMarker("outMs", Math.min(duration(), watchedPosition()))}>Set Out marker</button>
-                <label>Timecode <input value={timecode()} placeholder="0:00.000" onInput={(event) => setTimecode(event.currentTarget.value)} /></label>
-                <button onClick={() => { const value = parseTimecode(timecode()); if (value === undefined || value > duration()) return setStatus("Invalid timecode."); updateTimeline({ playheadMs: value }); }}>Go to timecode</button>
-                <label>Segment label <input value={segmentLabel()} onInput={(event) => setSegmentLabel(event.currentTarget.value)} /></label>
+                <button onClick={() => setMarker("outMs", Math.min(duration(), watchedPosition()))}>
+                  Set Out marker
+                </button>
+                <label>
+                  Timecode{" "}
+                  <input
+                    value={timecode()}
+                    placeholder="0:00.000"
+                    onInput={(event) => setTimecode(event.currentTarget.value)}
+                  />
+                </label>
+                <button
+                  onClick={() => {
+                    const value = parseTimecode(timecode());
+                    if (value === undefined || value > duration())
+                      return setStatus("Invalid timecode.");
+                    updateTimeline({ playheadMs: value });
+                  }}
+                >
+                  Go to timecode
+                </button>
+                <label>
+                  Segment label{" "}
+                  <input
+                    value={segmentLabel()}
+                    onInput={(event) => setSegmentLabel(event.currentTarget.value)}
+                  />
+                </label>
               </div>
               <ol aria-label="Selected segments">
                 <For each={present().segments}>
-                  {(segment, index) => <li>{segment.label ?? "Unlabelled"}: <span>{formatTime(segment.startMs, duration())} – {formatTime(segment.endMs, duration())}</span> <button onClick={() => moveSegment(index(), -1)} disabled={index() === 0}>↑</button> <button onClick={() => moveSegment(index(), 1)} disabled={index() === present().segments.length - 1}>↓</button> <button onClick={() => removeSegment(index())}>Remove</button></li>}
+                  {(segment, index) => (
+                    <li>
+                      {segment.label ?? "Unlabelled"}:{" "}
+                      <span>
+                        {formatTime(segment.startMs, duration())} –{" "}
+                        {formatTime(segment.endMs, duration())}
+                      </span>{" "}
+                      <button onClick={() => moveSegment(index(), -1)} disabled={index() === 0}>
+                        ↑
+                      </button>{" "}
+                      <button
+                        onClick={() => moveSegment(index(), 1)}
+                        disabled={index() === present().segments.length - 1}
+                      >
+                        ↓
+                      </button>{" "}
+                      <button onClick={() => removeSegment(index())}>Remove</button>
+                    </li>
+                  )}
                 </For>
               </ol>
-              <Show when={canStreamPreview()} fallback={<p role="status">Preview is unavailable in this browser. Use the timeline controls to set markers manually.</p>}>
+              <Show
+                when={canStreamPreview()}
+                fallback={
+                  <p role="status">
+                    Preview is unavailable in this browser. Use the timeline controls to set markers
+                    manually.
+                  </p>
+                }
+              >
                 <video
                   ref={(element) => {
                     video = element;
@@ -1034,7 +1147,11 @@ export function App() {
                   <dt>Offset</dt>
                   <dd>{diagnostics() ? `${diagnostics()!.offsetMs} ms` : "—"}</dd>
                   <dt>Window</dt>
-                  <dd>{diagnostics() ? `${diagnostics()!.startMs} ms / ${diagnostics()!.durationMs} ms` : "—"}</dd>
+                  <dd>
+                    {diagnostics()
+                      ? `${diagnostics()!.startMs} ms / ${diagnostics()!.durationMs} ms`
+                      : "—"}
+                  </dd>
                   <dt>Response</dt>
                   <dd>{diagnostics() ? `${diagnostics()!.elapsedMs} ms` : "—"}</dd>
                 </dl>
@@ -1043,7 +1160,10 @@ export function App() {
                 <input
                   type="checkbox"
                   checked={muted()}
-                  onChange={(event) => { setMuted(event.currentTarget.checked); markDirty(); }}
+                  onChange={(event) => {
+                    setMuted(event.currentTarget.checked);
+                    markDirty();
+                  }}
                 />{" "}
                 Mute preview
               </label>
@@ -1057,7 +1177,10 @@ export function App() {
           Project ID{" "}
           <input
             value={projectId()}
-            onInput={(event) => { setProjectId(event.currentTarget.value); markDirty(); }}
+            onInput={(event) => {
+              setProjectId(event.currentTarget.value);
+              markDirty();
+            }}
           />
         </label>
         <p>
@@ -1108,27 +1231,16 @@ export function App() {
                   .then((text) => {
                     const imported = parseProjectJson(text);
                     if (!selected() || imported.mediaId !== selected()!.id)
-                      throw new Error(
-                        "Select the cut list's media before importing.",
-                      );
+                      throw new Error("Select the cut list's media before importing.");
                     const segments = imported.segments as Segment[];
-                    const error = validateSegments(
-                      segments,
-                      selected()!.durationMs,
-                    );
+                    const error = validateSegments(segments, selected()!.durationMs);
                     if (error) throw new Error(error);
                     updateTimeline({ segments });
                     markDirty();
-                    setStatus(
-                      "Cut list imported. Save the project to keep it.",
-                    );
+                    setStatus("Cut list imported. Save the project to keep it.");
                   })
                   .catch((error) =>
-                    setStatus(
-                      error instanceof Error
-                        ? error.message
-                        : "Cut list import failed.",
-                    ),
+                    setStatus(error instanceof Error ? error.message : "Cut list import failed."),
                   );
                 event.currentTarget.value = "";
               }}
@@ -1145,9 +1257,7 @@ export function App() {
                   setStatus("Interchange file exceeds the 1 MiB limit.");
                   return;
                 }
-                const format = file.name.toLowerCase().endsWith(".csv")
-                  ? "csv"
-                  : "chapters";
+                const format = file.name.toLowerCase().endsWith(".csv") ? "csv" : "chapters";
                 void file
                   .arrayBuffer()
                   .then((body) =>
@@ -1155,8 +1265,7 @@ export function App() {
                       method: "POST",
                       body,
                       headers: {
-                        "Content-Type":
-                          format === "csv" ? "text/csv" : "text/plain",
+                        "Content-Type": format === "csv" ? "text/csv" : "text/plain",
                       },
                     }),
                   )
@@ -1180,9 +1289,7 @@ export function App() {
             onClick={() =>
               void api
                 .interchangeRequest(projectId(), "csv")
-                .then((response) =>
-                  response.ok ? response.blob() : Promise.reject(),
-                )
+                .then((response) => (response.ok ? response.blob() : Promise.reject()))
                 .then((blob) => {
                   const link = document.createElement("a");
                   link.href = URL.createObjectURL(blob);
@@ -1199,9 +1306,7 @@ export function App() {
             onClick={() =>
               void api
                 .interchangeRequest(projectId(), "chapters")
-                .then((response) =>
-                  response.ok ? response.blob() : Promise.reject(),
-                )
+                .then((response) => (response.ok ? response.blob() : Promise.reject()))
                 .then((blob) => {
                   const link = document.createElement("a");
                   link.href = URL.createObjectURL(blob);
@@ -1235,9 +1340,7 @@ export function App() {
           Mode{" "}
           <select
             value={exportMode()}
-            onChange={(event) =>
-              setExportMode(event.currentTarget.value as "merge" | "separate")
-            }
+            onChange={(event) => setExportMode(event.currentTarget.value as "merge" | "separate")}
           >
             <option value="merge">Merge</option>
             <option value="separate">Separate</option>
@@ -1248,9 +1351,7 @@ export function App() {
           <select
             value={exportSelection()}
             onChange={(event) =>
-              setExportSelection(
-                event.currentTarget.value as "segments" | "gaps",
-              )
+              setExportSelection(event.currentTarget.value as "segments" | "gaps")
             }
           >
             <option value="segments">Segments</option>
@@ -1261,13 +1362,27 @@ export function App() {
           <legend>Streams</legend>
           <For each={tracks()}>
             {(track) => {
-              const checked = () => streamIndexes().length === 0 || streamIndexes().includes(track.index);
-              return <label>
-                <input type="checkbox" checked={checked()} onChange={(event) => {
-                  const all = streamIndexes().length ? streamIndexes() : tracks().map((item) => item.index);
-                  setStreamIndexes(event.currentTarget.checked ? [...new Set([...all, track.index])] : all.filter((index) => index !== track.index));
-                }} /> {track.type} {track.codec} (#{track.index})
-              </label>;
+              const checked = () =>
+                streamIndexes().length === 0 || streamIndexes().includes(track.index);
+              return (
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={checked()}
+                    onChange={(event) => {
+                      const all = streamIndexes().length
+                        ? streamIndexes()
+                        : tracks().map((item) => item.index);
+                      setStreamIndexes(
+                        event.currentTarget.checked
+                          ? [...new Set([...all, track.index])]
+                          : all.filter((index) => index !== track.index),
+                      );
+                    }}
+                  />{" "}
+                  {track.type} {track.codec} (#{track.index})
+                </label>
+              );
             }}
           </For>
         </fieldset>
@@ -1279,36 +1394,45 @@ export function App() {
           >
             <option value="stream_copy_preferred">Stream copy preferred</option>
             <option value="precise_reencode">Precise re-encode</option>
-            <option value="hybrid_smart_cut" disabled={hybridSmartCutKnownIneligible(selected())}>Hybrid smart cut{hybridSmartCutKnownIneligible(selected()) ? " (unavailable)" : ""}</option>
+            <option value="hybrid_smart_cut" disabled={hybridSmartCutKnownIneligible(selected())}>
+              Hybrid smart cut{hybridSmartCutKnownIneligible(selected()) ? " (unavailable)" : ""}
+            </option>
           </select>
         </label>
         <div class="controls">
-          <button disabled={!selected() || !present().segments.length} onClick={() => void exportProject()}>
+          <button
+            disabled={!selected() || !present().segments.length}
+            onClick={() => void exportProject()}
+          >
             Start export
           </button>
-          <Show
-            when={
-              exportJob()?.state === "queued" ||
-              exportJob()?.state === "running"
-            }
-          >
+          <Show when={exportJob()?.state === "queued" || exportJob()?.state === "running"}>
             <button onClick={() => void cancelExport()}>Cancel export</button>
           </Show>
         </div>
         <Show when={exportJob()?.result}>
           <div>
-            <div aria-label="Export result"><p>Output ready: {exportJob()!.result!.outputName ?? exportJob()!.result!.outputNames?.join(", ")}</p>
-            <p>{exportJob()!.result!.sizeBytes.toLocaleString()} bytes · retained until {exportJob()!.result!.retainUntil}</p></div>
-            <div aria-label="Export warnings"><For each={exportJob()!.warnings ?? []}>{(warning) => <p role="status">Warning: {warning}</p>}</For></div>
+            <div aria-label="Export result">
+              <p>
+                Output ready:{" "}
+                {exportJob()!.result!.outputName ?? exportJob()!.result!.outputNames?.join(", ")}
+              </p>
+              <p>
+                {exportJob()!.result!.sizeBytes.toLocaleString()} bytes · retained until{" "}
+                {exportJob()!.result!.retainUntil}
+              </p>
+            </div>
+            <div aria-label="Export warnings">
+              <For each={exportJob()!.warnings ?? []}>
+                {(warning) => <p role="status">Warning: {warning}</p>}
+              </For>
+            </div>
           </div>
         </Show>
       </section>
       <section aria-labelledby="detection-heading">
         <h2 id="detection-heading">Auto detection</h2>
-        <p role="status">
-          {detectionStatus() ||
-            "Review candidates before they change segments."}
-        </p>
+        <p role="status">{detectionStatus() || "Review candidates before they change segments."}</p>
         <div class="controls">
           <button
             disabled={
@@ -1340,15 +1464,8 @@ export function App() {
           >
             Detect scene changes
           </button>
-          <Show
-            when={
-              detectionJob()?.state === "queued" ||
-              detectionJob()?.state === "running"
-            }
-          >
-            <button onClick={() => void cancelDetection()}>
-              Cancel detection
-            </button>
+          <Show when={detectionJob()?.state === "queued" || detectionJob()?.state === "running"}>
+            <button onClick={() => void cancelDetection()}>Cancel detection</button>
           </Show>
         </div>
         <Show when={detectionCandidates().length > 0}>
@@ -1356,19 +1473,14 @@ export function App() {
             <For each={detectionCandidates()}>
               {(candidate) => (
                 <li>
-                  {candidate.source} ·{" "}
-                  {formatTime(candidate.startMs, duration())}–
+                  {candidate.source} · {formatTime(candidate.startMs, duration())}–
                   {formatTime(candidate.endMs, duration())} ·{" "}
                   {Math.round(candidate.confidence * 100)}%{" "}
-                  <button onClick={() => acceptDetection(candidate)}>
-                    Accept
-                  </button>
+                  <button onClick={() => acceptDetection(candidate)}>Accept</button>
                   <button
                     onClick={() => {
                       setDetectionCandidates(
-                        detectionCandidates().filter(
-                          (item) => item.id !== candidate.id,
-                        ),
+                        detectionCandidates().filter((item) => item.id !== candidate.id),
                       );
                       setDetectionStatus("Candidate rejected.");
                     }}
