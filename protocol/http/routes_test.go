@@ -191,8 +191,15 @@ func TestAssetHeadersArePrivateAndInputsBounded(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "http://api.test/api/v1/media/"+id+"/thumbnails?startMs=0&durationMs=1000&count=1&width=80", nil)
 	rec := httptest.NewRecorder()
 	server.ServeHTTP(rec, req)
-	if rec.Code != http.StatusOK || rec.Header().Get("Cache-Control") != "private, no-cache" {
-		t.Fatalf("status=%d cache=%q", rec.Code, rec.Header().Get("Cache-Control"))
+	if rec.Code != http.StatusOK || rec.Header().Get("Cache-Control") != "private, no-cache" || rec.Header().Get("ETag") == "" {
+		t.Fatalf("status=%d cache=%q etag=%q", rec.Code, rec.Header().Get("Cache-Control"), rec.Header().Get("ETag"))
+	}
+	cached := httptest.NewRequest(http.MethodGet, "http://api.test/api/v1/media/"+id+"/thumbnails?startMs=0&durationMs=1000&count=1&width=80", nil)
+	cached.Header.Set("If-None-Match", rec.Header().Get("ETag"))
+	rec = httptest.NewRecorder()
+	server.ServeHTTP(rec, cached)
+	if rec.Code != http.StatusNotModified {
+		t.Fatalf("conditional status=%d", rec.Code)
 	}
 	bad := httptest.NewRequest(http.MethodGet, "http://api.test/api/v1/media/"+id+"/thumbnails?startMs=0&durationMs=1000&count=33&width=80", nil)
 	rec = httptest.NewRecorder()

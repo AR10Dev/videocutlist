@@ -1,5 +1,6 @@
 import { defineConfig } from "vitest/config";
-
+import solid from "@solidjs/vite-plugin";
 export default defineConfig({
-  test: { exclude: ["node_modules/**", "playwright/**"] },
+  plugins: [solid()],
+  test: { environment: "node", exclude: ["playwright/**", "node_modules/**"] },
 });

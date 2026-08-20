@@ -23,6 +23,7 @@ import (
 	"videocutlist/infrastructure/media/index"
 	"videocutlist/infrastructure/media/probe"
 	"videocutlist/infrastructure/store"
+	"videocutlist/infrastructure/webassets"
 	"videocutlist/protocol/http"
 )
 
@@ -123,7 +124,7 @@ func run(ctx context.Context) error {
 	mux := http.NewServeMux()
 	mux.Handle("/api/", apiServer)
 	mux.Handle("/metrics", apiServer)
-	mux.Handle("/", http.FileServer(http.Dir("client/dist")))
+	mux.Handle("/", webassets.Handler("client/dist"))
 	proxied, err := httpapi.TrustedProxy(cfg.TrustedProxyCIDRs, mux)
 	if err != nil {
 		return err

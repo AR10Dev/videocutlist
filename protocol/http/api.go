@@ -3,6 +3,8 @@ package httpapi
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -411,6 +413,9 @@ func (s *Server) thumbnails(w http.ResponseWriter, r *http.Request, p domain.Pri
 		httpx.Error(w, 422, "invalid_asset", "Thumbnail parameters are invalid.", id)
 		return
 	}
+	if assetNotModified(w, r, item, "thumbnails") {
+		return
+	}
 	result, err := s.config.Assets.Thumbnails(r.Context(), p, spec)
 	if err != nil {
 		internalError(w, id)
@@ -418,7 +423,6 @@ func (s *Server) thumbnails(w http.ResponseWriter, r *http.Request, p domain.Pri
 	}
 	defer result.Reader.Close()
 	w.Header().Set("Content-Type", "image/png")
-	w.Header().Set("Cache-Control", "private, no-cache")
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.Copy(w, result.Reader)
 }
@@ -444,6 +448,9 @@ func (s *Server) waveform(w http.ResponseWriter, r *http.Request, p domain.Princ
 		httpx.Error(w, 422, "invalid_asset", "Waveform parameters are invalid.", id)
 		return
 	}
+	if assetNotModified(w, r, item, "waveform") {
+		return
+	}
 	result, err := s.config.Assets.Waveform(r.Context(), p, spec)
 	if errors.Is(err, application.ErrNoAudio) {
 		httpx.Error(w, 422, "no_audio", "Media has no audio stream.", id)
@@ -453,7 +460,6 @@ func (s *Server) waveform(w http.ResponseWriter, r *http.Request, p domain.Princ
 		internalError(w, id)
 		return
 	}
-	w.Header().Set("Cache-Control", "private, no-cache")
 	httpx.WriteJSON(w, 200, map[string]any{"startMs": result.StartMS, "durationMs": result.DurationMS, "peaks": result.Peaks})
 }
 
@@ -829,6 +835,18 @@ func optionalInt(value string, fallback int64) (int64, error) {
 	}
 	return strconv.ParseInt(value, 10, 64)
 }
+func assetNotModified(w http.ResponseWriter, r *http.Request, item Media, kind string) bool {
+	sum := sha256.Sum256([]byte(kind + "\x00" + item.ETag + "\x00" + r.URL.RawQuery))
+	etag := `"` + hex.EncodeToString(sum[:]) + `"`
+	w.Header().Set("Cache-Control", "private, no-cache")
+	w.Header().Set("ETag", etag)
+	if r.Header.Get("If-None-Match") == etag {
+		w.WriteHeader(http.StatusNotModified)
+		return true
+	}
+	return false
+}
+
 func previewHeaders(writer http.ResponseWriter, spec PreviewSpec, cache string) {
 	writer.Header().Set("X-Preview-Start", strconv.FormatInt(spec.StartMS, 10))
 	writer.Header().Set("X-Preview-Duration", strconv.FormatInt(spec.WindowMS, 10))

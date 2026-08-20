@@ -34,6 +34,15 @@ export const hybridSmartCutKnownIneligible = (media?: Media) => {
 };
 
 export type Segment = { startMs: number; endMs: number; label?: string };
+
+export const acceptsMediaMetadata = (
+  aborted: boolean,
+  request: number,
+  currentRequest: number,
+  selectedId: string | undefined,
+  metadataId: string,
+) => !aborted && request === currentRequest && selectedId === metadataId;
+
 export type PreviewDiagnostics = {
   cache: string;
   requestId: string;
@@ -47,6 +56,12 @@ export const previewMime = 'video/mp4; codecs="avc1.42E01E, mp4a.40.2"';
 
 export const clampMediaPosition = (positionMs: number, durationMs: number) =>
   Math.max(0, Math.min(durationMs, Math.round(Number.isFinite(positionMs) ? positionMs : 0)));
+
+export const parseTimecode = (value: string) => {
+  const match = /^(\d+):(\d{2})\.(\d{3})$/.exec(value.trim());
+  if (!match || Number(match[2]) > 59) return undefined;
+  return Number(match[1]) * 60000 + Number(match[2]) * 1000 + Number(match[3]);
+};
 
 export const formatTime = (positionMs: number, durationMs: number) => {
   const ms = clampMediaPosition(positionMs, durationMs);

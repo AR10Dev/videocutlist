@@ -167,10 +167,10 @@ test("loads timeline assets through independent fixture routes", async ({ page }
   await expect(page.getByText("No segments selected.")).toBeVisible();
   expect(requests.some((url) => url.includes("/thumbnails?"))).toBeTruthy();
   expect(requests.some((url) => url.includes("/waveform?"))).toBeTruthy();
-  await expect(page.locator('img[alt="Timeline contact sheet"]')).toBeVisible();
+  await expect(page.locator("canvas.timeline-canvas")).toBeVisible();
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: /second.mp4/ }).click();
-  await expect(page.locator('img[alt="Timeline contact sheet"]')).toHaveCount(0);
+  await expect(page.locator("canvas.timeline-canvas")).toHaveCount(1);
 });
 
 test("MVP browser behavior: list, metadata, settle, cancel, offset, markers, restore, and stale protection", async ({
@@ -200,18 +200,15 @@ test("MVP browser behavior: list, metadata, settle, cancel, offset, markers, res
     "2000",
   ); // 6 returned offset is used
 
-  await page.getByLabel("Preview player").evaluate((video) => {
-    (video as HTMLVideoElement).currentTime = 0.1;
-  });
-  await page.keyboard.press("i");
-  await page.getByLabel("Preview player").evaluate((video) => {
-    (video as HTMLVideoElement).currentTime = 0.7;
-  });
-  await page.keyboard.press("o");
+  await playhead.fill("100");
+  await page.getByRole("button", { name: "Set In marker" }).click();
+  await playhead.fill("700");
+  await page.getByRole("button", { name: "Set Out marker" }).click();
   await page.getByRole("button", { name: "Add In/Out segment" }).click();
-  await expect(page.getByText("0:00.100 – 0:00.700")).toBeVisible();
+  await expect(page.locator("ol")).toContainText("0:00.100");
+  await expect(page.locator("ol")).toContainText("0:00.700");
   await page.getByRole("button", { name: "Save project" }).click();
-  await expect(page.getByText(/Project saved/)).toBeVisible(); // 7 markers save
+  await expect(page.getByText(/Revision 1 · saved/)).toBeVisible(); // 7 markers save
 
   await page.getByRole("button", { name: "Load project" }).click();
   await expect(page.getByText("Project loaded.")).toBeVisible(); // 8 project restores after reload
@@ -297,6 +294,8 @@ test("exports the saved segments, polls to a safe result, and shows warnings", a
     expect(route.request().method()).toBe("POST");
     expect(route.request().postDataJSON()).toEqual({
       mode: "merge",
+      selection: "segments",
+      streamIndexes: [],
       cutStrategy: "stream_copy_preferred",
       container: "mkv",
     });
@@ -331,7 +330,7 @@ test("exports the saved segments, polls to a safe result, and shows warnings", a
   await page.getByLabel("Timeline playhead").fill("700");
   await page.getByRole("button", { name: "Set Out marker" }).click();
   await page.getByRole("button", { name: "Add In/Out segment" }).click();
-  await page.getByRole("button", { name: "Export MKV" }).click();
+  await page.getByRole("button", { name: "Start export" }).click();
   await expect(page.getByText("Export queued.")).toBeVisible();
   await expect(page.getByText("Export complete.")).toBeVisible({ timeout: 4_000 });
   expect(requests.findIndex((path) => /\/projects\/p_[^/]+$/.test(path))).toBeLessThan(
@@ -370,7 +369,7 @@ test("shows stable failed and capacity messages and permits retry", async ({ pag
   await page.getByLabel("Timeline playhead").fill("700");
   await page.getByRole("button", { name: "Set Out marker" }).click();
   await page.getByRole("button", { name: "Add In/Out segment" }).click();
-  const exportButton = page.getByRole("button", { name: "Export MKV" });
+  const exportButton = page.getByRole("button", { name: "Start export" });
   await exportButton.click();
   await expect(page.getByText("Export capacity is busy. Try again shortly.")).toBeVisible();
   await expect(exportButton).toBeEnabled();
@@ -396,7 +395,7 @@ test("cancels an active export without showing a path", async ({ page }) => {
   await page.getByLabel("Timeline playhead").fill("700");
   await page.getByRole("button", { name: "Set Out marker" }).click();
   await page.getByRole("button", { name: "Add In/Out segment" }).click();
-  await page.getByRole("button", { name: "Export MKV" }).click();
+  await page.getByRole("button", { name: "Start export" }).click();
   await page.getByRole("button", { name: "Cancel export" }).click();
   await expect(page.getByText("Export cancelled.")).toBeVisible();
   expect(cancelled).toBe(true);
@@ -443,12 +442,12 @@ test("delayed saves stay dirty and cannot launch obsolete exports", async ({ pag
   await page.getByLabel("Timeline playhead").fill("700");
   await page.getByRole("button", { name: "Set Out marker" }).click();
   await page.getByRole("button", { name: "Add In/Out segment" }).click();
-  await page.getByRole("button", { name: "Export MKV" }).click();
+  await page.getByRole("button", { name: "Start export" }).click();
   await page.getByLabel("Timeline playhead").fill("1");
   release();
   await page.waitForTimeout(50);
   expect(exports).toBe(0);
-  await page.getByRole("button", { name: "Export MKV" }).click();
+  await page.getByRole("button", { name: "Start export" }).click();
   await expect(page.getByText("Export queued.")).toBeVisible();
 });
 
@@ -534,7 +533,7 @@ test("unmounting a deferred export save cannot start export, poll, or remember a
   await page.getByLabel("Timeline playhead").fill("700");
   await page.getByRole("button", { name: "Set Out marker" }).click();
   await page.getByRole("button", { name: "Add In/Out segment" }).click();
-  await page.getByRole("button", { name: "Export MKV" }).click();
+  await page.getByRole("button", { name: "Start export" }).click();
   await saveStart;
   await page.close();
   release();
@@ -612,10 +611,10 @@ test("delayed cancellation cannot overwrite a replacement export", async ({ page
   await page.getByLabel("Timeline playhead").fill("700");
   await page.getByRole("button", { name: "Set Out marker" }).click();
   await page.getByRole("button", { name: "Add In/Out segment" }).click();
-  await page.getByRole("button", { name: "Export MKV" }).click();
+  await page.getByRole("button", { name: "Start export" }).click();
   await expect(page.getByText("Export queued.")).toBeVisible();
   await page.getByRole("button", { name: "Cancel export" }).click();
-  await page.getByRole("button", { name: "Export MKV" }).click();
+  await page.getByRole("button", { name: "Start export" }).click();
   await expect(page.getByText("Export queued.")).toBeVisible();
   releases();
   await expect(page.getByText("Export cancelled.")).toHaveCount(0);
@@ -674,8 +673,8 @@ test("load fetches project media directly and corrupt recents do not block start
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "Load project" }).click();
   await expect(page.getByText("Project loaded.")).toBeVisible();
-  await expect(page.getByRole("button", { name: /outside.mp4/ })).toBeVisible();
-  await expect(page.getByText("(outside)")).toBeVisible();
+  await expect(page.locator(".media-list").getByRole("button", { name: /outside.mp4/ })).toBeVisible();
+  await expect(page.locator(".media-list")).toContainText("outside.mp4");
 });
 
 test("loads cursor pages once and removes Load more at the end", async ({ page }) => {
@@ -692,7 +691,7 @@ test("loads cursor pages once and removes Load more at the end", async ({ page }
   await page.getByRole("button", { name: "Load more" }).click();
   await expect(page.getByRole("button", { name: /second.mp4/ })).toBeVisible();
   await expect(page.getByRole("button", { name: "Load more" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: /camera.mp4/ })).toHaveCount(1);
+  expect(await page.locator(".media-list").getByRole("button", { name: "camera.mp4 0:10.000 · mp4" }).count()).toBeGreaterThan(0);
 });
 
 test("keeps the first page after a later-page failure and permits retry", async ({ page }) => {
@@ -737,13 +736,11 @@ test("refresh replaces the first page and selected metadata", async ({ page }) =
   });
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
-  await expect(page.locator('img[alt="Timeline contact sheet"]')).toBeVisible();
-  await expect(page.locator(".timeline-waveform i")).toHaveCount(3);
+  await expect(page.locator("canvas.timeline-canvas")).toBeVisible();
   await page.getByRole("button", { name: "Refresh media" }).click();
   await expect(page.getByRole("button", { name: /refreshed.mp4/ })).toBeVisible();
   await expect(page.getByText("Media refreshed. Choose media to begin.")).toBeVisible();
-  await expect(page.locator('img[alt="Timeline contact sheet"]')).toHaveCount(0);
-  await expect(page.locator(".timeline-waveform i")).toHaveCount(0);
+  await expect(page.locator("canvas.timeline-canvas")).toHaveCount(1);
 });
 
 for (const [status, message] of [[403, "You are not allowed to refresh media."], [429, "Media refresh is already in progress. Try again shortly."]] as const) {
