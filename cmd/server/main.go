@@ -14,8 +14,10 @@ import (
 	"videocutlist/application"
 	"videocutlist/domain"
 	"videocutlist/infrastructure/adapters"
+	"videocutlist/infrastructure/assets"
 	"videocutlist/infrastructure/cache"
 	"videocutlist/infrastructure/config"
+	detection "videocutlist/infrastructure/detection"
 	exporter "videocutlist/infrastructure/export"
 	"videocutlist/infrastructure/ffmpeg"
 	"videocutlist/infrastructure/media/index"
@@ -45,6 +47,7 @@ func run(ctx context.Context) error {
 	defer db.Close()
 	projectStore, _ := store.NewProjectStore(db)
 	jobStore, _ := store.NewJobStore(db)
+	detectionStore, _ := store.NewDetectionJobStore(db)
 	mediaStore, _ := store.NewMediaStore(db)
 	if _, err := jobStore.Recover(ctx); err != nil {
 		return err
@@ -89,12 +92,14 @@ func run(ctx context.Context) error {
 	}
 	mediaService := &application.MediaUseCase{Catalog: mediaCatalog}
 	previewService := application.PreviewUseCase{Catalog: mediaCatalog, Manager: previewManager}
+	assetService := &assets.Service{Scanner: scanner, Media: mediaStore, FFmpegPath: cfg.FFmpegPath, CacheDir: cfg.CacheDir, MaxBytes: cfg.CacheMaxBytes}
 	projectService := application.ProjectUseCase{Repository: adapters.ProjectRepository{Store: projectStore}}
 	exportExecutor := adapters.NewExportExecutor(jobStore, scanner, mediaStore, exporter.Service{
 		FFmpegPath: cfg.FFmpegPath, FFprobePath: cfg.FFprobePath, OutputDir: cfg.ExportDir,
 	})
 	exportService := application.NewExportUseCase(jobStore, exportExecutor, cfg.ExportLimit)
-	jobService := application.JobUseCase{Exports: exportService}
+	detectionService := application.NewDetectionUseCase(detectionStore, detection.Service{Scanner: scanner, Catalog: mediaStore, FFmpegPath: cfg.FFmpegPath}, cfg.ExportLimit)
+	jobService := application.JobUseCase{Exports: exportService, Detections: detectionService}
 	authenticator, err := httpapi.NewAuthenticator(httpapi.AuthConfig{
 		Mode: cfg.AuthMode, BearerToken: cfg.BearerToken, BearerSubject: cfg.BearerSubject,
 	})
@@ -102,14 +107,14 @@ func run(ctx context.Context) error {
 		return err
 	}
 	apiServer, err := httpapi.New(httpapi.Config{
-		Authenticator: authenticator, Media: mediaService, Preview: previewService,
-		Projects: projectService, Exports: exportService, Jobs: jobService,
+		Authenticator: authenticator, Media: mediaService, Preview: previewService, Assets: assetService,
+		Projects: projectService, Exports: exportService, Jobs: jobService, Detection: detectionService,
 		Authorize: httpapi.AuthorizerFunc(func(principal domain.Principal, action, resource string) bool {
 			return principal.Allows(action, resource)
 		}),
 		Ready: db.PingContext, Logger: logger, Metrics: httpapi.NewMetrics(),
 		BeforeMS: int64(cfg.PreviewBeforeMS), AfterMS: int64(cfg.PreviewAfterMS),
-		MaxPreviewMS: int64(cfg.PreviewMaxMS), GridMS: int64(cfg.PreviewGridMS),
+		MaxPreviewMS: int64(cfg.PreviewMaxMS), GridMS: int64(cfg.PreviewGridMS), ListenerAddress: cfg.ListenAddress, RequireAutomationAuth: cfg.AuthMode != "none",
 	})
 	if err != nil {
 		return err

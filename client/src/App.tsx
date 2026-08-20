@@ -1,8 +1,15 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from "react";
-import { createApiClient, resolveBrowserConfiguration } from "./api";
+import {
+  createApiClient,
+  resolveBrowserConfiguration,
+  validInterchangeFileSize,
+} from "./api";
+import { normalizePeaks, viewportScale } from "./assets";
+import { acceptCandidate, type Candidate, type DetectionKind } from "./detection";
 import {
   canStreamPreview,
   formatTime,
+  hybridSmartCutKnownIneligible,
   streamPreview,
   validateSegments,
   watchedMediaPosition,
@@ -13,11 +20,20 @@ import {
 import {
   confirmDiscard,
   newProjectId,
+  parseProjectJson,
+  projectJson,
   recentProjects,
   recentProjectsKey,
   type RecentProject,
   validProjectId,
 } from "./projectLifecycle";
+import {
+  createTimelineHistory,
+  editTimeline,
+  redoTimeline,
+  resetTimelineHistory,
+  undoTimeline,
+} from "./timeline";
 type Project = {
   id: string;
   mediaId: string;
@@ -26,12 +42,29 @@ type Project = {
   uiState: { playheadMs: number; zoom: number; muted: boolean };
 };
 
+type DetectionJob = {
+  id: string;
+  type: string;
+  state: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+  mediaId: string;
+  projectId: string;
+  projectRevision: number;
+  kind: DetectionKind;
+  candidates?: Candidate[];
+  errorCode?: string;
+};
+
 type ExportJob = {
   id: string;
   type: string;
   state: "queued" | "running" | "succeeded" | "failed" | "cancelled";
   progress: number;
-  result?: { outputName: string; sizeBytes: number; retainUntil: string };
+  result?: {
+    outputName?: string;
+    outputNames?: string[];
+    sizeBytes: number;
+    retainUntil: string;
+  };
   warnings?: string[];
   errorCode?: string;
 };
@@ -42,6 +75,37 @@ const api = createApiClient(resolveBrowserConfiguration());
 
 const mediaDuration = (media?: Media) => media?.durationMs ?? 0;
 
+type Track = { index: number; type: string; codec: string };
+
+const tracks = (media?: Media): Track[] => {
+  const value = media?.streams.tracks;
+  return Array.isArray(value)
+    ? value.filter(
+        (track): track is Track =>
+          !!track &&
+          typeof track === "object" &&
+          Number.isInteger((track as Track).index) &&
+          typeof (track as Track).type === "string" &&
+          typeof (track as Track).codec === "string",
+      )
+    : [];
+};
+
+const parseTimecode = (value: string) => {
+  const match = /^(\d+):(\d{2})\.(\d{3})$/.exec(value.trim());
+  if (!match || Number(match[2]) > 59) return undefined;
+  return Number(match[1]) * 60_000 + Number(match[2]) * 1000 + Number(match[3]);
+};
+
+const frameDuration = (media?: Media) => {
+  const rate = media?.streams.video as { avgFrameRate?: string } | undefined;
+  const [numerator, denominator] = rate?.avgFrameRate?.split("/") ?? [];
+  const fps = Number(numerator) / Number(denominator);
+  return Number.isFinite(fps) && fps > 0
+    ? Math.max(1, Math.round(1000 / fps))
+    : 0;
+};
+
 const exportFailures: Record<string, string> = {
   interrupted_by_restart:
     "Export was interrupted by a server restart. Try again.",
@@ -49,6 +113,8 @@ const exportFailures: Record<string, string> = {
   media_unavailable:
     "Selected media is unavailable. Choose media and try again.",
   export_failed: "Export failed. Try again.",
+  hybrid_smart_cut_unsupported_media:
+    "Hybrid Smart Cut is unavailable for this file. It supports H.264 constant-frame-rate video in MKV only. Use Stream Copy or Precise Re-encode instead.",
   result_encoding_failed:
     "Export failed while preparing its result. Try again.",
 };
@@ -88,6 +154,8 @@ export function App() {
   const selectionRef = useRef(0);
   const exportRequestRef = useRef(0);
   const exportTimerRef = useRef<number | undefined>(undefined);
+  const detectionTimerRef = useRef<number | undefined>(undefined);
+  const detectionRequestRef = useRef(0);
   const loadRequestRef = useRef<AbortController | undefined>(undefined);
   const editorRequestsRef = useRef({
     editor: 0,
@@ -100,6 +168,11 @@ export function App() {
   const refreshRequestRef = useRef<AbortController | undefined>(undefined);
   const refreshRequestVersionRef = useRef(0);
   const metadataRequestRef = useRef<AbortController | undefined>(undefined);
+  const assetRequestRef = useRef<AbortController | undefined>(undefined);
+  const [thumbnailURL, setThumbnailURL] = useState<string>();
+  const thumbnailURLRef = useRef<string | undefined>(undefined);
+  const [waveform, setWaveform] = useState<number[]>([]);
+  const [assetStatus, setAssetStatus] = useState("");
   const selectedRef = useRef<Media | undefined>(undefined);
   const [media, setMedia] = useState<Media[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
@@ -133,11 +206,32 @@ export function App() {
     diagnostics,
     dirty,
   } = editor;
+  const initialTimelineHistory = createTimelineHistory({
+    playheadMs,
+    inMs,
+    outMs,
+    segments,
+    zoom,
+  });
+  const timelineHistoryRef = useRef(initialTimelineHistory);
+  const [timelineHistory, setTimelineHistory] = useState(initialTimelineHistory);
   const projectIdRef = useRef(projectId);
   const editorRef = useRef(editor);
   const [status, setStatus] = useState("Loading media…");
   const [exportJob, setExportJob] = useState<ExportJob>();
+  const [detectionJob, setDetectionJob] = useState<DetectionJob>();
+  const [detectionStatus, setDetectionStatus] = useState("");
+  const [detectionCandidates, setDetectionCandidates] = useState<Candidate[]>([]);
   const [exportStatus, setExportStatus] = useState("");
+  const [exportMode, setExportMode] = useState<"merge" | "separate">("merge");
+  const [exportSelection, setExportSelection] = useState<"segments" | "gaps">(
+    "segments",
+  );
+  const [cutStrategy, setCutStrategy] = useState<
+    "stream_copy_preferred" | "precise_reencode" | "hybrid_smart_cut"
+  >("stream_copy_preferred");
+  const [streamIndexes, setStreamIndexes] = useState<number[]>([]);
+  const hybridSmartCutUnavailable = hybridSmartCutKnownIneligible(selected);
   const [recent, setRecent] = useState<RecentProject[]>(() => {
     try {
       return recentProjects(
@@ -160,6 +254,8 @@ export function App() {
       mediaRequestRef.current?.abort();
       refreshRequestRef.current?.abort();
       metadataRequestRef.current?.abort();
+      assetRequestRef.current?.abort();
+      if (thumbnailURLRef.current) URL.revokeObjectURL(thumbnailURLRef.current);
       if (exportTimerRef.current) window.clearTimeout(exportTimerRef.current);
       selectionRef.current += 1;
       exportRequestRef.current += 1;
@@ -186,10 +282,30 @@ export function App() {
   }, []);
 
   const changeEditor = useCallback(
-    (changes: Partial<EditorState>, invalidate = false) => {
+    (changes: Partial<EditorState>, invalidate = false, recordTimeline = true) => {
       if (invalidate) invalidateEditor();
       const action: EditorAction = { type: "change", changes };
-      editorRef.current = editorReducer(editorRef.current, action);
+      const previous = editorRef.current;
+      const next = editorReducer(previous, action);
+      if (
+        recordTimeline &&
+        (changes.playheadMs !== undefined ||
+          changes.inMs !== undefined ||
+          changes.outMs !== undefined ||
+          changes.segments !== undefined ||
+          changes.zoom !== undefined)
+      ) {
+        const history = editTimeline(timelineHistoryRef.current, {
+          playheadMs: next.playheadMs,
+          inMs: next.inMs,
+          outMs: next.outMs,
+          segments: next.segments,
+          zoom: next.zoom,
+        });
+        timelineHistoryRef.current = history;
+        setTimelineHistory(history);
+      }
+      editorRef.current = next;
       dispatchEditor(action);
     },
     [invalidateEditor],
@@ -255,6 +371,39 @@ export function App() {
     (value: boolean) => changeEditor({ dirty: value }),
     [changeEditor],
   );
+  const resetTimeline = useCallback(() => {
+    const current = editorRef.current;
+    const history = resetTimelineHistory({
+      playheadMs: current.playheadMs,
+      inMs: current.inMs,
+      outMs: current.outMs,
+      segments: current.segments,
+      zoom: current.zoom,
+    });
+    timelineHistoryRef.current = history;
+    setTimelineHistory(history);
+  }, []);
+  const applyTimelineHistory = useCallback(
+    (operation: typeof undoTimeline) => {
+      const next = operation(timelineHistoryRef.current);
+      if (next === timelineHistoryRef.current) return;
+      timelineHistoryRef.current = next;
+      setTimelineHistory(next);
+      invalidateEditor();
+      changeEditor(next.present, false, false);
+      setDirty(true);
+      setStatus("Timeline history updated.");
+    },
+    [changeEditor, invalidateEditor, setDirty],
+  );
+  const undo = useCallback(
+    () => applyTimelineHistory(undoTimeline),
+    [applyTimelineHistory],
+  );
+  const redo = useCallback(
+    () => applyTimelineHistory(redoTimeline),
+    [applyTimelineHistory],
+  );
 
   const rememberProject = useCallback(
     (id: string, label: string) => {
@@ -280,6 +429,17 @@ export function App() {
     setExportStatus("");
   }, []);
 
+  const clearAssetState = useCallback(() => {
+    assetRequestRef.current?.abort();
+    if (thumbnailURLRef.current) {
+      URL.revokeObjectURL(thumbnailURLRef.current);
+      thumbnailURLRef.current = undefined;
+    }
+    setThumbnailURL(undefined);
+    setWaveform([]);
+    setAssetStatus("");
+  }, []);
+
   useEffect(() => {
     if (!dirty) return;
     const warn = (event: BeforeUnloadEvent) => event.preventDefault();
@@ -295,6 +455,7 @@ export function App() {
         return;
       clearExport();
       invalidateEditor();
+      clearAssetState();
       selectedRef.current = item;
       setSelected(item);
       setPlayheadMs(0);
@@ -303,6 +464,7 @@ export function App() {
       setSegments([]);
       setDiagnostics(undefined);
       setDirty(true);
+      resetTimeline();
       setStatus(`Selected ${item.name}.`);
       const controller = new AbortController();
       metadataRequestRef.current = controller;
@@ -349,6 +511,8 @@ export function App() {
       invalidateEditor,
       setDiagnostics,
       setDirty,
+      resetTimeline,
+      clearAssetState,
       setInMs,
       setOutMs,
       setPlayheadMs,
@@ -401,8 +565,10 @@ export function App() {
             const item = page.items.find(
               (candidate) => candidate.id === selectedItem.id,
             );
-            if (item) setSelected(item);
-            else {
+            if (item) {
+              clearAssetState();
+              setSelected(item);
+            } else {
               const metadata = await api.request(
                 `media/${encodeURIComponent(selectedItem.id)}`,
                 { signal: controller.signal },
@@ -420,8 +586,9 @@ export function App() {
                   selectedRef.current?.id === selectedItem.id &&
                   request === mediaRequestVersionRef.current
                 )
+                  clearAssetState();
                   setSelected(item);
-              } else if (metadata.status === 404)
+                } else if (metadata.status === 404)
                 if (
                   mountedRef.current &&
                   selectedRef.current?.id === selectedItem.id
@@ -451,7 +618,7 @@ export function App() {
           setLoadingMore(false);
       }
     },
-    [setSelected],
+    [clearAssetState, setSelected],
   );
 
   useEffect(() => {
@@ -577,13 +744,23 @@ export function App() {
 
   useEffect(() => {
     const keyboard = (event: KeyboardEvent) => {
-      if (
+      const editingText =
         (event.target instanceof HTMLInputElement &&
           event.target.type !== "range") ||
-        event.target instanceof HTMLTextAreaElement ||
-        !selected
-      )
+        event.target instanceof HTMLTextAreaElement;
+      const modifier = event.metaKey || event.ctrlKey;
+      if (modifier && !editingText && event.key.toLowerCase() === "z") {
+        event.preventDefault();
+        if (event.shiftKey) redo();
+        else undo();
         return;
+      }
+      if (modifier && !editingText && event.key.toLowerCase() === "y") {
+        event.preventDefault();
+        redo();
+        return;
+      }
+      if (editingText || !selected) return;
       if (event.key === "i" || event.key === "I") {
         event.preventDefault();
         invalidateEditor();
@@ -628,6 +805,8 @@ export function App() {
     setInMs,
     setOutMs,
     setPlayheadMs,
+    redo,
+    undo,
   ]);
 
   const addSegment = () => {
@@ -638,7 +817,7 @@ export function App() {
     const error = validateSegments(next, mediaDuration(selected));
     if (error) return setStatus(error);
     invalidateEditor();
-    setSegments(next.sort((a, b) => a.startMs - b.startMs));
+    setSegments(next);
     setSegmentLabel("");
     setDirty(true);
     setStatus("Segment added.");
@@ -692,6 +871,7 @@ export function App() {
       )
         return;
       clearExport();
+      clearAssetState();
       projectIdRef.current = project.id;
       selectedRef.current = item;
       setProjectId(project.id);
@@ -711,6 +891,7 @@ export function App() {
       );
       setDiagnostics(undefined);
       setDirty(false);
+      resetTimeline();
       rememberProject(project.id, item.name);
       setStatus("Project loaded.");
     } catch (error) {
@@ -733,6 +914,7 @@ export function App() {
       return;
     invalidateEditor();
     clearExport();
+    clearAssetState();
     selectedRef.current = undefined;
     const id = newProjectId();
     projectIdRef.current = id;
@@ -748,6 +930,7 @@ export function App() {
     setMuted(false);
     setDiagnostics(undefined);
     setDirty(false);
+    resetTimeline();
     setStatus("New project ready.");
   };
 
@@ -857,8 +1040,10 @@ export function App() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            mode: "merge",
-            cutStrategy: "stream_copy_preferred",
+            mode: exportMode,
+            selection: exportSelection,
+            streamIndexes,
+            cutStrategy,
             container: "mkv",
           }),
         },
@@ -931,6 +1116,78 @@ export function App() {
     }
   };
 
+  const cancelDetection = async () => {
+    const job = detectionJob;
+    if (!job || (job.state !== "queued" && job.state !== "running")) return;
+    detectionRequestRef.current += 1;
+    if (detectionTimerRef.current) window.clearTimeout(detectionTimerRef.current);
+    setDetectionStatus("Cancelling detection…");
+    try {
+      const response = await api.request(`jobs/${encodeURIComponent(job.id)}`, { method: "DELETE" });
+      if (!response.ok) throw new Error("Detection could not be cancelled.");
+      setDetectionJob({ ...job, state: "cancelled" });
+      setDetectionStatus("Detection cancelled.");
+    } catch (error) { setDetectionStatus(error instanceof Error ? error.message : "Detection could not be cancelled."); }
+  };
+
+  const startDetection = async (kind: DetectionKind) => {
+    if (!selected) return;
+    const saved = await saveProject();
+    if (!saved) return;
+    const request = ++detectionRequestRef.current;
+    if (detectionTimerRef.current) window.clearTimeout(detectionTimerRef.current);
+    setDetectionCandidates([]);
+    setDetectionStatus(`Starting ${kind} detection…`);
+    try {
+      const response = await api.request(`projects/${encodeURIComponent(saved.id)}/detections`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mediaId: saved.mediaId, projectRevision: saved.revision, kind }),
+      });
+      if (request !== detectionRequestRef.current) return;
+      if (!response.ok) { setDetectionStatus(response.status === 409 ? "Detection is stale; save or reload the project." : "Detection could not be started."); return; }
+      const job = await response.json() as DetectionJob;
+      setDetectionJob(job);
+      const poll = async () => {
+        if (request !== detectionRequestRef.current) return;
+        try {
+          const nextResponse = await api.request(`jobs/${encodeURIComponent(job.id)}`);
+          if (request !== detectionRequestRef.current) return;
+          if (!nextResponse.ok) throw new Error("Detection status could not be updated.");
+          const next = await nextResponse.json() as DetectionJob;
+          setDetectionJob(next);
+          if (next.state === "queued" || next.state === "running") {
+            setDetectionStatus(next.state === "queued" ? "Detection queued." : "Detection running.");
+            detectionTimerRef.current = window.setTimeout(() => void poll(), 500);
+          } else if (next.state === "succeeded") {
+            setDetectionCandidates(next.candidates ?? []);
+            setDetectionStatus(`${next.candidates?.length ?? 0} candidates found. Review each before accepting.`);
+          } else if (next.state === "cancelled") setDetectionStatus("Detection cancelled.");
+          else setDetectionStatus(`Detection failed${next.errorCode ? `: ${next.errorCode}.` : "."}`);
+        } catch (error) { if (request === detectionRequestRef.current) setDetectionStatus(error instanceof Error ? error.message : "Detection status could not be updated."); }
+      };
+      if (job.state === "queued" || job.state === "running") detectionTimerRef.current = window.setTimeout(() => void poll(), 500);
+      else if (job.state === "succeeded") setDetectionCandidates(job.candidates ?? []);
+    } catch { if (request === detectionRequestRef.current) setDetectionStatus("Detection could not be started."); }
+  };
+
+  const acceptDetectionCandidate = (candidate: Candidate) => {
+    if (!selected) return;
+    const next = acceptCandidate(candidate, { id: projectId, mediaId: selected.id, revision, segments }, selected.durationMs);
+    if (!next) { setDetectionStatus("Candidate is stale, invalid, or overlaps an existing segment."); return; }
+    const error = validateSegments(next.segments, selected.durationMs);
+    if (error) { setDetectionStatus(error); return; }
+    invalidateEditor(); setSegments(next.segments); setDirty(true);
+    setDetectionCandidates((current) => current.filter((item) => item.id !== candidate.id));
+    setDetectionStatus("Candidate accepted; save the project to persist it.");
+  };
+
+  const rejectDetectionCandidate = (candidate: Candidate) => {
+    setDetectionCandidates((current) => current.filter((item) => item.id !== candidate.id));
+    setDetectionStatus("Candidate rejected.");
+  };
+
+  useEffect(() => () => { if (detectionTimerRef.current) window.clearTimeout(detectionTimerRef.current); }, []);
+
   const cancelExport = async () => {
     if (
       !exportJob ||
@@ -958,7 +1215,29 @@ export function App() {
     }
   };
 
+  useEffect(() => {
+    assetRequestRef.current?.abort();
+    if (thumbnailURLRef.current) {
+      URL.revokeObjectURL(thumbnailURLRef.current);
+      thumbnailURLRef.current = undefined;
+    }
+    if (!selected) return;
+    const controller = new AbortController(); assetRequestRef.current = controller;
+    const params = { startMs: 0, durationMs: Math.max(1, Math.min(120000, selected.durationMs)), count: 16, width: 320 };
+    void api.assetRequest(selected.id, "thumbnails", params, { signal: controller.signal }).then(async (response) => {
+      if (!response.ok) throw new Error("Thumbnails unavailable");
+      return response.blob();
+    }).then((blob) => { if (!controller.signal.aborted) { const url = URL.createObjectURL(blob); thumbnailURLRef.current = url; setThumbnailURL(url); } }).catch(() => { if (!controller.signal.aborted) setAssetStatus("Thumbnails unavailable; editing remains available."); });
+    void api.assetRequest(selected.id, "waveform", { startMs: 0, durationMs: Math.max(1, Math.min(120000, selected.durationMs)), samples: 256 }, { signal: controller.signal }).then(async (response) => {
+      const value = await response.json() as { peaks?: unknown };
+      if (!response.ok) throw new Error("Waveform unavailable");
+      return normalizePeaks(value.peaks);
+    }).then((peaks) => { if (!controller.signal.aborted) setWaveform(peaks); }).catch(() => { if (!controller.signal.aborted) setAssetStatus("Waveform unavailable (or media has no audio); editing remains available."); });
+    return () => controller.abort();
+  }, [selected]);
+
   const duration = mediaDuration(selected);
+  const frameMs = frameDuration(selected);
   const previewSupported = canStreamPreview();
   return (
     <main aria-label="VideoCutlist segment selection">
@@ -1010,6 +1289,18 @@ export function App() {
             <label htmlFor="playhead">
               Playhead: {formatTime(playheadMs, duration)}
             </label>
+            <p id="timeline-description">Playhead {formatTime(playheadMs, duration)}. In marker {formatTime(inMs, duration)}. Out marker {formatTime(outMs, duration)}. {segments.length ? `${segments.length} segment${segments.length === 1 ? "" : "s"} selected.` : "No segments selected."}</p>
+            <div className="timeline-visual" role="group" aria-labelledby="timeline-heading timeline-description" style={{ width: `${viewportScale(zoom) * 100}%` }}>
+              {thumbnailURL && <img src={thumbnailURL} alt="Timeline contact sheet" />}
+              <div className="timeline-waveform" aria-hidden="true">
+                {waveform.map((peak, index) => <i key={index} style={{ height: `${Math.max(2, peak * 100)}%` }} />)}
+              </div>
+              <span className="timeline-overlay timeline-in" style={{ left: `${(inMs / duration) * 100}%` }} aria-label="In marker" />
+              <span className="timeline-overlay timeline-out" style={{ left: `${(outMs / duration) * 100}%` }} aria-label="Out marker" />
+              {segments.map((segment) => <span key={`${segment.startMs}-${segment.endMs}`} className="timeline-segment" style={{ left: `${(segment.startMs / duration) * 100}%`, width: `${((segment.endMs - segment.startMs) / duration) * 100}%` }} aria-label={`Segment ${formatTime(segment.startMs, duration)} to ${formatTime(segment.endMs, duration)}`} />)}
+              <span className="timeline-overlay timeline-playhead" style={{ left: `${(playheadMs / duration) * 100}%` }} aria-label="Playhead" />
+            </div>
+            {assetStatus && <p role="status">{assetStatus}</p>}
             <input
               id="playhead"
               aria-label="Timeline playhead"
@@ -1025,6 +1316,20 @@ export function App() {
               }}
             />
             <div className="controls">
+              <button
+                disabled={!timelineHistory.past.length}
+                onClick={undo}
+                aria-label="Undo timeline edit"
+              >
+                Undo
+              </button>
+              <button
+                disabled={!timelineHistory.future.length}
+                onClick={redo}
+                aria-label="Redo timeline edit"
+              >
+                Redo
+              </button>
               <button
                 onClick={() => {
                   invalidateEditor();
@@ -1066,6 +1371,33 @@ export function App() {
                 +1s
               </button>
             </div>
+            <label htmlFor="timecode">Timecode</label>
+            <input
+              id="timecode"
+              defaultValue={formatTime(playheadMs, duration)}
+              onBlur={(event) => {
+                const timecode = parseTimecode(event.target.value);
+                if (timecode === undefined || timecode > duration) {
+                  setStatus("Use M:SS.mmm inside the selected media.");
+                  event.target.value = formatTime(playheadMs, duration);
+                  return;
+                }
+                invalidateEditor();
+                setDirty(true);
+                setPlayheadMs(timecode);
+              }}
+            />
+            {frameMs > 0 && (
+              <button
+                onClick={() => {
+                  invalidateEditor();
+                  setDirty(true);
+                  setPlayheadMs((value) => Math.min(duration, value + frameMs));
+                }}
+              >
+                Next frame
+              </button>
+            )}
             <p>
               In: {formatTime(inMs, duration)} · Out:{" "}
               {formatTime(outMs, duration)}
@@ -1108,6 +1440,40 @@ export function App() {
               {formatTime(segment.endMs, duration)}{" "}
               {segment.label ? `(${segment.label})` : ""}
               <button
+                disabled={index === 0}
+                onClick={() => {
+                  invalidateEditor();
+                  setSegments((value) => {
+                    const next = [...value];
+                    [next[index - 1], next[index]] = [
+                      next[index],
+                      next[index - 1],
+                    ];
+                    return next;
+                  });
+                  setDirty(true);
+                }}
+              >
+                Move up
+              </button>
+              <button
+                disabled={index === segments.length - 1}
+                onClick={() => {
+                  invalidateEditor();
+                  setSegments((value) => {
+                    const next = [...value];
+                    [next[index], next[index + 1]] = [
+                      next[index + 1],
+                      next[index],
+                    ];
+                    return next;
+                  });
+                  setDirty(true);
+                }}
+              >
+                Move down
+              </button>
+              <button
                 onClick={() => {
                   invalidateEditor();
                   setSegments((value) =>
@@ -1122,6 +1488,23 @@ export function App() {
             </li>
           ))}
         </ol>
+      </section>
+      <section aria-labelledby="detection-heading">
+        <h2 id="detection-heading">Auto detection</h2>
+        <p>{detectionStatus || "Review candidates before they change segments."}</p>
+        <div className="controls">
+          <button disabled={!selected || !!detectionJob && (detectionJob.state === "queued" || detectionJob.state === "running")} onClick={() => void startDetection("silence")}>Detect silence</button>
+          <button disabled={!selected || !!detectionJob && (detectionJob.state === "queued" || detectionJob.state === "running")} onClick={() => void startDetection("black")}>Detect black frames</button>
+          <button disabled={!selected || !!detectionJob && (detectionJob.state === "queued" || detectionJob.state === "running")} onClick={() => void startDetection("scene")}>Detect scene changes</button>
+          {detectionJob && (detectionJob.state === "queued" || detectionJob.state === "running") && <button onClick={() => void cancelDetection()}>Cancel detection</button>}
+        </div>
+        {detectionCandidates.length > 0 && <ol aria-label="Detection candidates">
+          {detectionCandidates.map((candidate) => <li key={candidate.id}>
+            {candidate.source} · {formatTime(candidate.startMs, duration)}–{formatTime(candidate.endMs, duration)} · {Math.round(candidate.confidence * 100)}%
+            <button onClick={() => acceptDetectionCandidate(candidate)}>Accept</button>
+            <button onClick={() => rejectDetectionCandidate(candidate)}>Reject</button>
+          </li>)}
+        </ol>}
       </section>
       <section aria-labelledby="project-heading">
         <h2 id="project-heading">Project</h2>
@@ -1139,6 +1522,8 @@ export function App() {
         <button onClick={newProject}>New project</button>
         <button onClick={() => void loadProject()}>Load project</button>
         <button onClick={() => void saveProject()}>Save project</button>
+        <button disabled={!selected} onClick={() => void api.interchangeRequest(projectId, "csv").then(async (response) => { if (!response.ok) throw new Error("CSV export failed."); const blob = await response.blob(); const link = document.createElement("a"); link.href = URL.createObjectURL(blob); link.download = `${projectId}.csv`; link.click(); URL.revokeObjectURL(link.href); }).catch(() => setStatus("CSV export failed."))}>Export CSV</button>
+        <button disabled={!selected} onClick={() => void api.interchangeRequest(projectId, "chapters").then(async (response) => { if (!response.ok) throw new Error("Chapter export failed."); const blob = await response.blob(); const link = document.createElement("a"); link.href = URL.createObjectURL(blob); link.download = `${projectId}.chapters.txt`; link.click(); URL.revokeObjectURL(link.href); }).catch(() => setStatus("Chapter export failed."))}>Export chapters</button>
         <label htmlFor="recent-projects">Recent projects</label>
         <select
           id="recent-projects"
@@ -1157,6 +1542,148 @@ export function App() {
           ))}
         </select>
         <button
+          disabled={!selected}
+          onClick={() => {
+            const blob = new Blob(
+              [
+                projectJson({
+                  version: 1,
+                  mediaId: selected?.id,
+                  revision,
+                  segments,
+                  uiState: { playheadMs, zoom, muted },
+                }),
+              ],
+              { type: "application/json" },
+            );
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement("a");
+            link.href = url;
+            link.download = `${projectId}.videocutlist.json`;
+            link.click();
+            URL.revokeObjectURL(url);
+          }}
+        >
+          Download cut list
+        </button>
+        <label htmlFor="project-file">Import cut list</label>
+        <input
+          id="project-file"
+          type="file"
+          accept="application/json,.json"
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            if (!file) return;
+            void file
+              .text()
+              .then((text) => {
+                const imported = parseProjectJson(text);
+                if (!selected || imported.mediaId !== selected.id)
+                  throw new Error(
+                    "Select the cut list's media before importing.",
+                  );
+                const next = imported.segments as Segment[];
+                const error = validateSegments(next, selected.durationMs);
+                if (error) throw new Error(error);
+                invalidateEditor();
+                setSegments(next);
+                setDirty(true);
+                setStatus("Cut list imported. Save the project to keep it.");
+              })
+              .catch((error: unknown) =>
+                setStatus(
+                  error instanceof Error
+                    ? error.message
+                    : "Cut list import failed.",
+                ),
+              );
+            event.target.value = "";
+          }}
+        />
+        <label htmlFor="interchange-file">Import CSV or chapters</label>
+        <input id="interchange-file" type="file" accept=".csv,.txt,text/csv,text/plain" onChange={(event) => { const file = event.target.files?.[0]; if (!file) return; if (!validInterchangeFileSize(file.size)) { setStatus("Interchange file exceeds the 1 MiB limit."); event.target.value = ""; return; } const format = file.name.toLowerCase().endsWith(".csv") ? "csv" : "chapters"; void file.arrayBuffer().then((body) => api.interchangeRequest(projectId, format, { method: "POST", body, headers: { "Content-Type": format === "csv" ? "text/csv" : "text/plain" } })).then(async (response) => { if (!response.ok) throw new Error("Interchange import failed."); const value = await response.json() as { segments: Segment[]; revision: number }; invalidateEditor(); setSegments(value.segments); setRevision(value.revision); setDirty(false); setStatus("Interchange imported."); }).catch(() => setStatus("Interchange import failed.")); event.target.value = ""; }} />
+        <label htmlFor="export-mode">Output</label>
+        <select
+          id="export-mode"
+          value={exportMode}
+          onChange={(event) =>
+            setExportMode(event.target.value as "merge" | "separate")
+          }
+        >
+          <option value="merge">Merge cuts</option>
+          <option value="separate">Separate files</option>
+        </select>
+        <label htmlFor="export-selection">Selection</label>
+        <select
+          id="export-selection"
+          value={exportSelection}
+          onChange={(event) =>
+            setExportSelection(event.target.value as "segments" | "gaps")
+          }
+        >
+          <option value="segments">Selected segments</option>
+          <option value="gaps">Unselected gaps</option>
+        </select>
+        <label htmlFor="cut-strategy">Cut accuracy</label>
+        <select
+          id="cut-strategy"
+          value={cutStrategy}
+          onChange={(event) =>
+            setCutStrategy(
+              event.target.value as
+                | "stream_copy_preferred"
+                | "precise_reencode"
+                | "hybrid_smart_cut",
+            )
+          }
+        >
+          <option value="stream_copy_preferred">
+            Fast stream copy, keyframe dependent
+          </option>
+          <option value="precise_reencode">
+            Experimental precise re-encode
+          </option>
+          <option value="hybrid_smart_cut" disabled={hybridSmartCutUnavailable}>
+            Experimental hybrid Smart Cut (H.264 CFR MKV)
+          </option>
+        </select>
+        <p>
+          Stream-copy starts may move to an earlier keyframe. They are not
+          frame-exact.
+        </p>
+        {hybridSmartCutUnavailable && (
+          <p>
+            Hybrid Smart Cut is unavailable for this file. It supports H.264
+            constant-frame-rate video in MKV only. Use Stream Copy or Precise
+            Re-encode instead.
+          </p>
+        )}
+        {tracks(selected).map((track) => (
+          <label key={track.index}>
+            <input
+              type="checkbox"
+              checked={
+                streamIndexes.length === 0 ||
+                streamIndexes.includes(track.index)
+              }
+              onChange={(event) =>
+                setStreamIndexes((current) => {
+                  const selectedTracks = current.length
+                    ? current
+                    : tracks(selected).map((item) => item.index);
+                  return event.target.checked
+                    ? [...selectedTracks, track.index].filter(
+                        (value, index, values) =>
+                          values.indexOf(value) === index,
+                      )
+                    : selectedTracks.filter((value) => value !== track.index);
+                })
+              }
+            />{" "}
+            {track.index}: {track.type} ({track.codec})
+          </label>
+        ))}
+        <button
           onClick={() => void exportProject()}
           disabled={!selected || !segments.length}
         >
@@ -1169,7 +1696,11 @@ export function App() {
           )}
         {exportJob?.state === "succeeded" && exportJob.result && (
           <div aria-label="Export result">
-            <p>Export: {exportJob.result.outputName}</p>
+            <p>
+              Export:{" "}
+              {exportJob.result.outputName ??
+                exportJob.result.outputNames?.join(", ")}
+            </p>
             <p>Size: {exportJob.result.sizeBytes.toLocaleString()} bytes</p>
             <p>
               Retained until:{" "}

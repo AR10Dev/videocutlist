@@ -1,7 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
-import { createApiClient } from "../src/api";
+import {
+  createApiClient,
+  MAX_INTERCHANGE_FILE_BYTES,
+  validInterchangeFileSize,
+} from "../src/api";
 
 describe("client API boundary", () => {
+  it("bounds interchange files before reading them", () => {
+    expect(validInterchangeFileSize(MAX_INTERCHANGE_FILE_BYTES)).toBe(true);
+    expect(validInterchangeFileSize(MAX_INTERCHANGE_FILE_BYTES + 1)).toBe(false);
+    expect(validInterchangeFileSize(Number.POSITIVE_INFINITY)).toBe(false);
+  });
   const api = (serverBaseUrl: string) =>
     createApiClient({ serverBaseUrl, authentication: { type: "none" } });
 

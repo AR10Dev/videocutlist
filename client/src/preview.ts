@@ -8,6 +8,31 @@ export type Media = {
   etag: string;
 };
 
+type VideoMetadata = {
+  codec?: unknown;
+  avgFrameRate?: unknown;
+  frameRate?: unknown;
+};
+
+const frameRate = (value: unknown) => {
+  if (typeof value !== "string") return undefined;
+  const [numerator, denominator] = value.split("/").map(Number);
+  if (!Number.isFinite(numerator) || !Number.isFinite(denominator) || denominator <= 0 || numerator <= 0)
+    return undefined;
+  return numerator / denominator;
+};
+
+export const hybridSmartCutKnownIneligible = (media?: Media) => {
+  if (!media) return false;
+  const video = media.streams.video as VideoMetadata | undefined;
+  if (!video || typeof video.codec !== "string") return false;
+  if (video.codec.toLowerCase() !== "h264") return true;
+  if (media.container.toLowerCase() !== "matroska,webm" || !media.name.toLowerCase().endsWith(".mkv")) return true;
+  const average = frameRate(video.avgFrameRate);
+  const nominal = frameRate(video.frameRate);
+  return average !== undefined && nominal !== undefined && average !== nominal;
+};
+
 export type Segment = { startMs: number; endMs: number; label?: string };
 export type PreviewDiagnostics = {
   cache: string;

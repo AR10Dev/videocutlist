@@ -280,43 +280,77 @@ components:
     ExportInput:
       type: object
       additionalProperties: false
-      required: [mode, cutStrategy, container]
+      required: [mode, selection, cutStrategy, container]
       properties:
-        mode: { type: string, enum: [merge] }
-        cutStrategy: { type: string, enum: [stream_copy_preferred] }
-        container: { type: string, enum: [mkv] }
-        smartBoundaryReencode: { type: boolean, const: false, default: false }
+        mode:
+          type: string
+          enum: [merge, separate]
+        selection:
+          type: string
+          enum: [segments, gaps]
+          default: segments
+        streamIndexes:
+          type: array
+          uniqueItems: true
+          items:
+            type: integer
+            minimum: 0
+        cutStrategy:
+          type: string
+          enum: [stream_copy_preferred, precise_reencode]
+        container:
+          type: string
+          enum: [mkv]
     Job:
       type: object
       required: [id, type, state, createdAt, updatedAt]
       properties:
-        id: { type: string }
-        type: { type: string, enum: [export] }
+        id:
+          type: string
+        type:
+          type: string
+          enum: [export]
         state:
-          {
-            type: string,
-            enum: [queued, running, succeeded, failed, cancelled],
-          }
-        progress: { type: number, minimum: 0, maximum: 1 }
+          type: string
+          enum: [queued, running, succeeded, failed, cancelled]
+        progress:
+          type: number
+          minimum: 0
+          maximum: 1
         result:
           description: Present only when an export job succeeded.
           type: object
           additionalProperties: false
-          required: [outputName, sizeBytes, retainUntil]
+          required: [sizeBytes, retainUntil]
           properties:
             outputName:
-              {
-                type: string,
-                description: Published export filename,
-                never a filesystem path.,
-              }
-            sizeBytes: { type: integer, format: int64, minimum: 0 }
-            retainUntil: { type: string, format: date-time }
-        warnings: { type: array, items: { type: string } }
+              type: string
+              description: >-
+                Published merged-export filename, never a filesystem path.
+            outputNames:
+              type: array
+              description: >-
+                Published separate-export filenames, never filesystem paths.
+              items:
+                type: string
+            sizeBytes:
+              type: integer
+              format: int64
+              minimum: 0
+            retainUntil:
+              type: string
+              format: date-time
+        warnings:
+          type: array
+          items:
+            type: string
         errorCode:
-          {
-            type: string,
-            description: Stable export failure code; present only when state is failed.,
-          }
-        createdAt: { type: string, format: date-time }
-        updatedAt: { type: string, format: date-time }
+          type: string
+          description: >-
+            Stable export failure code; present only when state is failed.
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time

@@ -36,7 +36,11 @@ func (c Coordinator) Execute(ctx context.Context, owner, jobID string, source *o
 		if errors.Is(err, ErrCancelled) {
 			_, _ = c.Jobs.Cancel(stateContext, owner, jobID)
 		} else {
-			_, _ = c.Jobs.Fail(stateContext, owner, jobID, "export_failed")
+			code := "export_failed"
+			if errors.Is(err, ErrHybridSmartCutUnsupportedMedia) {
+				code = "hybrid_smart_cut_unsupported_media"
+			}
+			_, _ = c.Jobs.Fail(stateContext, owner, jobID, code)
 		}
 		return Result{}, err
 	}

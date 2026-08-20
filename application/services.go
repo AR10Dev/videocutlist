@@ -139,10 +139,12 @@ func (e *ExportUseCase) Create(ctx context.Context, principal domain.Principal, 
 		return Job{}, err
 	}
 	data, err := json.Marshal(struct {
-		Mode        string `json:"mode"`
-		CutStrategy string `json:"cutStrategy"`
-		Container   string `json:"container"`
-	}{input.Mode, input.CutStrategy, input.Container})
+		Mode          string `json:"mode"`
+		Selection     string `json:"selection"`
+		StreamIndexes []int  `json:"streamIndexes,omitempty"`
+		CutStrategy   string `json:"cutStrategy"`
+		Container     string `json:"container"`
+	}{input.Mode, input.Selection, input.StreamIndexes, input.CutStrategy, input.Container})
 	if err != nil {
 		return Job{}, err
 	}
@@ -191,13 +193,44 @@ func (e *ExportUseCase) Cancel(ctx context.Context, owner, id string) error {
 	return err
 }
 
-type JobUseCase struct{ Exports *ExportUseCase }
+type JobUseCase struct {
+	Exports    *ExportUseCase
+	Detections *DetectionUseCase
+}
 
 func (j JobUseCase) Get(ctx context.Context, principal domain.Principal, id string) (Job, error) {
-	return j.Exports.Get(ctx, principal.Subject, id)
+	if j.Exports != nil {
+		if value, err := j.Exports.Get(ctx, principal.Subject, id); err == nil {
+			return value, nil
+		}
+	}
+	if j.Detections != nil {
+		value, err := j.Detections.Get(ctx, principal, id)
+		if err != nil {
+			return Job{}, err
+		}
+		return detectionJobAsJob(value), nil
+	}
+	return Job{}, store.ErrJobNotFound
 }
 func (j JobUseCase) Cancel(ctx context.Context, principal domain.Principal, id string) error {
-	return j.Exports.Cancel(ctx, principal.Subject, id)
+	if j.Exports != nil {
+		if err := j.Exports.Cancel(ctx, principal.Subject, id); err == nil {
+			return nil
+		}
+	}
+	if j.Detections != nil {
+		return j.Detections.Cancel(ctx, principal, id)
+	}
+	return store.ErrJobNotFound
+}
+
+func detectionJobAsJob(value DetectionJob) Job {
+	job := Job{ID: value.ID, Type: value.Type, State: value.State}
+	if value.ErrorCode != nil {
+		job.ErrorCode = value.ErrorCode
+	}
+	return job
 }
 
 func jobResult(record store.ExportJob) Job {
@@ -216,14 +249,15 @@ func jobResult(record store.ExportJob) Job {
 	if record.State == store.JobSucceeded && record.ResultJSON.Valid {
 		var result struct {
 			OutputName  string    `json:"outputName"`
+			OutputNames []string  `json:"outputNames"`
 			SizeBytes   int64     `json:"sizeBytes"`
 			RetainUntil time.Time `json:"retainUntil"`
 			Warnings    []struct {
 				Message string `json:"message"`
 			} `json:"warnings"`
 		}
-		if json.Unmarshal([]byte(record.ResultJSON.String), &result) == nil && safeOutputName(result.OutputName) && result.SizeBytes >= 0 && !result.RetainUntil.IsZero() {
-			job.Result = &JobResult{OutputName: result.OutputName, SizeBytes: result.SizeBytes, RetainUntil: result.RetainUntil}
+		if json.Unmarshal([]byte(record.ResultJSON.String), &result) == nil && safeOutputNames(result.OutputName, result.OutputNames) && result.SizeBytes >= 0 && !result.RetainUntil.IsZero() {
+			job.Result = &JobResult{OutputName: result.OutputName, OutputNames: result.OutputNames, SizeBytes: result.SizeBytes, RetainUntil: result.RetainUntil}
 			for _, warning := range result.Warnings {
 				if len(job.Warnings) == 10 {
 					break
@@ -236,6 +270,21 @@ func jobResult(record store.ExportJob) Job {
 		}
 	}
 	return job
+}
+
+func safeOutputNames(name string, names []string) bool {
+	if name != "" {
+		return len(names) == 0 && safeOutputName(name)
+	}
+	if len(names) == 0 || len(names) > 100 {
+		return false
+	}
+	for _, output := range names {
+		if !safeOutputName(output) {
+			return false
+		}
+	}
+	return true
 }
 
 func safeOutputName(name string) bool {

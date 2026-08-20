@@ -44,7 +44,7 @@ func TestMediaAPIShapeHidesStorageAndProviderMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 	for field := range streams {
-		if field != "video" && field != "audio" {
+		if field != "video" && field != "audio" && field != "tracks" {
 			t.Fatalf("media streams exposed %q: %s", field, response)
 		}
 	}

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -14,9 +15,13 @@ import (
 
 	"videocutlist/application"
 	"videocutlist/domain"
+	"videocutlist/infrastructure/interchange"
 )
 
-const maxQueryBytes = 4 << 10
+const (
+	maxQueryBytes          = 4 << 10
+	maxAutomationBodyBytes = interchange.MaxInputBytes
+)
 
 type Media = application.Media
 type MediaPage = application.MediaPage
@@ -58,14 +63,24 @@ type ExportInput = application.ExportInput
 type Job = application.Job
 type PreviewSpec = application.PreviewSpec
 type PreviewResult = application.PreviewResult
+type AssetSpec = application.AssetSpec
+type AssetResult = application.AssetResult
 
 // The interfaces are intentionally API-shaped adapters. Concrete domain wiring
 // remains outside this package, and no original path crosses this boundary.
 type MediaService = application.MediaService
 type PreviewService = application.PreviewService
+type AssetService = application.AssetService
 type ProjectService = application.ProjectService
 type ExportService = application.ExportService
 type JobService = application.JobService
+type DetectionRequest = application.DetectionRequest
+type DetectionJob = application.DetectionJob
+type DetectionService interface {
+	Create(context.Context, domain.Principal, string, DetectionRequest) (DetectionJob, error)
+	Get(context.Context, domain.Principal, string) (DetectionJob, error)
+	Cancel(context.Context, domain.Principal, string) error
+}
 type Authorizer interface {
 	Allow(domain.Principal, string, string) bool
 }
@@ -79,9 +94,11 @@ type Config struct {
 	Authenticator Authenticator
 	Media         MediaService
 	Preview       PreviewService
+	Assets        AssetService
 	Projects      ProjectService
 	Exports       ExportService
 	Jobs          JobService
+	Detection     DetectionService
 	Authorize     Authorizer
 	Ready         func(context.Context) error
 	Logger        *log.Logger
@@ -90,6 +107,9 @@ type Config struct {
 	AfterMS       int64
 	MaxPreviewMS  int64
 	GridMS        int64
+	// ListenerAddress gates the local-only automation command surface.
+	ListenerAddress       string
+	RequireAutomationAuth bool
 }
 
 type Server struct {
@@ -171,6 +191,12 @@ func (s *Server) dispatch(writer http.ResponseWriter, request *http.Request, id 
 	case routePreview:
 		s.preview(writer, request, principal, r.id, id)
 		return "/api/v1/media/{mediaId}/preview", principal.Subject
+	case routeThumbnails:
+		s.thumbnails(writer, request, principal, r.id, id)
+		return "/api/v1/media/{mediaId}/thumbnails", principal.Subject
+	case routeWaveform:
+		s.waveform(writer, request, principal, r.id, id)
+		return "/api/v1/media/{mediaId}/waveform", principal.Subject
 	case routeGetProject:
 		s.getProject(writer, request, principal, r.id, id)
 		return "/api/v1/projects/{projectId}", principal.Subject
@@ -180,12 +206,24 @@ func (s *Server) dispatch(writer http.ResponseWriter, request *http.Request, id 
 	case routeCreateExport:
 		s.createExport(writer, request, principal, r.id, id)
 		return "/api/v1/projects/{projectId}/exports", principal.Subject
+	case routeImportInterchange:
+		s.importInterchange(writer, request, principal, r.id, id)
+		return "/api/v1/projects/{projectId}/interchange/{format}", principal.Subject
+	case routeExportInterchange:
+		s.exportInterchange(writer, request, principal, r.id, id)
+		return "/api/v1/projects/{projectId}/interchange/{format}", principal.Subject
+	case routeCreateDetection:
+		s.createDetection(writer, request, principal, r.id, id)
+		return "/api/v1/projects/{projectId}/detections", principal.Subject
 	case routeGetJob:
 		s.getJob(writer, request, principal, r.id, id)
 		return "/api/v1/jobs/{jobId}", principal.Subject
 	case routeCancelJob:
 		s.cancelJob(writer, request, principal, r.id, id)
 		return "/api/v1/jobs/{jobId}", principal.Subject
+	case routeAutomation:
+		s.automation(writer, request, principal, id)
+		return "/api/v1/automation", principal.Subject
 	}
 	httpx.Error(writer, http.StatusNotFound, "not_found", "Resource not found.", id)
 	return routeFor(request.URL.Path), principal.Subject
@@ -312,6 +350,113 @@ func (s *Server) preview(writer http.ResponseWriter, request *http.Request, prin
 	}
 }
 
+func (s *Server) assetSpec(request *http.Request, item Media, waveform bool) (AssetSpec, error) {
+	keys := []string{"startMs", "durationMs"}
+	if waveform {
+		keys = append(keys, "samples")
+	} else {
+		keys = append(keys, "count", "width")
+	}
+	if !queryKeys(request, keys...) {
+		return AssetSpec{}, errors.New("unknown query")
+	}
+	q := request.URL.Query()
+	start, err := requiredInt(q.Get("startMs"))
+	if err != nil || start < 0 {
+		return AssetSpec{}, errors.New("start")
+	}
+	duration, err := requiredInt(q.Get("durationMs"))
+	if err != nil || duration < 1 || duration > 120000 {
+		return AssetSpec{}, errors.New("duration")
+	}
+	spec := AssetSpec{MediaID: item.ID, StartMS: start, DurationMS: duration}
+	if waveform {
+		spec.Samples, err = strconv.Atoi(q.Get("samples"))
+		if err != nil || spec.Samples < 16 || spec.Samples > 4096 {
+			return AssetSpec{}, errors.New("samples")
+		}
+	} else {
+		spec.Count, err = strconv.Atoi(q.Get("count"))
+		if err != nil || spec.Count < 1 || spec.Count > 32 {
+			return AssetSpec{}, errors.New("count")
+		}
+		spec.Width, err = strconv.Atoi(q.Get("width"))
+		if err != nil || spec.Width < 80 || spec.Width > 320 {
+			return AssetSpec{}, errors.New("width")
+		}
+	}
+	if item.DurationMS < 1 || start >= item.DurationMS {
+		return AssetSpec{}, errors.New("range")
+	}
+	if start+duration > item.DurationMS {
+		spec.DurationMS = item.DurationMS - start
+	}
+	return spec, nil
+}
+
+func (s *Server) thumbnails(w http.ResponseWriter, r *http.Request, p domain.Principal, media, id string) {
+	if s.config.Assets == nil || !s.allowed(w, p, "media_assets", media, id) {
+		if s.config.Assets == nil {
+			internalError(w, id)
+		}
+		return
+	}
+	item, err := s.config.Media.Get(r.Context(), media)
+	if err != nil {
+		notFound(w, id)
+		return
+	}
+	spec, err := s.assetSpec(r, item, false)
+	if err != nil {
+		httpx.Error(w, 422, "invalid_asset", "Thumbnail parameters are invalid.", id)
+		return
+	}
+	result, err := s.config.Assets.Thumbnails(r.Context(), p, spec)
+	if err != nil {
+		internalError(w, id)
+		return
+	}
+	defer result.Reader.Close()
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("Cache-Control", "private, no-cache")
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.Copy(w, result.Reader)
+}
+
+func (s *Server) waveform(w http.ResponseWriter, r *http.Request, p domain.Principal, media, id string) {
+	if s.config.Assets == nil || !s.allowed(w, p, "media_assets", media, id) {
+		if s.config.Assets == nil {
+			internalError(w, id)
+		}
+		return
+	}
+	item, err := s.config.Media.Get(r.Context(), media)
+	if err != nil {
+		notFound(w, id)
+		return
+	}
+	if item.Streams["audio"] == nil {
+		httpx.Error(w, 422, "no_audio", "Media has no audio stream.", id)
+		return
+	}
+	spec, err := s.assetSpec(r, item, true)
+	if err != nil {
+		httpx.Error(w, 422, "invalid_asset", "Waveform parameters are invalid.", id)
+		return
+	}
+	result, err := s.config.Assets.Waveform(r.Context(), p, spec)
+	if errors.Is(err, application.ErrNoAudio) {
+		httpx.Error(w, 422, "no_audio", "Media has no audio stream.", id)
+		return
+	}
+	if err != nil {
+		internalError(w, id)
+		return
+	}
+	w.Header().Set("Cache-Control", "private, no-cache")
+	httpx.WriteJSON(w, 200, map[string]any{"startMs": result.StartMS, "durationMs": result.DurationMS, "peaks": result.Peaks})
+}
+
 func (s *Server) previewSpec(request *http.Request, item Media) (PreviewSpec, error) {
 	if !queryKeys(request, "centerMs", "beforeMs", "afterMs", "mute") {
 		return PreviewSpec{}, errors.New("unknown query")
@@ -407,8 +552,222 @@ func (s *Server) createExport(writer http.ResponseWriter, request *http.Request,
 	s.metrics.Add("export_jobs_total", 1)
 	httpx.WriteJSON(writer, http.StatusAccepted, job)
 }
+func (s *Server) createDetection(writer http.ResponseWriter, request *http.Request, principal domain.Principal, project string, id string) {
+	if s.config.Detection == nil || !s.allowed(writer, principal, "detect", project, id) {
+		if s.config.Detection == nil {
+			internalError(writer, id)
+		}
+		return
+	}
+	owned, err := s.config.Projects.Get(request.Context(), principal, project)
+	if err != nil {
+		notFound(writer, id)
+		return
+	}
+	var input DetectionRequest
+	if httpx.ReadJSON(request, &input) != nil || input.MediaID != owned.MediaID || input.ProjectRevision != owned.Revision || !input.Kind.Valid() {
+		httpx.Error(writer, http.StatusConflict, "stale_project", "Detection request is stale.", id)
+		return
+	}
+	job, err := s.config.Detection.Create(request.Context(), principal, project, input)
+	if err != nil {
+		if errors.Is(err, application.ErrBusy) {
+			httpx.Error(writer, http.StatusTooManyRequests, "detection_busy", "Detection capacity is full.", id)
+			return
+		}
+		httpx.Error(writer, http.StatusUnprocessableEntity, "invalid_detection", "Detection request is invalid.", id)
+		return
+	}
+	httpx.WriteJSON(writer, http.StatusAccepted, job)
+}
+
+type automationCommand struct {
+	Action    string `json:"action"`
+	ProjectID string `json:"projectId,omitempty"`
+	JobID     string `json:"jobId,omitempty"`
+	Format    string `json:"format,omitempty"`
+	Input     string `json:"input,omitempty"`
+}
+
+func (s *Server) automation(w http.ResponseWriter, r *http.Request, p domain.Principal, id string) {
+	if r.Header.Get("Origin") != "" || !listenerLoopback(s.config.ListenerAddress) || !s.config.RequireAutomationAuth || p.Subject == "" || p.Subject == "anonymous" {
+		httpx.Error(w, http.StatusForbidden, "automation_forbidden", "Automation is unavailable.", id)
+		return
+	}
+	if r.ContentLength > maxAutomationBodyBytes {
+		httpx.Error(w, http.StatusRequestEntityTooLarge, "body_too_large", "Request body is too large.", id)
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxAutomationBodyBytes+1))
+	if err != nil || len(body) > maxAutomationBodyBytes {
+		httpx.Error(w, http.StatusRequestEntityTooLarge, "body_too_large", "Request body is too large.", id)
+		return
+	}
+	var command automationCommand
+	decoder := json.NewDecoder(strings.NewReader(string(body)))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&command); err != nil || command.Action == "" {
+		httpx.Error(w, http.StatusUnprocessableEntity, "invalid_command", "Command is invalid.", id)
+		return
+	}
+	var extra any
+	if decoder.Decode(&extra) != io.EOF {
+		httpx.Error(w, http.StatusUnprocessableEntity, "invalid_command", "Command is invalid.", id)
+		return
+	}
+	switch command.Action {
+	case "project.import":
+		if !validProjectID(command.ProjectID) || (command.Format != "csv" && command.Format != "chapters") || command.Input == "" || !s.allowed(w, p, "project_import", command.ProjectID, id) {
+			return
+		}
+		// Reuse the canonical HTTP interchange path and return only its opaque project ID.
+		project, err := s.config.Projects.Get(r.Context(), p, command.ProjectID)
+		if err != nil {
+			notFound(w, id)
+			return
+		}
+		media, err := s.config.Media.Get(r.Context(), project.MediaID)
+		if err != nil {
+			notFound(w, id)
+			return
+		}
+		var segments []domain.Segment
+		if command.Format == "csv" {
+			segments, err = interchange.ParseCSV([]byte(command.Input), media.DurationMS)
+		} else {
+			segments, err = interchange.ParseChapters([]byte(command.Input), media.DurationMS)
+		}
+		if err != nil {
+			httpx.Error(w, http.StatusUnprocessableEntity, "invalid_interchange", "Interchange input is invalid.", id)
+			return
+		}
+		project.Segments = segments
+		saved, err := s.config.Projects.Save(r.Context(), p, command.ProjectID, project.Document, media.DurationMS)
+		if err != nil {
+			httpx.Error(w, http.StatusConflict, "revision_conflict", "Project revision conflicts.", id)
+			return
+		}
+		httpx.WriteJSON(w, http.StatusOK, map[string]string{"projectId": saved.ID})
+	case "project.export":
+		if !validProjectID(command.ProjectID) || (command.Format != "csv" && command.Format != "chapters") || !s.allowed(w, p, "project_export", command.ProjectID, id) {
+			return
+		}
+		project, err := s.config.Projects.Get(r.Context(), p, command.ProjectID)
+		if err != nil {
+			notFound(w, id)
+			return
+		}
+		var data []byte
+		if command.Format == "csv" {
+			data, err = interchange.ExportCSV(project.Document)
+		} else {
+			data, err = interchange.ExportChapters(project.Document)
+		}
+		if err != nil {
+			internalError(w, id)
+			return
+		}
+		httpx.WriteJSON(w, http.StatusOK, map[string]string{"filename": "cutlist." + command.Format, "content": string(data)})
+	case "job.status":
+		if !validJobID(command.JobID) || !s.allowed(w, p, "job_read", command.JobID, id) {
+			return
+		}
+		job, err := s.config.Jobs.Get(r.Context(), p, command.JobID)
+		if err != nil {
+			notFound(w, id)
+			return
+		}
+		httpx.WriteJSON(w, http.StatusOK, job)
+	default:
+		httpx.Error(w, http.StatusUnprocessableEntity, "unsupported_command", "Command is not supported.", id)
+	}
+}
+
+func listenerLoopback(address string) bool {
+	ip := net.ParseIP(address)
+	return ip != nil && ip.IsLoopback()
+}
+
+func (s *Server) importInterchange(w http.ResponseWriter, r *http.Request, p domain.Principal, routeID, id string) {
+	parts := strings.SplitN(routeID, ":", 2)
+	if len(parts) != 2 || !s.allowed(w, p, "project_import", parts[0], id) {
+		return
+	}
+	project, err := s.config.Projects.Get(r.Context(), p, parts[0])
+	if err != nil {
+		notFound(w, id)
+		return
+	}
+	media, err := s.config.Media.Get(r.Context(), project.MediaID)
+	if err != nil {
+		notFound(w, id)
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, interchange.MaxInputBytes+1))
+	if err != nil || len(body) > interchange.MaxInputBytes {
+		httpx.Error(w, 422, "invalid_interchange", "Interchange input is invalid.", id)
+		return
+	}
+	var segments []domain.Segment
+	if parts[1] == "csv" {
+		segments, err = interchange.ParseCSV(body, media.DurationMS)
+	} else {
+		segments, err = interchange.ParseChapters(body, media.DurationMS)
+	}
+	if err != nil {
+		httpx.Error(w, 422, "invalid_interchange", "Interchange input is invalid.", id)
+		return
+	}
+	project.Segments = segments
+	saved, err := s.config.Projects.Save(r.Context(), p, parts[0], project.Document, media.DurationMS)
+	if err != nil {
+		httpx.Error(w, 409, "revision_conflict", "Project revision conflicts.", id)
+		return
+	}
+	httpx.WriteJSON(w, 200, saved)
+}
+func (s *Server) exportInterchange(w http.ResponseWriter, r *http.Request, p domain.Principal, routeID, id string) {
+	parts := strings.SplitN(routeID, ":", 2)
+	if len(parts) != 2 || !s.allowed(w, p, "project_export", parts[0], id) {
+		return
+	}
+	project, err := s.config.Projects.Get(r.Context(), p, parts[0])
+	if err != nil {
+		notFound(w, id)
+		return
+	}
+	var data []byte
+	if parts[1] == "csv" {
+		data, err = interchange.ExportCSV(project.Document)
+	} else {
+		data, err = interchange.ExportChapters(project.Document)
+	}
+	if err != nil {
+		internalError(w, id)
+		return
+	}
+	if parts[1] == "csv" {
+		w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	} else {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	}
+	w.Header().Set("Content-Disposition", `attachment; filename="cutlist.`+parts[1]+`"`)
+	w.WriteHeader(200)
+	_, _ = w.Write(data)
+}
+
 func (s *Server) getJob(writer http.ResponseWriter, request *http.Request, principal domain.Principal, job string, id string) {
 	if !s.allowed(writer, principal, "job_read", job, id) {
+		return
+	}
+	if s.config.Detection != nil {
+		if value, err := s.config.Detection.Get(request.Context(), principal, job); err == nil {
+			httpx.WriteJSON(writer, 200, value)
+			return
+		}
+	}
+	if s.config.Jobs == nil {
+		notFound(writer, id)
 		return
 	}
 	value, err := s.config.Jobs.Get(request.Context(), principal, job)
@@ -420,6 +779,20 @@ func (s *Server) getJob(writer http.ResponseWriter, request *http.Request, princ
 }
 func (s *Server) cancelJob(writer http.ResponseWriter, request *http.Request, principal domain.Principal, job string, id string) {
 	if !s.allowed(writer, principal, "job_cancel", job, id) {
+		return
+	}
+	if s.config.Detection != nil {
+		if _, err := s.config.Detection.Get(request.Context(), principal, job); err == nil {
+			if err := s.config.Detection.Cancel(request.Context(), principal, job); err != nil {
+				notFound(writer, id)
+				return
+			}
+			writer.WriteHeader(http.StatusNoContent)
+			return
+		}
+	}
+	if s.config.Jobs == nil {
+		notFound(writer, id)
 		return
 	}
 	if err := s.config.Jobs.Cancel(request.Context(), principal, job); err != nil {
@@ -463,7 +836,17 @@ func previewHeaders(writer http.ResponseWriter, spec PreviewSpec, cache string) 
 	writer.Header().Set("X-Preview-Cache", cache)
 }
 func validExport(input ExportInput) bool {
-	return input.Mode == "merge" && input.CutStrategy == "stream_copy_preferred" && input.Container == "mkv" && (input.SmartBoundaryReencode == nil || !*input.SmartBoundaryReencode)
+	if (input.Mode != "merge" && input.Mode != "separate") || (input.Selection != "" && input.Selection != "segments" && input.Selection != "gaps") || (input.CutStrategy != "stream_copy_preferred" && input.CutStrategy != "precise_reencode" && input.CutStrategy != "hybrid_smart_cut") || input.Container != "mkv" {
+		return false
+	}
+	seen := map[int]bool{}
+	for _, index := range input.StreamIndexes {
+		if index < 0 || seen[index] {
+			return false
+		}
+		seen[index] = true
+	}
+	return true
 }
 func notFound(writer http.ResponseWriter, id string) {
 	httpx.Error(writer, 404, "not_found", "Resource not found.", id)

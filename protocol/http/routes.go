@@ -21,11 +21,17 @@ const (
 	routeRefreshMedia
 	routeGetMedia
 	routePreview
+	routeThumbnails
+	routeWaveform
 	routeGetProject
 	routePutProject
 	routeCreateExport
+	routeImportInterchange
+	routeExportInterchange
+	routeCreateDetection
 	routeGetJob
 	routeCancelJob
+	routeAutomation
 )
 
 type route struct {
@@ -58,16 +64,28 @@ func parseRoute(method, path string) route {
 		return route{kind: routeGetMedia, id: parts[1]}
 	case len(parts) == 3 && parts[0] == "media" && validMediaID(parts[1]) && parts[2] == "preview" && (method == http.MethodGet || method == http.MethodHead):
 		return route{kind: routePreview, id: parts[1]}
+	case len(parts) == 3 && parts[0] == "media" && validMediaID(parts[1]) && parts[2] == "thumbnails" && method == http.MethodGet:
+		return route{kind: routeThumbnails, id: parts[1]}
+	case len(parts) == 3 && parts[0] == "media" && validMediaID(parts[1]) && parts[2] == "waveform" && method == http.MethodGet:
+		return route{kind: routeWaveform, id: parts[1]}
 	case len(parts) == 2 && parts[0] == "projects" && validProjectID(parts[1]) && method == http.MethodGet:
 		return route{kind: routeGetProject, id: parts[1]}
 	case len(parts) == 2 && parts[0] == "projects" && validProjectID(parts[1]) && method == http.MethodPut:
 		return route{kind: routePutProject, id: parts[1]}
 	case len(parts) == 3 && parts[0] == "projects" && validProjectID(parts[1]) && parts[2] == "exports" && method == http.MethodPost:
 		return route{kind: routeCreateExport, id: parts[1]}
+	case len(parts) == 4 && parts[0] == "projects" && validProjectID(parts[1]) && parts[2] == "interchange" && (parts[3] == "csv" || parts[3] == "chapters") && method == http.MethodPost:
+		return route{kind: routeImportInterchange, id: parts[1] + ":" + parts[3]}
+	case len(parts) == 4 && parts[0] == "projects" && validProjectID(parts[1]) && parts[2] == "interchange" && (parts[3] == "csv" || parts[3] == "chapters") && method == http.MethodGet:
+		return route{kind: routeExportInterchange, id: parts[1] + ":" + parts[3]}
+	case len(parts) == 3 && parts[0] == "projects" && validProjectID(parts[1]) && parts[2] == "detections" && method == http.MethodPost:
+		return route{kind: routeCreateDetection, id: parts[1]}
 	case len(parts) == 2 && parts[0] == "jobs" && validJobID(parts[1]) && method == http.MethodGet:
 		return route{kind: routeGetJob, id: parts[1]}
 	case len(parts) == 2 && parts[0] == "jobs" && validJobID(parts[1]) && method == http.MethodDelete:
 		return route{kind: routeCancelJob, id: parts[1]}
+	case len(parts) == 1 && parts[0] == "automation" && method == http.MethodPost:
+		return route{kind: routeAutomation}
 	default:
 		return route{}
 	}

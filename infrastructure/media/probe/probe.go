@@ -20,12 +20,23 @@ var ErrOutputTooLarge = errors.New("ffprobe output exceeds limit")
 
 // Metadata is the stable subset of ffprobe output used by the application.
 type Metadata struct {
-	DurationMS   int64  `json:"durationMs"`
-	Container    string `json:"container"`
-	Video        *Video `json:"video,omitempty"`
-	Audio        *Audio `json:"audio,omitempty"`
-	VideoStreams int    `json:"videoStreams"`
-	AudioStreams int    `json:"audioStreams"`
+	DurationMS   int64    `json:"durationMs"`
+	Container    string   `json:"container"`
+	Video        *Video   `json:"video,omitempty"`
+	Audio        *Audio   `json:"audio,omitempty"`
+	VideoStreams int      `json:"videoStreams"`
+	AudioStreams int      `json:"audioStreams"`
+	Streams      []Stream `json:"streams"`
+}
+
+type Stream struct {
+	Index        int    `json:"index"`
+	Type         string `json:"type"`
+	Codec        string `json:"codec"`
+	Width        int    `json:"width,omitempty"`
+	Height       int    `json:"height,omitempty"`
+	AvgFrameRate string `json:"avgFrameRate,omitempty"`
+	Channels     int    `json:"channels,omitempty"`
 }
 
 type Video struct {
@@ -33,6 +44,7 @@ type Video struct {
 	Width        int    `json:"width"`
 	Height       int    `json:"height"`
 	AvgFrameRate string `json:"avgFrameRate"`
+	FrameRate    string `json:"frameRate,omitempty"`
 }
 
 type Audio struct {
@@ -55,6 +67,87 @@ func (c Client) Probe(ctx context.Context, filename string) (Metadata, error) {
 
 // ProbeFile passes source as child descriptor 3 so FFprobe never reopens a
 // pathname after the media resolver has checked it.
+// FrameTimes returns video frame timestamps in milliseconds from an open descriptor.
+func (c Client) FrameTimes(ctx context.Context, source *os.File) ([]int64, error) {
+	if source == nil {
+		return nil, errors.New("ffprobe source is required")
+	}
+	path := c.Path
+	if path == "" {
+		path = "ffprobe"
+	}
+	cmd := exec.CommandContext(ctx, path, "-v", "error", "-select_streams", "v:0", "-show_entries", "frame=best_effort_timestamp_time", "-of", "json", "/proc/self/fd/3")
+	cmd.ExtraFiles = []*os.File{source}
+	var stdout, stderr limitedBuffer
+	stdout.limit, stderr.limit = maxOutputBytes, maxOutputBytes
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("ffprobe frame times: %w", err)
+	}
+	var parsed struct {
+		Frames []struct {
+			Timestamp string `json:"best_effort_timestamp_time"`
+		} `json:"frames"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &parsed); err != nil {
+		return nil, fmt.Errorf("ffprobe frame times: %w", err)
+	}
+	result := make([]int64, 0, len(parsed.Frames))
+	for _, frame := range parsed.Frames {
+		value, err := strconv.ParseFloat(frame.Timestamp, 64)
+		if err != nil || value < 0 {
+			return nil, errors.New("invalid video frame timestamp")
+		}
+		result = append(result, int64(math.Round(value*1000)))
+	}
+	if len(result) < 2 {
+		return nil, errors.New("insufficient video frame timestamps")
+	}
+	return result, nil
+}
+
+// Keyframes returns video keyframe timestamps in milliseconds from an open descriptor.
+func (c Client) Keyframes(ctx context.Context, source *os.File) ([]int64, error) {
+	if source == nil {
+		return nil, errors.New("ffprobe source is required")
+	}
+	path := c.Path
+	if path == "" {
+		path = "ffprobe"
+	}
+	cmd := exec.CommandContext(ctx, path, "-v", "error", "-select_streams", "v:0", "-show_entries", "frame=best_effort_timestamp_time,key_frame", "-of", "json", "/proc/self/fd/3")
+	cmd.ExtraFiles = []*os.File{source}
+	var stdout, stderr limitedBuffer
+	stdout.limit, stderr.limit = maxOutputBytes, maxOutputBytes
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		return nil, fmt.Errorf("ffprobe keyframes: %w", err)
+	}
+	var parsed struct {
+		Frames []struct {
+			Timestamp string `json:"best_effort_timestamp_time"`
+			Key       int    `json:"key_frame"`
+		} `json:"frames"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &parsed); err != nil {
+		return nil, fmt.Errorf("ffprobe keyframes: %w", err)
+	}
+	result := make([]int64, 0)
+	for _, frame := range parsed.Frames {
+		if frame.Key != 1 {
+			continue
+		}
+		value, err := strconv.ParseFloat(frame.Timestamp, 64)
+		if err == nil && value >= 0 {
+			result = append(result, int64(math.Round(value*1000)))
+		}
+	}
+	if len(result) == 0 {
+		return nil, errors.New("no video keyframes")
+	}
+	return result, nil
+}
+
 func (c Client) ProbeFile(ctx context.Context, source *os.File) (Metadata, error) {
 	if source == nil {
 		return Metadata{}, errors.New("ffprobe source is required")
@@ -69,7 +162,7 @@ func (c Client) run(ctx context.Context, input string, files []*os.File) (Metada
 	}
 	cmd := exec.CommandContext(ctx, path,
 		"-v", "error",
-		"-show_entries", "format=duration,format_name:stream=index,codec_type,codec_name,width,height,avg_frame_rate,channels",
+		"-show_entries", "format=duration,format_name:stream=index,codec_type,codec_name,width,height,avg_frame_rate,r_frame_rate,channels",
 		"-of", "json",
 		input,
 	)
@@ -116,11 +209,13 @@ type response struct {
 		Name     string `json:"format_name"`
 	} `json:"format"`
 	Streams []struct {
+		Index        int    `json:"index"`
 		Type         string `json:"codec_type"`
 		Codec        string `json:"codec_name"`
 		Width        int    `json:"width"`
 		Height       int    `json:"height"`
 		AvgFrameRate string `json:"avg_frame_rate"`
+		FrameRate    string `json:"r_frame_rate"`
 		Channels     int    `json:"channels"`
 	} `json:"streams"`
 }
@@ -139,11 +234,12 @@ func normalize(data []byte) (Metadata, error) {
 		return Metadata{}, fmt.Errorf("invalid duration %q", parsed.Format.Duration)
 	}
 	for _, stream := range parsed.Streams {
+		result.Streams = append(result.Streams, Stream{Index: stream.Index, Type: stream.Type, Codec: stream.Codec, Width: stream.Width, Height: stream.Height, AvgFrameRate: stream.AvgFrameRate, Channels: stream.Channels})
 		switch stream.Type {
 		case "video":
 			result.VideoStreams++
 			if result.Video == nil {
-				result.Video = &Video{Codec: stream.Codec, Width: stream.Width, Height: stream.Height, AvgFrameRate: stream.AvgFrameRate}
+				result.Video = &Video{Codec: stream.Codec, Width: stream.Width, Height: stream.Height, AvgFrameRate: stream.AvgFrameRate, FrameRate: stream.FrameRate}
 			}
 		case "audio":
 			result.AudioStreams++

@@ -62,6 +62,76 @@ func TestStreamCopySegmentsMergeWithWarningAndAtomicPublish(t *testing.T) {
 	}
 }
 
+func TestHybridSmartCutMKVFixtureAndFallback(t *testing.T) {
+	ffmpeg, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg is required")
+	}
+	if _, err := exec.LookPath("ffprobe"); err != nil {
+		t.Skip("ffprobe is required")
+	}
+	directory := t.TempDir()
+	sourcePath := filepath.Join(directory, "fixture.mkv")
+	fixture := exec.Command(ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=30", "-f", "lavfi", "-i", "sine=frequency=880:sample_rate=48000", "-t", "2", "-map", "0:v:0", "-map", "1:a:0", "-c:v", "libx264", "-g", "15", "-pix_fmt", "yuv420p", "-c:a", "libopus", sourcePath)
+	if output, err := fixture.CombinedOutput(); err != nil {
+		t.Skipf("cannot generate fixture: %v: %s", err, output)
+	}
+	source, err := os.Open(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	service := export.Service{FFmpegPath: ffmpeg, OutputDir: filepath.Join(directory, "exports")}
+	document := domain.Document{Segments: []domain.Segment{{StartMS: 100, EndMS: 900}}}
+	result, err := service.Run(context.Background(), source, document, export.Request{Mode: "merge", CutStrategy: "hybrid_smart_cut", Container: "mkv"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Warnings) != 1 || result.Warnings[0].Code != "experimental_hybrid_smart_cut" {
+		t.Fatalf("result = %#v", result)
+	}
+	if _, err := (probe.Client{}).Probe(context.Background(), filepath.Join(service.OutputDir, result.OutputName)); err != nil {
+		t.Fatalf("hybrid output does not probe: %v", err)
+	}
+}
+
+func TestHybridSmartCutRejectsWebMAndInvalidRate(t *testing.T) {
+	ffmpeg, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg is required")
+	}
+	directory := t.TempDir()
+	webm := filepath.Join(directory, "fixture.webm")
+	cmd := exec.Command(ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=160x90:rate=30", "-t", "1", "-c:v", "libvpx-vp9", webm)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Skipf("cannot generate WebM fixture: %v: %s", err, output)
+	}
+	source, err := os.Open(webm)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	service := export.Service{FFmpegPath: ffmpeg, OutputDir: filepath.Join(directory, "exports")}
+	_, err = service.Run(context.Background(), source, domain.Document{Segments: []domain.Segment{{StartMS: 0, EndMS: 500}}}, export.Request{Mode: "merge", CutStrategy: "hybrid_smart_cut", Container: "mkv"})
+	if !errors.Is(err, export.ErrInvalidRequest) {
+		t.Fatalf("WebM error = %v", err)
+	}
+	vfr := filepath.Join(directory, "fixture-vfr.mkv")
+	cmd = exec.Command(ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=160x90:rate=30", "-t", "1", "-vf", "select='if(lt(n,15),not(mod(n,3)),not(mod(n,2)))'", "-fps_mode", "vfr", "-c:v", "libx264", vfr)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Skipf("cannot generate VFR fixture: %v: %s", err, output)
+	}
+	vfrSource, err := os.Open(vfr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer vfrSource.Close()
+	_, err = service.Run(context.Background(), vfrSource, domain.Document{Segments: []domain.Segment{{StartMS: 0, EndMS: 500}}}, export.Request{Mode: "merge", CutStrategy: "hybrid_smart_cut", Container: "mkv"})
+	if !errors.Is(err, export.ErrInvalidRequest) {
+		t.Fatalf("VFR error = %v", err)
+	}
+}
+
 func TestCancellationRemovesIncompleteOutput(t *testing.T) {
 	directory := t.TempDir()
 	sourcePath := filepath.Join(directory, "source")

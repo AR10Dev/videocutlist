@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"regexp"
+	"sort"
 	"unicode/utf8"
 )
 
@@ -46,8 +47,10 @@ func Validate(document Document, durationMS int64) error {
 	if document.UIState.Zoom <= 0 || math.IsNaN(document.UIState.Zoom) || math.IsInf(document.UIState.Zoom, 0) {
 		return errors.New("zoom must be positive")
 	}
+	ordered := append([]Segment(nil), document.Segments...)
+	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].StartMS < ordered[j].StartMS })
 	var previousEnd int64
-	for i, segment := range document.Segments {
+	for i, segment := range ordered {
 		if segment.StartMS < 0 || segment.StartMS >= segment.EndMS || segment.EndMS > durationMS {
 			return fmt.Errorf("segment %d is outside media duration", i)
 		}

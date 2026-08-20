@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   canStreamPreview,
   formatTime,
+  hybridSmartCutKnownIneligible,
   previewMime,
   streamPreview,
   validateSegments,
@@ -9,6 +10,29 @@ import {
 } from "../src/preview";
 
 afterEach(() => vi.unstubAllGlobals());
+
+describe("hybrid Smart Cut eligibility", () => {
+  const media = (video: Record<string, unknown>, overrides = {}) => ({
+    id: "m1",
+    name: "clip.mkv",
+    durationMs: 1000,
+    sizeBytes: 1,
+    container: "matroska,webm",
+    streams: { video },
+    etag: "e1",
+    ...overrides,
+  });
+
+  it("rejects known non-H.264, non-MKV, and VFR metadata", () => {
+    expect(hybridSmartCutKnownIneligible(media({ codec: "hevc", avgFrameRate: "25/1", frameRate: "25/1" }))).toBe(true);
+    expect(hybridSmartCutKnownIneligible(media({ codec: "h264", avgFrameRate: "25/1", frameRate: "25/1" }, { name: "clip.webm" }))).toBe(true);
+    expect(hybridSmartCutKnownIneligible(media({ codec: "h264", avgFrameRate: "25/1", frameRate: "30/1" }))).toBe(true);
+  });
+
+  it("does not disable when metadata is incomplete", () => {
+    expect(hybridSmartCutKnownIneligible(media({ codec: "h264", avgFrameRate: "25/1" }))).toBe(false);
+  });
+});
 
 describe("segment validation", () => {
   it("accepts ordered, non-overlapping integer millisecond segments", () => {

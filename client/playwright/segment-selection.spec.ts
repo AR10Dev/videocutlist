@@ -50,6 +50,9 @@ test.beforeEach(async ({ page }) => {
     Object.defineProperty(URL, "revokeObjectURL", { value: () => undefined });
   });
   let savedRevision = 0;
+  let detectionPoll = 0;
+  let detectionProjectId = "p_demo-project";
+  let detectionRevision = 1;
   await page.route(`${apiOrigin}/api/v1/**`, async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -57,6 +60,10 @@ test.beforeEach(async ({ page }) => {
       return route.fulfill({ json: { items: [media, secondMedia] } });
     if (url.pathname === `/api/v1/media/${media.id}`)
       return route.fulfill({ json: media });
+    if (url.pathname.endsWith("/thumbnails"))
+      return route.fulfill({ headers: { "content-type": "image/png" }, body: "png-fixture" });
+    if (url.pathname.endsWith("/waveform"))
+      return route.fulfill({ json: { startMs: 0, durationMs: 10000, peaks: [0.1, 0.5, 1] } });
     if (url.pathname.includes("/preview")) {
       const center = url.searchParams.get("centerMs") ?? "0";
       if (center === "1000")
@@ -75,6 +82,22 @@ test.beforeEach(async ({ page }) => {
         body: "fragment",
       });
     }
+    if (url.pathname.endsWith("/detections") && request.method() === "POST") {
+      const kind = (request.postDataJSON() as { kind?: string }).kind ?? "silence";
+      const projectId = url.pathname.split("/")[4];
+      detectionProjectId = projectId;
+      detectionRevision = savedRevision;
+      return route.fulfill({ status: 202, json: { id: `j_detection-${kind}`, type: "detection", state: "queued", mediaId: media.id, projectId, projectRevision: detectionRevision, kind } });
+    }
+    if (url.pathname.includes("/jobs/j_detection-black") && request.method() === "GET")
+      return route.fulfill({ json: { id: "j_detection-black", type: "detection", state: "failed", mediaId: media.id, projectId: detectionProjectId, projectRevision: detectionRevision, kind: "black", errorCode: "detection_failed" } });
+    if (url.pathname.includes("/jobs/j_detection-silence") && request.method() === "GET") {
+      detectionPoll += 1;
+      if (detectionPoll === 1) return route.fulfill({ json: { id: "j_detection-silence", type: "detection", state: "running", mediaId: media.id, projectId: detectionProjectId, projectRevision: detectionRevision, kind: "silence" } });
+      return route.fulfill({ json: { id: "j_detection-silence", type: "detection", state: "succeeded", mediaId: media.id, projectId: detectionProjectId, projectRevision: detectionRevision, kind: "silence", candidates: [{ id: "c_detection-1", mediaId: media.id, projectId: detectionProjectId, projectRevision: detectionRevision, startMs: 1000, endMs: 1500, source: "silence", confidence: 0.9 }] } });
+    }
+    if (url.pathname.includes("/jobs/j_detection-") && request.method() === "DELETE")
+      return route.fulfill({ status: 204 });
     if (request.method() === "GET")
       return route.fulfill({
         json: {
@@ -94,9 +117,10 @@ test.beforeEach(async ({ page }) => {
           },
         });
       savedRevision += 1;
+      const savedProjectId = url.pathname.split("/")[4];
       return route.fulfill({
         json: {
-          id: "p_demo-project",
+          id: savedProjectId,
           mediaId: media.id,
           revision: savedRevision,
           segments: [],
@@ -106,6 +130,47 @@ test.beforeEach(async ({ page }) => {
     }
     return route.fulfill({ status: 404 });
   });
+});
+
+test("detection polls, presents candidates, and supports reject and accept", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await page.getByRole("button", { name: "Detect silence" }).click();
+  await expect(page.getByText("Detection running.")).toBeVisible();
+  await expect(page.getByText(/1 candidates found/)).toBeVisible();
+  await page.getByRole("button", { name: "Reject" }).click();
+  await expect(page.getByText("Candidate rejected.")).toBeVisible();
+  await page.getByRole("button", { name: "Detect silence" }).click();
+  await expect(page.getByText(/1 candidates found/)).toBeVisible();
+  await page.getByRole("button", { name: "Accept" }).click();
+  await expect(page.getByText("Candidate accepted; save the project to persist it.")).toBeVisible();
+  await expect(page.getByText(/1 segment selected/)).toBeVisible();
+});
+
+test("detection can be cancelled and reports failed jobs", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await page.getByRole("button", { name: "Detect silence" }).click();
+  await expect(page.getByRole("button", { name: "Cancel detection" })).toBeVisible();
+  await page.getByRole("button", { name: "Cancel detection" }).click();
+  await expect(page.getByText("Detection cancelled.")).toBeVisible();
+  await page.getByRole("button", { name: "Detect black frames" }).click();
+  await expect(page.getByText("Detection failed: detection_failed.")).toBeVisible();
+});
+
+test("loads timeline assets through independent fixture routes", async ({ page }) => {
+  const requests: string[] = [];
+  page.on("request", (request) => { if (request.url().includes("/thumbnails") || request.url().includes("/waveform")) requests.push(request.url()); });
+  await page.goto("/");
+  await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await expect(page.getByRole("group", { name: /Timeline/ })).toBeVisible();
+  await expect(page.getByText("No segments selected.")).toBeVisible();
+  expect(requests.some((url) => url.includes("/thumbnails?"))).toBeTruthy();
+  expect(requests.some((url) => url.includes("/waveform?"))).toBeTruthy();
+  await expect(page.locator('img[alt="Timeline contact sheet"]')).toBeVisible();
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByRole("button", { name: /second.mp4/ }).click();
+  await expect(page.locator('img[alt="Timeline contact sheet"]')).toHaveCount(0);
 });
 
 test("MVP browser behavior: list, metadata, settle, cancel, offset, markers, restore, and stale protection", async ({
@@ -651,23 +716,34 @@ test("keeps the first page after a later-page failure and permits retry", async 
 test("refresh replaces the first page and selected metadata", async ({ page }) => {
   const refreshed = { ...media, name: "refreshed.mp4", etag: "v2" };
   let refreshes = 0;
-  await page.route(`${apiOrigin}/api/v1/media**`, (route) => {
+  await page.route(`${apiOrigin}/api/v1/media**`, async (route) => {
     const url = new URL(route.request().url());
     if (url.pathname === "/api/v1/media/refresh") {
       refreshes += 1;
       return route.fulfill({ json: { id: "j_refresh", type: "media_refresh", state: "succeeded", progress: 1 } });
     }
+    if (route.request().method() !== "GET") return route.fallback();
     if (url.pathname === `/api/v1/media/${media.id}`)
       return route.fulfill({ json: refreshes ? refreshed : media });
-    if (url.pathname === "/api/v1/media" && route.request().method() === "GET")
+    if (url.pathname === "/api/v1/media")
       return route.fulfill({ json: { items: refreshes ? [refreshed] : [media], nextCursor: null } });
+    if (refreshes && (url.pathname.endsWith("/thumbnails") || url.pathname.endsWith("/waveform"))) {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      return route.fulfill(url.pathname.endsWith("/thumbnails")
+        ? { headers: { "content-type": "image/png" }, body: "refreshed-png-fixture" }
+        : { json: { startMs: 0, durationMs: 10000, peaks: [0.2, 0.6] } });
+    }
     return route.fallback();
   });
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await expect(page.locator('img[alt="Timeline contact sheet"]')).toBeVisible();
+  await expect(page.locator(".timeline-waveform i")).toHaveCount(3);
   await page.getByRole("button", { name: "Refresh media" }).click();
   await expect(page.getByRole("button", { name: /refreshed.mp4/ })).toBeVisible();
   await expect(page.getByText("Media refreshed. Choose media to begin.")).toBeVisible();
+  await expect(page.locator('img[alt="Timeline contact sheet"]')).toHaveCount(0);
+  await expect(page.locator(".timeline-waveform i")).toHaveCount(0);
 });
 
 for (const [status, message] of [[403, "You are not allowed to refresh media."], [429, "Media refresh is already in progress. Try again shortly."]] as const) {

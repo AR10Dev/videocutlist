@@ -36,3 +36,20 @@ export const recentProjects = (value: unknown): RecentProject[] => {
 
 export const confirmDiscard = (dirty: boolean, confirm: () => boolean) =>
   !dirty || confirm();
+
+export const projectJson = (project: unknown): string => {
+  if (!project || typeof project !== "object" || JSON.stringify(project).length > 1_000_000)
+    throw new Error("Project is too large or invalid.");
+  return JSON.stringify(project);
+};
+
+export const parseProjectJson = (text: string): Record<string, unknown> => {
+  if (text.length > 1_000_000) throw new Error("Project file is too large.");
+  let value: unknown;
+  try { value = JSON.parse(text); } catch { throw new Error("Project file is invalid JSON."); }
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Project shape is invalid.");
+  const object = value as Record<string, unknown>;
+  if (typeof object.mediaId !== "string" || !Array.isArray(object.segments) || !object.uiState || typeof object.uiState !== "object")
+    throw new Error("Project shape is invalid.");
+  return object;
+};

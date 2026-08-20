@@ -6,6 +6,10 @@ export type ClientConfiguration = {
   authentication: Authentication;
 };
 
+export const MAX_INTERCHANGE_FILE_BYTES = 1 << 20;
+export const validInterchangeFileSize = (size: number) =>
+  Number.isSafeInteger(size) && size >= 0 && size <= MAX_INTERCHANGE_FILE_BYTES;
+
 declare global {
   interface Window {
     VIDEOCUTLIST_CONFIG?: ClientConfiguration;
@@ -125,5 +129,11 @@ export function createApiClient(
     });
   };
 
-  return { url, request };
+  const assetRequest = (mediaId: string, kind: "thumbnails" | "waveform", params: Record<string, number>, init: RequestInit = {}) => {
+    const query = new URLSearchParams(Object.entries(params).map(([key, value]) => [key, String(value)]));
+    return request(`media/${encodeURIComponent(mediaId)}/${kind}?${query}`, init);
+  };
+  const interchangeRequest = (projectId: string, format: "csv" | "chapters", init: RequestInit = {}) =>
+    request(`projects/${encodeURIComponent(projectId)}/interchange/${format}`, init);
+  return { url, request, assetRequest, interchangeRequest };
 }

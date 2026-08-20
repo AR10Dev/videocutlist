@@ -17,6 +17,9 @@ var mediaMigration string
 //go:embed migrations/004_cache.sql
 var cacheMigration string
 
+//go:embed migrations/005_detection_jobs.sql
+var detectionJobsMigration string
+
 // OpenDatabase opens the single-host SQLite store and applies ordered,
 // idempotent migrations.
 func OpenDatabase(ctx context.Context, path string) (*sql.DB, error) {
@@ -39,6 +42,7 @@ func OpenDatabase(ctx context.Context, path string) (*sql.DB, error) {
 		projectsMigration,
 		jobsMigration,
 		cacheMigration,
+		detectionJobsMigration,
 	} {
 		if _, err := db.ExecContext(ctx, statement); err != nil {
 			_ = db.Close()

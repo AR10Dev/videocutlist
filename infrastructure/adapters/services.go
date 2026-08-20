@@ -59,6 +59,7 @@ func media(item index.Media) application.Media {
 	if item.Metadata.Audio != nil {
 		streams["audio"] = item.Metadata.Audio
 	}
+	streams["tracks"] = item.Metadata.Streams
 	return application.Media{ID: item.ID, Name: item.Name, DurationMS: item.Metadata.DurationMS, SizeBytes: item.SizeBytes, Container: item.Metadata.Container, Streams: streams, ETag: index.SourceFingerprint(item)}
 }
 func preview(item index.Media, request application.PreviewSpec) domain.PreviewSpec {

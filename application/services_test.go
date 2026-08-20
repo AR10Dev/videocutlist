@@ -178,7 +178,7 @@ func TestExportJobResultIsSafeAndStateCompatible(t *testing.T) {
 	retainUntil := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
 	record := store.ExportJob{ID: "j_aaaaaaaaaaaa", State: store.JobSucceeded, ResultJSON: sql.NullString{String: `{"outputName":"export.mkv","sizeBytes":42,"retainUntil":"` + retainUntil.Format(time.RFC3339) + `","warnings":[{"message":"Cut may start at an earlier keyframe."}],"outputDir":"/exports/private","stderr":"secret"}`, Valid: true}}
 	job := jobResult(record)
-	if job.Result == nil || *job.Result != (JobResult{OutputName: "export.mkv", SizeBytes: 42, RetainUntil: retainUntil}) || len(job.Warnings) != 1 || job.Warnings[0] != "Cut may start at an earlier keyframe." || job.ErrorCode != nil {
+	if job.Result == nil || job.Result.OutputName != "export.mkv" || len(job.Result.OutputNames) != 0 || job.Result.SizeBytes != 42 || !job.Result.RetainUntil.Equal(retainUntil) || len(job.Warnings) != 1 || job.Warnings[0] != "Cut may start at an earlier keyframe." || job.ErrorCode != nil {
 		t.Fatalf("job = %#v", job)
 	}
 
