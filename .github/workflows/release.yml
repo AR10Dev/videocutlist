@@ -14,6 +14,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   IMAGE: ghcr.io/ar10dev/videocutlist
   TAG: ${{ inputs.tag || github.ref_name }}
@@ -39,6 +43,20 @@ jobs:
           cache: pnpm
           cache-dependency-path: client/pnpm-lock.yaml
       - run: pnpm --dir client install --frozen-lockfile
+      - name: Validate release tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          version_pattern='^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
+          if [[ ! "$TAG" =~ $version_pattern ]]; then
+            echo "Invalid version tag: $TAG" >&2
+            exit 1
+          fi
+          if ! git ls-remote --exit-code origin \
+            "refs/tags/$TAG" >/dev/null; then
+            echo "Release tag does not exist: $TAG" >&2
+            exit 1
+          fi
       - run: make check
 
   publish-image:
@@ -61,11 +79,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          version_pattern='^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$'
-          if [[ ! "$TAG" =~ $version_pattern ]]; then
-            echo "Invalid version tag: $TAG" >&2
-            exit 1
-          fi
           docker build \
             --file deployments/containers/Dockerfile \
             --tag "$IMAGE:$TAG" \
@@ -81,10 +94,13 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      GH_REPO: ${{ github.repository }}
     steps:
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release view "$TAG" || \
-            gh release create "$TAG" --title "$TAG" --generate-notes
+            gh release create "$TAG" --repo "$GH_REPO" --verify-tag \
+              --title "$TAG" --generate-notes

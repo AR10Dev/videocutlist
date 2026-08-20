@@ -1,43 +1,53 @@
 name: CI
 
 on:
-  push:
-  pull_request:
+    push:
+        branches:
+            - main
+    pull_request:
+
+concurrency:
+    group: ci-${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: true
 
 permissions:
-  contents: read
+    contents: read
 
 jobs:
-  check:
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v7.0.1
-      - uses: actions/setup-go@v7.0.0
-        with:
-          go-version: "1.26.6"
-      - uses: pnpm/action-setup@v6.0.10
-        with:
-          version: 10.34.5
-      - uses: actions/setup-node@v7.0.0
-        with:
-          node-version: "26.7.0"
-          cache: pnpm
-          cache-dependency-path: client/pnpm-lock.yaml
-      - run: pnpm --dir client install --frozen-lockfile
-      - run: pnpm --dir client audit --audit-level high
-      - run: pnpm --dir client exec playwright install-deps chromium
-      - name: Download Chromium
-        shell: bash
-        run: |
-          for attempt in 1 2 3; do
-            if timeout 10m pnpm --dir client exec playwright install \
-              chromium; then
-              exit 0
-            fi
-            echo "Chromium download attempt $attempt failed" >&2
-            sleep 5
-          done
-          echo "Chromium download failed after 3 attempts" >&2
-          exit 1
-      - run: make smoke
+    check:
+        runs-on: ubuntu-latest
+        timeout-minutes: 30
+        steps:
+            - uses: actions/checkout@v7.0.1
+            - uses: actions/setup-go@v7.0.0
+              with:
+                  go-version: "1.26.6"
+            - uses: pnpm/action-setup@v6.0.10
+              with:
+                  version: 10.34.5
+            - uses: actions/setup-node@v7.0.0
+              with:
+                  node-version: "26.7.0"
+                  cache: pnpm
+                  cache-dependency-path: client/pnpm-lock.yaml
+            - run: pnpm --dir client install --frozen-lockfile
+            - run: pnpm --dir client audit --audit-level high
+            - run: make check
+
+    e2e:
+        runs-on: ubuntu-latest
+        timeout-minutes: 30
+        steps:
+            - uses: actions/checkout@v7.0.1
+            - uses: pnpm/action-setup@v6.0.10
+              with:
+                  version: 10.34.5
+            - uses: actions/setup-node@v7.0.0
+              with:
+                  node-version: "26.7.0"
+                  cache: pnpm
+                  cache-dependency-path: client/pnpm-lock.yaml
+            - run: pnpm --dir client install --frozen-lockfile
+            - run: pnpm --dir client exec playwright install-deps chromium
+            - run: pnpm --dir client exec playwright install --only-shell chromium
+            - run: make e2e
