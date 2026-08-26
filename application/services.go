@@ -40,6 +40,7 @@ type ExportJobs interface {
 }
 type ExportExecutor interface {
 	Execute(context.Context, string, string, domain.Document) error
+	Preflight(context.Context, domain.Principal, string, Project, ExportInput) (ExportPreflight, error)
 }
 
 type MediaUseCase struct {
@@ -123,6 +124,13 @@ func NewExportUseCase(jobs ExportJobs, executor ExportExecutor, limit int) *Expo
 	return &ExportUseCase{Jobs: jobs, Executor: executor, slots: make(chan struct{}, limit), cancel: map[string]context.CancelFunc{}}
 }
 func (e *ExportUseCase) Create(ctx context.Context, principal domain.Principal, projectID string, project Project, input ExportInput) (Job, error) {
+	preflight, err := e.Executor.Preflight(ctx, principal, projectID, project, input)
+	if err != nil {
+		return Job{}, err
+	}
+	if !preflight.Allowed {
+		return Job{}, errors.New("export preflight blocked")
+	}
 	select {
 	case e.slots <- struct{}{}:
 	default:
@@ -139,12 +147,14 @@ func (e *ExportUseCase) Create(ctx context.Context, principal domain.Principal, 
 		return Job{}, err
 	}
 	data, err := json.Marshal(struct {
-		Mode          string `json:"mode"`
-		Selection     string `json:"selection"`
-		StreamIndexes []int  `json:"streamIndexes,omitempty"`
-		CutStrategy   string `json:"cutStrategy"`
-		Container     string `json:"container"`
-	}{input.Mode, input.Selection, input.StreamIndexes, input.CutStrategy, input.Container})
+		Mode             string `json:"mode"`
+		Selection        string `json:"selection"`
+		StreamIndexes    []int  `json:"streamIndexes,omitempty"`
+		CutStrategy      string `json:"cutStrategy"`
+		Container        string `json:"container"`
+		DestinationID    string `json:"destinationId,omitempty"`
+		FilenameTemplate string `json:"filenameTemplate,omitempty"`
+	}{input.Mode, input.Selection, input.StreamIndexes, input.CutStrategy, input.Container, input.DestinationID, input.FilenameTemplate})
 	if err != nil {
 		return Job{}, err
 	}
@@ -242,22 +252,31 @@ func jobResult(record store.ExportJob) Job {
 		progress = 1
 	}
 	job := Job{ID: record.ID, Type: "export", State: string(record.State), Progress: progress, CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt}
+	var request ExportInput
+	if json.Unmarshal([]byte(record.RequestJSON), &request) == nil {
+		job.Strategy, job.Mode, job.Selection, job.SelectedStreams = request.CutStrategy, request.Mode, request.Selection, append([]int(nil), request.StreamIndexes...)
+	}
 	if record.State == store.JobFailed && record.ErrorCode.Valid {
 		value := record.ErrorCode.String
 		job.ErrorCode = &value
 	}
 	if record.State == store.JobSucceeded && record.ResultJSON.Valid {
 		var result struct {
-			OutputName  string    `json:"outputName"`
-			OutputNames []string  `json:"outputNames"`
-			SizeBytes   int64     `json:"sizeBytes"`
-			RetainUntil time.Time `json:"retainUntil"`
-			Warnings    []struct {
+			OutputName      string    `json:"outputName"`
+			OutputNames     []string  `json:"outputNames"`
+			SizeBytes       int64     `json:"sizeBytes"`
+			RetainUntil     time.Time `json:"retainUntil"`
+			DestinationID   string    `json:"destinationId"`
+			DestinationKind string    `json:"destinationKind"`
+			Warnings        []struct {
+				Code    string `json:"code"`
 				Message string `json:"message"`
 			} `json:"warnings"`
+			Verified bool `json:"verified"`
 		}
 		if json.Unmarshal([]byte(record.ResultJSON.String), &result) == nil && safeOutputNames(result.OutputName, result.OutputNames) && result.SizeBytes >= 0 && !result.RetainUntil.IsZero() {
-			job.Result = &JobResult{OutputName: result.OutputName, OutputNames: result.OutputNames, SizeBytes: result.SizeBytes, RetainUntil: result.RetainUntil}
+			job.Result = &JobResult{OutputName: result.OutputName, OutputNames: result.OutputNames, SizeBytes: result.SizeBytes, RetainUntil: result.RetainUntil, DestinationID: result.DestinationID, DestinationKind: result.DestinationKind}
+			job.Verified = result.Verified
 			for _, warning := range result.Warnings {
 				if len(job.Warnings) == 10 {
 					break
@@ -266,6 +285,7 @@ func jobResult(record store.ExportJob) Job {
 					warning.Message = warning.Message[:500]
 				}
 				job.Warnings = append(job.Warnings, warning.Message)
+				job.WarningDetails = append(job.WarningDetails, ExportFinding{Severity: "warn", Code: warning.Code, Message: warning.Message})
 			}
 		}
 	}

@@ -95,8 +95,22 @@ func run(ctx context.Context) error {
 	previewService := application.PreviewUseCase{Catalog: mediaCatalog, Manager: previewManager}
 	assetService := &assets.Service{Scanner: scanner, Media: mediaStore, FFmpegPath: cfg.FFmpegPath, CacheDir: cfg.CacheDir, MaxBytes: cfg.CacheMaxBytes}
 	projectService := application.ProjectUseCase{Repository: adapters.ProjectRepository{Store: projectStore}}
+	artifacts := exporter.NewArtifactStore()
+	artifacts.Cleanup(time.Now().UTC())
+	go func() {
+		ticker := time.NewTicker(15 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case now := <-ticker.C:
+				artifacts.Cleanup(now.UTC())
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
 	exportExecutor := adapters.NewExportExecutor(jobStore, scanner, mediaStore, exporter.Service{
-		FFmpegPath: cfg.FFmpegPath, FFprobePath: cfg.FFprobePath, OutputDir: cfg.ExportDir,
+		FFmpegPath: cfg.FFmpegPath, FFprobePath: cfg.FFprobePath, OutputDir: cfg.ExportDir, Destinations: cfg.Destinations, Artifacts: artifacts,
 	})
 	exportService := application.NewExportUseCase(jobStore, exportExecutor, cfg.ExportLimit)
 	detectionService := application.NewDetectionUseCase(detectionStore, detection.Service{Scanner: scanner, Catalog: mediaStore, FFmpegPath: cfg.FFmpegPath}, cfg.ExportLimit)
@@ -109,7 +123,8 @@ func run(ctx context.Context) error {
 	}
 	apiServer, err := httpapi.New(httpapi.Config{
 		Authenticator: authenticator, Media: mediaService, Preview: previewService, Assets: assetService,
-		Projects: projectService, Exports: exportService, Jobs: jobService, Detection: detectionService,
+		Projects: projectService, Exports: exportService, Preflight: exportExecutor, Jobs: jobService, Detection: detectionService, Download: exportExecutor,
+		Destinations: destinationMetadata(cfg.Destinations),
 		Authorize: httpapi.AuthorizerFunc(func(principal domain.Principal, action, resource string) bool {
 			return principal.Allows(action, resource)
 		}),
@@ -146,6 +161,15 @@ func run(ctx context.Context) error {
 		defer cancel()
 		return server.Shutdown(shutdown)
 	}
+}
+
+func destinationMetadata(values []exporter.Destination) []httpapi.DestinationMetadata {
+	result := make([]httpapi.DestinationMetadata, 0, len(values))
+	for _, value := range values {
+		public := value.Public()
+		result = append(result, httpapi.DestinationMetadata{ID: public.ID, Label: public.Label, Description: public.Description, Kind: public.Kind, Retention: public.Retention})
+	}
+	return result
 }
 
 func newHTTPServer(cfg config.Config, handler http.Handler) *http.Server {

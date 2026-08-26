@@ -31,11 +31,14 @@ var (
 )
 
 type Request struct {
-	Mode          string `json:"mode"`
-	Selection     string `json:"selection"`
-	StreamIndexes []int  `json:"streamIndexes,omitempty"`
-	CutStrategy   string `json:"cutStrategy"`
-	Container     string `json:"container"`
+	Mode             string `json:"mode"`
+	Selection        string `json:"selection"`
+	StreamIndexes    []int  `json:"streamIndexes,omitempty"`
+	CutStrategy      string `json:"cutStrategy"`
+	Container        string `json:"container"`
+	DestinationID    string `json:"destinationId,omitempty"`
+	FilenameTemplate string `json:"filenameTemplate,omitempty"`
+	JobID            string `json:"-"`
 }
 
 type Warning struct {
@@ -45,19 +48,24 @@ type Warning struct {
 
 // Result deliberately contains only an output name, never a filesystem path.
 type Result struct {
-	OutputName  string    `json:"outputName,omitempty"`
-	OutputNames []string  `json:"outputNames,omitempty"`
-	SizeBytes   int64     `json:"sizeBytes"`
-	RetainUntil time.Time `json:"retainUntil"`
-	Warnings    []Warning `json:"warnings,omitempty"`
+	OutputName      string    `json:"outputName,omitempty"`
+	OutputNames     []string  `json:"outputNames,omitempty"`
+	SizeBytes       int64     `json:"sizeBytes"`
+	RetainUntil     time.Time `json:"retainUntil"`
+	DestinationID   string    `json:"destinationId,omitempty"`
+	DestinationKind string    `json:"destinationKind,omitempty"`
+	Warnings        []Warning `json:"warnings,omitempty"`
+	Verified        bool      `json:"verified"`
 }
 
 type Service struct {
-	FFmpegPath  string
-	FFprobePath string
-	OutputDir   string
-	Retention   time.Duration
-	Now         func() time.Time
+	FFmpegPath   string
+	FFprobePath  string
+	OutputDir    string // backwards-compatible default download destination
+	Destinations []Destination
+	Artifacts    *ArtifactStore
+	Retention    time.Duration
+	Now          func() time.Time
 }
 
 func (s Service) Run(ctx context.Context, source *os.File, document domain.Document, request Request) (Result, error) {
@@ -71,15 +79,23 @@ func (s Service) Run(ctx context.Context, source *os.File, document domain.Docum
 		request.Selection = "segments"
 	}
 	var metadata probe.Metadata
-	if request.Selection == "gaps" || len(request.StreamIndexes) > 0 {
-		var probeErr error
-		metadata, probeErr = (probe.Client{Path: s.FFprobePath}).ProbeFile(ctx, source)
-		if probeErr != nil {
-			return Result{}, fmt.Errorf("probe export source: %w", probeErr)
+	var probeErr error
+	if err := ctx.Err(); err != nil {
+		return Result{}, fmt.Errorf("%w: %v", ErrCancelled, err)
+	}
+	metadata, probeErr = (probe.Client{Path: s.FFprobePath}).ProbeFile(ctx, source)
+	if probeErr != nil {
+		if err := ctx.Err(); err != nil {
+			return Result{}, fmt.Errorf("%w: %v", ErrCancelled, err)
 		}
-		if err := validateStreamIndexes(request.StreamIndexes, metadata.Streams); err != nil {
-			return Result{}, fmt.Errorf("%w: %v", ErrInvalidRequest, err)
-		}
+		return Result{}, fmt.Errorf("probe export source: %w", probeErr)
+	}
+	preflight := Preflight(request, metadata)
+	if !preflight.Allowed {
+		return Result{}, fmt.Errorf("%w: export preflight blocked", ErrInvalidRequest)
+	}
+	request.StreamIndexes = preflight.Selection
+	if request.Selection == "gaps" { /* metadata is also needed for duration below */
 	}
 	segments := append([]domain.Segment(nil), document.Segments...)
 	if request.Selection == "gaps" {
@@ -119,17 +135,29 @@ func (s Service) Run(ctx context.Context, source *os.File, document domain.Docum
 			}
 		}
 	}
-	if s.OutputDir == "" {
-		return Result{}, errors.New("export output directory is required")
+	destination := Destination{ID: "download", Kind: KindDownload, Root: s.OutputDir, Retention: s.Retention}
+	for _, candidate := range s.Destinations {
+		if candidate.ID == request.DestinationID || request.DestinationID == "" && candidate.ID == "download" {
+			destination = candidate
+			break
+		}
 	}
-	if err := os.MkdirAll(s.OutputDir, 0o750); err != nil {
+	if request.DestinationID != "" && destination.ID != request.DestinationID {
+		return Result{}, fmt.Errorf("%w: unknown destination", ErrInvalidRequest)
+	}
+	outputDir, err := destinationRoot(destination, source.Name())
+	if err != nil {
+		return Result{}, fmt.Errorf("%w: %v", ErrInvalidRequest, err)
+	}
+	outputDir, err = prepareDestinationRoot(outputDir)
+	if err != nil {
 		return Result{}, fmt.Errorf("create export directory: %w", err)
 	}
-	outputName, err := uniqueName(s.OutputDir, now(s))
+	outputName, err := outputFileName(outputDir, request, source.Name(), 0, now(s))
 	if err != nil {
 		return Result{}, err
 	}
-	temporaryOutput, err := os.CreateTemp(s.OutputDir, ".export-*.mkv")
+	temporaryOutput, err := os.CreateTemp(outputDir, ".videocutlist-export-*.mkv")
 	if err != nil {
 		return Result{}, fmt.Errorf("create export temporary file: %w", err)
 	}
@@ -140,7 +168,7 @@ func (s Service) Run(ctx context.Context, source *os.File, document domain.Docum
 	}
 	defer os.Remove(temporaryPath)
 
-	workDir, err := os.MkdirTemp(s.OutputDir, ".export-segments-")
+	workDir, err := os.MkdirTemp(outputDir, ".videocutlist-segments-")
 	if err != nil {
 		return Result{}, err
 	}
@@ -154,19 +182,30 @@ func (s Service) Run(ctx context.Context, source *os.File, document domain.Docum
 		}
 	}
 	if request.Mode == "separate" {
-		result := Result{OutputNames: make([]string, 0, len(segmentFiles)), RetainUntil: now(s).Add(retention(s))}
-		for _, segmentFile := range segmentFiles {
-			if _, err := (probe.Client{Path: s.FFprobePath}).Probe(ctx, segmentFile); err != nil {
+		result := Result{OutputNames: make([]string, 0, len(segmentFiles)), RetainUntil: now(s).Add(destinationRetention(destination, s)), DestinationID: destination.ID, DestinationKind: destination.Kind}
+		published := make([]string, 0, len(segmentFiles))
+		committed := false
+		defer func() {
+			if !committed {
+				for _, path := range published {
+					_ = os.Remove(path)
+				}
+			}
+		}()
+		for i, segmentFile := range segmentFiles {
+			if err := verifyOutput(ctx, s.FFprobePath, segmentFile, metadata, request.StreamIndexes, segments[i].EndMS-segments[i].StartMS); err != nil {
 				return Result{}, fmt.Errorf("validate export: %w", err)
 			}
-			name, err := uniqueName(s.OutputDir, now(s))
+			name, err := outputFileName(outputDir, request, source.Name(), i, now(s))
 			if err != nil {
 				return Result{}, err
 			}
-			if err := os.Rename(segmentFile, filepath.Join(s.OutputDir, name)); err != nil {
+			publishedPath := filepath.Join(outputDir, name)
+			if err := os.Rename(segmentFile, publishedPath); err != nil {
 				return Result{}, err
 			}
-			info, err := os.Stat(filepath.Join(s.OutputDir, name))
+			published = append(published, publishedPath)
+			info, err := os.Stat(publishedPath)
 			if err != nil {
 				return Result{}, err
 			}
@@ -178,6 +217,15 @@ func (s Service) Run(ctx context.Context, source *os.File, document domain.Docum
 		} else if request.CutStrategy == "hybrid_smart_cut" {
 			result.Warnings = hybridWarnings(segments, keyframes, hybridInterior)
 		}
+		result.Verified = request.CutStrategy != "precise_reencode"
+		committed = true
+		if s.Artifacts != nil {
+			values := make([]Artifact, len(result.OutputNames))
+			for i, name := range result.OutputNames {
+				values[i] = Artifact{Path: filepath.Join(outputDir, name), Name: name, Kind: destination.Kind, Expires: result.RetainUntil}
+			}
+			s.Artifacts.Put(request.JobID, values)
+		}
 		return result, nil
 	}
 	if len(segmentFiles) == 1 {
@@ -188,10 +236,14 @@ func (s Service) Run(ctx context.Context, source *os.File, document domain.Docum
 		return Result{}, err
 	}
 
-	if _, err := (probe.Client{Path: s.FFprobePath}).Probe(ctx, temporaryPath); err != nil {
+	expectedDuration := int64(0)
+	for _, segment := range segments {
+		expectedDuration += segment.EndMS - segment.StartMS
+	}
+	if err := verifyOutput(ctx, s.FFprobePath, temporaryPath, metadata, request.StreamIndexes, expectedDuration); err != nil {
 		return Result{}, fmt.Errorf("validate export: %w", err)
 	}
-	finalPath := filepath.Join(s.OutputDir, outputName)
+	finalPath := filepath.Join(outputDir, outputName)
 	if err := os.Rename(temporaryPath, finalPath); err != nil {
 		return Result{}, fmt.Errorf("publish export: %w", err)
 	}
@@ -199,7 +251,10 @@ func (s Service) Run(ctx context.Context, source *os.File, document domain.Docum
 	if err != nil {
 		return Result{}, err
 	}
-	result := Result{OutputName: outputName, SizeBytes: info.Size(), RetainUntil: now(s).Add(retention(s))}
+	result := Result{OutputName: outputName, SizeBytes: info.Size(), RetainUntil: now(s).Add(destinationRetention(destination, s)), DestinationID: destination.ID, DestinationKind: destination.Kind, Verified: request.CutStrategy != "precise_reencode"}
+	if s.Artifacts != nil {
+		s.Artifacts.Put(request.JobID, []Artifact{{Path: finalPath, Name: outputName, Kind: destination.Kind, Expires: result.RetainUntil}})
+	}
 	if request.CutStrategy == "precise_reencode" {
 		result.Warnings = []Warning{{Code: "experimental_precise_reencode", Message: "Experimental full re-encode mode; output boundaries and codec behavior require inspection."}}
 	} else if request.CutStrategy == "hybrid_smart_cut" {
@@ -220,14 +275,15 @@ func (s Service) copySegment(ctx context.Context, source *os.File, segment domai
 	if _, err := source.Seek(0, io.SeekStart); err != nil {
 		return fmt.Errorf("rewind export source: %w", err)
 	}
-	args := []string{"-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-ss", seconds(segment.StartMS), "-i", sourceArgument(), "-t", seconds(segment.EndMS - segment.StartMS), "-map", "0", "-avoid_negative_ts", "make_zero"}
-	if len(request.StreamIndexes) > 0 {
-		args = append(args[:len(args)-2], "-map")
+	args := []string{"-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-ss", seconds(segment.StartMS), "-i", sourceArgument(), "-t", seconds(segment.EndMS - segment.StartMS)}
+	if len(request.StreamIndexes) == 0 {
+		args = append(args, "-map", "0")
+	} else {
 		for _, index := range request.StreamIndexes {
-			args = append(args, fmt.Sprintf("0:%d", index))
+			args = append(args, "-map", fmt.Sprintf("0:%d", index))
 		}
-		args = append(args, "-avoid_negative_ts", "make_zero")
 	}
+	args = append(args, "-avoid_negative_ts", "make_zero")
 	if request.CutStrategy == "precise_reencode" {
 		args = append(args, "-c:v", "libx264", "-c:a", "aac")
 	} else {
@@ -507,7 +563,33 @@ func retention(s Service) time.Duration {
 	if s.Retention > 0 {
 		return s.Retention
 	}
-	return 30 * 24 * time.Hour
+	return 24 * time.Hour
+}
+func destinationRetention(d Destination, s Service) time.Duration {
+	if d.Kind == KindArchive {
+		return 100 * 365 * 24 * time.Hour
+	}
+	if d.Retention > 0 {
+		return d.Retention
+	}
+	return retention(s)
+}
+
+func outputFileName(directory string, request Request, source string, segment int, at time.Time) (string, error) {
+	values := map[string]string{"source": strings.TrimSuffix(filepath.Base(source), filepath.Ext(source)), "date": at.Format("20060102"), "time": at.Format("150405"), "segment": strconv.Itoa(segment + 1), "mode": request.Mode, "ext": "mkv"}
+	name, err := RenderTemplate(request.FilenameTemplate, values)
+	if err != nil {
+		return "", fmt.Errorf("%w: %v", ErrInvalidRequest, err)
+	}
+	if name == "" {
+		name = "cut-" + uniqueSuffix()
+	}
+	name = strings.TrimSuffix(name, ".mkv") + "-" + uniqueSuffix() + ".mkv"
+	candidate := filepath.Join(directory, name)
+	if _, err := os.Stat(candidate); err == nil {
+		return outputFileName(directory, request, source, segment, at)
+	}
+	return name, nil
 }
 
 func uniqueName(directory string, at time.Time) (string, error) {

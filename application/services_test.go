@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"strconv"
 	"strings"
@@ -114,6 +115,10 @@ type executorStub struct {
 	once      sync.Once
 }
 
+func (e *executorStub) Preflight(context.Context, domain.Principal, string, Project, ExportInput) (ExportPreflight, error) {
+	return ExportPreflight{Allowed: true}, nil
+}
+
 func (e *executorStub) Execute(ctx context.Context, _ string, _ string, _ domain.Document) error {
 	e.once.Do(func() { close(e.started) })
 	<-ctx.Done()
@@ -126,6 +131,31 @@ func project() Project {
 }
 func input() ExportInput {
 	return ExportInput{Mode: "merge", CutStrategy: "stream_copy_preferred", Container: "mkv"}
+}
+
+func TestExportDurableRequestPreservesDestinationAndTemplate(t *testing.T) {
+	jobs, executor := &jobsStub{}, &executorStub{started: make(chan struct{}), cancelled: make(chan struct{})}
+	useCase := NewExportUseCase(jobs, executor, 1)
+	request := input()
+	request.DestinationID = "archive"
+	request.FilenameTemplate = "{source}-{segment}.{ext}"
+	if _, err := useCase.Create(context.Background(), domain.Principal{Subject: "editor"}, "p_aaaaaaaaaaaa", project(), request); err != nil {
+		t.Fatal(err)
+	}
+	jobs.mu.Lock()
+	encoded := jobs.job.RequestJSON
+	jobs.mu.Unlock()
+	var durable ExportInput
+	if err := json.Unmarshal([]byte(encoded), &durable); err != nil {
+		t.Fatal(err)
+	}
+	if durable.DestinationID != request.DestinationID || durable.FilenameTemplate != request.FilenameTemplate {
+		t.Fatalf("durable request = %#v", durable)
+	}
+	if err := useCase.Cancel(context.Background(), "editor", jobs.job.ID); err != nil {
+		t.Fatal(err)
+	}
+	<-executor.cancelled
 }
 
 func TestExportAdmissionPrecedesDurableCreation(t *testing.T) {

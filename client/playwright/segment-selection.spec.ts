@@ -89,6 +89,8 @@ test.beforeEach(async ({ page }) => {
         body: "fragment",
       });
     }
+    if (url.pathname.endsWith("/exports/preflight") && request.method() === "POST")
+      return route.fulfill({ json: { allowed: true, selection: [], findings: [] } });
     if (url.pathname.endsWith("/detections") && request.method() === "POST") {
       const kind = (request.postDataJSON() as { kind?: string }).kind ?? "silence";
       const projectId = url.pathname.split("/")[4];
@@ -407,6 +409,8 @@ test("exports the saved segments, polls to a safe result, and shows warnings", a
       streamIndexes: [],
       cutStrategy: "stream_copy_preferred",
       container: "mkv",
+      destinationId: "download",
+      filenameTemplate: "{source}-{segment}.{ext}",
     });
     await route.fulfill({
       json: { id: "j_export", type: "export", state: "queued", progress: 0 },

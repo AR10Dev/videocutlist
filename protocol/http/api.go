@@ -11,6 +11,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -75,6 +76,7 @@ type PreviewService = application.PreviewService
 type AssetService = application.AssetService
 type ProjectService = application.ProjectService
 type ExportService = application.ExportService
+type ExportPreflightService = application.ExportPreflightService
 type JobService = application.JobService
 type DetectionRequest = application.DetectionRequest
 type DetectionJob = application.DetectionJob
@@ -82,6 +84,13 @@ type DetectionService interface {
 	Create(context.Context, domain.Principal, string, DetectionRequest) (DetectionJob, error)
 	Get(context.Context, domain.Principal, string) (DetectionJob, error)
 	Cancel(context.Context, domain.Principal, string) error
+}
+type DestinationMetadata struct {
+	ID          string `json:"id"`
+	Label       string `json:"label"`
+	Description string `json:"description,omitempty"`
+	Kind        string `json:"kind"`
+	Retention   string `json:"retention,omitempty"`
 }
 type Authorizer interface {
 	Allow(domain.Principal, string, string) bool
@@ -99,8 +108,11 @@ type Config struct {
 	Assets        AssetService
 	Projects      ProjectService
 	Exports       ExportService
+	Preflight     ExportPreflightService
 	Jobs          JobService
 	Detection     DetectionService
+	Download      application.ExportDownloadService
+	Destinations  []DestinationMetadata
 	Authorize     Authorizer
 	Ready         func(context.Context) error
 	Logger        *log.Logger
@@ -181,6 +193,9 @@ func (s *Server) dispatch(writer http.ResponseWriter, request *http.Request, id 
 	}
 	r := parseRoute(request.Method, request.URL.EscapedPath())
 	switch r.kind {
+	case routeListDestinations:
+		httpx.WriteJSON(writer, http.StatusOK, map[string]any{"destinations": s.config.Destinations})
+		return "/api/v1/destinations", principal.Subject
 	case routeListMedia:
 		s.listMedia(writer, request, id)
 		return "/api/v1/media", principal.Subject
@@ -208,6 +223,9 @@ func (s *Server) dispatch(writer http.ResponseWriter, request *http.Request, id 
 	case routeCreateExport:
 		s.createExport(writer, request, principal, r.id, id)
 		return "/api/v1/projects/{projectId}/exports", principal.Subject
+	case routePreflightExport:
+		s.preflightExport(writer, request, principal, r.id, id)
+		return "/api/v1/projects/{projectId}/exports/preflight", principal.Subject
 	case routeImportInterchange:
 		s.importInterchange(writer, request, principal, r.id, id)
 		return "/api/v1/projects/{projectId}/interchange/{format}", principal.Subject
@@ -220,6 +238,9 @@ func (s *Server) dispatch(writer http.ResponseWriter, request *http.Request, id 
 	case routeGetJob:
 		s.getJob(writer, request, principal, r.id, id)
 		return "/api/v1/jobs/{jobId}", principal.Subject
+	case routeDownloadOutput:
+		s.downloadOutput(writer, request, principal, r.id, id)
+		return "/api/v1/jobs/{jobId}/outputs/{position}", principal.Subject
 	case routeCancelJob:
 		s.cancelJob(writer, request, principal, r.id, id)
 		return "/api/v1/jobs/{jobId}", principal.Subject
@@ -229,6 +250,46 @@ func (s *Server) dispatch(writer http.ResponseWriter, request *http.Request, id 
 	}
 	httpx.Error(writer, http.StatusNotFound, "not_found", "Resource not found.", id)
 	return routeFor(request.URL.Path), principal.Subject
+}
+
+func (s *Server) downloadOutput(w http.ResponseWriter, r *http.Request, p domain.Principal, encoded, id string) {
+	if s.config.Download == nil {
+		return
+	}
+	parts := strings.Split(encoded, ":")
+	if len(parts) != 2 || !validJobID(parts[0]) {
+		notFound(w, id)
+		return
+	}
+	if !s.allowed(w, p, "job_read", parts[0], id) {
+		return
+	}
+	position, err := strconv.Atoi(parts[1])
+	if err != nil || position < 0 || position > 99 {
+		notFound(w, id)
+		return
+	}
+	file, name, err := s.config.Download.Download(r.Context(), p, parts[0], position)
+	if err != nil {
+		notFound(w, id)
+		return
+	}
+	defer file.Close()
+	if !safeOutputName(name) {
+		notFound(w, id)
+		return
+	}
+	w.Header().Set("Content-Type", "video/x-matroska")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.Copy(w, file)
+}
+
+func safeOutputName(name string) bool {
+	if name == "" || strings.ContainsAny(name, `/\\\"`) {
+		return false
+	}
+	return filepath.Base(name) == name
 }
 
 func (s *Server) identity(writer http.ResponseWriter, request *http.Request, id string) (domain.Principal, bool) {
@@ -531,6 +592,30 @@ func (s *Server) putProject(writer http.ResponseWriter, request *http.Request, p
 		return
 	}
 	httpx.WriteJSON(writer, 200, saved)
+}
+func (s *Server) preflightExport(writer http.ResponseWriter, request *http.Request, principal domain.Principal, project string, id string) {
+	if s.config.Preflight == nil || !s.allowed(writer, principal, "export", project, id) {
+		if s.config.Preflight == nil {
+			internalError(writer, id)
+		}
+		return
+	}
+	owned, err := s.config.Projects.Get(request.Context(), principal, project)
+	if err != nil {
+		notFound(writer, id)
+		return
+	}
+	var input ExportInput
+	if httpx.ReadJSON(request, &input) != nil || !validExport(input) {
+		httpx.Error(writer, 422, "invalid_export", "Export is invalid.", id)
+		return
+	}
+	result, err := s.config.Preflight.Preflight(request.Context(), principal, project, owned, input)
+	if err != nil {
+		httpx.Error(writer, 422, "preflight_failed", "Export preflight failed.", id)
+		return
+	}
+	httpx.WriteJSON(writer, 200, result)
 }
 func (s *Server) createExport(writer http.ResponseWriter, request *http.Request, principal domain.Principal, project string, id string) {
 	if !s.allowed(writer, principal, "export", project, id) {
@@ -855,6 +940,9 @@ func previewHeaders(writer http.ResponseWriter, spec PreviewSpec, cache string) 
 }
 func validExport(input ExportInput) bool {
 	if (input.Mode != "merge" && input.Mode != "separate") || (input.Selection != "" && input.Selection != "segments" && input.Selection != "gaps") || (input.CutStrategy != "stream_copy_preferred" && input.CutStrategy != "precise_reencode" && input.CutStrategy != "hybrid_smart_cut") || input.Container != "mkv" {
+		return false
+	}
+	if len(input.DestinationID) > 64 || len(input.FilenameTemplate) > 160 || strings.ContainsAny(input.DestinationID, "/\\") || strings.ContainsAny(input.FilenameTemplate, "\x00") {
 		return false
 	}
 	seen := map[int]bool{}

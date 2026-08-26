@@ -105,7 +105,13 @@ func (s *Scanner) Scan(ctx context.Context, alias string) ([]Record, error) {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if entry.IsDir() || !isMediaPath(path) {
+		if entry.IsDir() {
+			if filepath.Base(path) == ".videocutlist-exports" {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if !isMediaPath(path) {
 			return nil
 		}
 		file, info, err := openMedia(root, path)

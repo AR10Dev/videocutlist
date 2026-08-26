@@ -31,6 +31,7 @@ func TestParseRoute(t *testing.T) {
 		{"waveform", http.MethodGet, "/api/v1/media/" + media + "/waveform", routeWaveform, media},
 		{"project put", http.MethodPut, "/api/v1/projects/" + project, routePutProject, project},
 		{"export", http.MethodPost, "/api/v1/projects/" + project + "/exports", routeCreateExport, project},
+		{"export preflight", http.MethodPost, "/api/v1/projects/" + project + "/exports/preflight", routePreflightExport, project},
 		{"csv import", http.MethodPost, "/api/v1/projects/" + project + "/interchange/csv", routeImportInterchange, project + ":csv"},
 		{"chapter export", http.MethodGet, "/api/v1/projects/" + project + "/interchange/chapters", routeExportInterchange, project + ":chapters"},
 		{"detection", http.MethodPost, "/api/v1/projects/" + project + "/detections", routeCreateDetection, project},

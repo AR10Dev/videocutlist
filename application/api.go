@@ -35,28 +35,38 @@ type Project struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 type ExportInput struct {
-	Mode          string `json:"mode"`
-	Selection     string `json:"selection"`
-	StreamIndexes []int  `json:"streamIndexes,omitempty"`
-	CutStrategy   string `json:"cutStrategy"`
-	Container     string `json:"container"`
+	Mode             string `json:"mode"`
+	Selection        string `json:"selection"`
+	StreamIndexes    []int  `json:"streamIndexes,omitempty"`
+	CutStrategy      string `json:"cutStrategy"`
+	Container        string `json:"container"`
+	DestinationID    string `json:"destinationId,omitempty"`
+	FilenameTemplate string `json:"filenameTemplate,omitempty"`
 }
 type Job struct {
-	ID        string     `json:"id"`
-	Type      string     `json:"type"`
-	State     string     `json:"state"`
-	Progress  float64    `json:"progress"`
-	Result    *JobResult `json:"result,omitempty"`
-	Warnings  []string   `json:"warnings,omitempty"`
-	ErrorCode *string    `json:"errorCode,omitempty"`
-	CreatedAt time.Time  `json:"createdAt"`
-	UpdatedAt time.Time  `json:"updatedAt"`
+	ID              string          `json:"id"`
+	Type            string          `json:"type"`
+	State           string          `json:"state"`
+	Progress        float64         `json:"progress"`
+	Result          *JobResult      `json:"result,omitempty"`
+	Warnings        []string        `json:"warnings,omitempty"`
+	WarningDetails  []ExportFinding `json:"warningDetails,omitempty"`
+	Strategy        string          `json:"strategy,omitempty"`
+	Mode            string          `json:"mode,omitempty"`
+	Selection       string          `json:"selection,omitempty"`
+	SelectedStreams []int           `json:"selectedStreams,omitempty"`
+	Verified        bool            `json:"verified,omitempty"`
+	ErrorCode       *string         `json:"errorCode,omitempty"`
+	CreatedAt       time.Time       `json:"createdAt"`
+	UpdatedAt       time.Time       `json:"updatedAt"`
 }
 type JobResult struct {
-	OutputName  string    `json:"outputName,omitempty"`
-	OutputNames []string  `json:"outputNames,omitempty"`
-	SizeBytes   int64     `json:"sizeBytes"`
-	RetainUntil time.Time `json:"retainUntil"`
+	OutputName      string    `json:"outputName,omitempty"`
+	OutputNames     []string  `json:"outputNames,omitempty"`
+	SizeBytes       int64     `json:"sizeBytes"`
+	RetainUntil     time.Time `json:"retainUntil"`
+	DestinationID   string    `json:"destinationId,omitempty"`
+	DestinationKind string    `json:"destinationKind,omitempty"`
 }
 type PreviewSpec struct {
 	MediaID                                 string
@@ -105,9 +115,26 @@ type ProjectService interface {
 type ExportService interface {
 	Create(context.Context, domain.Principal, string, Project, ExportInput) (Job, error)
 }
+type ExportPreflightService interface {
+	Preflight(context.Context, domain.Principal, string, Project, ExportInput) (ExportPreflight, error)
+}
+type ExportFinding struct {
+	Severity    string `json:"severity"`
+	Code        string `json:"code"`
+	Message     string `json:"message"`
+	StreamIndex *int   `json:"streamIndex,omitempty"`
+}
+type ExportPreflight struct {
+	Allowed   bool            `json:"allowed"`
+	Selection []int           `json:"selection"`
+	Findings  []ExportFinding `json:"findings"`
+}
 type JobService interface {
 	Get(context.Context, domain.Principal, string) (Job, error)
 	Cancel(context.Context, domain.Principal, string) error
+}
+type ExportDownloadService interface {
+	Download(context.Context, domain.Principal, string, int) (io.ReadCloser, string, error)
 }
 
 // NormalizePreview is the one frozen preview-window implementation used by all transports.

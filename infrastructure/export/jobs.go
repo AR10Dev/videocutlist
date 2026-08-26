@@ -30,6 +30,7 @@ func (c Coordinator) Execute(ctx context.Context, owner, jobID string, source *o
 		_, _ = c.Jobs.Fail(context.Background(), owner, jobID, "invalid_export_request")
 		return Result{}, fmt.Errorf("decode export request: %w", err)
 	}
+	request.JobID = jobID
 	result, err := c.Exporter.Run(ctx, source, document, request)
 	if err != nil {
 		stateContext := context.Background() // Persist a terminal state even after request cancellation.
@@ -50,6 +51,9 @@ func (c Coordinator) Execute(ctx context.Context, owner, jobID string, source *o
 		return Result{}, err
 	}
 	if _, err := c.Jobs.Succeed(context.Background(), owner, jobID, string(data)); err != nil {
+		if c.Exporter.Artifacts != nil {
+			c.Exporter.Artifacts.Remove(jobID)
+		}
 		return Result{}, err
 	}
 	return result, nil

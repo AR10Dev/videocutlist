@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	exporter "videocutlist/infrastructure/export"
 )
 
 const (
@@ -43,6 +45,7 @@ type Config struct {
 	DatabasePath        string
 	CacheDir            string
 	ExportDir           string
+	Destinations        []exporter.Destination
 	MediaRoots          map[string]string
 	AuthMode            string
 	BearerToken         string
@@ -97,6 +100,19 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 	}
 	if c.DatabasePath == "" || c.CacheDir == "" || c.ExportDir == "" {
 		return Config{}, fmt.Errorf("VIDEOCUTLIST_DATABASE_PATH, VIDEOCUTLIST_CACHE_DIR, and VIDEOCUTLIST_EXPORT_DIR are required")
+	}
+	c.Destinations = []exporter.Destination{{ID: "download", Label: "Downloads", Kind: exporter.KindDownload, Root: c.ExportDir, Retention: 24 * time.Hour, RetentionText: "24h"}}
+	if raw := value(lookup, "VIDEOCUTLIST_DESTINATIONS_JSON", ""); raw != "" {
+		if err := json.Unmarshal([]byte(raw), &c.Destinations); err != nil || len(c.Destinations) == 0 {
+			return Config{}, fmt.Errorf("VIDEOCUTLIST_DESTINATIONS_JSON must be a non-empty JSON array")
+		}
+	}
+	seenDestinations := map[string]bool{}
+	for _, destination := range c.Destinations {
+		if destination.ID == "" || seenDestinations[destination.ID] || destination.Kind != exporter.KindDownload && destination.Kind != exporter.KindArchive && destination.Kind != exporter.KindSourceAdjacent {
+			return Config{}, fmt.Errorf("invalid destination configuration")
+		}
+		seenDestinations[destination.ID] = true
 	}
 	if err := json.Unmarshal([]byte(required(lookup, "VIDEOCUTLIST_MEDIA_ROOTS_JSON")), &c.MediaRoots); err != nil || len(c.MediaRoots) == 0 {
 		return Config{}, fmt.Errorf("VIDEOCUTLIST_MEDIA_ROOTS_JSON must be a non-empty JSON object")

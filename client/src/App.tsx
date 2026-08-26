@@ -39,6 +39,13 @@ import {
 } from "./projectLifecycle";
 
 type MediaPage = { items: Media[]; nextCursor?: string | null };
+type Destination = {
+  id: string;
+  label: string;
+  description?: string;
+  kind: string;
+  retention?: string;
+};
 type Project = {
   id: string;
   mediaId: string;
@@ -53,10 +60,17 @@ type ExportJob = {
   result?: {
     outputName?: string;
     outputNames?: string[];
+    destinationKind?: string;
     sizeBytes: number;
     retainUntil: string;
   };
   warnings?: string[];
+  warningDetails?: { severity: string; code: string; message: string; streamIndex?: number }[];
+  strategy?: string;
+  mode?: string;
+  selection?: string;
+  selectedStreams?: number[];
+  verified?: boolean;
   errorCode?: string;
 };
 type DetectionJob = {
@@ -99,6 +113,17 @@ export function App() {
   const [exportSelection, setExportSelection] = createSignal<"segments" | "gaps">("segments");
   const [cutStrategy, setCutStrategy] = createSignal("stream_copy_preferred");
   const [streamIndexes, setStreamIndexes] = createSignal<number[]>([]);
+  const [destinations, setDestinations] = createSignal<Destination[]>([]);
+  const [destinationId, setDestinationId] = createSignal("download");
+  const [filenameTemplate, setFilenameTemplate] = createSignal(
+    localStorage.getItem("videocutlist.filenameTemplate") ?? "{source}-{segment}.{ext}",
+  );
+  const [preflight, setPreflight] = createSignal<{
+    allowed: boolean;
+    selection: number[];
+    findings: { severity: string; code: string; message: string; streamIndex?: number }[];
+  }>();
+  const [preflightPending, setPreflightPending] = createSignal(false);
   const [detectionJob, setDetectionJob] = createSignal<DetectionJob>();
   const [detectionStatus, setDetectionStatus] = createSignal("");
   const [detectionCandidates, setDetectionCandidates] = createSignal<Candidate[]>([]);
@@ -129,6 +154,7 @@ export function App() {
   let editorVersion = 0;
   let exportTimer: number | undefined;
   let exportRequest = 0;
+  let preflightVersion = 0;
   let detectionTimer: number | undefined;
   let detectionRequest = 0;
   let exportController: AbortController | undefined;
@@ -429,12 +455,23 @@ export function App() {
     const value = selected()?.streams.tracks;
     return Array.isArray(value)
       ? value.filter(
-          (track): track is { index: number; type: string; codec: string } =>
+          (
+            track,
+          ): track is {
+            index: number;
+            type: string;
+            codec: string;
+            language?: string;
+            disposition?: string[];
+          } =>
             !!track &&
             typeof track === "object" &&
             Number.isInteger((track as { index?: unknown }).index) &&
             typeof (track as { type?: unknown }).type === "string" &&
-            typeof (track as { codec?: unknown }).codec === "string",
+            typeof (track as { codec?: unknown }).codec === "string" &&
+            ((track as { type: string }).type === "video" ||
+              (track as { type: string }).type === "audio" ||
+              (track as { type: string }).type === "subtitle"),
         )
       : [];
   };
@@ -635,9 +672,103 @@ export function App() {
     exportController?.abort();
   });
   const exportFailure = exportFailureMessage;
+  void api.request("destinations").then(async (response) => {
+    if (!response.ok) return;
+    const value = (await response.json()) as { destinations?: Destination[] };
+    const items = Array.isArray(value.destinations) ? value.destinations : [];
+    setDestinations(items);
+    if (items.length && !items.some((item) => item.id === destinationId()))
+      setDestinationId(items[0].id);
+  });
+  createEffect(
+    () =>
+      [
+        selected(),
+        projectId(),
+        exportMode(),
+        exportSelection(),
+        cutStrategy(),
+        streamIndexes(),
+        revision(),
+        tracks(),
+        destinationId(),
+        filenameTemplate(),
+      ] as const,
+    ([
+      item,
+      currentProjectID,
+      mode,
+      selection,
+      strategy,
+      indexes,
+      _revision,
+      _tracks,
+      destination,
+      template,
+    ]) => {
+      if (!item) {
+        setPreflight(undefined);
+        return;
+      }
+      if (exportTimer) window.clearTimeout(exportTimer);
+      setPreflightPending(true);
+      const version = ++preflightVersion;
+      exportTimer = window.setTimeout(async () => {
+        try {
+          const response = await api.request(
+            `projects/${encodeURIComponent(currentProjectID)}/exports/preflight`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                mode,
+                selection,
+                streamIndexes: indexes,
+                cutStrategy: strategy,
+                container: "mkv",
+                destinationId: destination,
+                filenameTemplate: template,
+              }),
+            },
+          );
+          if (version !== preflightVersion) return;
+          if (response.ok) setPreflight(await response.json());
+          else
+            setPreflight({
+              allowed: false,
+              selection: [],
+              findings: [
+                {
+                  severity: "blocked",
+                  code: "preflight_failed",
+                  message: "Export preflight failed.",
+                },
+              ],
+            });
+        } catch {
+          if (version === preflightVersion)
+            setPreflight({
+              allowed: false,
+              selection: [],
+              findings: [
+                {
+                  severity: "blocked",
+                  code: "preflight_failed",
+                  message: "Export preflight failed.",
+                },
+              ],
+            });
+        }
+        if (version === preflightVersion) setPreflightPending(false);
+      }, 250);
+    },
+  );
   const exportProject = async () => {
     const saved = await saveProject();
     if (!saved) return;
+    // Saving changes the revision and schedules a fresh preflight; the export
+    // endpoint repeats it authoritatively, so do not strand the button meanwhile.
+    setPreflightPending(false);
     const request = ++exportRequest;
     exportController?.abort();
     const controller = new AbortController();
@@ -655,6 +786,8 @@ export function App() {
           streamIndexes: streamIndexes(),
           cutStrategy: cutStrategy(),
           container: "mkv",
+          destinationId: destinationId(),
+          filenameTemplate: filenameTemplate(),
         }),
         signal: controller.signal,
       });
@@ -1380,7 +1513,10 @@ export function App() {
                       );
                     }}
                   />{" "}
-                  {track.type} {track.codec} (#{track.index})
+                  {track.type} {track.codec}
+                  {track.language ? ` · ${track.language}` : ""}
+                  {track.disposition?.length ? ` · ${track.disposition.join(", ")}` : ""} (#
+                  {track.index})
                 </label>
               );
             }}
@@ -1399,9 +1535,76 @@ export function App() {
             </option>
           </select>
         </label>
+        <label>
+          Destination{" "}
+          <select
+            value={destinationId()}
+            onChange={(event) => setDestinationId(event.currentTarget.value)}
+          >
+            <For each={destinations()}>
+              {(destination) => (
+                <option value={destination.id}>
+                  {destination.label} ({destination.retention ?? "durable"})
+                </option>
+              )}
+            </For>
+          </select>
+        </label>
+        <label>
+          Filename template{" "}
+          <input
+            value={filenameTemplate()}
+            onInput={(event) => {
+              const value = event.currentTarget.value;
+              setFilenameTemplate(value);
+              localStorage.setItem("videocutlist.filenameTemplate", value);
+            }}
+            aria-label="Filename template"
+          />
+        </label>
+        <p role="status">
+          Preview:{" "}
+          {filenameTemplate()
+            .replaceAll("{ext}", "mkv")
+            .replaceAll("{segment}", "1")
+            .replaceAll("{mode}", exportMode()) || "server default"}
+        </p>
+        <div aria-label="Export review">
+          <p>
+            Review: {exportMode()} {exportSelection()} · {cutStrategy()}
+          </p>
+          <p>
+            Requested segment bounds:{" "}
+            {present()
+              .segments.map(
+                (segment) =>
+                  `${formatTime(segment.startMs, duration())}–${formatTime(segment.endMs, duration())}`,
+              )
+              .join(", ") || "none"}
+          </p>
+          <p>Selected streams: {preflight()?.selection?.join(", ") || "default safe streams"}</p>
+          <Show when={cutStrategy() === "stream_copy_preferred"}>
+            <p>Stream-copy cuts may begin at an earlier keyframe; no frame-exactness is claimed.</p>
+          </Show>
+          <Show when={cutStrategy() !== "stream_copy_preferred"}>
+            <p>Boundary precision depends on the selected strategy and requires human review.</p>
+          </Show>
+          <For each={preflight()?.findings ?? []}>
+            {(finding) => (
+              <p role="status">
+                {finding.severity}: {finding.message}
+              </p>
+            )}
+          </For>
+        </div>
         <div class="controls">
           <button
-            disabled={!selected() || !present().segments.length}
+            disabled={
+              !selected() ||
+              !present().segments.length ||
+              preflightPending() ||
+              (!dirty() && !preflight()?.allowed)
+            }
             onClick={() => void exportProject()}
           >
             Start export
@@ -1418,10 +1621,39 @@ export function App() {
                 {exportJob()!.result!.outputName ?? exportJob()!.result!.outputNames?.join(", ")}
               </p>
               <p>
+                Strategy: {exportJob()!.strategy ?? cutStrategy()} ·{" "}
+                {exportJob()!.verified ? "verified output" : "verification pending"}
+              </p>
+              <p>
                 {exportJob()!.result!.sizeBytes.toLocaleString()} bytes · retained until{" "}
                 {exportJob()!.result!.retainUntil}
               </p>
             </div>
+            <Show
+              when={
+                exportJob()!.state === "succeeded" &&
+                exportJob()!.result!.destinationKind === "download"
+              }
+            >
+              <For
+                each={
+                  exportJob()!.result!.outputNames ??
+                  (exportJob()!.result!.outputName ? [exportJob()!.result!.outputName] : [])
+                }
+              >
+                {(_, position) => (
+                  <a
+                    href={api.url(
+                      `jobs/${encodeURIComponent(exportJob()!.id)}/outputs/${position()}`,
+                    )}
+                    download
+                  >
+                    Download output {position() + 1}
+                  </a>
+                )}
+              </For>
+            </Show>
+            <p role="note">Please review the exported media before delivery.</p>
             <div aria-label="Export warnings">
               <For each={exportJob()!.warnings ?? []}>
                 {(warning) => <p role="status">Warning: {warning}</p>}

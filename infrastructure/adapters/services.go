@@ -7,6 +7,8 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
+	"time"
 
 	"videocutlist/application"
 	"videocutlist/domain"
@@ -136,6 +138,66 @@ type ExportExecutor struct {
 func NewExportExecutor(jobs *store.JobStore, scanner *index.Scanner, media *store.MediaStore, service exporter.Service) ExportExecutor {
 	return ExportExecutor{Jobs: jobs, Scanner: scanner, Media: media, Coordinator: exporter.Coordinator{Jobs: jobs, Exporter: service}}
 }
+func (e ExportExecutor) Preflight(ctx context.Context, principal domain.Principal, projectID string, project application.Project, input application.ExportInput) (application.ExportPreflight, error) {
+	source, _, err := e.Scanner.Open(ctx, e.Media, project.MediaID)
+	if err != nil {
+		return application.ExportPreflight{}, err
+	}
+	defer source.Close()
+	file, ok := source.(*os.File)
+	if !ok {
+		return application.ExportPreflight{}, errors.New("media source is not a file")
+	}
+	result, err := e.Coordinator.Exporter.Preflight(ctx, file, exporter.Request{Mode: input.Mode, Selection: input.Selection, StreamIndexes: input.StreamIndexes, CutStrategy: input.CutStrategy, Container: input.Container, DestinationID: input.DestinationID, FilenameTemplate: input.FilenameTemplate})
+	if err != nil {
+		return application.ExportPreflight{}, err
+	}
+	findings := make([]application.ExportFinding, len(result.Findings))
+	for i, finding := range result.Findings {
+		findings[i] = application.ExportFinding{Severity: finding.Severity, Code: finding.Code, Message: finding.Message, StreamIndex: finding.StreamIndex}
+	}
+	return application.ExportPreflight{Allowed: result.Allowed, Selection: result.Selection, Findings: findings}, nil
+}
+
+func (e ExportExecutor) Download(ctx context.Context, principal domain.Principal, jobID string, position int) (io.ReadCloser, string, error) {
+	job, err := e.Jobs.Get(ctx, principal.Subject, jobID)
+	if err != nil || job.State != store.JobSucceeded || e.Coordinator.Exporter.Artifacts == nil {
+		return nil, "", store.ErrJobNotFound
+	}
+	var request exporter.Request
+	var result exporter.Result
+	if json.Unmarshal([]byte(job.RequestJSON), &request) != nil || !job.ResultJSON.Valid || json.Unmarshal([]byte(job.ResultJSON.String), &result) != nil || result.DestinationKind == exporter.KindSourceAdjacent {
+		return nil, "", store.ErrJobNotFound
+	}
+	destination := exporter.Destination{ID: "download", Kind: exporter.KindDownload, Root: e.Coordinator.Exporter.OutputDir}
+	for _, candidate := range e.Coordinator.Exporter.Destinations {
+		if candidate.ID == result.DestinationID {
+			destination = candidate
+			break
+		}
+	}
+	if destination.Root == "" {
+		return nil, "", store.ErrJobNotFound
+	}
+	names := result.OutputNames
+	if result.OutputName != "" {
+		names = []string{result.OutputName}
+	}
+	if position < 0 || position >= len(names) {
+		return nil, "", store.ErrJobNotFound
+	}
+	values := make([]exporter.Artifact, len(names))
+	for i, name := range names {
+		values[i] = exporter.Artifact{Path: filepath.Join(destination.Root, name), Name: name, Kind: result.DestinationKind, Expires: result.RetainUntil}
+	}
+	e.Coordinator.Exporter.Artifacts.Put(jobID, values)
+	file, artifact, err := e.Coordinator.Exporter.Artifacts.Open(jobID, position, time.Now().UTC())
+	if err != nil {
+		return nil, "", err
+	}
+	return file, artifact.Name, nil
+}
+
 func (e ExportExecutor) Execute(ctx context.Context, owner, id string, document domain.Document) error {
 	source, _, err := e.Scanner.Open(ctx, e.Media, document.MediaID)
 	if err != nil {

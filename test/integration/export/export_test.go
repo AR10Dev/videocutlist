@@ -147,9 +147,16 @@ func TestCancellationRemovesIncompleteOutput(t *testing.T) {
 	if err := os.WriteFile(ffmpeg, []byte("#!/bin/sh\nexec sleep 10\n"), 0o700); err != nil {
 		t.Fatal(err)
 	}
+	ffprobe := filepath.Join(directory, "wait-for-probe-cancel.sh")
+	if err := os.WriteFile(ffprobe, []byte("#!/bin/sh\nexec sleep 10\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(directory, "exports"), 0o750); err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
-	service := export.Service{FFmpegPath: ffmpeg, OutputDir: filepath.Join(directory, "exports")}
+	service := export.Service{FFmpegPath: ffmpeg, FFprobePath: ffprobe, OutputDir: filepath.Join(directory, "exports")}
 	_, err = service.Run(ctx, source, domain.Document{Segments: []domain.Segment{{StartMS: 0, EndMS: 1}}}, export.Request{Mode: "merge", CutStrategy: "stream_copy_preferred", Container: "mkv"})
 	if !errors.Is(err, export.ErrCancelled) {
 		t.Fatalf("cancellation error = %v", err)

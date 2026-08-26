@@ -10,6 +10,7 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 )
@@ -30,13 +31,15 @@ type Metadata struct {
 }
 
 type Stream struct {
-	Index        int    `json:"index"`
-	Type         string `json:"type"`
-	Codec        string `json:"codec"`
-	Width        int    `json:"width,omitempty"`
-	Height       int    `json:"height,omitempty"`
-	AvgFrameRate string `json:"avgFrameRate,omitempty"`
-	Channels     int    `json:"channels,omitempty"`
+	Index        int      `json:"index"`
+	Type         string   `json:"type"`
+	Codec        string   `json:"codec"`
+	Language     string   `json:"language,omitempty"`
+	Disposition  []string `json:"disposition,omitempty"`
+	Width        int      `json:"width,omitempty"`
+	Height       int      `json:"height,omitempty"`
+	AvgFrameRate string   `json:"avgFrameRate,omitempty"`
+	Channels     int      `json:"channels,omitempty"`
 }
 
 type Video struct {
@@ -162,7 +165,7 @@ func (c Client) run(ctx context.Context, input string, files []*os.File) (Metada
 	}
 	cmd := exec.CommandContext(ctx, path,
 		"-v", "error",
-		"-show_entries", "format=duration,format_name:stream=index,codec_type,codec_name,width,height,avg_frame_rate,r_frame_rate,channels",
+		"-show_entries", "format=duration,format_name:stream=index,codec_type,codec_name,width,height,avg_frame_rate,r_frame_rate,channels:stream_tags=language:stream_disposition",
 		"-of", "json",
 		input,
 	)
@@ -217,6 +220,10 @@ type response struct {
 		AvgFrameRate string `json:"avg_frame_rate"`
 		FrameRate    string `json:"r_frame_rate"`
 		Channels     int    `json:"channels"`
+		Tags         struct {
+			Language string `json:"language"`
+		} `json:"tags"`
+		Disposition map[string]int `json:"disposition"`
 	} `json:"streams"`
 }
 
@@ -234,7 +241,14 @@ func normalize(data []byte) (Metadata, error) {
 		return Metadata{}, fmt.Errorf("invalid duration %q", parsed.Format.Duration)
 	}
 	for _, stream := range parsed.Streams {
-		result.Streams = append(result.Streams, Stream{Index: stream.Index, Type: stream.Type, Codec: stream.Codec, Width: stream.Width, Height: stream.Height, AvgFrameRate: stream.AvgFrameRate, Channels: stream.Channels})
+		disposition := make([]string, 0)
+		for name, enabled := range stream.Disposition {
+			if enabled != 0 {
+				disposition = append(disposition, name)
+			}
+		}
+		sort.Strings(disposition)
+		result.Streams = append(result.Streams, Stream{Index: stream.Index, Type: stream.Type, Codec: stream.Codec, Language: stream.Tags.Language, Disposition: disposition, Width: stream.Width, Height: stream.Height, AvgFrameRate: stream.AvgFrameRate, Channels: stream.Channels})
 		switch stream.Type {
 		case "video":
 			result.VideoStreams++
