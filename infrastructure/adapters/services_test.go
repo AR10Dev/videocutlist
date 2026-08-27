@@ -7,9 +7,11 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"videocutlist/application"
 	"videocutlist/domain"
+	"videocutlist/infrastructure/export"
 	"videocutlist/infrastructure/ffmpeg"
 	"videocutlist/infrastructure/media/index"
 	"videocutlist/infrastructure/media/probe"
@@ -142,6 +144,77 @@ func TestExportSourceCancellationPersistsCancelled(t *testing.T) {
 	}
 	if job.State != store.JobCancelled {
 		t.Fatalf("job state = %q, want cancelled", job.State)
+	}
+}
+
+func TestExportDownloadEnforcesDurableLifecycle(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "export.mkv"), []byte("video bytes"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	db, err := store.OpenDatabase(ctx, filepath.Join(t.TempDir(), "videocutlist.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	projects, err := store.NewProjectStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := projects.Save(ctx, "owner", "project", 0, `{}`); err != nil {
+		t.Fatal(err)
+	}
+	jobs, err := store.NewJobStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor := ExportExecutor{Jobs: jobs, Coordinator: export.Coordinator{Exporter: export.Service{OutputDir: root, Artifacts: export.NewArtifactStore()}}}
+	create := func(t *testing.T, id string, result export.Result) {
+		t.Helper()
+		resultJSON, err := json.Marshal(result)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := jobs.Create(ctx, store.ExportJob{ID: id, OwnerLogin: "owner", ProjectID: "project", ProjectRevision: 1, RequestJSON: `{}`}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := jobs.Start(ctx, "owner", id); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := jobs.Succeed(ctx, "owner", id, string(resultJSON)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fresh := time.Now().Add(time.Hour)
+	create(t, "j_download_ok", export.Result{OutputName: "export.mkv", RetainUntil: fresh, DestinationKind: export.KindDownload})
+	file, name, err := executor.Download(ctx, domain.Principal{Subject: "owner"}, "j_download_ok", 0)
+	if err != nil || name != "export.mkv" {
+		t.Fatalf("Download() = (%q, %v), want public download", name, err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	create(t, "j_download_expired", export.Result{OutputName: "export.mkv", RetainUntil: time.Now().Add(-time.Hour), DestinationKind: export.KindDownload})
+	create(t, "j_download_archive", export.Result{OutputName: "export.mkv", RetainUntil: fresh, DestinationKind: export.KindArchive})
+	create(t, "j_download_source", export.Result{OutputName: "export.mkv", RetainUntil: fresh, DestinationKind: export.KindSourceAdjacent})
+	if _, err := jobs.Create(ctx, store.ExportJob{ID: "j_download_cancelled", OwnerLogin: "owner", ProjectID: "project", ProjectRevision: 1, RequestJSON: `{}`}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := jobs.Cancel(ctx, "owner", "j_download_cancelled"); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct{ owner, id string }{
+		{"other", "j_download_ok"},
+		{"owner", "j_download_expired"},
+		{"owner", "j_download_archive"},
+		{"owner", "j_download_source"},
+		{"owner", "j_download_cancelled"},
+	} {
+		if _, _, err := executor.Download(ctx, domain.Principal{Subject: test.owner}, test.id, 0); err == nil {
+			t.Fatalf("Download(%q, %q) succeeded", test.owner, test.id)
+		}
 	}
 }
 
