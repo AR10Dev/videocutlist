@@ -49,6 +49,12 @@ type LibraryStatus = {
   state: "unconfigured" | "scanning" | "ready_empty" | "ready_with_media" | "failed";
   message: string;
 };
+type LibraryRoot = { alias: string; path: string; state?: "ready" | "unavailable"; message?: string };
+type ServerSettings = {
+  settings: Record<string, unknown> & { mediaRoots?: Record<string, string> };
+  revision: number;
+  roots?: Record<string, { state: "ready" | "unavailable"; message: string }>;
+};
 type Destination = {
   id: string;
   label: string;
@@ -113,6 +119,11 @@ export function App() {
   const [settings, setSettings] = createSignal(() => storedSettings(localStorage));
   const [settingsOpen, setSettingsOpen] = createSignal(false);
   const [serverSettingsStatus, setServerSettingsStatus] = createSignal("");
+  const [libraryRoots, setLibraryRoots] = createSignal<LibraryRoot[]>([]);
+  const [settingsRevision, setSettingsRevision] = createSignal(0);
+  const [settingsPending, setSettingsPending] = createSignal(false);
+  const [rescanPending, setRescanPending] = createSignal(false);
+  const [rootErrors, setRootErrors] = createSignal<Record<number, string>>({});
   const [muted, setMuted] = createSignal(settings().muted);
   const [diagnostics, setDiagnostics] = createSignal<PreviewDiagnostics>();
   const [projectId, setProjectId] = createSignal(newProjectId());
@@ -186,20 +197,69 @@ export function App() {
     setSettings(next);
     localStorage.setItem(settingsKey, JSON.stringify(next));
   };
-  const openSettings = async () => {
-    setSettingsOpen(true);
-    setServerSettingsStatus("Checking administrator settings access…");
+  const loadServerSettings = async () => {
+    setServerSettingsStatus("Loading administrator settings…");
     try {
       const response = await api.request("settings");
-      setServerSettingsStatus(
-        response.status === 403
-          ? "Administrator settings are unavailable: your account is not authorized."
-          : response.ok
-            ? "Administrator settings are available to authorized accounts."
-            : "Administrator settings are unavailable on this server.",
-      );
-    } catch {
-      setServerSettingsStatus("Administrator settings are unavailable on this server.");
+      if (response.status === 403) throw new Error("Administrator settings are unavailable: your account is not authorized.");
+      if (!response.ok) throw new Error("Administrator settings are unavailable on this server.");
+      const value = (await response.json()) as ServerSettings;
+      const roots = value.settings.mediaRoots ?? {};
+      setLibraryRoots(Object.entries(roots).map(([alias, path]) => ({ alias, path, ...value.roots?.[alias] })));
+      setSettingsRevision(value.revision);
+      setServerSettingsStatus("Administrator settings loaded.");
+    } catch (error) {
+      setServerSettingsStatus(error instanceof Error ? error.message : "Administrator settings are unavailable on this server.");
+    }
+  };
+  const openSettings = async () => {
+    setSettingsOpen(true);
+    await loadServerSettings();
+  };
+  const validateRoots = () => {
+    const errors: Record<number, string> = {};
+    const aliases = new Set<string>();
+    libraryRoots().forEach((root, index) => {
+      if (!root.alias.trim()) errors[index] = "Alias is required.";
+      else if (aliases.has(root.alias.trim())) errors[index] = "Aliases must be unique.";
+      else aliases.add(root.alias.trim());
+      if (!root.path.trim() || !/^(?:\/|[A-Za-z]:[\\/])/.test(root.path.trim())) errors[index] = `${errors[index] ? `${errors[index]} ` : ""}Enter an absolute server path.`;
+    });
+    setRootErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+  const saveLibrarySettings = async () => {
+    if (settingsPending() || !validateRoots()) return;
+    setSettingsPending(true);
+    setServerSettingsStatus("Saving library settings…");
+    try {
+      const current = await api.request("settings");
+      if (!current.ok) throw new Error("Settings could not be reloaded before saving.");
+      const value = (await current.json()) as ServerSettings;
+      const mediaRoots = Object.fromEntries(libraryRoots().map((root) => [root.alias.trim(), root.path.trim()]));
+      const response = await api.request("settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ revision: value.revision, settings: { ...value.settings, mediaRoots } }) });
+      if (!response.ok) throw new Error(response.status === 409 ? "Settings changed; reload before updating." : "Library settings were rejected. Check each path.");
+      const saved = (await response.json()) as ServerSettings;
+      setSettingsRevision(saved.revision);
+      setServerSettingsStatus("Library settings saved.");
+    } catch (error) {
+      setServerSettingsStatus(error instanceof Error ? error.message : "Library settings could not be saved.");
+    } finally {
+      setSettingsPending(false);
+    }
+  };
+  const rescanLibrary = async () => {
+    if (rescanPending()) return;
+    setRescanPending(true);
+    setServerSettingsStatus("Rescanning media library…");
+    try {
+      const response = await api.request("settings/media/refresh", { method: "POST" });
+      if (!response.ok) throw new Error("Media library could not be rescanned. Check mounts and permissions.");
+      setServerSettingsStatus("Media library rescan started.");
+    } catch (error) {
+      setServerSettingsStatus(error instanceof Error ? error.message : "Media library rescan failed.");
+    } finally {
+      setRescanPending(false);
     }
   };
   const updateTimeline = (changes: Partial<ReturnType<typeof present>>) => {
@@ -1954,7 +2014,51 @@ export function App() {
           <p>Browser-local preferences stay in this browser and do not change server configuration.</p>
           <section aria-labelledby="library-settings-heading">
             <h3 id="library-settings-heading">Library</h3>
-            <p>Media is indexed by the server. Choosing a host folder is unavailable in the browser.</p>
+            <p>
+              Media is indexed by the server. Type an absolute path below; this browser cannot choose a host folder.
+              The service account needs read access. In a container, mount the host directory first and enter its container path.
+            </p>
+            <Show when={libraryRoots().length > 0} fallback={<p>No media roots configured.</p>}>
+              <div class="library-roots" aria-label="Media roots">
+                <For each={libraryRoots()}>
+                  {(root, index) => (
+                    <div class="library-root">
+                      <label>
+                        Alias
+                        <input
+                          value={root.alias}
+                          aria-label={`Alias for media root ${index() + 1}`}
+                          onInput={(event) => setLibraryRoots(libraryRoots().map((item, i) => i === index() ? { ...item, alias: event.currentTarget.value } : item))}
+                        />
+                      </label>
+                      <label>
+                        Server path
+                        <input
+                          value={root.path}
+                          aria-label={`Server path for media root ${index() + 1}`}
+                          onInput={(event) => setLibraryRoots(libraryRoots().map((item, i) => i === index() ? { ...item, path: event.currentTarget.value } : item))}
+                        />
+                      </label>
+                      <span role="status">{root.state === "unavailable" ? root.message : root.message ?? "Available"}</span>
+                      <Show when={rootErrors()[index()] as string | undefined}>
+                        {(error) => <p class="field-error" role="alert">{error()}</p>}
+                      </Show>
+                      <button type="button" onClick={() => setLibraryRoots(libraryRoots().filter((_, i) => i !== index()))}>Remove</button>
+                    </div>
+                  )}
+                </For>
+              </div>
+            </Show>
+            <div class="settings-actions">
+              <button type="button" onClick={() => setLibraryRoots([...libraryRoots(), { alias: "", path: "" }])}>Add root</button>
+              <button type="button" onClick={() => void saveLibrarySettings()} disabled={settingsPending()}>
+                {settingsPending() ? "Saving…" : "Save library settings"}
+              </button>
+              <button type="button" onClick={() => void rescanLibrary()} disabled={rescanPending() || settingsPending()}>
+                {rescanPending() ? "Rescanning…" : "Rescan library"}
+              </button>
+            </div>
+            <p class="settings-revision">Settings revision {settingsRevision()}</p>
           </section>
           <section aria-labelledby="exports-settings-heading">
             <h3 id="exports-settings-heading">Exports</h3>
