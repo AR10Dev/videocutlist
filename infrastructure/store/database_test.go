@@ -18,7 +18,7 @@ func TestOpenDatabaseAppliesAllMigrations(t *testing.T) {
 	} else {
 		reopened.Close()
 	}
-	for _, table := range []string{"media", "projects", "export_jobs", "cache_entries"} {
+	for _, table := range []string{"media", "projects", "export_jobs", "cache_entries", "runtime_settings"} {
 		var name string
 		if err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&name); err != nil {
 			t.Fatalf("missing %s: %v", table, err)

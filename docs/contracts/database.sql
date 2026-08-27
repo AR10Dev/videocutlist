@@ -43,3 +43,11 @@ CREATE TABLE cache_entries (
   accessed_at TEXT NOT NULL
 );
 
+CREATE TABLE runtime_settings (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  schema_version INTEGER NOT NULL,
+  revision INTEGER NOT NULL,
+  document_json TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+

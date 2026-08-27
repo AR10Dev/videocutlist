@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -46,6 +47,17 @@ func run(ctx context.Context) error {
 		return err
 	}
 	defer db.Close()
+	runtimeSettingsStore, err := store.NewRuntimeSettingsStore(db)
+	if err != nil {
+		return err
+	}
+	effectiveSettings, err := runtimeSettingsStore.Seed(ctx, cfg.RuntimeSettings())
+	if err != nil {
+		return err
+	}
+	if err := cfg.ApplyRuntimeSettings(effectiveSettings.Settings); err != nil {
+		return fmt.Errorf("load runtime settings: %w", err)
+	}
 	projectStore, _ := store.NewProjectStore(db)
 	jobStore, _ := store.NewJobStore(db)
 	detectionStore, _ := store.NewDetectionJobStore(db)
