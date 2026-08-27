@@ -66,6 +66,10 @@ test.beforeEach(async ({ page }) => {
   await page.route(`${apiOrigin}/api/v1/**`, async (route) => {
     const request = route.request();
     const url = new URL(request.url());
+    if (url.pathname === "/api/v1/media/status")
+      return route.fulfill({
+        json: { state: "ready_empty", message: "No supported media was found." },
+      });
     if (url.pathname === "/api/v1/media")
       return route.fulfill({ json: { items: [media, secondMedia] } });
     if (url.pathname === `/api/v1/media/${media.id}`) return route.fulfill({ json: media });
@@ -208,6 +212,20 @@ test.beforeEach(async ({ page }) => {
     }
     return route.fulfill({ status: 404 });
   });
+});
+
+test("explains server-mounted setup when the library is empty", async ({ page }) => {
+  await page.route(`${apiOrigin}/api/v1/media`, (route) => route.fulfill({ json: { items: [] } }));
+
+  await page.goto("/");
+
+  await expect(page.getByRole("heading", { name: "Server media library" })).toBeVisible();
+  await expect(page.getByText("No supported media was found.")).toBeVisible();
+  await expect(
+    page.getByText(/Mount your media into the server, configure its media root/),
+  ).toBeVisible();
+  await expect(page.getByText(/browser does not upload or choose a host folder/)).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Project" })).not.toBeVisible();
 });
 
 test("keeps the inspector contextual until media is selected", async ({ page }) => {

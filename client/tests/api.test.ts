@@ -51,6 +51,21 @@ describe("client API boundary", () => {
     expect(() => api("https://video.example.com").url(path)).toThrow();
   });
 
+  it("requests library status without accepting a filesystem path", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(() => Promise.resolve(new Response()));
+    const client = createApiClient(
+      { serverBaseUrl: "https://video.example.com", authentication: { type: "none" } },
+      fetch,
+    );
+
+    await client.request("media/status");
+
+    expect(fetch).toHaveBeenCalledWith(
+      "https://video.example.com/api/v1/media/status",
+      expect.objectContaining({ credentials: "omit" }),
+    );
+  });
+
   it("keeps the request signal and caller headers for no-auth requests", async () => {
     const fetch = vi.fn<typeof globalThis.fetch>(() => Promise.resolve(new Response()));
     const signal = new AbortController().signal;

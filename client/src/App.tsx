@@ -41,6 +41,10 @@ import { defaultSettings, settingsKey, storedSettings, type AppSettings } from "
 
 type MediaPage = { items: Media[]; nextCursor?: string | null };
 type FolderPage = { folders: { id: string; label: string }[]; items: Media[]; nextCursor?: string | null };
+type LibraryStatus = {
+  state: "unconfigured" | "scanning" | "ready_empty" | "ready_with_media" | "failed";
+  message: string;
+};
 type Destination = {
   id: string;
   label: string;
@@ -95,6 +99,7 @@ export function App() {
   const [loadingMore, setLoadingMore] = createSignal(false);
   const [refreshing, setRefreshing] = createSignal(false);
   const [status, setStatus] = createSignal("Loading media…");
+  const [libraryStatus, setLibraryStatus] = createSignal<LibraryStatus>();
   const [assetStatus, setAssetStatus] = createSignal("");
   const [segmentLabel, setSegmentLabel] = createSignal("");
   const [timecode, setTimecode] = createSignal("");
@@ -202,11 +207,14 @@ export function App() {
     if (cursor) setLoadingMore(true);
     else setStatus("Loading media…");
     try {
-      const response = await api.request(
-        `media?limit=50${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`,
-        { signal: controller.signal },
-      );
+      const [response, libraryResponse] = await Promise.all([
+        api.request(`media?limit=50${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`, {
+          signal: controller.signal,
+        }),
+        api.request("media/status", { signal: controller.signal }),
+      ]);
       if (!response.ok) throw new Error(`Media request failed (${response.status}).`);
+      if (libraryResponse.ok) setLibraryStatus((await libraryResponse.json()) as LibraryStatus);
       const page = (await response.json()) as MediaPage;
       if (controller.signal.aborted || request !== requestVersion) return;
       setMedia(cursor ? [...media(), ...page.items] : page.items);
@@ -1080,21 +1088,52 @@ export function App() {
             ↻
           </button>
         </div>
+        <Show when={!selected()}>
+          <section class="library-setup" aria-labelledby="library-setup-heading">
+            <h3 id="library-setup-heading">Server media library</h3>
+            <p>
+              VideoCutlist indexes videos mounted on the server; the browser does not upload or
+              choose a host folder.
+            </p>
+            <p>{libraryStatus()?.message ?? "Checking the server media library…"}</p>
+            <Show
+              when={
+                libraryStatus()?.state === "unconfigured" ||
+                libraryStatus()?.state === "ready_empty"
+              }
+            >
+              <p>
+                Mount your media into the server, configure its media root, then use Refresh to
+                index supported videos.
+              </p>
+            </Show>
+            <Show when={libraryStatus()?.state === "failed"}>
+              <p>Check the server media configuration and logs, then use Refresh to try again.</p>
+            </Show>
+            <Show when={libraryStatus()?.state === "scanning"}>
+              <p>Indexing is in progress. Refresh when scanning has finished.</p>
+            </Show>
+          </section>
+        </Show>
         <nav class="file-tree" aria-label="Media folders">
           <button class="folder" aria-current="page">
-            ⌄ Media library
+            ⌄ Server media library
           </button>
           <div class="folder-contents">
             <Show when={folders().length}>
               <ul class="folder-list" aria-label="Virtual folders">
                 <For each={folders()}>
                   {(folder) => (
-                    <li><button class="folder" onClick={() => void loadFolder(folder.id)}>{folder.label}</button></li>
+                    <li>
+                      <button class="folder" onClick={() => void loadFolder(folder.id)}>
+                        {folder.label}
+                      </button>
+                    </li>
                   )}
                 </For>
               </ul>
             </Show>
-            <span class="folder-label">{activeFolder() ? "Videos in folder" : "All videos"}</span>
+            <span class="folder-label">{activeFolder() ? "Videos in folder" : "Indexed videos"}</span>
             <ul class="media-list" aria-label="Media list">
               <For each={media()}>
                 {(item) => (

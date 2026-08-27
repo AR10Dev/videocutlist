@@ -5,11 +5,11 @@
 **Blocked by:** 01, 02
 
 **Category:** enhancement
-**Status:** ready-for-agent
+**Status:** complete
 
-- [ ] Before a video is selected, the primary action explains how to make media available.
-- [ ] The view names the configured library using only a safe display label.
-- [ ] The UI does not imply that cut-list or chapter imports add original video media.
+- [x] Before a video is selected, the primary action explains how to make media available.
+- [x] The view names the configured library using only a safe display label.
+- [x] The UI does not imply that cut-list or chapter imports add original video media.
 
 ## Comments
 
