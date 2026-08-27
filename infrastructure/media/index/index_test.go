@@ -167,6 +167,15 @@ func (m *memoryCatalog) Sync(_ context.Context, alias string, records []Record) 
 	return nil
 }
 
+func (m *memoryCatalog) RemoveRoot(_ context.Context, alias string) error {
+	for id, record := range m.records {
+		if record.RootAlias == alias {
+			delete(m.records, id)
+		}
+	}
+	return nil
+}
+
 func (m *memoryCatalog) Get(_ context.Context, id string) (Record, error) {
 	record, ok := m.records[id]
 	if !ok {
@@ -177,6 +186,50 @@ func (m *memoryCatalog) Get(_ context.Context, id string) (Record, error) {
 
 func (m *memoryCatalog) List(_ context.Context, cursor string, limit int) (Page, error) {
 	return Page{}, nil
+}
+
+func TestReconfigureValidatesAllowlistAndRemovesRecords(t *testing.T) {
+	parent := t.TempDir()
+	oldRoot := filepath.Join(parent, "old")
+	newRoot := filepath.Join(parent, "new")
+	if err := os.Mkdir(oldRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(newRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	scanner, err := NewScanner([]Root{{Alias: "old", Path: oldRoot}}, fakeProbe{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog := &memoryCatalog{records: map[string]Record{"id": {RootAlias: "old"}}}
+	if err := scanner.Reconfigure(context.Background(), []Root{{Alias: "new", Path: newRoot}}, []string{parent}, catalog); err != nil {
+		t.Fatal(err)
+	}
+	if len(catalog.records) != 0 {
+		t.Fatal("removed root records remain available")
+	}
+	if _, err := scanner.Scan(context.Background(), "old"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("old root scan error = %v", err)
+	}
+	if err := scanner.Reconfigure(context.Background(), []Root{{Alias: "escape", Path: filepath.Join(t.TempDir(), "other")}}, []string{parent}, catalog); err == nil {
+		t.Fatal("allowlist escape accepted")
+	}
+}
+
+func TestReconfigureRejectsDuplicateAndRelativeRoots(t *testing.T) {
+	scanner, err := NewScanner([]Root{{Alias: "one", Path: t.TempDir()}}, fakeProbe{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, roots := range [][]Root{
+		{{Alias: "dup", Path: t.TempDir()}, {Alias: "dup", Path: t.TempDir()}},
+		{{Alias: "relative", Path: "media"}},
+	} {
+		if err := scanner.Reconfigure(context.Background(), roots, nil, nil); err == nil {
+			t.Fatal("invalid roots accepted")
+		}
+	}
 }
 
 func TestScanSkipsSymlinkEscapeAndUsesOpaqueID(t *testing.T) {

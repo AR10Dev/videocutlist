@@ -83,6 +83,7 @@ type Scanner struct {
 	prober probe.Runner
 	limits ScanLimits
 	mu     sync.Mutex
+	config sync.RWMutex
 }
 
 func NewScanner(roots []Root, prober probe.Runner) (*Scanner, error) {
@@ -125,6 +126,8 @@ func MediaID(rootAlias, relativePath string) string {
 }
 
 func (s *Scanner) Scan(ctx context.Context, alias string) ([]Record, error) {
+	s.config.RLock()
+	defer s.config.RUnlock()
 	root, err := s.root(alias)
 	if err != nil {
 		return nil, err
@@ -181,6 +184,108 @@ func (s *Scanner) Scan(ctx context.Context, alias string) ([]Record, error) {
 	return records, nil
 }
 
+// RootCatalog can hide records belonging to a removed media root.
+type RootCatalog interface {
+	RemoveRoot(context.Context, string) error
+}
+
+// Reconfigure validates and atomically replaces the active roots. Existing
+// open requests retain the old snapshot; new requests use the new snapshot.
+// The optional allowlist is checked after symlink resolution.
+func (s *Scanner) Reconfigure(ctx context.Context, roots []Root, allowlist []string, catalog Catalog) error {
+	validated, err := validateRoots(roots, allowlist)
+	if err != nil {
+		return err
+	}
+	s.config.Lock()
+	s.mu.Lock()
+	removed := make([]string, 0)
+	for alias := range s.roots {
+		found := false
+		for _, root := range validated {
+			if root.Alias == alias {
+				found = true
+				break
+			}
+		}
+		if !found {
+			removed = append(removed, alias)
+		}
+	}
+	for _, root := range s.roots {
+		if root.handle != nil {
+			_ = root.handle.Close()
+		}
+	}
+	s.roots = make(map[string]Root, len(validated))
+	for _, root := range validated {
+		s.roots[root.Alias] = root
+	}
+	s.mu.Unlock()
+	s.config.Unlock()
+	if remover, ok := catalog.(RootCatalog); ok {
+		for _, alias := range removed {
+			if err := remover.RemoveRoot(ctx, alias); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func validateRoots(roots []Root, allowlist []string) ([]Root, error) {
+	allowed := make([]string, len(allowlist))
+	for i, base := range allowlist {
+		if !filepath.IsAbs(base) {
+			return nil, fmt.Errorf("media root allowlist must contain absolute directories")
+		}
+		canonical, err := filepath.EvalSymlinks(base)
+		if err != nil {
+			return nil, fmt.Errorf("media root allowlist: %w", err)
+		}
+		allowed[i] = filepath.Clean(canonical)
+	}
+	result := make([]Root, 0, len(roots))
+	seen := make(map[string]struct{}, len(roots))
+	for _, root := range roots {
+		if strings.TrimSpace(root.Alias) == "" || !filepath.IsAbs(root.Path) {
+			return nil, errors.New("media root alias and absolute path are required")
+		}
+		if _, ok := seen[root.Alias]; ok {
+			return nil, fmt.Errorf("duplicate media root alias %q", root.Alias)
+		}
+		canonical, err := filepath.EvalSymlinks(root.Path)
+		if err != nil {
+			return nil, fmt.Errorf("media root %q: %w", root.Alias, err)
+		}
+		info, err := os.Stat(canonical)
+		if err != nil || !info.IsDir() {
+			return nil, fmt.Errorf("media root %q must be a readable directory", root.Alias)
+		}
+		directory, err := os.Open(canonical)
+		if err != nil {
+			return nil, fmt.Errorf("media root %q is not readable", root.Alias)
+		}
+		_ = directory.Close()
+		if len(allowed) > 0 && !underAnyRoot(canonical, allowed) {
+			return nil, fmt.Errorf("media root %q is outside the deployment allowlist", root.Alias)
+		}
+		seen[root.Alias] = struct{}{}
+		result = append(result, Root{Alias: root.Alias, Path: filepath.Clean(canonical)})
+	}
+	return result, nil
+}
+
+func underAnyRoot(path string, bases []string) bool {
+	for _, base := range bases {
+		rel, err := filepath.Rel(base, path)
+		if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Scanner) root(alias string) (Root, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -200,13 +305,17 @@ func (s *Scanner) root(alias string) (Root, error) {
 }
 
 func (s *Scanner) Refresh(ctx context.Context, catalog Catalog) error {
+	s.config.RLock()
+	defer s.config.RUnlock()
 	if catalog == nil {
 		return errors.New("media catalog is required")
 	}
+	s.mu.Lock()
 	aliases := make([]string, 0, len(s.roots))
 	for alias := range s.roots {
 		aliases = append(aliases, alias)
 	}
+	s.mu.Unlock()
 	sort.Strings(aliases)
 	for _, alias := range aliases {
 		records, err := s.Scan(ctx, alias)
@@ -223,6 +332,8 @@ func (s *Scanner) Refresh(ctx context.Context, catalog Catalog) error {
 // Open resolves a catalog record server-side and returns an open file, never a
 // filesystem path. Callers must close the returned reader.
 func (s *Scanner) Open(ctx context.Context, catalog Catalog, id string) (io.ReadCloser, Media, error) {
+	s.config.RLock()
+	defer s.config.RUnlock()
 	record, err := catalog.Get(ctx, id)
 	if err != nil {
 		return nil, Media{}, err

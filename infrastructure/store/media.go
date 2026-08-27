@@ -56,6 +56,13 @@ ON CONFLICT(root_alias, relative_path) DO UPDATE SET
 	return tx.Commit()
 }
 
+// RemoveRoot makes records from a removed root unavailable without exposing
+// its filesystem path or deleting historical opaque IDs.
+func (s *MediaStore) RemoveRoot(ctx context.Context, alias string) error {
+	_, err := s.db.ExecContext(ctx, `UPDATE media SET available = 0, updated_at = ? WHERE root_alias = ?`, time.Now().UTC().Format(time.RFC3339Nano), alias)
+	return err
+}
+
 func (s *MediaStore) Get(ctx context.Context, id string) (index.Record, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT id, root_alias, relative_path, size_bytes, mtime_ns, metadata_json FROM media WHERE id = ? AND available = 1`, id)
 	record, err := scanMedia(row)
