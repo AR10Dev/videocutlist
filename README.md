@@ -35,9 +35,13 @@ VIDEOCUTLIST_MEDIA_ROOTS_JSON='{"media":"/path/to/media"}' \
   go run ./cmd/server
 ```
 
-The server listens on `127.0.0.1:8787` by default. Release builds embed the bundled
-client in the Go binary and serve it from the same origin. Local development builds
-serve the generated `client/dist` directory.
+The server listens on `127.0.0.1:8787` by default. Run it as a dedicated
+non-root account with read access to the absolute media root and write access to
+only the database, cache, and export directories. See the [deployment and
+settings guide](docs/runbooks/containers.md) for native permissions and
+container-visible mount paths. Release builds embed the bundled client in the Go
+binary and serve it from the same origin. Local development builds serve the
+generated `client/dist` directory.
 
 ## Deploy with Docker or Podman
 
