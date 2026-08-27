@@ -241,7 +241,7 @@ func validateRoots(roots []Root, allowlist []string) ([]Root, error) {
 		}
 		canonical, err := filepath.EvalSymlinks(base)
 		if err != nil {
-			return nil, fmt.Errorf("media root allowlist: %w", err)
+			return nil, errors.New("media root allowlist contains an invalid directory")
 		}
 		allowed[i] = filepath.Clean(canonical)
 	}
@@ -256,7 +256,7 @@ func validateRoots(roots []Root, allowlist []string) ([]Root, error) {
 		}
 		canonical, err := filepath.EvalSymlinks(root.Path)
 		if err != nil {
-			return nil, fmt.Errorf("media root %q: %w", root.Alias, err)
+			return nil, fmt.Errorf("media root %q is not a valid directory", root.Alias)
 		}
 		info, err := os.Stat(canonical)
 		if err != nil || !info.IsDir() {
