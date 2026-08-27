@@ -1,5 +1,29 @@
 # Frozen Runtime Contracts — v1
 
+## Settings scopes and administration
+
+VideoCutlist has three settings scopes:
+
+- **Deployment bootstrap (environment-only):** database path, listener and port,
+  authentication, trusted proxy and CORS policy, FFmpeg/FFprobe paths, and
+  container mounts. These values are never editable through the Settings API.
+- **Server runtime settings (shared by every client):** media roots, export
+  defaults and destinations, preview limits, cache policy, and scan limits.
+  These values use a typed persisted document; deployment values provide first-run
+  defaults only.
+- **Browser preferences (local to one browser profile):** editor conveniences
+  such as mute, cut strategy, and filename template. They are stored in browser
+  local storage and are never sent to the server settings store.
+
+The Settings API is an administrator operation. Its HTTP handlers must call the
+shared authorizer with the named `settings:manage` capability before parsing a
+request or loading settings. A missing capability returns `403 forbidden` without
+revealing configuration or filesystem paths. The local `auth=none` mode is an
+intentional single-user administrator mode and should remain loopback-only. A
+non-loopback deployment must configure authentication (`bearer` or
+`trusted_proxy`) before an administrator can manage settings; every authenticated
+built-in principal is an administrator in the current provider-neutral policy.
+
 ## Identity and media
 
 - Go module: `videocutlist`.

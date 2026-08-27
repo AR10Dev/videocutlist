@@ -31,9 +31,17 @@ Compose directory's `data`, `cache`, and `exports` directories by default.
 Override them with `VIDEOCUTLIST_DATA_DIR`, `VIDEOCUTLIST_CACHE_DIR`, and
 `VIDEOCUTLIST_EXPORT_DIR`.
 
-The default bind is loopback-only. For LAN access, set
+The default bind is loopback-only and `auth=none` is intended only for this
+single-user local administrator mode. For LAN access, set
 `VIDEOCUTLIST_BIND_ADDRESS` and use `VIDEOCUTLIST_AUTH_MODE=bearer` with a
 secret `VIDEOCUTLIST_BEARER_TOKEN`; restrict the published port with a firewall.
+Server runtime settings are administrator-only: authenticated principals with
+`settings:manage` may change media roots, export defaults, preview limits, cache
+policy, and scan limits. Container media roots must be existing container-visible
+paths; add host bind mounts in Compose rather than trying to configure host paths
+through the app. Authentication, mounts, executable paths, listener, and trusted
+proxy/CORS policy remain deployment configuration and cannot be changed in the
+Settings API.
 
 Check status and logs with either runtime:
 

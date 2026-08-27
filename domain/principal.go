@@ -7,6 +7,10 @@ import (
 
 var ErrUnauthenticated = errors.New("unauthenticated")
 
+// SettingsManageCapability authorizes reading and changing server runtime settings.
+// Settings handlers must check it before parsing a request or loading settings.
+const SettingsManageCapability = "settings:manage"
+
 // Principal is the authenticated subject propagated through application code.
 type Principal struct {
 	Subject      string
