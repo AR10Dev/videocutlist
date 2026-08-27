@@ -1331,396 +1331,405 @@ export function App() {
       <Show when={selected()}>
         <section class="project-panel" aria-labelledby="project-heading">
           <h2 id="project-heading">Project</h2>
-        <label>
-          Project ID{" "}
-          <input
-            value={projectId()}
-            onInput={(event) => {
-              setProjectId(event.currentTarget.value);
-              markDirty();
-            }}
-          />
-        </label>
-        <p>
-          Revision {revision()} {dirty() ? "· unsaved changes" : "· saved"}
-        </p>
-        <p>
-          Interchange files update cut lists; they do not upload or add a video. Videos are indexed
-          from the server&apos;s media library; configure its media roots, then choose a video from File
-          explorer.
-        </p>
-        <div class="controls">
-          <button onClick={newProject}>New project</button>
-          <button onClick={() => void loadProject()}>Load project</button>
-          <button onClick={() => void saveProject()}>Save project</button>
-          <button
-            disabled={!selected()}
-            onClick={() => {
-              const blob = new Blob(
-                [
-                  projectJson({
-                    version: 1,
-                    mediaId: selected()!.id,
-                    revision: revision(),
-                    segments: present().segments,
-                    uiState: {
-                      playheadMs: playheadMs(),
-                      zoom: present().zoom,
-                      muted: muted(),
-                    },
-                  }),
-                ],
-                { type: "application/json" },
-              );
-              const link = document.createElement("a");
-              link.href = URL.createObjectURL(blob);
-              link.download = `${projectId()}.videocutlist.json`;
-              link.click();
-              URL.revokeObjectURL(link.href);
-            }}
-          >
-            Download cut list
-          </button>
-          <Show
-            when={selected()}
-            fallback={<p>Choose a video from File explorer to import a cut list.</p>}
-          >
-            <label>
-              Import cut list{" "}
-              <input
-                type="file"
-                accept="application/json,.json"
-                onChange={(event) => {
-                  const file = event.currentTarget.files?.[0];
-                  if (!file) return;
-                  void file
-                    .text()
-                    .then((text) => {
-                      const imported = parseProjectJson(text);
-                      if (!selected() || imported.mediaId !== selected()!.id)
-                        throw new Error("Select the cut list's media before importing.");
-                      const segments = imported.segments as Segment[];
-                      const error = validateSegments(segments, selected()!.durationMs);
-                      if (error) throw new Error(error);
-                      updateTimeline({ segments });
-                      markDirty();
-                      setStatus("Cut list imported. Save the project to keep it.");
-                    })
-                    .catch((error) =>
-                      setStatus(error instanceof Error ? error.message : "Cut list import failed."),
-                    );
-                  event.currentTarget.value = "";
-                }}
-              />
-            </label>
+          <label>
+            Project ID{" "}
+            <input
+              value={projectId()}
+              onInput={(event) => {
+                setProjectId(event.currentTarget.value);
+                markDirty();
+              }}
+            />
+          </label>
+          <p>
+            Revision {revision()} {dirty() ? "· unsaved changes" : "· saved"}
+          </p>
+          <p>
+            Interchange files update cut lists; they do not upload or add a video. Videos are
+            indexed from the server&apos;s media library; configure its media roots, then choose a
+            video from File explorer.
+          </p>
+          <div class="controls">
+            <button onClick={newProject}>New project</button>
+            <button onClick={() => void loadProject()}>Load project</button>
+            <button onClick={() => void saveProject()}>Save project</button>
+            <button
+              disabled={!selected()}
+              onClick={() => {
+                const blob = new Blob(
+                  [
+                    projectJson({
+                      version: 1,
+                      mediaId: selected()!.id,
+                      revision: revision(),
+                      segments: present().segments,
+                      uiState: {
+                        playheadMs: playheadMs(),
+                        zoom: present().zoom,
+                        muted: muted(),
+                      },
+                    }),
+                  ],
+                  { type: "application/json" },
+                );
+                const link = document.createElement("a");
+                link.href = URL.createObjectURL(blob);
+                link.download = `${projectId()}.videocutlist.json`;
+                link.click();
+                URL.revokeObjectURL(link.href);
+              }}
+            >
+              Download cut list
+            </button>
+            <Show
+              when={selected()}
+              fallback={<p>Choose a video from File explorer to import a cut list.</p>}
+            >
+              <label>
+                Import cut list{" "}
+                <input
+                  type="file"
+                  accept="application/json,.json"
+                  onChange={(event) => {
+                    const file = event.currentTarget.files?.[0];
+                    if (!file) return;
+                    void file
+                      .text()
+                      .then((text) => {
+                        const imported = parseProjectJson(text);
+                        if (!selected() || imported.mediaId !== selected()!.id)
+                          throw new Error("Select the cut list's media before importing.");
+                        const segments = imported.segments as Segment[];
+                        const error = validateSegments(segments, selected()!.durationMs);
+                        if (error) throw new Error(error);
+                        updateTimeline({ segments });
+                        markDirty();
+                        setStatus("Cut list imported. Save the project to keep it.");
+                      })
+                      .catch((error) =>
+                        setStatus(
+                          error instanceof Error ? error.message : "Cut list import failed.",
+                        ),
+                      );
+                    event.currentTarget.value = "";
+                  }}
+                />
+              </label>
+            </Show>
+            <Show
+              when={selected() && !dirty()}
+              fallback={
+                <p>
+                  Save or load the selected video&apos;s project before importing CSV or chapters.
+                </p>
+              }
+            >
+              <label>
+                Import CSV or chapters{" "}
+                <input
+                  type="file"
+                  accept=".csv,.txt,text/csv,text/plain"
+                  onChange={(event) => {
+                    const file = event.currentTarget.files?.[0];
+                    if (!file || !validInterchangeFileSize(file.size)) {
+                      setStatus("Interchange file exceeds the 1 MiB limit.");
+                      return;
+                    }
+                    const format = file.name.toLowerCase().endsWith(".csv") ? "csv" : "chapters";
+                    void file
+                      .arrayBuffer()
+                      .then((body) =>
+                        api.interchangeRequest(projectId(), format, {
+                          method: "POST",
+                          body,
+                          headers: {
+                            "Content-Type": format === "csv" ? "text/csv" : "text/plain",
+                          },
+                        }),
+                      )
+                      .then(async (response) => {
+                        if (!response.ok) throw new Error();
+                        const value = (await response.json()) as {
+                          segments: Segment[];
+                          revision: number;
+                        };
+                        updateTimeline({ segments: value.segments });
+                        setRevision(value.revision);
+                        setDirty(false);
+                        setStatus("Interchange imported.");
+                      })
+                      .catch(() => setStatus("Interchange import failed."));
+                    event.currentTarget.value = "";
+                  }}
+                />
+              </label>
+            </Show>
+            <button
+              onClick={() =>
+                void api
+                  .interchangeRequest(projectId(), "csv")
+                  .then((response) => (response.ok ? response.blob() : Promise.reject()))
+                  .then((blob) => {
+                    const link = document.createElement("a");
+                    link.href = URL.createObjectURL(blob);
+                    link.download = `${projectId()}.csv`;
+                    link.click();
+                    URL.revokeObjectURL(link.href);
+                  })
+                  .catch(() => setStatus("CSV export failed."))
+              }
+            >
+              Export CSV
+            </button>
+            <button
+              onClick={() =>
+                void api
+                  .interchangeRequest(projectId(), "chapters")
+                  .then((response) => (response.ok ? response.blob() : Promise.reject()))
+                  .then((blob) => {
+                    const link = document.createElement("a");
+                    link.href = URL.createObjectURL(blob);
+                    link.download = `${projectId()}.chapters.txt`;
+                    link.click();
+                    URL.revokeObjectURL(link.href);
+                  })
+                  .catch(() => setStatus("Chapters export failed."))
+              }
+            >
+              Export chapters
+            </button>
+          </div>
+          <Show when={recent().length > 0}>
+            <h3>Recent projects</h3>
+            <ul>
+              {recent().map((item) => (
+                <li>
+                  <button onClick={() => void loadProject(item.id)}>
+                    {item.label} ({item.id})
+                  </button>
+                </li>
+              ))}
+            </ul>
           </Show>
-          <Show
-            when={selected() && !dirty()}
-            fallback={<p>Save or load the selected video&apos;s project before importing CSV or chapters.</p>}
-          >
-            <label>
-              Import CSV or chapters{" "}
-              <input
-                type="file"
-                accept=".csv,.txt,text/csv,text/plain"
-                onChange={(event) => {
-                  const file = event.currentTarget.files?.[0];
-                  if (!file || !validInterchangeFileSize(file.size)) {
-                    setStatus("Interchange file exceeds the 1 MiB limit.");
-                    return;
-                  }
-                  const format = file.name.toLowerCase().endsWith(".csv") ? "csv" : "chapters";
-                  void file
-                    .arrayBuffer()
-                    .then((body) =>
-                      api.interchangeRequest(projectId(), format, {
-                        method: "POST",
-                        body,
-                        headers: {
-                          "Content-Type": format === "csv" ? "text/csv" : "text/plain",
-                        },
-                      }),
-                    )
-                    .then(async (response) => {
-                      if (!response.ok) throw new Error();
-                      const value = (await response.json()) as {
-                        segments: Segment[];
-                        revision: number;
-                      };
-                      updateTimeline({ segments: value.segments });
-                      setRevision(value.revision);
-                      setDirty(false);
-                      setStatus("Interchange imported.");
-                    })
-                    .catch(() => setStatus("Interchange import failed."));
-                  event.currentTarget.value = "";
-                }}
-              />
-            </label>
-          </Show>
-          <button
-            onClick={() =>
-              void api
-                .interchangeRequest(projectId(), "csv")
-                .then((response) => (response.ok ? response.blob() : Promise.reject()))
-                .then((blob) => {
-                  const link = document.createElement("a");
-                  link.href = URL.createObjectURL(blob);
-                  link.download = `${projectId()}.csv`;
-                  link.click();
-                  URL.revokeObjectURL(link.href);
-                })
-                .catch(() => setStatus("CSV export failed."))
-            }
-          >
-            Export CSV
-          </button>
-          <button
-            onClick={() =>
-              void api
-                .interchangeRequest(projectId(), "chapters")
-                .then((response) => (response.ok ? response.blob() : Promise.reject()))
-                .then((blob) => {
-                  const link = document.createElement("a");
-                  link.href = URL.createObjectURL(blob);
-                  link.download = `${projectId()}.chapters.txt`;
-                  link.click();
-                  URL.revokeObjectURL(link.href);
-                })
-                .catch(() => setStatus("Chapters export failed."))
-            }
-          >
-            Export chapters
-          </button>
-        </div>
-        <Show when={recent().length > 0}>
-          <h3>Recent projects</h3>
-          <ul>
-            {recent().map((item) => (
-              <li>
-                <button onClick={() => void loadProject(item.id)}>
-                  {item.label} ({item.id})
-                </button>
-              </li>
-            ))}
-          </ul>
-        </Show>
         </section>
       </Show>
       <Show when={selected()}>
         <section class="export-panel" aria-labelledby="export-heading">
           <h2 id="export-heading">Export</h2>
-        <p role="status">{exportStatus() || "Export a saved project."}</p>
-        <label>
-          Mode{" "}
-          <select
-            value={exportMode()}
-            onChange={(event) => setExportMode(event.currentTarget.value as "merge" | "separate")}
-          >
-            <option value="merge">Merge</option>
-            <option value="separate">Separate</option>
-          </select>
-        </label>
-        <label>
-          Selection{" "}
-          <select
-            value={exportSelection()}
-            onChange={(event) =>
-              setExportSelection(event.currentTarget.value as "segments" | "gaps")
-            }
-          >
-            <option value="segments">Segments</option>
-            <option value="gaps">Gaps</option>
-          </select>
-        </label>
-        <fieldset>
-          <legend>Streams</legend>
-          <For each={tracks()}>
-            {(track) => {
-              const checked = () =>
-                streamIndexes().length === 0 || streamIndexes().includes(track.index);
-              return (
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={checked()}
-                    onChange={(event) => {
-                      const all = streamIndexes().length
-                        ? streamIndexes()
-                        : tracks().map((item) => item.index);
-                      setStreamIndexes(
-                        event.currentTarget.checked
-                          ? [...new Set([...all, track.index])]
-                          : all.filter((index) => index !== track.index),
-                      );
-                    }}
-                  />{" "}
-                  {track.type} {track.codec}
-                  {track.language ? ` · ${track.language}` : ""}
-                  {track.disposition?.length ? ` · ${track.disposition.join(", ")}` : ""} (#
-                  {track.index})
-                </label>
-              );
-            }}
-          </For>
-        </fieldset>
-        <label>
-          Cut strategy{" "}
-          <select
-            value={cutStrategy()}
-            onChange={(event) => {
-              const value = event.currentTarget.value as AppSettings["cutStrategy"];
-              setCutStrategy(value);
-              saveSettings({ cutStrategy: value });
-            }}
-          >
-            <option value="stream_copy_preferred">Stream copy preferred</option>
-            <option value="precise_reencode">Precise re-encode</option>
-            <option value="hybrid_smart_cut" disabled={hybridSmartCutKnownIneligible(selected())}>
-              Hybrid smart cut{hybridSmartCutKnownIneligible(selected()) ? " (unavailable)" : ""}
-            </option>
-          </select>
-        </label>
-        <label>
-          Destination{" "}
-          <select
-            value={destinationId()}
-            onChange={(event) => setDestinationId(event.currentTarget.value)}
-          >
-            <For each={destinations()}>
-              {(destination) => (
-                <option value={destination.id}>
-                  {destination.label} ({destination.retention ?? "durable"})
-                </option>
+          <p role="status">{exportStatus() || "Export a saved project."}</p>
+          <label>
+            Mode{" "}
+            <select
+              value={exportMode()}
+              onChange={(event) => setExportMode(event.currentTarget.value as "merge" | "separate")}
+            >
+              <option value="merge">Merge</option>
+              <option value="separate">Separate</option>
+            </select>
+          </label>
+          <label>
+            Selection{" "}
+            <select
+              value={exportSelection()}
+              onChange={(event) =>
+                setExportSelection(event.currentTarget.value as "segments" | "gaps")
+              }
+            >
+              <option value="segments">Segments</option>
+              <option value="gaps">Gaps</option>
+            </select>
+          </label>
+          <fieldset>
+            <legend>Streams</legend>
+            <For each={tracks()}>
+              {(track) => {
+                const checked = () =>
+                  streamIndexes().length === 0 || streamIndexes().includes(track.index);
+                return (
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={checked()}
+                      onChange={(event) => {
+                        const all = streamIndexes().length
+                          ? streamIndexes()
+                          : tracks().map((item) => item.index);
+                        setStreamIndexes(
+                          event.currentTarget.checked
+                            ? [...new Set([...all, track.index])]
+                            : all.filter((index) => index !== track.index),
+                        );
+                      }}
+                    />{" "}
+                    {track.type} {track.codec}
+                    {track.language ? ` · ${track.language}` : ""}
+                    {track.disposition?.length ? ` · ${track.disposition.join(", ")}` : ""} (#
+                    {track.index})
+                  </label>
+                );
+              }}
+            </For>
+          </fieldset>
+          <label>
+            Cut strategy{" "}
+            <select
+              value={cutStrategy()}
+              onChange={(event) => {
+                const value = event.currentTarget.value as AppSettings["cutStrategy"];
+                setCutStrategy(value);
+                saveSettings({ cutStrategy: value });
+              }}
+            >
+              <option value="stream_copy_preferred">Stream copy preferred</option>
+              <option value="precise_reencode">Precise re-encode</option>
+              <option value="hybrid_smart_cut" disabled={hybridSmartCutKnownIneligible(selected())}>
+                Hybrid smart cut{hybridSmartCutKnownIneligible(selected()) ? " (unavailable)" : ""}
+              </option>
+            </select>
+          </label>
+          <label>
+            Destination{" "}
+            <select
+              value={destinationId()}
+              onChange={(event) => setDestinationId(event.currentTarget.value)}
+            >
+              <For each={destinations()}>
+                {(destination) => (
+                  <option value={destination.id}>
+                    {destination.label} ({destination.retention ?? "durable"})
+                  </option>
+                )}
+              </For>
+            </select>
+          </label>
+          <label>
+            Filename template{" "}
+            <input
+              value={filenameTemplate()}
+              onInput={(event) => {
+                const value = event.currentTarget.value;
+                setFilenameTemplate(value);
+                saveSettings({ filenameTemplate: value });
+              }}
+              aria-label="Filename template"
+            />
+          </label>
+          <p role="status">
+            Preview:{" "}
+            {filenameTemplate()
+              .replaceAll("{ext}", "mkv")
+              .replaceAll("{segment}", "1")
+              .replaceAll("{mode}", exportMode()) || "server default"}
+          </p>
+          <div aria-label="Export review">
+            <p>
+              Review: {exportMode()} {exportSelection()} · {cutStrategy()}
+            </p>
+            <p>
+              Requested segment bounds:{" "}
+              {present()
+                .segments.map(
+                  (segment) =>
+                    `${formatTime(segment.startMs, duration())}–${formatTime(segment.endMs, duration())}`,
+                )
+                .join(", ") || "none"}
+            </p>
+            <p>Selected streams: {preflight()?.selection?.join(", ") || "default safe streams"}</p>
+            <Show when={cutStrategy() === "stream_copy_preferred"}>
+              <p>
+                Stream-copy cuts may begin at an earlier keyframe; no frame-exactness is claimed.
+              </p>
+            </Show>
+            <Show when={cutStrategy() !== "stream_copy_preferred"}>
+              <p>Boundary precision depends on the selected strategy and requires human review.</p>
+            </Show>
+            <For each={preflight()?.findings ?? []}>
+              {(finding) => (
+                <p role="status">
+                  {finding.severity}: {finding.message}
+                </p>
               )}
             </For>
-          </select>
-        </label>
-        <label>
-          Filename template{" "}
-          <input
-            value={filenameTemplate()}
-            onInput={(event) => {
-              const value = event.currentTarget.value;
-              setFilenameTemplate(value);
-              saveSettings({ filenameTemplate: value });
-            }}
-            aria-label="Filename template"
-          />
-        </label>
-        <p role="status">
-          Preview:{" "}
-          {filenameTemplate()
-            .replaceAll("{ext}", "mkv")
-            .replaceAll("{segment}", "1")
-            .replaceAll("{mode}", exportMode()) || "server default"}
-        </p>
-        <div aria-label="Export review">
-          <p>
-            Review: {exportMode()} {exportSelection()} · {cutStrategy()}
-          </p>
-          <p>
-            Requested segment bounds:{" "}
-            {present()
-              .segments.map(
-                (segment) =>
-                  `${formatTime(segment.startMs, duration())}–${formatTime(segment.endMs, duration())}`,
-              )
-              .join(", ") || "none"}
-          </p>
-          <p>Selected streams: {preflight()?.selection?.join(", ") || "default safe streams"}</p>
-          <Show when={cutStrategy() === "stream_copy_preferred"}>
-            <p>Stream-copy cuts may begin at an earlier keyframe; no frame-exactness is claimed.</p>
-          </Show>
-          <Show when={cutStrategy() !== "stream_copy_preferred"}>
-            <p>Boundary precision depends on the selected strategy and requires human review.</p>
-          </Show>
-          <For each={preflight()?.findings ?? []}>
-            {(finding) => (
-              <p role="status">
-                {finding.severity}: {finding.message}
-              </p>
-            )}
-          </For>
-        </div>
-        <div class="controls">
-          <button
-            disabled={
-              !selected() ||
-              !present().segments.length ||
-              preflightPending() ||
-              (!dirty() && !preflight()?.allowed)
-            }
-            onClick={() => void exportProject()}
-          >
-            Start export
-          </button>
-          <Show when={exportJob()?.state === "queued" || exportJob()?.state === "running"}>
-            <button onClick={() => void cancelExport()}>Cancel export</button>
-          </Show>
-        </div>
-        <Show when={exportJob()?.result}>
-          <div>
-            <div aria-label="Export result">
-              <p>
-                Output ready:{" "}
-                {exportJob()!.result!.outputName ?? exportJob()!.result!.outputNames?.join(", ")}
-              </p>
-              <p>
-                Strategy:{" "}
-                {exportJob()!.appliedStrategy ??
-                  (exportJob()!.result!.appliedStrategies?.length
-                    ? "mixed per segment"
-                    : (exportJob()!.strategy ?? cutStrategy()))}{" "}
-                · {exportJob()!.verified ? "verified output" : "requires inspection"}
-              </p>
-              <Show when={(exportJob()!.result!.appliedStrategies?.length ?? 0) > 1}>
-                <For each={exportJob()!.result!.appliedStrategies}>
-                  {(strategy) => (
-                    <p>
-                      Segment {strategy.segment}
-                      {strategy.outputName ? ` (${strategy.outputName})` : ""}: {strategy.strategy}
-                    </p>
+          </div>
+          <div class="controls">
+            <button
+              disabled={
+                !selected() ||
+                !present().segments.length ||
+                preflightPending() ||
+                (!dirty() && !preflight()?.allowed)
+              }
+              onClick={() => void exportProject()}
+            >
+              Start export
+            </button>
+            <Show when={exportJob()?.state === "queued" || exportJob()?.state === "running"}>
+              <button onClick={() => void cancelExport()}>Cancel export</button>
+            </Show>
+          </div>
+          <Show when={exportJob()?.result}>
+            <div>
+              <div aria-label="Export result">
+                <p>
+                  Output ready:{" "}
+                  {exportJob()!.result!.outputName ?? exportJob()!.result!.outputNames?.join(", ")}
+                </p>
+                <p>
+                  Strategy:{" "}
+                  {exportJob()!.appliedStrategy ??
+                    (exportJob()!.result!.appliedStrategies?.length
+                      ? "mixed per segment"
+                      : (exportJob()!.strategy ?? cutStrategy()))}{" "}
+                  · {exportJob()!.verified ? "verified output" : "requires inspection"}
+                </p>
+                <Show when={(exportJob()!.result!.appliedStrategies?.length ?? 0) > 1}>
+                  <For each={exportJob()!.result!.appliedStrategies}>
+                    {(strategy) => (
+                      <p>
+                        Segment {strategy.segment}
+                        {strategy.outputName ? ` (${strategy.outputName})` : ""}:{" "}
+                        {strategy.strategy}
+                      </p>
+                    )}
+                  </For>
+                </Show>
+                <p>
+                  {exportJob()!.result!.sizeBytes.toLocaleString()} bytes · retained until{" "}
+                  {exportJob()!.result!.retainUntil}
+                </p>
+              </div>
+              <Show
+                when={
+                  exportJob()!.state === "succeeded" &&
+                  exportJob()!.result!.destinationKind === "download"
+                }
+              >
+                <For
+                  each={
+                    exportJob()!.result!.outputNames ??
+                    (exportJob()!.result!.outputName ? [exportJob()!.result!.outputName] : [])
+                  }
+                >
+                  {(_, position) => (
+                    <a
+                      href={api.url(
+                        `jobs/${encodeURIComponent(exportJob()!.id)}/outputs/${position()}`,
+                      )}
+                      download
+                    >
+                      Download output {position() + 1}
+                    </a>
                   )}
                 </For>
               </Show>
-              <p>
-                {exportJob()!.result!.sizeBytes.toLocaleString()} bytes · retained until{" "}
-                {exportJob()!.result!.retainUntil}
-              </p>
+              <p role="note">Please review the exported media before delivery.</p>
+              <div aria-label="Export warnings">
+                <For each={exportJob()!.warnings ?? []}>
+                  {(warning) => <p role="status">Warning: {warning}</p>}
+                </For>
+              </div>
             </div>
-            <Show
-              when={
-                exportJob()!.state === "succeeded" &&
-                exportJob()!.result!.destinationKind === "download"
-              }
-            >
-              <For
-                each={
-                  exportJob()!.result!.outputNames ??
-                  (exportJob()!.result!.outputName ? [exportJob()!.result!.outputName] : [])
-                }
-              >
-                {(_, position) => (
-                  <a
-                    href={api.url(
-                      `jobs/${encodeURIComponent(exportJob()!.id)}/outputs/${position()}`,
-                    )}
-                    download
-                  >
-                    Download output {position() + 1}
-                  </a>
-                )}
-              </For>
-            </Show>
-            <p role="note">Please review the exported media before delivery.</p>
-            <div aria-label="Export warnings">
-              <For each={exportJob()!.warnings ?? []}>
-                {(warning) => <p role="status">Warning: {warning}</p>}
-              </For>
-            </div>
-          </div>
-        </Show>
+          </Show>
         </section>
       </Show>
       <section class="settings-panel" aria-labelledby="settings-heading">
@@ -1753,66 +1762,68 @@ export function App() {
       <Show when={selected()}>
         <section class="detection-panel" aria-labelledby="detection-heading">
           <h2 id="detection-heading">Auto detection</h2>
-        <p role="status">{detectionStatus() || "Review candidates before they change segments."}</p>
-        <div class="controls">
-          <button
-            disabled={
-              !selected() ||
-              detectionJob()?.state === "queued" ||
-              detectionJob()?.state === "running"
-            }
-            onClick={() => void startDetection("silence")}
-          >
-            Detect silence
-          </button>
-          <button
-            disabled={
-              !selected() ||
-              detectionJob()?.state === "queued" ||
-              detectionJob()?.state === "running"
-            }
-            onClick={() => void startDetection("black")}
-          >
-            Detect black frames
-          </button>
-          <button
-            disabled={
-              !selected() ||
-              detectionJob()?.state === "queued" ||
-              detectionJob()?.state === "running"
-            }
-            onClick={() => void startDetection("scene")}
-          >
-            Detect scene changes
-          </button>
-          <Show when={detectionJob()?.state === "queued" || detectionJob()?.state === "running"}>
-            <button onClick={() => void cancelDetection()}>Cancel detection</button>
+          <p role="status">
+            {detectionStatus() || "Review candidates before they change segments."}
+          </p>
+          <div class="controls">
+            <button
+              disabled={
+                !selected() ||
+                detectionJob()?.state === "queued" ||
+                detectionJob()?.state === "running"
+              }
+              onClick={() => void startDetection("silence")}
+            >
+              Detect silence
+            </button>
+            <button
+              disabled={
+                !selected() ||
+                detectionJob()?.state === "queued" ||
+                detectionJob()?.state === "running"
+              }
+              onClick={() => void startDetection("black")}
+            >
+              Detect black frames
+            </button>
+            <button
+              disabled={
+                !selected() ||
+                detectionJob()?.state === "queued" ||
+                detectionJob()?.state === "running"
+              }
+              onClick={() => void startDetection("scene")}
+            >
+              Detect scene changes
+            </button>
+            <Show when={detectionJob()?.state === "queued" || detectionJob()?.state === "running"}>
+              <button onClick={() => void cancelDetection()}>Cancel detection</button>
+            </Show>
+          </div>
+          <Show when={detectionCandidates().length > 0}>
+            <ol aria-label="Detection candidates">
+              <For each={detectionCandidates()}>
+                {(candidate) => (
+                  <li>
+                    {candidate.source} · {formatTime(candidate.startMs, duration())}–
+                    {formatTime(candidate.endMs, duration())} ·{" "}
+                    {Math.round(candidate.confidence * 100)}%{" "}
+                    <button onClick={() => acceptDetection(candidate)}>Accept</button>
+                    <button
+                      onClick={() => {
+                        setDetectionCandidates(
+                          detectionCandidates().filter((item) => item.id !== candidate.id),
+                        );
+                        setDetectionStatus("Candidate rejected.");
+                      }}
+                    >
+                      Reject
+                    </button>
+                  </li>
+                )}
+              </For>
+            </ol>
           </Show>
-        </div>
-        <Show when={detectionCandidates().length > 0}>
-          <ol aria-label="Detection candidates">
-            <For each={detectionCandidates()}>
-              {(candidate) => (
-                <li>
-                  {candidate.source} · {formatTime(candidate.startMs, duration())}–
-                  {formatTime(candidate.endMs, duration())} ·{" "}
-                  {Math.round(candidate.confidence * 100)}%{" "}
-                  <button onClick={() => acceptDetection(candidate)}>Accept</button>
-                  <button
-                    onClick={() => {
-                      setDetectionCandidates(
-                        detectionCandidates().filter((item) => item.id !== candidate.id),
-                      );
-                      setDetectionStatus("Candidate rejected.");
-                    }}
-                  >
-                    Reject
-                  </button>
-                </li>
-              )}
-            </For>
-          </ol>
-        </Show>
         </section>
       </Show>
     </main>
