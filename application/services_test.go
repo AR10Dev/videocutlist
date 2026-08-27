@@ -169,6 +169,30 @@ func TestExportDurableRequestPreservesDestinationAndTemplate(t *testing.T) {
 	<-executor.cancelled
 }
 
+func TestExportCapturesSettingsForNextJob(t *testing.T) {
+	jobs, executor := &jobsStub{}, &executorStub{started: make(chan struct{}), cancelled: make(chan struct{})}
+	settings := store.NewRuntimeSettingsState(store.RuntimeSettings{ExportLimit: 1})
+	useCase := NewExportUseCase(jobs, executor, 1)
+	useCase.Settings = settings
+	if _, err := useCase.Create(context.Background(), domain.Principal{Subject: "editor"}, "p_aaaaaaaaaaaa", project(), input()); err != nil {
+		t.Fatal(err)
+	}
+	settings.Replace(store.RuntimeSettings{ExportLimit: 9})
+	var request struct {
+		Settings store.RuntimeSettings `json:"runtimeSettings"`
+	}
+	if err := json.Unmarshal([]byte(jobs.job.RequestJSON), &request); err != nil {
+		t.Fatal(err)
+	}
+	if request.Settings.ExportLimit != 1 {
+		t.Fatalf("captured export limit = %d, want 1", request.Settings.ExportLimit)
+	}
+	if err := useCase.Cancel(context.Background(), "editor", jobs.job.ID); err != nil {
+		t.Fatal(err)
+	}
+	<-executor.cancelled
+}
+
 func TestExportAdmissionPrecedesDurableCreation(t *testing.T) {
 	jobs, executor := &jobsStub{}, &executorStub{started: make(chan struct{}), cancelled: make(chan struct{})}
 	useCase := NewExportUseCase(jobs, executor, 1)

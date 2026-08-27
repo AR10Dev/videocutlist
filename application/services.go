@@ -232,7 +232,10 @@ func (p ProjectUseCase) Save(ctx context.Context, principal domain.Principal, id
 type ExportUseCase struct {
 	Jobs     ExportJobs
 	Executor ExportExecutor
+	Settings *store.RuntimeSettingsState
 	slots    chan struct{}
+	limit    func() int
+	active   int
 	mu       sync.Mutex
 	cancel   map[string]context.CancelFunc
 }
@@ -240,6 +243,8 @@ type ExportUseCase struct {
 func NewExportUseCase(jobs ExportJobs, executor ExportExecutor, limit int) *ExportUseCase {
 	return &ExportUseCase{Jobs: jobs, Executor: executor, slots: make(chan struct{}, limit), cancel: map[string]context.CancelFunc{}}
 }
+
+func (e *ExportUseCase) SetLimitProvider(provider func() int) { e.limit = provider }
 func (e *ExportUseCase) Create(ctx context.Context, principal domain.Principal, projectID string, project Project, input ExportInput) (Job, error) {
 	preflight, err := e.Executor.Preflight(ctx, principal, projectID, project, input)
 	if err != nil {
@@ -248,15 +253,25 @@ func (e *ExportUseCase) Create(ctx context.Context, principal domain.Principal, 
 	if !preflight.Allowed {
 		return Job{}, errors.New("export preflight blocked")
 	}
-	select {
-	case e.slots <- struct{}{}:
-	default:
+	e.mu.Lock()
+	currentLimit := cap(e.slots)
+	e.mu.Unlock()
+	if e.limit != nil {
+		currentLimit = e.limit()
+	}
+	e.mu.Lock()
+	if e.active >= currentLimit {
+		e.mu.Unlock()
 		return Job{}, ErrBusy
 	}
+	e.active++
+	e.mu.Unlock()
 	admitted := false
 	defer func() {
 		if !admitted {
-			<-e.slots
+			e.mu.Lock()
+			e.active--
+			e.mu.Unlock()
 		}
 	}()
 	id, err := newID("j_")
@@ -264,14 +279,15 @@ func (e *ExportUseCase) Create(ctx context.Context, principal domain.Principal, 
 		return Job{}, err
 	}
 	data, err := json.Marshal(struct {
-		Mode             string `json:"mode"`
-		Selection        string `json:"selection"`
-		StreamIndexes    []int  `json:"streamIndexes,omitempty"`
-		CutStrategy      string `json:"cutStrategy"`
-		Container        string `json:"container"`
-		DestinationID    string `json:"destinationId,omitempty"`
-		FilenameTemplate string `json:"filenameTemplate,omitempty"`
-	}{input.Mode, input.Selection, input.StreamIndexes, input.CutStrategy, input.Container, input.DestinationID, input.FilenameTemplate})
+		Mode             string                 `json:"mode"`
+		Selection        string                 `json:"selection"`
+		StreamIndexes    []int                  `json:"streamIndexes,omitempty"`
+		CutStrategy      string                 `json:"cutStrategy"`
+		Container        string                 `json:"container"`
+		DestinationID    string                 `json:"destinationId,omitempty"`
+		FilenameTemplate string                 `json:"filenameTemplate,omitempty"`
+		Settings         *store.RuntimeSettings `json:"runtimeSettings,omitempty"`
+	}{input.Mode, input.Selection, input.StreamIndexes, input.CutStrategy, input.Container, input.DestinationID, input.FilenameTemplate, runtimeSettings(e.Settings)})
 	if err != nil {
 		return Job{}, err
 	}
@@ -287,8 +303,16 @@ func (e *ExportUseCase) Create(ctx context.Context, principal domain.Principal, 
 	go e.run(jobCtx, principal.Subject, id, project.Document)
 	return jobResult(record), nil
 }
+func runtimeSettings(state *store.RuntimeSettingsState) *store.RuntimeSettings {
+	if state == nil {
+		return nil
+	}
+	settings := state.Snapshot()
+	return &settings
+}
+
 func (e *ExportUseCase) run(ctx context.Context, owner, id string, document domain.Document) {
-	defer func() { <-e.slots }()
+	defer func() { e.mu.Lock(); e.active--; e.mu.Unlock() }()
 	defer func() { e.mu.Lock(); delete(e.cancel, id); e.mu.Unlock() }()
 	_ = e.Executor.Execute(ctx, owner, id, document)
 }

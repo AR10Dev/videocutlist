@@ -55,8 +55,33 @@ type LibraryRoot = {
   state?: "ready" | "unavailable";
   message?: string;
 };
+type RuntimeDestination = {
+  id: string;
+  label: string;
+  description?: string;
+  kind: string;
+  root?: string;
+  mediaRoot?: string;
+  retention?: string;
+};
+
+type ServerRuntimeSettings = {
+  mediaRoots?: Record<string, string>;
+  destinations?: RuntimeDestination[];
+  exportLimit: number;
+  cacheMaxBytes: number;
+  previewGlobalLimit: number;
+  previewPerUserLimit: number;
+  previewBeforeMs: number;
+  previewAfterMs: number;
+  previewMaxMs: number;
+  previewGridMs: number;
+  mediaMaxFiles: number;
+  mediaMaxDepth: number;
+};
+
 type ServerSettings = {
-  settings: Record<string, unknown> & { mediaRoots?: Record<string, string> };
+  settings: ServerRuntimeSettings;
   revision: number;
   roots?: Record<string, { state: "ready" | "unavailable"; message: string }>;
 };
@@ -126,6 +151,7 @@ export function App() {
   const [serverSettingsStatus, setServerSettingsStatus] = createSignal("");
   const [libraryRoots, setLibraryRoots] = createSignal<LibraryRoot[]>([]);
   const [settingsRevision, setSettingsRevision] = createSignal(0);
+  const [runtimeSettings, setRuntimeSettings] = createSignal<ServerRuntimeSettings>();
   const [settingsPending, setSettingsPending] = createSignal(false);
   const [rescanPending, setRescanPending] = createSignal(false);
   const [rootErrors, setRootErrors] = createSignal<Record<number, string>>({});
@@ -215,6 +241,7 @@ export function App() {
         Object.entries(roots).map(([alias, path]) => ({ alias, path, ...value.roots?.[alias] })),
       );
       setSettingsRevision(value.revision);
+      setRuntimeSettings(value.settings);
       setServerSettingsStatus("Administrator settings loaded.");
     } catch (error) {
       setServerSettingsStatus(
@@ -241,42 +268,68 @@ export function App() {
     setRootErrors(errors);
     return Object.keys(errors).length === 0;
   };
-  const saveLibrarySettings = async () => {
-    if (settingsPending() || !validateRoots()) return;
+  const saveRuntimeSettings = async (
+    changes: Partial<ServerRuntimeSettings>,
+    successMessage: string,
+  ) => {
+    if (settingsPending()) return;
     setSettingsPending(true);
-    setServerSettingsStatus("Saving library settings…");
+    setServerSettingsStatus("Saving administrator settings…");
     try {
       const current = await api.request("settings");
       if (!current.ok) throw new Error("Settings could not be reloaded before saving.");
       const value = (await current.json()) as ServerSettings;
-      const mediaRoots = Object.fromEntries(
-        libraryRoots().map((root) => [root.alias.trim(), root.path.trim()]),
-      );
       const response = await api.request("settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           revision: value.revision,
-          settings: { ...value.settings, mediaRoots },
+          settings: { ...value.settings, ...changes },
         }),
       });
       if (!response.ok)
         throw new Error(
           response.status === 409
             ? "Settings changed; reload before updating."
-            : "Library settings were rejected. Check each path.",
+            : "Settings were rejected. Check the configured limits.",
         );
       const saved = (await response.json()) as ServerSettings;
       setSettingsRevision(saved.revision);
-      setServerSettingsStatus("Library settings saved.");
+      setRuntimeSettings(saved.settings);
+      setServerSettingsStatus(successMessage);
     } catch (error) {
       setServerSettingsStatus(
-        error instanceof Error ? error.message : "Library settings could not be saved.",
+        error instanceof Error ? error.message : "Settings could not be saved.",
       );
     } finally {
       setSettingsPending(false);
     }
   };
+
+  const saveLibrarySettings = async () => {
+    if (!validateRoots()) return;
+    const mediaRoots = Object.fromEntries(
+      libraryRoots().map((root) => [root.alias.trim(), root.path.trim()]),
+    );
+    await saveRuntimeSettings({ mediaRoots }, "Library settings saved.");
+  };
+
+  const updateDestination = (id: string, changes: Partial<RuntimeDestination>) => {
+    const current = runtimeSettings();
+    if (!current?.destinations) return;
+    setRuntimeSettings({
+      ...current,
+      destinations: current.destinations.map((destination) =>
+        destination.id === id ? { ...destination, ...changes } : destination,
+      ),
+    });
+  };
+
+  const saveDestinations = () =>
+    void saveRuntimeSettings(
+      { destinations: runtimeSettings()?.destinations },
+      "Export destination settings saved.",
+    );
   const rescanLibrary = async () => {
     if (rescanPending()) return;
     setRescanPending(true);
@@ -2169,6 +2222,10 @@ export function App() {
           </section>
           <section aria-labelledby="exports-settings-heading">
             <h3 id="exports-settings-heading">Exports</h3>
+            <p>
+              Source media is read-only. Exports are retained according to each destination policy;
+              cache data is disposable.
+            </p>
             <label>
               Cut strategy (saved in this browser)
               <select
@@ -2195,10 +2252,201 @@ export function App() {
                 }}
               />
             </label>
+            <Show when={runtimeSettings()?.destinations?.length}>
+              <h4>Destinations</h4>
+              <ul>
+                <For each={runtimeSettings()?.destinations}>
+                  {(destination) => (
+                    <li>
+                      <label>
+                        Name
+                        <input
+                          value={destination.label}
+                          onChange={(event) =>
+                            updateDestination(destination.id, { label: event.currentTarget.value })
+                          }
+                        />
+                      </label>
+                      <label>
+                        Description
+                        <input
+                          value={destination.description ?? ""}
+                          onChange={(event) =>
+                            updateDestination(destination.id, {
+                              description: event.currentTarget.value,
+                            })
+                          }
+                        />
+                      </label>
+                      <label>
+                        Retention
+                        <input
+                          value={destination.retention ?? ""}
+                          placeholder="for example 30d"
+                          onChange={(event) =>
+                            updateDestination(destination.id, {
+                              retention: event.currentTarget.value,
+                            })
+                          }
+                        />
+                      </label>
+                      <span>{destination.kind} · deployment-managed location</span>
+                    </li>
+                  )}
+                </For>
+              </ul>
+              <button type="button" onClick={saveDestinations} disabled={settingsPending()}>
+                {settingsPending() ? "Saving…" : "Save destination settings"}
+              </button>
+              <p>
+                Destination roots are deployment-controlled and remain within configured export
+                bases.
+              </p>
+            </Show>
           </section>
           <section aria-labelledby="performance-settings-heading">
             <h3 id="performance-settings-heading">Performance</h3>
-            <p>Performance controls are managed by the server administrator.</p>
+            <p>Changes apply to the next job; running FFmpeg jobs are not reconfigured.</p>
+            <label>
+              Export concurrency{" "}
+              <input
+                type="number"
+                min="1"
+                value={runtimeSettings()?.exportLimit ?? ""}
+                onChange={(event) =>
+                  void saveRuntimeSettings(
+                    { exportLimit: event.currentTarget.valueAsNumber },
+                    "Performance settings saved.",
+                  )
+                }
+              />
+            </label>
+            <label>
+              Preview global concurrency{" "}
+              <input
+                type="number"
+                min="1"
+                value={runtimeSettings()?.previewGlobalLimit ?? ""}
+                onChange={(event) =>
+                  void saveRuntimeSettings(
+                    { previewGlobalLimit: event.currentTarget.valueAsNumber },
+                    "Performance settings saved.",
+                  )
+                }
+              />
+            </label>
+            <label>
+              Preview per-user concurrency{" "}
+              <input
+                type="number"
+                min="1"
+                value={runtimeSettings()?.previewPerUserLimit ?? ""}
+                onChange={(event) =>
+                  void saveRuntimeSettings(
+                    { previewPerUserLimit: event.currentTarget.valueAsNumber },
+                    "Performance settings saved.",
+                  )
+                }
+              />
+            </label>
+            <label>
+              Preview before (ms){" "}
+              <input
+                type="number"
+                min="1"
+                value={runtimeSettings()?.previewBeforeMs ?? ""}
+                onChange={(event) =>
+                  void saveRuntimeSettings(
+                    { previewBeforeMs: event.currentTarget.valueAsNumber },
+                    "Performance settings saved.",
+                  )
+                }
+              />
+            </label>
+            <label>
+              Preview after (ms){" "}
+              <input
+                type="number"
+                min="1"
+                value={runtimeSettings()?.previewAfterMs ?? ""}
+                onChange={(event) =>
+                  void saveRuntimeSettings(
+                    { previewAfterMs: event.currentTarget.valueAsNumber },
+                    "Performance settings saved.",
+                  )
+                }
+              />
+            </label>
+            <label>
+              Preview maximum window (ms){" "}
+              <input
+                type="number"
+                min="1"
+                value={runtimeSettings()?.previewMaxMs ?? ""}
+                onChange={(event) =>
+                  void saveRuntimeSettings(
+                    { previewMaxMs: event.currentTarget.valueAsNumber },
+                    "Performance settings saved.",
+                  )
+                }
+              />
+            </label>
+            <label>
+              Preview grid (ms){" "}
+              <input
+                type="number"
+                min="1"
+                value={runtimeSettings()?.previewGridMs ?? ""}
+                onChange={(event) =>
+                  void saveRuntimeSettings(
+                    { previewGridMs: event.currentTarget.valueAsNumber },
+                    "Performance settings saved.",
+                  )
+                }
+              />
+            </label>
+            <label>
+              Media scan file limit{" "}
+              <input
+                type="number"
+                min="1"
+                value={runtimeSettings()?.mediaMaxFiles ?? ""}
+                onChange={(event) =>
+                  void saveRuntimeSettings(
+                    { mediaMaxFiles: event.currentTarget.valueAsNumber },
+                    "Performance settings saved.",
+                  )
+                }
+              />
+            </label>
+            <label>
+              Media scan depth limit{" "}
+              <input
+                type="number"
+                min="1"
+                value={runtimeSettings()?.mediaMaxDepth ?? ""}
+                onChange={(event) =>
+                  void saveRuntimeSettings(
+                    { mediaMaxDepth: event.currentTarget.valueAsNumber },
+                    "Performance settings saved.",
+                  )
+                }
+              />
+            </label>
+            <label>
+              Disposable cache size (bytes){" "}
+              <input
+                type="number"
+                min="1"
+                value={runtimeSettings()?.cacheMaxBytes ?? ""}
+                onChange={(event) =>
+                  void saveRuntimeSettings(
+                    { cacheMaxBytes: event.currentTarget.valueAsNumber },
+                    "Performance settings saved.",
+                  )
+                }
+              />
+            </label>
           </section>
           <section aria-labelledby="editor-settings-heading">
             <h3 id="editor-settings-heading">Editor</h3>

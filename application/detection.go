@@ -42,6 +42,8 @@ type DetectionUseCase struct {
 	Jobs     DetectionJobs
 	Detector Detector
 	slots    chan struct{}
+	limit    func() int
+	active   int
 	mu       sync.Mutex
 	cancel   map[string]context.CancelFunc
 }
@@ -52,24 +54,36 @@ func NewDetectionUseCase(j DetectionJobs, d Detector, limit int) *DetectionUseCa
 	}
 	return &DetectionUseCase{Jobs: j, Detector: d, slots: make(chan struct{}, limit), cancel: map[string]context.CancelFunc{}}
 }
+
+func (e *DetectionUseCase) SetLimitProvider(provider func() int) { e.limit = provider }
 func (e *DetectionUseCase) Create(ctx context.Context, p domain.Principal, projectID string, request DetectionRequest) (DetectionJob, error) {
 	if request.ProjectRevision < 1 || request.MediaID == "" || !request.Kind.Valid() {
 		return DetectionJob{}, errors.New("invalid detection request")
 	}
-	select {
-	case e.slots <- struct{}{}:
-	default:
+	e.mu.Lock()
+	limit := cap(e.slots)
+	if e.limit != nil {
+		limit = e.limit()
+	}
+	if e.active >= limit {
+		e.mu.Unlock()
 		return DetectionJob{}, ErrBusy
 	}
+	e.active++
+	e.mu.Unlock()
 	id, err := newID("j_")
 	if err != nil {
-		<-e.slots
+		e.mu.Lock()
+		e.active--
+		e.mu.Unlock()
 		return DetectionJob{}, err
 	}
 	request.ProjectID = projectID
 	record, err := e.Jobs.Create(ctx, store.DetectionJob{ID: id, OwnerLogin: p.Subject, ProjectID: projectID, MediaID: request.MediaID, ProjectRevision: request.ProjectRevision, Kind: string(request.Kind)})
 	if err != nil {
-		<-e.slots
+		e.mu.Lock()
+		e.active--
+		e.mu.Unlock()
 		return DetectionJob{}, err
 	}
 	jobctx, cancel := context.WithCancel(context.Background())
@@ -80,7 +94,7 @@ func (e *DetectionUseCase) Create(ctx context.Context, p domain.Principal, proje
 	return detectionResult(record), nil
 }
 func (e *DetectionUseCase) run(ctx context.Context, owner, id string, request DetectionRequest) {
-	defer func() { <-e.slots; e.mu.Lock(); delete(e.cancel, id); e.mu.Unlock() }()
+	defer func() { e.mu.Lock(); e.active--; delete(e.cancel, id); e.mu.Unlock() }()
 	if _, err := e.Jobs.Start(ctx, owner, id); err != nil {
 		return
 	}

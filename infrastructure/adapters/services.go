@@ -150,6 +150,7 @@ type ExportExecutor struct {
 	Scanner     *index.Scanner
 	Media       *store.MediaStore
 	Coordinator exporter.Coordinator
+	Settings    *store.RuntimeSettingsState
 }
 
 func NewExportExecutor(jobs *store.JobStore, scanner *index.Scanner, media *store.MediaStore, service exporter.Service) ExportExecutor {
@@ -165,7 +166,11 @@ func (e ExportExecutor) Preflight(ctx context.Context, principal domain.Principa
 	if !ok {
 		return application.ExportPreflight{}, errors.New("media source is not a file")
 	}
-	result, err := e.Coordinator.Exporter.Preflight(ctx, file, exporter.Request{Mode: input.Mode, Selection: input.Selection, StreamIndexes: input.StreamIndexes, CutStrategy: input.CutStrategy, Container: input.Container, DestinationID: input.DestinationID, FilenameTemplate: input.FilenameTemplate})
+	service := e.Coordinator.Exporter
+	if e.Settings != nil {
+		applyRuntimeSettings(&service, e.Settings.Snapshot())
+	}
+	result, err := service.Preflight(ctx, file, exporter.Request{Mode: input.Mode, Selection: input.Selection, StreamIndexes: input.StreamIndexes, CutStrategy: input.CutStrategy, Container: input.Container, DestinationID: input.DestinationID, FilenameTemplate: input.FilenameTemplate})
 	if err != nil {
 		return application.ExportPreflight{}, err
 	}
@@ -234,6 +239,26 @@ func (e ExportExecutor) Execute(ctx context.Context, owner, id string, document 
 		_, _ = e.Jobs.Fail(context.Background(), owner, id, "media_unavailable")
 		return errors.New("media source is not a file")
 	}
-	_, err = e.Coordinator.Execute(ctx, owner, id, file, document)
+	coordinator := e.Coordinator
+	if e.Settings != nil {
+		settings := e.Settings.Snapshot()
+		if job, getErr := e.Jobs.Get(ctx, owner, id); getErr == nil {
+			var request struct {
+				Settings *store.RuntimeSettings `json:"runtimeSettings"`
+			}
+			if json.Unmarshal([]byte(job.RequestJSON), &request) == nil && request.Settings != nil {
+				settings = *request.Settings
+			}
+		}
+		applyRuntimeSettings(&coordinator.Exporter, settings)
+	}
+	_, err = coordinator.Execute(ctx, owner, id, file, document)
 	return err
+}
+
+func applyRuntimeSettings(service *exporter.Service, settings store.RuntimeSettings) {
+	service.Destinations = make([]exporter.Destination, len(settings.Destinations))
+	for i, destination := range settings.Destinations {
+		service.Destinations[i] = exporter.Destination{ID: destination.ID, Label: destination.Label, Description: destination.Description, Kind: destination.Kind, Root: destination.Root, RetentionText: destination.Retention, MediaRoot: destination.MediaRoot}
+	}
 }

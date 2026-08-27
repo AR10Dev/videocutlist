@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -45,6 +46,35 @@ type RuntimeSettingsRecord struct {
 	SchemaVersion int
 	Revision      int64
 	UpdatedAt     time.Time
+}
+
+// RuntimeSettingsState publishes complete snapshots to work started after an update.
+// A caller must retain its captured value for the lifetime of a job.
+type RuntimeSettingsState struct {
+	mu       sync.RWMutex
+	settings RuntimeSettings
+}
+
+func NewRuntimeSettingsState(settings RuntimeSettings) *RuntimeSettingsState {
+	return &RuntimeSettingsState{settings: settings}
+}
+
+func (s *RuntimeSettingsState) Snapshot() RuntimeSettings {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	settings := s.settings
+	settings.MediaRoots = make(map[string]string, len(s.settings.MediaRoots))
+	for alias, path := range s.settings.MediaRoots {
+		settings.MediaRoots[alias] = path
+	}
+	settings.Destinations = append([]RuntimeDestination(nil), s.settings.Destinations...)
+	return settings
+}
+
+func (s *RuntimeSettingsState) Replace(settings RuntimeSettings) {
+	s.mu.Lock()
+	s.settings = settings
+	s.mu.Unlock()
 }
 
 var ErrRuntimeSettingsRevisionConflict = errors.New("runtime settings revision conflict")

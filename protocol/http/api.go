@@ -119,28 +119,30 @@ func (f AuthorizerFunc) Allow(principal domain.Principal, action, resource strin
 }
 
 type Config struct {
-	Authenticator     Authenticator
-	Media             MediaService
-	MediaImport       application.MediaImportService
-	Preview           PreviewService
-	Assets            AssetService
-	Projects          ProjectService
-	Exports           ExportService
-	Preflight         ExportPreflightService
-	Jobs              JobService
-	Detection         DetectionService
-	Download          application.ExportDownloadService
-	Settings          *store.RuntimeSettingsStore
-	SettingsAllowlist []string
-	Destinations      []DestinationMetadata
-	Authorize         Authorizer
-	Ready             func(context.Context) error
-	Logger            *log.Logger
-	Metrics           *Metrics
-	BeforeMS          int64
-	AfterMS           int64
-	MaxPreviewMS      int64
-	GridMS            int64
+	Authenticator        Authenticator
+	Media                MediaService
+	MediaImport          application.MediaImportService
+	Preview              PreviewService
+	Assets               AssetService
+	Projects             ProjectService
+	Exports              ExportService
+	Preflight            ExportPreflightService
+	Jobs                 JobService
+	Detection            DetectionService
+	Download             application.ExportDownloadService
+	Settings             *store.RuntimeSettingsStore
+	RuntimeSettings      *store.RuntimeSettingsState
+	ApplyRuntimeSettings func(store.RuntimeSettings) error
+	SettingsAllowlist    []string
+	Destinations         []DestinationMetadata
+	Authorize            Authorizer
+	Ready                func(context.Context) error
+	Logger               *log.Logger
+	Metrics              *Metrics
+	BeforeMS             int64
+	AfterMS              int64
+	MaxPreviewMS         int64
+	GridMS               int64
 	// ListenerAddress gates the local-only automation command surface.
 	ListenerAddress       string
 	RequireAutomationAuth bool
@@ -383,6 +385,15 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, id string) 
 	if err != nil {
 		httpx.Error(w, http.StatusUnprocessableEntity, "invalid_settings", "Settings must be a complete valid document.", id)
 		return
+	}
+	if s.config.ApplyRuntimeSettings != nil {
+		if err := s.config.ApplyRuntimeSettings(record.Settings); err != nil {
+			httpx.Error(w, http.StatusUnprocessableEntity, "invalid_settings", "Settings could not be applied safely.", id)
+			return
+		}
+	}
+	if s.config.RuntimeSettings != nil {
+		s.config.RuntimeSettings.Replace(record.Settings)
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"settings": record.Settings, "revision": record.Revision, "schemaVersion": record.SchemaVersion, "updatedAt": record.UpdatedAt})
 }
@@ -701,6 +712,11 @@ func (s *Server) waveform(w http.ResponseWriter, r *http.Request, p domain.Princ
 }
 
 func (s *Server) previewSpec(request *http.Request, item Media) (PreviewSpec, error) {
+	beforeDefault, afterDefault, maxPreview, grid := s.config.BeforeMS, s.config.AfterMS, s.config.MaxPreviewMS, s.config.GridMS
+	if s.config.RuntimeSettings != nil {
+		settings := s.config.RuntimeSettings.Snapshot()
+		beforeDefault, afterDefault, maxPreview, grid = int64(settings.PreviewBeforeMS), int64(settings.PreviewAfterMS), int64(settings.PreviewMaxMS), int64(settings.PreviewGridMS)
+	}
 	if !queryKeys(request, "centerMs", "beforeMs", "afterMs", "mute") {
 		return PreviewSpec{}, errors.New("unknown query")
 	}
@@ -709,12 +725,12 @@ func (s *Server) previewSpec(request *http.Request, item Media) (PreviewSpec, er
 	if err != nil || center < 0 {
 		return PreviewSpec{}, errors.New("center")
 	}
-	before, err := optionalInt(query.Get("beforeMs"), s.config.BeforeMS)
+	before, err := optionalInt(query.Get("beforeMs"), beforeDefault)
 	if err != nil || before < 0 {
 		return PreviewSpec{}, errors.New("before")
 	}
-	after, err := optionalInt(query.Get("afterMs"), s.config.AfterMS)
-	if err != nil || after < 0 || before+after > s.config.MaxPreviewMS {
+	after, err := optionalInt(query.Get("afterMs"), afterDefault)
+	if err != nil || after < 0 || before+after > maxPreview {
 		return PreviewSpec{}, errors.New("after")
 	}
 	mute := false
@@ -730,7 +746,7 @@ func (s *Server) previewSpec(request *http.Request, item Media) (PreviewSpec, er
 	if item.DurationMS < 1 {
 		return PreviewSpec{}, errors.New("duration")
 	}
-	return application.NormalizePreview(item.ID, item.DurationMS, center, mute, domain.WindowConfig{BeforeMS: before, AfterMS: after, MaxMS: s.config.MaxPreviewMS, GridMS: s.config.GridMS})
+	return application.NormalizePreview(item.ID, item.DurationMS, center, mute, domain.WindowConfig{BeforeMS: before, AfterMS: after, MaxMS: maxPreview, GridMS: grid})
 }
 
 func (s *Server) getProject(writer http.ResponseWriter, request *http.Request, principal domain.Principal, project string, id string) {

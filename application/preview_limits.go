@@ -27,6 +27,17 @@ func NewPreviewLimits(global, perUser int) (*PreviewLimits, error) {
 	return &PreviewLimits{global: global, perUser: perUser, users: make(map[string]int)}, nil
 }
 
+// SetLimits applies limits to previews admitted after this call.
+func (p *PreviewLimits) SetLimits(global, perUser int) error {
+	if global < 1 || perUser < 1 {
+		return errors.New("preview limits must be positive")
+	}
+	p.mu.Lock()
+	p.global, p.perUser = global, perUser
+	p.mu.Unlock()
+	return nil
+}
+
 // AcquireProcess reserves one global FFmpeg process slot.
 func (p *PreviewLimits) AcquireProcess() (func(), error) {
 	p.mu.Lock()

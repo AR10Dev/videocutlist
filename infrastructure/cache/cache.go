@@ -48,6 +48,17 @@ func New(root string, maxBytes int64) (*Store, error) {
 	return &Store{root: root, max: maxBytes, open: make(map[string]int), partial: make(map[string]struct{}), paths: make(map[string]*sync.Mutex)}, nil
 }
 
+// SetMaxBytes applies the cache policy to writes started after this call.
+func (s *Store) SetMaxBytes(maxBytes int64) error {
+	if maxBytes < 1 {
+		return errors.New("cache limit must be positive")
+	}
+	s.mu.Lock()
+	s.max = maxBytes
+	s.mu.Unlock()
+	return nil
+}
+
 // Key is the frozen v1 compact JSON identity. Do not add implementation
 // details: the runtime contract intentionally keys only the encoder profile.
 func Key(spec domain.PreviewSpec) string { return domain.PreviewKey(spec) }

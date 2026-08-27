@@ -184,6 +184,17 @@ func (s *Scanner) Scan(ctx context.Context, alias string) ([]Record, error) {
 	return records, nil
 }
 
+// ReconfigureLimits applies scan bounds to scans started after this call.
+func (s *Scanner) ReconfigureLimits(limits ScanLimits) error {
+	if limits.MaxFiles < 1 || limits.MaxDepth < 1 {
+		return errors.New("scan limits must be positive")
+	}
+	s.config.Lock()
+	s.limits = limits
+	s.config.Unlock()
+	return nil
+}
+
 // RootCatalog can hide records belonging to a removed media root.
 type RootCatalog interface {
 	RemoveRoot(context.Context, string) error

@@ -58,6 +58,7 @@ func run(ctx context.Context) error {
 	if err := cfg.ApplyRuntimeSettings(effectiveSettings.Settings); err != nil {
 		return fmt.Errorf("load runtime settings: %w", err)
 	}
+	runtimeState := store.NewRuntimeSettingsState(effectiveSettings.Settings)
 	projectStore, _ := store.NewProjectStore(db)
 	jobStore, _ := store.NewJobStore(db)
 	detectionStore, _ := store.NewDetectionJobStore(db)
@@ -121,8 +122,12 @@ func run(ctx context.Context) error {
 	exportExecutor := adapters.NewExportExecutor(jobStore, scanner, mediaStore, exporter.Service{
 		FFmpegPath: cfg.FFmpegPath, FFprobePath: cfg.FFprobePath, OutputDir: cfg.ExportDir, Destinations: cfg.Destinations, Artifacts: artifacts,
 	})
+	exportExecutor.Settings = runtimeState
 	exportService := application.NewExportUseCase(jobStore, exportExecutor, cfg.ExportLimit)
+	exportService.Settings = runtimeState
 	detectionService := application.NewDetectionUseCase(detectionStore, detection.Service{Scanner: scanner, Catalog: mediaStore, FFmpegPath: cfg.FFmpegPath}, cfg.ExportLimit)
+	detectionService.SetLimitProvider(func() int { return runtimeState.Snapshot().ExportLimit })
+	exportService.SetLimitProvider(func() int { return runtimeState.Snapshot().ExportLimit })
 	jobService := application.JobUseCase{Exports: exportService, Detections: detectionService}
 	authenticator, err := httpapi.NewAuthenticator(httpapi.AuthConfig{
 		Mode: cfg.AuthMode, BearerToken: cfg.BearerToken, BearerSubject: cfg.BearerSubject,
@@ -130,10 +135,29 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	applyRuntime := func(settings store.RuntimeSettings) error {
+		if err := cfg.ApplyRuntimeSettings(settings); err != nil {
+			return err
+		}
+		roots := make([]index.Root, 0, len(settings.MediaRoots))
+		for alias, path := range settings.MediaRoots {
+			roots = append(roots, index.Root{Alias: alias, Path: path})
+		}
+		if err := scanner.Reconfigure(ctx, roots, nil, mediaStore); err != nil {
+			return err
+		}
+		if err := scanner.ReconfigureLimits(index.ScanLimits{MaxFiles: settings.MediaMaxFiles, MaxDepth: settings.MediaMaxDepth}); err != nil {
+			return err
+		}
+		if err := limiter.SetLimits(settings.PreviewGlobalLimit, settings.PreviewPerUserLimit); err != nil {
+			return err
+		}
+		return cacheStore.SetMaxBytes(settings.CacheMaxBytes)
+	}
 	apiServer, err := httpapi.New(httpapi.Config{
 		Authenticator: authenticator, Media: mediaService, Preview: previewService, Assets: assetService,
 		Projects: projectService, Exports: exportService, Preflight: exportExecutor, Jobs: jobService, Detection: detectionService, Download: exportExecutor, MediaImport: mediaService,
-		Settings:     runtimeSettingsStore,
+		Settings: runtimeSettingsStore, RuntimeSettings: runtimeState, ApplyRuntimeSettings: applyRuntime,
 		Destinations: destinationMetadata(cfg.Destinations),
 		Authorize: httpapi.AuthorizerFunc(func(principal domain.Principal, action, resource string) bool {
 			return principal.Allows(action, resource)
