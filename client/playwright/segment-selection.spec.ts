@@ -210,6 +210,23 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
+test("keeps the inspector contextual until media is selected", async ({ page }) => {
+  await page.goto("/");
+
+  await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Project" })).not.toBeVisible();
+  await expect(page.getByRole("heading", { name: "Export" })).not.toBeVisible();
+  await expect(page.getByRole("heading", { name: "Auto detection" })).not.toBeVisible();
+  await expect(page.getByText("Default cut strategy")).not.toBeVisible();
+  await expect(page.getByText("Default filename template")).not.toBeVisible();
+
+  await page.getByRole("button", { name: /camera.mp4/ }).click();
+
+  await expect(page.getByRole("heading", { name: "Project" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Export" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Auto detection" })).toBeVisible();
+});
+
 test("detection polls, presents candidates, and supports reject and accept", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
@@ -601,6 +618,7 @@ test("delayed project loads cannot replace a newer editor", async ({ page }) => 
       .catch(() => {});
   });
   await page.goto("/");
+  await page.getByRole("button", { name: /camera.mp4/ }).click();
   await page.getByLabel("Project ID").fill("p_race-load012");
   await page.getByRole("button", { name: "Load project" }).click();
   page.once("dialog", (dialog) => dialog.accept());
@@ -718,8 +736,8 @@ test("a delayed old-project save stays silent after New and the new project save
   await oldStart;
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "New project" }).click();
-  const newID = await page.getByLabel("Project ID").inputValue();
   await page.getByRole("button", { name: /camera.mp4/ }).click();
+  const newID = await page.getByLabel("Project ID").inputValue();
   await page.getByLabel("Timeline playhead").fill("100");
   await page.getByRole("button", { name: "Set In marker" }).click();
   await page.getByLabel("Timeline playhead").fill("700");
@@ -899,9 +917,9 @@ test("delayed cancellation cannot overwrite a replacement export", async ({ page
 
 test("new projects reset the editor and dirty changes need confirmation", async ({ page }) => {
   await page.goto("/");
+  await page.getByRole("button", { name: /camera.mp4/ }).click();
   const projectId = page.getByLabel("Project ID");
   await expect(projectId).toHaveValue(/^p_[A-Za-z0-9_-]{12,64}$/);
-  await page.getByRole("button", { name: /camera.mp4/ }).click();
   let projectLoads = 0;
   page.on("request", (request) => {
     if (/\/api\/v1\/projects\/p_/.test(new URL(request.url()).pathname)) projectLoads += 1;
@@ -924,7 +942,7 @@ test("new projects reset the editor and dirty changes need confirmation", async 
   await page.getByRole("button", { name: "New project" }).click();
   await expect(page.getByText("New project ready.")).toBeVisible();
   await expect(page.getByText("Select a media item.")).toBeVisible();
-  await expect(projectId).toHaveValue(/^p_[A-Za-z0-9_-]{12,64}$/);
+  await expect(projectId).not.toBeVisible();
 });
 
 test("load fetches project media directly and corrupt recents do not block startup", async ({
@@ -954,6 +972,7 @@ test("load fetches project media directly and corrupt recents do not block start
   );
   await page.goto("/");
   await expect(page.getByRole("button", { name: /camera.mp4/ })).toBeVisible();
+  await page.getByRole("button", { name: /camera.mp4/ }).click();
   await page.getByLabel("Project ID").fill("p_outside-media");
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "Load project" }).click();

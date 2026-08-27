@@ -1328,8 +1328,9 @@ export function App() {
           )}
         </Show>
       </section>
-      <section class="project-panel" aria-labelledby="project-heading">
-        <h2 id="project-heading">Project</h2>
+      <Show when={selected()}>
+        <section class="project-panel" aria-labelledby="project-heading">
+          <h2 id="project-heading">Project</h2>
         <label>
           Project ID{" "}
           <input
@@ -1504,9 +1505,11 @@ export function App() {
             ))}
           </ul>
         </Show>
-      </section>
-      <section class="export-panel" aria-labelledby="export-heading">
-        <h2 id="export-heading">Export</h2>
+        </section>
+      </Show>
+      <Show when={selected()}>
+        <section class="export-panel" aria-labelledby="export-heading">
+          <h2 id="export-heading">Export</h2>
         <p role="status">{exportStatus() || "Export a saved project."}</p>
         <label>
           Mode{" "}
@@ -1718,36 +1721,11 @@ export function App() {
             </div>
           </div>
         </Show>
-      </section>
+        </section>
+      </Show>
       <section class="settings-panel" aria-labelledby="settings-heading">
         <h2 id="settings-heading">Settings</h2>
-        <p>Saved in this browser and used for new exports.</p>
-        <label>
-          Default cut strategy
-          <select
-            value={cutStrategy()}
-            onChange={(event) => {
-              const value = event.currentTarget.value as AppSettings["cutStrategy"];
-              setCutStrategy(value);
-              saveSettings({ cutStrategy: value });
-            }}
-          >
-            <option value="stream_copy_preferred">Stream copy preferred</option>
-            <option value="precise_reencode">Precise re-encode</option>
-            <option value="hybrid_smart_cut">Hybrid smart cut</option>
-          </select>
-        </label>
-        <label>
-          Default filename template
-          <input
-            value={filenameTemplate()}
-            onInput={(event) => {
-              const value = event.currentTarget.value;
-              setFilenameTemplate(value);
-              saveSettings({ filenameTemplate: value });
-            }}
-          />
-        </label>
+        <p>Saved in this browser.</p>
         <label>
           <input
             type="checkbox"
@@ -1772,8 +1750,9 @@ export function App() {
           Reset settings
         </button>
       </section>
-      <section class="detection-panel" aria-labelledby="detection-heading">
-        <h2 id="detection-heading">Auto detection</h2>
+      <Show when={selected()}>
+        <section class="detection-panel" aria-labelledby="detection-heading">
+          <h2 id="detection-heading">Auto detection</h2>
         <p role="status">{detectionStatus() || "Review candidates before they change segments."}</p>
         <div class="controls">
           <button
@@ -1834,7 +1813,8 @@ export function App() {
             </For>
           </ol>
         </Show>
-      </section>
+        </section>
+      </Show>
     </main>
   );
 }

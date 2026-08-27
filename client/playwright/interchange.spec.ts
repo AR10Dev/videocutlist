@@ -10,6 +10,13 @@ const media = {
   etag: "v1",
 };
 
+test("project interchange controls wait for media selection", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByRole("button", { name: "Export CSV" })).not.toBeVisible();
+  await expect(page.getByRole("button", { name: "Export chapters" })).not.toBeVisible();
+  await expect(page.getByLabel("Import CSV or chapters")).not.toBeVisible();
+});
+
 test("separates media selection from cut-list imports", async ({ page }) => {
   await page.addInitScript(() => {
     window.VIDEOCUTLIST_CONFIG = {
@@ -26,7 +33,6 @@ test("separates media selection from cut-list imports", async ({ page }) => {
   });
 
   await page.goto("/");
-  await expect(page.getByText("they do not upload or add a video")).toBeVisible();
   await expect(page.getByLabel("Import cut list")).toHaveCount(0);
   await expect(page.getByLabel("Import CSV or chapters")).toHaveCount(0);
 
