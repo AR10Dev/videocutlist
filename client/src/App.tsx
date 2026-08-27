@@ -6,7 +6,7 @@ import {
   undoTimeline,
   type TimelineHistory,
 } from "./timeline";
-import { createApiClient, resolveBrowserConfiguration } from "./api";
+import { createApiClient, resolveBrowserConfiguration, validInterchangeFileSize } from "./api";
 import { normalizePeaks, viewportScale } from "./assets";
 import { frameDuration } from "./frame";
 import {
@@ -1343,6 +1343,11 @@ export function App() {
         <p>
           Revision {revision()} {dirty() ? "· unsaved changes" : "· saved"}
         </p>
+        <p>
+          Interchange files update cut lists; they do not upload or add a video. Videos are indexed
+          from the server&apos;s media library; configure its media roots, then choose a video from File
+          explorer.
+        </p>
         <div class="controls">
           <button onClick={newProject}>New project</button>
           <button onClick={() => void loadProject()}>Load project</button>
@@ -1375,73 +1380,83 @@ export function App() {
           >
             Download cut list
           </button>
-          <label>
-            Import cut list{" "}
-            <input
-              type="file"
-              accept="application/json,.json"
-              onChange={(event) => {
-                const file = event.currentTarget.files?.[0];
-                if (!file) return;
-                void file
-                  .text()
-                  .then((text) => {
-                    const imported = parseProjectJson(text);
-                    if (!selected() || imported.mediaId !== selected()!.id)
-                      throw new Error("Select the cut list's media before importing.");
-                    const segments = imported.segments as Segment[];
-                    const error = validateSegments(segments, selected()!.durationMs);
-                    if (error) throw new Error(error);
-                    updateTimeline({ segments });
-                    markDirty();
-                    setStatus("Cut list imported. Save the project to keep it.");
-                  })
-                  .catch((error) =>
-                    setStatus(error instanceof Error ? error.message : "Cut list import failed."),
-                  );
-                event.currentTarget.value = "";
-              }}
-            />
-          </label>
-          <label>
-            Import CSV or chapters{" "}
-            <input
-              type="file"
-              accept=".csv,.txt,text/csv,text/plain"
-              onChange={(event) => {
-                const file = event.currentTarget.files?.[0];
-                if (!file || file.size > 1 << 20) {
-                  setStatus("Interchange file exceeds the 1 MiB limit.");
-                  return;
-                }
-                const format = file.name.toLowerCase().endsWith(".csv") ? "csv" : "chapters";
-                void file
-                  .arrayBuffer()
-                  .then((body) =>
-                    api.interchangeRequest(projectId(), format, {
-                      method: "POST",
-                      body,
-                      headers: {
-                        "Content-Type": format === "csv" ? "text/csv" : "text/plain",
-                      },
-                    }),
-                  )
-                  .then(async (response) => {
-                    if (!response.ok) throw new Error();
-                    const value = (await response.json()) as {
-                      segments: Segment[];
-                      revision: number;
-                    };
-                    updateTimeline({ segments: value.segments });
-                    setRevision(value.revision);
-                    setDirty(false);
-                    setStatus("Interchange imported.");
-                  })
-                  .catch(() => setStatus("Interchange import failed."));
-                event.currentTarget.value = "";
-              }}
-            />
-          </label>
+          <Show
+            when={selected()}
+            fallback={<p>Choose a video from File explorer to import a cut list.</p>}
+          >
+            <label>
+              Import cut list{" "}
+              <input
+                type="file"
+                accept="application/json,.json"
+                onChange={(event) => {
+                  const file = event.currentTarget.files?.[0];
+                  if (!file) return;
+                  void file
+                    .text()
+                    .then((text) => {
+                      const imported = parseProjectJson(text);
+                      if (!selected() || imported.mediaId !== selected()!.id)
+                        throw new Error("Select the cut list's media before importing.");
+                      const segments = imported.segments as Segment[];
+                      const error = validateSegments(segments, selected()!.durationMs);
+                      if (error) throw new Error(error);
+                      updateTimeline({ segments });
+                      markDirty();
+                      setStatus("Cut list imported. Save the project to keep it.");
+                    })
+                    .catch((error) =>
+                      setStatus(error instanceof Error ? error.message : "Cut list import failed."),
+                    );
+                  event.currentTarget.value = "";
+                }}
+              />
+            </label>
+          </Show>
+          <Show
+            when={selected() && !dirty()}
+            fallback={<p>Save or load the selected video&apos;s project before importing CSV or chapters.</p>}
+          >
+            <label>
+              Import CSV or chapters{" "}
+              <input
+                type="file"
+                accept=".csv,.txt,text/csv,text/plain"
+                onChange={(event) => {
+                  const file = event.currentTarget.files?.[0];
+                  if (!file || !validInterchangeFileSize(file.size)) {
+                    setStatus("Interchange file exceeds the 1 MiB limit.");
+                    return;
+                  }
+                  const format = file.name.toLowerCase().endsWith(".csv") ? "csv" : "chapters";
+                  void file
+                    .arrayBuffer()
+                    .then((body) =>
+                      api.interchangeRequest(projectId(), format, {
+                        method: "POST",
+                        body,
+                        headers: {
+                          "Content-Type": format === "csv" ? "text/csv" : "text/plain",
+                        },
+                      }),
+                    )
+                    .then(async (response) => {
+                      if (!response.ok) throw new Error();
+                      const value = (await response.json()) as {
+                        segments: Segment[];
+                        revision: number;
+                      };
+                      updateTimeline({ segments: value.segments });
+                      setRevision(value.revision);
+                      setDirty(false);
+                      setStatus("Interchange imported.");
+                    })
+                    .catch(() => setStatus("Interchange import failed."));
+                  event.currentTarget.value = "";
+                }}
+              />
+            </label>
+          </Show>
           <button
             onClick={() =>
               void api
