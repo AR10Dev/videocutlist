@@ -175,6 +175,14 @@ func env(values map[string]string) func(string) (string, bool) {
 	}
 }
 
+func TestLoadAllowsAnUnconfiguredMediaLibrary(t *testing.T) {
+	values := mergeEnv(baseEnv(), map[string]string{"VIDEOCUTLIST_MEDIA_ROOTS_JSON": ""})
+	config, err := load(env(values))
+	if err != nil || len(config.MediaRoots) != 0 {
+		t.Fatalf("config=%#v err=%v", config.MediaRoots, err)
+	}
+}
+
 func TestLoadErrorNamesSetting(t *testing.T) {
 	_, err := load(env(map[string]string{}))
 	if err == nil || !strings.Contains(err.Error(), "VIDEOCUTLIST_DATABASE_PATH") {

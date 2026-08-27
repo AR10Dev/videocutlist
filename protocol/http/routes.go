@@ -18,6 +18,7 @@ type routeKind uint8
 const (
 	routeUnknown routeKind = iota
 	routeListMedia
+	routeMediaStatus
 	routeRefreshMedia
 	routeGetMedia
 	routePreview
@@ -61,6 +62,8 @@ func parseRoute(method, path string) route {
 	switch {
 	case len(parts) == 1 && parts[0] == "media" && method == http.MethodGet:
 		return route{kind: routeListMedia}
+	case len(parts) == 2 && parts[0] == "media" && parts[1] == "status" && method == http.MethodGet:
+		return route{kind: routeMediaStatus}
 	case len(parts) == 1 && parts[0] == "destinations" && method == http.MethodGet:
 		return route{kind: routeListDestinations}
 	case len(parts) == 2 && parts[0] == "media" && parts[1] == "refresh" && method == http.MethodPost:

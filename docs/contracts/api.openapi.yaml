@@ -3,7 +3,7 @@ info:
   title: VideoCutlist API
   version: 1.0.0
 servers:
-  - url: "{serverBaseUrl}/api/v1"
+  - url: '{serverBaseUrl}/api/v1'
     variables:
       serverBaseUrl:
         default: http://localhost:8787
@@ -20,113 +20,173 @@ paths:
       servers:
         - url: /
       responses:
-        "200":
+        '200':
           description: Prometheus text exposition
           content:
             text/plain:
-              schema: { type: string }
+              schema:
+                type: string
   /health:
     get:
       summary: Check process health
       operationId: health
       security: []
       responses:
-        "200": { description: Alive }
+        '200':
+          description: Alive
   /ready:
     get:
       summary: Check dependency readiness
       operationId: ready
       security: []
       responses:
-        "200": { description: Ready }
-        "503": { $ref: "#/components/responses/Error" }
+        '200':
+          description: Ready
+        '503':
+          $ref: '#/components/responses/Error'
   /media:
     get:
       summary: List indexed media
       operationId: listMedia
       parameters:
-        - {
-            name: limit,
-            in: query,
-            schema: { type: integer, minimum: 1, maximum: 100, default: 50 },
-          }
-        - { name: cursor, in: query, schema: { type: string } }
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+        - name: cursor
+          in: query
+          schema:
+            type: string
       responses:
-        "200":
+        '200':
           description: Media page
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/MediaPage" }
+              schema:
+                $ref: '#/components/schemas/MediaPage'
+  /media/status:
+    get:
+      summary: Read media-library status
+      operationId: mediaLibraryStatus
+      responses:
+        '200':
+          description: Safe media-library status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LibraryStatus'
   /media/refresh:
     post:
       summary: Refresh the media index
       operationId: refreshMedia
       responses:
-        "204": { description: Refresh completed }
-        "403": { $ref: "#/components/responses/Error" }
+        '204':
+          description: Refresh completed
+        '403':
+          $ref: '#/components/responses/Error'
   /media/{mediaId}:
     parameters:
-      - { $ref: "#/components/parameters/MediaId" }
+      - $ref: '#/components/parameters/MediaId'
     get:
       summary: Read media metadata
       operationId: getMedia
       responses:
-        "200":
+        '200':
           description: Media metadata
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Media" }
-        "404": { $ref: "#/components/responses/Error" }
+              schema:
+                $ref: '#/components/schemas/Media'
+        '404':
+          $ref: '#/components/responses/Error'
   /media/{mediaId}/preview:
     parameters:
-      - { $ref: "#/components/parameters/MediaId" }
-      - {
-          name: centerMs,
-          in: query,
-          required: true,
-          schema: { type: integer, minimum: 0 },
-        }
-      - { name: beforeMs, in: query, schema: { type: integer, minimum: 0 } }
-      - { name: afterMs, in: query, schema: { type: integer, minimum: 0 } }
-      - { name: mute, in: query, schema: { type: boolean, default: false } }
+      - $ref: '#/components/parameters/MediaId'
+      - name: centerMs
+        in: query
+        required: true
+        schema:
+          type: integer
+          minimum: 0
+      - name: beforeMs
+        in: query
+        schema:
+          type: integer
+          minimum: 0
+      - name: afterMs
+        in: query
+        schema:
+          type: integer
+          minimum: 0
+      - name: mute
+        in: query
+        schema:
+          type: boolean
+          default: false
     get:
       summary: Stream a normalized preview
       operationId: streamPreview
       responses:
-        "200":
+        '200':
           description: Fragmented MP4 preview
           headers:
-            X-Preview-Start: { schema: { type: integer } }
-            X-Preview-Duration: { schema: { type: integer } }
-            X-Preview-Offset: { schema: { type: integer } }
-            X-Preview-Cache: { schema: { type: string, enum: [hit, miss] } }
-            X-Request-ID: { schema: { type: string } }
+            X-Preview-Start:
+              schema:
+                type: integer
+            X-Preview-Duration:
+              schema:
+                type: integer
+            X-Preview-Offset:
+              schema:
+                type: integer
+            X-Preview-Cache:
+              schema:
+                type: string
+                enum:
+                  - hit
+                  - miss
+            X-Request-ID:
+              schema:
+                type: string
           content:
             video/mp4:
-              schema: { type: string, format: binary }
-        "404": { $ref: "#/components/responses/Error" }
-        "422": { $ref: "#/components/responses/Error" }
-        "403": { $ref: "#/components/responses/Error" }
-        "429": { $ref: "#/components/responses/Error" }
+              schema:
+                type: string
+                format: binary
+        '404':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '429':
+          $ref: '#/components/responses/Error'
     head:
       summary: Check for a cached preview
       operationId: previewStatus
       responses:
-        "200": { description: Complete cached preview exists }
-        "404": { description: No complete cached preview }
+        '200':
+          description: Complete cached preview exists
+        '404':
+          description: No complete cached preview
   /projects/{projectId}:
     parameters:
-      - { $ref: "#/components/parameters/ProjectId" }
+      - $ref: '#/components/parameters/ProjectId'
     get:
       summary: Read an owned project
       operationId: getProject
       responses:
-        "200":
+        '200':
           description: Project
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Project" }
-        "404": { $ref: "#/components/responses/Error" }
+              schema:
+                $ref: '#/components/schemas/Project'
+        '404':
+          $ref: '#/components/responses/Error'
     put:
       summary: Save an owned project
       operationId: putProject
@@ -134,18 +194,22 @@ paths:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/ProjectInput" }
+            schema:
+              $ref: '#/components/schemas/ProjectInput'
       responses:
-        "200":
+        '200':
           description: Saved project
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Project" }
-        "409": { $ref: "#/components/responses/Error" }
-        "422": { $ref: "#/components/responses/Error" }
+              schema:
+                $ref: '#/components/schemas/Project'
+        '409':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
   /projects/{projectId}/exports:
     parameters:
-      - { $ref: "#/components/parameters/ProjectId" }
+      - $ref: '#/components/parameters/ProjectId'
     post:
       summary: Create a durable export
       operationId: createExport
@@ -153,20 +217,26 @@ paths:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/ExportInput" }
+            schema:
+              $ref: '#/components/schemas/ExportInput'
       responses:
-        "202":
+        '202':
           description: Export queued
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Job" }
-        "404": { $ref: "#/components/responses/Error" }
-        "403": { $ref: "#/components/responses/Error" }
-        "429": { $ref: "#/components/responses/Error" }
-        "422": { $ref: "#/components/responses/Error" }
+              schema:
+                $ref: '#/components/schemas/Job'
+        '404':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '429':
+          $ref: '#/components/responses/Error'
+        '422':
+          $ref: '#/components/responses/Error'
   /projects/{projectId}/exports/preflight:
     parameters:
-      - { $ref: "#/components/parameters/ProjectId" }
+      - $ref: '#/components/parameters/ProjectId'
     post:
       summary: Validate export selection without queueing
       operationId: preflightExport
@@ -174,65 +244,81 @@ paths:
         required: true
         content:
           application/json:
-            schema: { $ref: "#/components/schemas/ExportInput" }
+            schema:
+              $ref: '#/components/schemas/ExportInput'
       responses:
-        "200":
+        '200':
           description: Structured export findings and deterministic selection
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/ExportPreflight" }
-        "422": { $ref: "#/components/responses/Error" }
+              schema:
+                $ref: '#/components/schemas/ExportPreflight'
+        '422':
+          $ref: '#/components/responses/Error'
   /destinations:
     get:
       summary: List administrator-configured export destinations
       operationId: listDestinations
       responses:
-        "200":
+        '200':
           description: Public destination metadata; roots are never returned
           content:
             application/json:
               schema:
                 type: object
-                required: [destinations]
+                required:
+                  - destinations
                 properties:
                   destinations:
                     type: array
-                    items: { $ref: "#/components/schemas/Destination" }
+                    items:
+                      $ref: '#/components/schemas/Destination'
   /jobs/{jobId}:
     parameters:
-      - { $ref: "#/components/parameters/JobId" }
+      - $ref: '#/components/parameters/JobId'
     get:
       summary: Read an owned job
       operationId: getJob
       responses:
-        "200":
+        '200':
           description: Job
           content:
             application/json:
-              schema: { $ref: "#/components/schemas/Job" }
-        "404": { $ref: "#/components/responses/Error" }
+              schema:
+                $ref: '#/components/schemas/Job'
+        '404':
+          $ref: '#/components/responses/Error'
     delete:
       summary: Cancel an owned job
       operationId: cancelJob
       responses:
-        "204": { description: Cancelled or already terminal }
-        "404": { $ref: "#/components/responses/Error" }
+        '204':
+          description: Cancelled or already terminal
+        '404':
+          $ref: '#/components/responses/Error'
   /jobs/{jobId}/outputs/{position}:
     parameters:
-      - { $ref: "#/components/parameters/JobId" }
+      - $ref: '#/components/parameters/JobId'
       - name: position
         in: path
         required: true
-        schema: { type: integer, minimum: 0, maximum: 99 }
+        schema:
+          type: integer
+          minimum: 0
+          maximum: 99
     get:
       summary: Download one owned completed download output
       operationId: downloadJobOutput
       responses:
-        "200":
+        '200':
           description: MKV attachment; only persisted download outputs are eligible
           content:
-            { video/x-matroska: { schema: { type: string, format: binary } } }
-        "404": { $ref: "#/components/responses/Error" }
+            video/x-matroska:
+              schema:
+                type: string
+                format: binary
+        '404':
+          $ref: '#/components/responses/Error'
 components:
   securitySchemes:
     bearerAuth:
@@ -241,103 +327,188 @@ components:
       description: Used only when the server selects static bearer mode.
   parameters:
     MediaId:
-      {
-        name: mediaId,
-        in: path,
-        required: true,
-        schema: { type: string, pattern: "^m_[A-Za-z0-9_-]{43}$" },
-      }
+      name: mediaId
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: ^m_[A-Za-z0-9_-]{43}$
     ProjectId:
-      {
-        name: projectId,
-        in: path,
-        required: true,
-        schema: { type: string, pattern: "^p_[A-Za-z0-9_-]{12,64}$" },
-      }
+      name: projectId
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: ^p_[A-Za-z0-9_-]{12,64}$
     JobId:
-      {
-        name: jobId,
-        in: path,
-        required: true,
-        schema: { type: string, pattern: "^j_[A-Za-z0-9_-]{12,64}$" },
-      }
+      name: jobId
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: ^j_[A-Za-z0-9_-]{12,64}$
   responses:
     Error:
       description: Safe error
       content:
         application/json:
-          schema: { $ref: "#/components/schemas/Error" }
+          schema:
+            $ref: '#/components/schemas/Error'
   schemas:
     Error:
       type: object
-      required: [error]
+      required:
+        - error
       properties:
         error:
           type: object
-          required: [code, message, requestId]
+          required:
+            - code
+            - message
+            - requestId
           properties:
-            code: { type: string }
-            message: { type: string }
-            requestId: { type: string }
+            code:
+              type: string
+            message:
+              type: string
+            requestId:
+              type: string
     Media:
       type: object
-      required: [id, name, durationMs, sizeBytes, container, streams, etag]
+      required:
+        - id
+        - name
+        - durationMs
+        - sizeBytes
+        - container
+        - streams
+        - etag
       properties:
-        id: { type: string }
-        name: { type: string }
-        durationMs: { type: integer }
-        sizeBytes: { type: integer }
-        container: { type: string }
-        streams: { type: object, additionalProperties: true }
-        etag: { type: string }
+        id:
+          type: string
+        name:
+          type: string
+        durationMs:
+          type: integer
+        sizeBytes:
+          type: integer
+        container:
+          type: string
+        streams:
+          type: object
+          additionalProperties: true
+        etag:
+          type: string
     MediaPage:
       type: object
-      required: [items]
+      required:
+        - items
       properties:
-        items: { type: array, items: { $ref: "#/components/schemas/Media" } }
-        nextCursor: { type: [string, "null"] }
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/Media'
+        nextCursor:
+          type:
+            - string
+            - 'null'
+    LibraryStatus:
+      type: object
+      required:
+        - state
+        - message
+      properties:
+        state:
+          type: string
+          enum:
+            - unconfigured
+            - scanning
+            - ready_empty
+            - ready_with_media
+            - failed
+        message:
+          type: string
     ProjectInput:
       type: object
-      required: [mediaId, revision, segments, uiState]
+      required:
+        - mediaId
+        - revision
+        - segments
+        - uiState
       properties:
-        mediaId: { type: string }
-        revision: { type: integer, minimum: 0 }
+        mediaId:
+          type: string
+        revision:
+          type: integer
+          minimum: 0
         segments:
-          { type: array, items: { $ref: "#/components/schemas/Segment" } }
-        uiState: { $ref: "#/components/schemas/UIState" }
+          type: array
+          items:
+            $ref: '#/components/schemas/Segment'
+        uiState:
+          $ref: '#/components/schemas/UIState'
     Project:
       allOf:
-        - { $ref: "#/components/schemas/ProjectInput" }
+        - $ref: '#/components/schemas/ProjectInput'
         - type: object
-          required: [id, updatedAt]
+          required:
+            - id
+            - updatedAt
           properties:
-            id: { type: string }
-            updatedAt: { type: string, format: date-time }
+            id:
+              type: string
+            updatedAt:
+              type: string
+              format: date-time
     Segment:
       type: object
-      required: [startMs, endMs]
+      required:
+        - startMs
+        - endMs
       properties:
-        startMs: { type: integer, minimum: 0 }
-        endMs: { type: integer, minimum: 1 }
-        label: { type: string, maxLength: 200 }
+        startMs:
+          type: integer
+          minimum: 0
+        endMs:
+          type: integer
+          minimum: 1
+        label:
+          type: string
+          maxLength: 200
     UIState:
       type: object
-      required: [playheadMs, zoom, muted]
+      required:
+        - playheadMs
+        - zoom
+        - muted
       properties:
-        playheadMs: { type: integer, minimum: 0 }
-        zoom: { type: number, exclusiveMinimum: 0 }
-        muted: { type: boolean }
+        playheadMs:
+          type: integer
+          minimum: 0
+        zoom:
+          type: number
+          exclusiveMinimum: 0
+        muted:
+          type: boolean
     ExportInput:
       type: object
       additionalProperties: false
-      required: [mode, selection, cutStrategy, container]
+      required:
+        - mode
+        - selection
+        - cutStrategy
+        - container
       properties:
         mode:
           type: string
-          enum: [merge, separate]
+          enum:
+            - merge
+            - separate
         selection:
           type: string
-          enum: [segments, gaps]
+          enum:
+            - segments
+            - gaps
           default: segments
         streamIndexes:
           type: array
@@ -347,10 +518,14 @@ components:
             minimum: 0
         cutStrategy:
           type: string
-          enum: [stream_copy_preferred, precise_reencode, hybrid_smart_cut]
+          enum:
+            - stream_copy_preferred
+            - precise_reencode
+            - hybrid_smart_cut
         container:
           type: string
-          enum: [mkv]
+          enum:
+            - mkv
         destinationId:
           type: string
           maxLength: 64
@@ -361,43 +536,84 @@ components:
           description: Restricted template using documented variables only.
     Destination:
       type: object
-      required: [id, label, kind]
+      required:
+        - id
+        - label
+        - kind
       properties:
-        id: { type: string }
-        label: { type: string }
-        description: { type: string }
-        kind: { type: string, enum: [download, archive, source_adjacent] }
-        retention: { type: string }
+        id:
+          type: string
+        label:
+          type: string
+        description:
+          type: string
+        kind:
+          type: string
+          enum:
+            - download
+            - archive
+            - source_adjacent
+        retention:
+          type: string
     ExportPreflight:
       type: object
-      required: [allowed, selection, findings]
+      required:
+        - allowed
+        - selection
+        - findings
       properties:
-        allowed: { type: boolean }
+        allowed:
+          type: boolean
         selection:
           type: array
-          items: { type: integer, minimum: 0 }
+          items:
+            type: integer
+            minimum: 0
         findings:
           type: array
           items:
             type: object
-            required: [severity, code, message]
+            required:
+              - severity
+              - code
+              - message
             properties:
-              severity: { type: string, enum: [allowed, warn, blocked] }
-              code: { type: string }
-              message: { type: string }
-              streamIndex: { type: integer, minimum: 0 }
+              severity:
+                type: string
+                enum:
+                  - allowed
+                  - warn
+                  - blocked
+              code:
+                type: string
+              message:
+                type: string
+              streamIndex:
+                type: integer
+                minimum: 0
     Job:
       type: object
-      required: [id, type, state, createdAt, updatedAt]
+      required:
+        - id
+        - type
+        - state
+        - createdAt
+        - updatedAt
       properties:
         id:
           type: string
         type:
           type: string
-          enum: [export]
+          enum:
+            - export
         state:
           type: string
-          enum: [queued, running, succeeded, failed, cancelled]
+          enum:
+            - queued
+            - running
+            - succeeded
+            - failed
+            - cancelled
         progress:
           type: number
           minimum: 0
@@ -406,16 +622,16 @@ components:
           description: Present only when an export job succeeded.
           type: object
           additionalProperties: false
-          required: [sizeBytes, retainUntil]
+          required:
+            - sizeBytes
+            - retainUntil
           properties:
             outputName:
               type: string
-              description: >-
-                Published merged-export filename, never a filesystem path.
+              description: Published merged-export filename, never a filesystem path.
             outputNames:
               type: array
-              description: >-
-                Published separate-export filenames, never filesystem paths.
+              description: Published separate-export filenames, never filesystem paths.
               items:
                 type: string
             sizeBytes:
@@ -425,24 +641,31 @@ components:
             retainUntil:
               type: string
               format: date-time
-            destinationId: { type: string }
+            destinationId:
+              type: string
             destinationKind:
-              { type: string, enum: [download, archive, source_adjacent] }
+              type: string
+              enum:
+                - download
+                - archive
+                - source_adjacent
             appliedStrategies:
               type: array
-              description: >-
-                Strategy used for each selected segment; outputName identifies
+              description: Strategy used for each selected segment; outputName identifies
                 separately published outputs.
               items:
                 type: object
                 additionalProperties: false
-                required: [segment, strategy]
+                required:
+                  - segment
+                  - strategy
                 properties:
-                  segment: { type: integer, minimum: 1 }
+                  segment:
+                    type: integer
+                    minimum: 1
                   outputName:
                     type: string
-                    description: >-
-                      Published separate-export filename, never a filesystem
+                    description: Published separate-export filename, never a filesystem
                       path.
                   strategy:
                     type: string
@@ -451,9 +674,8 @@ components:
           description: Requested cut strategy.
         appliedStrategy:
           type: string
-          description: >-
-            Strategy used by every selected segment; omitted when segments use
-            different strategies. See result.appliedStrategies for per-segment
+          description: Strategy used by every selected segment; omitted when segments
+            use different strategies. See result.appliedStrategies for per-segment
             values.
         warnings:
           type: array
@@ -463,19 +685,26 @@ components:
           type: array
           items:
             type: object
-            required: [severity, code, message]
+            required:
+              - severity
+              - code
+              - message
             properties:
-              severity: { type: string }
-              code: { type: string }
-              message: { type: string }
-              streamIndex: { type: integer, minimum: 0 }
+              severity:
+                type: string
+              code:
+                type: string
+              message:
+                type: string
+              streamIndex:
+                type: integer
+                minimum: 0
         verified:
           type: boolean
           description: False when the output requires human inspection.
         errorCode:
           type: string
-          description: >-
-            Stable export failure code; present only when state is failed.
+          description: Stable export failure code; present only when state is failed.
         createdAt:
           type: string
           format: date-time

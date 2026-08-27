@@ -67,10 +67,6 @@ func run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if err := scanner.Refresh(ctx, mediaStore); err != nil {
-		return err
-	}
-
 	cacheStore, err := cache.New(cfg.CacheDir, cfg.CacheMaxBytes)
 	if err != nil {
 		return err
@@ -86,12 +82,13 @@ func run(ctx context.Context) error {
 		return ffmpeg.ValidateFile(ctx, cfg.FFprobePath, path)
 	})
 	mediaCatalog := adapters.MediaCatalog{Scanner: scanner, Store: mediaStore}
+	mediaService := &application.MediaUseCase{Catalog: mediaCatalog, Configured: len(cfg.MediaRoots) > 0}
+	_ = mediaService.RefreshMedia(ctx)
 	previewRunner := adapters.PreviewRunner{Scanner: scanner, Media: mediaStore, FFmpeg: ffmpeg.Runner{Path: cfg.FFmpegPath}}
 	previewManager, err := application.NewPreviewManager(adapters.PreviewCache{Store: cacheStore}, previewRunner, application.Validator(validator), limiter)
 	if err != nil {
 		return err
 	}
-	mediaService := &application.MediaUseCase{Catalog: mediaCatalog}
 	previewService := application.PreviewUseCase{Catalog: mediaCatalog, Manager: previewManager}
 	assetService := &assets.Service{Scanner: scanner, Media: mediaStore, FFmpegPath: cfg.FFmpegPath, CacheDir: cfg.CacheDir, MaxBytes: cfg.CacheMaxBytes}
 	projectService := application.ProjectUseCase{Repository: adapters.ProjectRepository{Store: projectStore}}

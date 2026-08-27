@@ -44,7 +44,10 @@ type ExportExecutor interface {
 }
 
 type MediaUseCase struct {
-	Catalog MediaCatalog
+	Catalog    MediaCatalog
+	Configured bool
+	status     LibraryStatus
+	mu         sync.RWMutex
 }
 
 func (m *MediaUseCase) List(ctx context.Context, cursor string, limit int) (MediaPage, error) {
@@ -54,7 +57,51 @@ func (m *MediaUseCase) Get(ctx context.Context, id string) (Media, error) {
 	return m.Catalog.Get(ctx, id)
 }
 func (m *MediaUseCase) RefreshMedia(ctx context.Context) error {
-	return m.Catalog.Refresh(ctx)
+	if !m.Configured {
+		return nil
+	}
+	m.setStatus(LibraryScanning)
+	if err := m.Catalog.Refresh(ctx); err != nil {
+		m.setStatus(LibraryFailed)
+		return err
+	}
+	page, err := m.Catalog.List(ctx, "", 1)
+	if err != nil {
+		m.setStatus(LibraryFailed)
+		return err
+	}
+	if len(page.Items) == 0 {
+		m.setStatus(LibraryReadyEmpty)
+	} else {
+		m.setStatus(LibraryReadyWithMedia)
+	}
+	return nil
+}
+func (m *MediaUseCase) Status() LibraryStatus {
+	if !m.Configured {
+		return libraryStatus(LibraryUnconfigured)
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.status.State == "" {
+		return libraryStatus(LibraryScanning)
+	}
+	return m.status
+}
+func (m *MediaUseCase) setStatus(state LibraryState) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.status = libraryStatus(state)
+}
+func libraryStatus(state LibraryState) LibraryStatus {
+	messages := map[LibraryState]string{
+		LibraryUnconfigured:   "No media library is configured.",
+		LibraryScanning:       "Scanning media library.",
+		LibraryReadyEmpty:     "No supported media was found.",
+		LibraryReadyWithMedia: "Media library is ready.",
+		LibraryFailed:         "Media library scan failed. Try refreshing it.",
+	}
+	return LibraryStatus{State: state, Message: messages[state]}
 }
 
 type PreviewUseCase struct {

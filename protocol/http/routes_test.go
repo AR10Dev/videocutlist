@@ -24,6 +24,7 @@ func TestParseRoute(t *testing.T) {
 		id                 string
 	}{
 		{"list", http.MethodGet, "/api/v1/media", routeListMedia, ""},
+		{"status", http.MethodGet, "/api/v1/media/status", routeMediaStatus, ""},
 		{"refresh", http.MethodPost, "/api/v1/media/refresh", routeRefreshMedia, ""},
 		{"media", http.MethodGet, "/api/v1/media/" + media, routeGetMedia, media},
 		{"preview head", http.MethodHead, "/api/v1/media/" + media + "/preview", routePreview, media},
@@ -75,6 +76,9 @@ func (m *routeTestMedia) Get(context.Context, string) (Media, error) {
 	return Media{}, nil
 }
 func (m *routeTestMedia) RefreshMedia(context.Context) error { return nil }
+func (m *routeTestMedia) Status() LibraryStatus {
+	return LibraryStatus{State: LibraryReadyEmpty, Message: "No supported media was found."}
+}
 
 type routeTestAssets struct{}
 
@@ -219,6 +223,9 @@ func (m *assetTestMedia) Get(context.Context, string) (Media, error) {
 	return Media{ID: m.id, DurationMS: 1000, Streams: map[string]any{"audio": map[string]any{}}}, nil
 }
 func (m *assetTestMedia) RefreshMedia(context.Context) error { return nil }
+func (m *assetTestMedia) Status() LibraryStatus {
+	return LibraryStatus{State: LibraryReadyEmpty, Message: "No supported media was found."}
+}
 
 func TestServerRejectsEncodedSlashInMediaID(t *testing.T) {
 	authenticator, err := NewAuthenticator(AuthConfig{Mode: "none"})

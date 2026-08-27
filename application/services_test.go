@@ -29,7 +29,7 @@ func (c *catalogStub) Preview(context.Context, PreviewSpec) (domain.PreviewSpec,
 
 func TestMediaRefreshIsSynchronous(t *testing.T) {
 	catalog := &catalogStub{}
-	useCase := &MediaUseCase{Catalog: catalog}
+	useCase := &MediaUseCase{Catalog: catalog, Configured: true}
 	if err := useCase.RefreshMedia(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -40,13 +40,24 @@ func TestMediaRefreshIsSynchronous(t *testing.T) {
 
 func TestMediaRefreshFailureCanRetry(t *testing.T) {
 	catalog := &catalogStub{refreshErr: errors.New("refresh failed")}
-	useCase := &MediaUseCase{Catalog: catalog}
+	useCase := &MediaUseCase{Catalog: catalog, Configured: true}
 	if err := useCase.RefreshMedia(context.Background()); err == nil {
 		t.Fatal("failed refresh succeeded")
 	}
 	catalog.refreshErr = nil
 	if err := useCase.RefreshMedia(context.Background()); err != nil {
 		t.Fatalf("retry = %v", err)
+	}
+}
+
+func TestMediaLibraryStatusNeverExposesRefreshError(t *testing.T) {
+	catalog := &catalogStub{refreshErr: errors.New("scan /private/media/clip.mp4 failed")}
+	useCase := &MediaUseCase{Catalog: catalog, Configured: true}
+	if err := useCase.RefreshMedia(context.Background()); err == nil {
+		t.Fatal("refresh succeeded")
+	}
+	if got := useCase.Status(); got.State != LibraryFailed || got.Message != "Media library scan failed. Try refreshing it." {
+		t.Fatalf("status = %#v", got)
 	}
 }
 

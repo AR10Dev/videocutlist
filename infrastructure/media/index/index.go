@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 
 	"videocutlist/infrastructure/media/probe"
 )
@@ -62,6 +63,7 @@ type Catalog interface {
 type Scanner struct {
 	roots  map[string]Root
 	prober probe.Runner
+	mu     sync.Mutex
 }
 
 func NewScanner(roots []Root, prober probe.Runner) (*Scanner, error) {
@@ -76,11 +78,6 @@ func NewScanner(roots []Root, prober probe.Runner) (*Scanner, error) {
 		if _, ok := s.roots[root.Alias]; ok {
 			return nil, fmt.Errorf("duplicate media root alias %q", root.Alias)
 		}
-		handle, err := os.OpenRoot(root.Path)
-		if err != nil {
-			return nil, fmt.Errorf("open media root %q: %w", root.Alias, err)
-		}
-		root.handle = handle
 		s.roots[root.Alias] = root
 	}
 	return s, nil
@@ -93,12 +90,12 @@ func MediaID(rootAlias, relativePath string) string {
 }
 
 func (s *Scanner) Scan(ctx context.Context, alias string) ([]Record, error) {
-	root, ok := s.roots[alias]
-	if !ok {
-		return nil, ErrNotFound
+	root, err := s.root(alias)
+	if err != nil {
+		return nil, err
 	}
 	var records []Record
-	err := fs.WalkDir(root.handle.FS(), ".", func(path string, entry fs.DirEntry, walkErr error) error {
+	err = fs.WalkDir(root.handle.FS(), ".", func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
@@ -143,6 +140,24 @@ func (s *Scanner) Scan(ctx context.Context, alias string) ([]Record, error) {
 	return records, nil
 }
 
+func (s *Scanner) root(alias string) (Root, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	root, ok := s.roots[alias]
+	if !ok {
+		return Root{}, ErrNotFound
+	}
+	if root.handle == nil {
+		handle, err := os.OpenRoot(root.Path)
+		if err != nil {
+			return Root{}, fmt.Errorf("open media root %q: %w", alias, err)
+		}
+		root.handle = handle
+		s.roots[alias] = root
+	}
+	return root, nil
+}
+
 func (s *Scanner) Refresh(ctx context.Context, catalog Catalog) error {
 	if catalog == nil {
 		return errors.New("media catalog is required")
@@ -171,9 +186,9 @@ func (s *Scanner) Open(ctx context.Context, catalog Catalog, id string) (io.Read
 	if err != nil {
 		return nil, Media{}, err
 	}
-	root, ok := s.roots[record.RootAlias]
-	if !ok {
-		return nil, Media{}, ErrNotFound
+	root, err := s.root(record.RootAlias)
+	if err != nil {
+		return nil, Media{}, err
 	}
 	file, info, err := openMedia(root, record.RelativePath)
 	if err != nil {

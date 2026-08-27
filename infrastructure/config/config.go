@@ -114,8 +114,10 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 		}
 		seenDestinations[destination.ID] = true
 	}
-	if err := json.Unmarshal([]byte(required(lookup, "VIDEOCUTLIST_MEDIA_ROOTS_JSON")), &c.MediaRoots); err != nil || len(c.MediaRoots) == 0 {
-		return Config{}, fmt.Errorf("VIDEOCUTLIST_MEDIA_ROOTS_JSON must be a non-empty JSON object")
+	if roots := required(lookup, "VIDEOCUTLIST_MEDIA_ROOTS_JSON"); roots != "" {
+		if err := json.Unmarshal([]byte(roots), &c.MediaRoots); err != nil || c.MediaRoots == nil {
+			return Config{}, fmt.Errorf("VIDEOCUTLIST_MEDIA_ROOTS_JSON must be a JSON object")
+		}
 	}
 	for alias, path := range c.MediaRoots {
 		if strings.TrimSpace(alias) == "" || strings.TrimSpace(path) == "" {

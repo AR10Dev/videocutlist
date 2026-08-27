@@ -28,6 +28,17 @@ const (
 
 type Media = application.Media
 type MediaPage = application.MediaPage
+type LibraryStatus = application.LibraryStatus
+type LibraryState = application.LibraryState
+
+const (
+	LibraryUnconfigured   = application.LibraryUnconfigured
+	LibraryScanning       = application.LibraryScanning
+	LibraryReadyEmpty     = application.LibraryReadyEmpty
+	LibraryReadyWithMedia = application.LibraryReadyWithMedia
+	LibraryFailed         = application.LibraryFailed
+)
+
 type Segment = domain.Segment
 type UIState = domain.UIState
 type ProjectInput struct {
@@ -199,6 +210,9 @@ func (s *Server) dispatch(writer http.ResponseWriter, request *http.Request, id 
 	case routeListMedia:
 		s.listMedia(writer, request, id)
 		return "/api/v1/media", principal.Subject
+	case routeMediaStatus:
+		httpx.WriteJSON(writer, http.StatusOK, s.config.Media.Status())
+		return "/api/v1/media/status", principal.Subject
 	case routeRefreshMedia:
 		s.refreshMedia(writer, request, principal, id)
 		return "/api/v1/media/refresh", principal.Subject

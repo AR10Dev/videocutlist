@@ -26,6 +26,21 @@ type MediaPage struct {
 	Items      []Media `json:"items"`
 	NextCursor *string `json:"nextCursor"`
 }
+
+type LibraryState string
+
+const (
+	LibraryUnconfigured   LibraryState = "unconfigured"
+	LibraryScanning       LibraryState = "scanning"
+	LibraryReadyEmpty     LibraryState = "ready_empty"
+	LibraryReadyWithMedia LibraryState = "ready_with_media"
+	LibraryFailed         LibraryState = "failed"
+)
+
+type LibraryStatus struct {
+	State   LibraryState `json:"state"`
+	Message string       `json:"message"`
+}
 type Segment = domain.Segment
 type UIState = domain.UIState
 type ProjectInput = domain.Document
@@ -107,6 +122,7 @@ type MediaService interface {
 	List(context.Context, string, int) (MediaPage, error)
 	Get(context.Context, string) (Media, error)
 	RefreshMedia(context.Context) error
+	Status() LibraryStatus
 }
 type PreviewService interface {
 	Start(context.Context, domain.Principal, PreviewSpec) (PreviewResult, error)

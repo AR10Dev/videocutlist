@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -22,6 +23,7 @@ const validProject = "p_aaaaaaaaaaaa"
 type mediaStub struct {
 	calls, refreshCalls int
 	refreshErr          error
+	status              api.LibraryStatus
 }
 
 func (m *mediaStub) List(context.Context, string, int) (api.MediaPage, error) {
@@ -35,6 +37,7 @@ func (m *mediaStub) RefreshMedia(_ context.Context) error {
 	m.refreshCalls++
 	return m.refreshErr
 }
+func (m *mediaStub) Status() api.LibraryStatus { return m.status }
 
 type previewStub struct {
 	start     func(context.Context) (api.PreviewResult, error)
@@ -305,6 +308,27 @@ func TestDownloadOutputLifecycle(t *testing.T) {
 				t.Fatalf("status=%d headers=%v body=%q", response.Code, response.Header(), response.Body.String())
 			}
 		})
+	}
+}
+
+func TestLibraryStatusContractIsSafe(t *testing.T) {
+	for _, want := range []api.LibraryStatus{
+		{State: api.LibraryUnconfigured, Message: "No media library is configured."},
+		{State: api.LibraryScanning, Message: "Scanning media library."},
+		{State: api.LibraryReadyEmpty, Message: "No supported media was found."},
+		{State: api.LibraryReadyWithMedia, Message: "Media library is ready."},
+		{State: api.LibraryFailed, Message: "Media library scan failed. Try refreshing it."},
+	} {
+		service := server(t, noneAuth(t), &mediaStub{status: want}, &previewStub{start: func(context.Context) (api.PreviewResult, error) { return api.PreviewResult{}, nil }}, &exportStub{}, nil)
+		response := httptest.NewRecorder()
+		service.ServeHTTP(response, localRequest(http.MethodGet, "/api/v1/media/status", nil))
+		if response.Code != http.StatusOK || strings.Contains(response.Body.String(), "/private/media") {
+			t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+		}
+		var fields map[string]json.RawMessage
+		if err := json.Unmarshal(response.Body.Bytes(), &fields); err != nil || len(fields) != 2 || fields["state"] == nil || fields["message"] == nil {
+			t.Fatalf("response fields=%v err=%v body=%s", fields, err, response.Body.String())
+		}
 	}
 }
 
