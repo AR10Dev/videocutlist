@@ -133,11 +133,11 @@ func TestExportStrategiesReportTruthfulBoundaryWarnings(t *testing.T) {
 		warnings   int
 	}{
 		{"aligned stream copy", 0, 1000, "stream_copy_preferred", "stream_copy_preferred", "", "", true, 0},
-		{"sparse stream copy", 100, 400, "stream_copy_preferred", "stream_copy_preferred", "stream_copy_cut_may_not_be_frame_exact", "not frame-exact", true, 1},
-		{"aligned precise re-encode", 0, 1000, "precise_reencode", "precise_reencode", "experimental_precise_reencode", "full re-encode", false, 1},
-		{"sparse precise re-encode", 100, 400, "precise_reencode", "precise_reencode", "experimental_precise_reencode", "full re-encode", false, 1},
-		{"aligned hybrid smart cut", 0, 1000, "hybrid_smart_cut", "hybrid_smart_cut", "experimental_hybrid_smart_cut", "leading video boundary is re-encoded", true, 1},
-		{"sparse hybrid smart cut", 100, 400, "hybrid_smart_cut", "stream_copy", "hybrid_smart_cut_stream_copy_fallback", "stream-copied and may not be frame-exact", true, 1},
+		{"sparse stream copy", 100, 400, "stream_copy_preferred", "stream_copy_preferred", "stream_copy_cut_may_not_be_frame_exact", "Stream-copy cuts can start on an earlier keyframe; requested non-keyframe boundaries are not frame-exact.", true, 1},
+		{"aligned precise re-encode", 0, 1000, "precise_reencode", "precise_reencode", "experimental_precise_reencode", "Experimental full re-encode mode; output boundaries and codec behavior require inspection.", false, 1},
+		{"sparse precise re-encode", 100, 400, "precise_reencode", "precise_reencode", "experimental_precise_reencode", "Experimental full re-encode mode; output boundaries and codec behavior require inspection.", false, 1},
+		{"aligned hybrid smart cut", 0, 1000, "hybrid_smart_cut", "hybrid_smart_cut", "experimental_hybrid_smart_cut", "Experimental H.264 CFR MKV hybrid cut; the leading video boundary is re-encoded, the remaining video span is stream-copied, and audio is consistently AAC-encoded. Output is not frame-exact without probe confirmation.", true, 1},
+		{"sparse hybrid smart cut", 100, 400, "hybrid_smart_cut", "stream_copy", "hybrid_smart_cut_stream_copy_fallback", "Segment 1 had no compatible interior keyframe; the requested span was stream-copied and may not be frame-exact.", true, 1},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -152,8 +152,8 @@ func TestExportStrategiesReportTruthfulBoundaryWarnings(t *testing.T) {
 			if len(result.Warnings) != test.warnings {
 				t.Fatalf("warnings = %#v", result.Warnings)
 			}
-			if test.code != "" && (result.Warnings[0].Code != test.code || !strings.Contains(result.Warnings[0].Message, test.message)) {
-				t.Fatalf("warning = %#v", result.Warnings[0])
+			if test.code != "" && (result.Warnings[0].Code != test.code || result.Warnings[0].Message != test.message) {
+				t.Fatalf("warning = %#v, want code %q and message %q", result.Warnings[0], test.code, test.message)
 			}
 			if _, err := (probe.Client{}).Probe(context.Background(), filepath.Join(service.OutputDir, result.OutputName)); err != nil {
 				t.Fatalf("output does not probe: %v", err)
