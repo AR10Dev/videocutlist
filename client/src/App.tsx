@@ -60,6 +60,7 @@ type ExportJob = {
   result?: {
     outputName?: string;
     outputNames?: string[];
+    appliedStrategies?: { segment: number; outputName?: string; strategy: string }[];
     destinationKind?: string;
     sizeBytes: number;
     retainUntil: string;
@@ -1622,9 +1623,22 @@ export function App() {
                 {exportJob()!.result!.outputName ?? exportJob()!.result!.outputNames?.join(", ")}
               </p>
               <p>
-                Strategy: {exportJob()!.appliedStrategy ?? exportJob()!.strategy ?? cutStrategy()} ·{" "}
+                Strategy: {exportJob()!.appliedStrategy ??
+                  (exportJob()!.result!.appliedStrategies?.length
+                    ? "mixed per segment"
+                    : exportJob()!.strategy ?? cutStrategy())} ·{" "}
                 {exportJob()!.verified ? "verified output" : "requires inspection"}
               </p>
+              <Show when={(exportJob()!.result!.appliedStrategies?.length ?? 0) > 1}>
+                <For each={exportJob()!.result!.appliedStrategies}>
+                  {(strategy) => (
+                    <p>
+                      Segment {strategy.segment}
+                      {strategy.outputName ? ` (${strategy.outputName})` : ""}: {strategy.strategy}
+                    </p>
+                  )}
+                </For>
+              </Show>
               <p>
                 {exportJob()!.result!.sizeBytes.toLocaleString()} bytes · retained until{" "}
                 {exportJob()!.result!.retainUntil}

@@ -61,13 +61,20 @@ type Job struct {
 	CreatedAt       time.Time       `json:"createdAt"`
 	UpdatedAt       time.Time       `json:"updatedAt"`
 }
+type AppliedStrategy struct {
+	Segment    int    `json:"segment"`
+	OutputName string `json:"outputName,omitempty"`
+	Strategy   string `json:"strategy"`
+}
+
 type JobResult struct {
-	OutputName      string    `json:"outputName,omitempty"`
-	OutputNames     []string  `json:"outputNames,omitempty"`
-	SizeBytes       int64     `json:"sizeBytes"`
-	RetainUntil     time.Time `json:"retainUntil"`
-	DestinationID   string    `json:"destinationId,omitempty"`
-	DestinationKind string    `json:"destinationKind,omitempty"`
+	OutputName        string            `json:"outputName,omitempty"`
+	OutputNames       []string          `json:"outputNames,omitempty"`
+	AppliedStrategies []AppliedStrategy `json:"appliedStrategies,omitempty"`
+	SizeBytes         int64             `json:"sizeBytes"`
+	RetainUntil       time.Time         `json:"retainUntil"`
+	DestinationID     string            `json:"destinationId,omitempty"`
+	DestinationKind   string            `json:"destinationKind,omitempty"`
 }
 type PreviewSpec struct {
 	MediaID                                 string

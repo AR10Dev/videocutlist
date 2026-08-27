@@ -47,17 +47,24 @@ type Warning struct {
 	Message string `json:"message"`
 }
 
+type AppliedStrategy struct {
+	Segment    int    `json:"segment"`
+	OutputName string `json:"outputName,omitempty"`
+	Strategy   string `json:"strategy"`
+}
+
 // Result deliberately contains only an output name, never a filesystem path.
 type Result struct {
-	OutputName      string    `json:"outputName,omitempty"`
-	OutputNames     []string  `json:"outputNames,omitempty"`
-	SizeBytes       int64     `json:"sizeBytes"`
-	RetainUntil     time.Time `json:"retainUntil"`
-	DestinationID   string    `json:"destinationId,omitempty"`
-	DestinationKind string    `json:"destinationKind,omitempty"`
-	Warnings        []Warning `json:"warnings,omitempty"`
-	AppliedStrategy string    `json:"appliedStrategy,omitempty"`
-	Verified        bool      `json:"verified"`
+	OutputName        string            `json:"outputName,omitempty"`
+	OutputNames       []string          `json:"outputNames,omitempty"`
+	SizeBytes         int64             `json:"sizeBytes"`
+	RetainUntil       time.Time         `json:"retainUntil"`
+	DestinationID     string            `json:"destinationId,omitempty"`
+	DestinationKind   string            `json:"destinationKind,omitempty"`
+	Warnings          []Warning         `json:"warnings,omitempty"`
+	AppliedStrategy   string            `json:"appliedStrategy,omitempty"`
+	AppliedStrategies []AppliedStrategy `json:"appliedStrategies,omitempty"`
+	Verified          bool              `json:"verified"`
 }
 
 type Service struct {
@@ -181,8 +188,9 @@ func (s Service) Run(ctx context.Context, source *os.File, document domain.Docum
 			return Result{}, err
 		}
 	}
+	appliedStrategies := segmentStrategies(request.CutStrategy, segments, keyframes)
 	if request.Mode == "separate" {
-		result := Result{OutputNames: make([]string, 0, len(segmentFiles)), RetainUntil: now(s).Add(destinationRetention(destination, s)), DestinationID: destination.ID, DestinationKind: destination.Kind, AppliedStrategy: usedStrategy(request.CutStrategy, hybridInterior)}
+		result := Result{OutputNames: make([]string, 0, len(segmentFiles)), RetainUntil: now(s).Add(destinationRetention(destination, s)), DestinationID: destination.ID, DestinationKind: destination.Kind, AppliedStrategy: uniformStrategy(appliedStrategies), AppliedStrategies: appliedStrategies}
 		published := make([]string, 0, len(segmentFiles))
 		committed := false
 		defer func() {
@@ -210,6 +218,7 @@ func (s Service) Run(ctx context.Context, source *os.File, document domain.Docum
 				return Result{}, err
 			}
 			result.OutputNames = append(result.OutputNames, name)
+			result.AppliedStrategies[i].OutputName = name
 			result.SizeBytes += info.Size()
 		}
 		if request.CutStrategy == "precise_reencode" {
@@ -253,7 +262,7 @@ func (s Service) Run(ctx context.Context, source *os.File, document domain.Docum
 	if err != nil {
 		return Result{}, err
 	}
-	result := Result{OutputName: outputName, SizeBytes: info.Size(), RetainUntil: now(s).Add(destinationRetention(destination, s)), DestinationID: destination.ID, DestinationKind: destination.Kind, AppliedStrategy: usedStrategy(request.CutStrategy, hybridInterior), Verified: request.CutStrategy != "precise_reencode"}
+	result := Result{OutputName: outputName, SizeBytes: info.Size(), RetainUntil: now(s).Add(destinationRetention(destination, s)), DestinationID: destination.ID, DestinationKind: destination.Kind, AppliedStrategy: uniformStrategy(appliedStrategies), AppliedStrategies: appliedStrategies, Verified: request.CutStrategy != "precise_reencode"}
 	if s.Artifacts != nil {
 		s.Artifacts.Put(request.JobID, []Artifact{{Path: finalPath, Name: outputName, Kind: destination.Kind, Expires: result.RetainUntil}})
 	}
@@ -541,11 +550,29 @@ func selectedSegments(segments []domain.Segment, selection string, duration int6
 	return gaps
 }
 
-func usedStrategy(requested string, hybridInterior bool) string {
-	if requested == "hybrid_smart_cut" && !hybridInterior {
-		return "stream_copy"
+func segmentStrategies(requested string, segments []domain.Segment, keyframes []int64) []AppliedStrategy {
+	strategies := make([]AppliedStrategy, len(segments))
+	for i, segment := range segments {
+		strategy := requested
+		if requested == "hybrid_smart_cut" && !hasInteriorKeyframe(segment, keyframes) {
+			strategy = "stream_copy"
+		}
+		strategies[i] = AppliedStrategy{Segment: i + 1, Strategy: strategy}
 	}
-	return requested
+	return strategies
+}
+
+func uniformStrategy(strategies []AppliedStrategy) string {
+	if len(strategies) == 0 {
+		return ""
+	}
+	strategy := strategies[0].Strategy
+	for _, value := range strategies[1:] {
+		if value.Strategy != strategy {
+			return ""
+		}
+	}
+	return strategy
 }
 
 func hasPotentiallyInexactCut(segments []domain.Segment, keyframes []int64) bool {

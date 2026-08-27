@@ -426,13 +426,33 @@ components:
               format: date-time
             destinationId: {type: string}
             destinationKind: {type: string, enum: [download, archive, source_adjacent]}
+            appliedStrategies:
+              type: array
+              description: >-
+                Strategy used for each selected segment; outputName identifies
+                separately published outputs.
+              items:
+                type: object
+                additionalProperties: false
+                required: [segment, strategy]
+                properties:
+                  segment: {type: integer, minimum: 1}
+                  outputName:
+                    type: string
+                    description: >-
+                      Published separate-export filename, never a filesystem
+                      path.
+                  strategy:
+                    type: string
         strategy:
           type: string
           description: Requested cut strategy.
         appliedStrategy:
           type: string
           description: >-
-            Strategy actually used; hybrid fallback reports stream_copy.
+            Strategy used by every selected segment; omitted when segments use
+            different strategies. See result.appliedStrategies for per-segment
+            values.
         warnings:
           type: array
           items:

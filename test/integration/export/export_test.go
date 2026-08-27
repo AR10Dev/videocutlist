@@ -17,6 +17,58 @@ import (
 	"videocutlist/infrastructure/media/probe"
 )
 
+func TestGeneratedStreamCombinationFixtures(t *testing.T) {
+	ffprobe, err := exec.LookPath("ffprobe")
+	if err != nil {
+		t.Skip("ffprobe is required")
+	}
+	ffmpeg, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg is required")
+	}
+	root, err := filepath.Abs(filepath.Join("..", "..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixtures := filepath.Join(t.TempDir(), "fixtures")
+	command := exec.Command(filepath.Join(root, "test", "harness", "generate-fixtures.sh"), fixtures)
+	command.Env = append(os.Environ(), "FFMPEG_BIN="+ffmpeg, "FFPROBE_BIN="+ffprobe)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("cannot generate fixtures: %v: %s", err, output)
+	}
+	for _, test := range []struct {
+		name                   string
+		video, audio, subtitle int
+	}{
+		{"avc-video-only-long-gop.mp4", 1, 0, 0},
+		{"multi-audio-avc-aac.mkv", 1, 2, 0},
+		{"subtitle-avc-aac.mkv", 1, 1, 1},
+	} {
+		metadata, err := (probe.Client{Path: ffprobe}).Probe(context.Background(), filepath.Join(fixtures, test.name))
+		if err != nil || metadata.DurationMS <= 0 || metadata.VideoStreams != test.video || metadata.AudioStreams != test.audio {
+			t.Fatalf("fixture %s: metadata=%#v, err=%v", test.name, metadata, err)
+		}
+		subtitles := 0
+		for _, stream := range metadata.Streams {
+			if stream.Type == "subtitle" {
+				subtitles++
+			}
+		}
+		if subtitles != test.subtitle {
+			t.Fatalf("fixture %s: subtitle streams=%d, want %d", test.name, subtitles, test.subtitle)
+		}
+	}
+	source, err := (probe.Client{Path: ffprobe}).Probe(context.Background(), filepath.Join(fixtures, "avc-aac.mkv"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"corrupt-truncated.mp4", "attachment-avc-aac.mkv"} {
+		if err := export.VerifyOutput(context.Background(), ffprobe, filepath.Join(fixtures, name), source, []int{0}); err == nil {
+			t.Fatalf("invalid fixture %s was accepted by output verification", name)
+		}
+	}
+}
+
 func TestStreamCopySegmentsMergeWithWarningAndAtomicPublish(t *testing.T) {
 	ffmpeg, err := exec.LookPath("ffmpeg")
 	if err != nil {
@@ -168,6 +220,39 @@ func TestExportStrategiesReportTruthfulBoundaryWarnings(t *testing.T) {
 	assertPublicOutputNames(t, result, sourcePath)
 }
 
+func TestSeparateHybridExportReportsEachSegmentStrategy(t *testing.T) {
+	ffmpeg, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg is required")
+	}
+	if _, err := exec.LookPath("ffprobe"); err != nil {
+		t.Skip("ffprobe is required")
+	}
+	directory := t.TempDir()
+	sourcePath := filepath.Join(directory, "keyframe-layout.mkv")
+	fixture := exec.Command(ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=30", "-f", "lavfi", "-i", "sine=frequency=880:sample_rate=48000", "-t", "2", "-map", "0:v:0", "-map", "1:a:0", "-c:v", "libx264", "-g", "15", "-pix_fmt", "yuv420p", "-c:a", "libopus", sourcePath)
+	if output, err := fixture.CombinedOutput(); err != nil {
+		t.Skipf("cannot generate fixture: %v: %s", err, output)
+	}
+	source, err := os.Open(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+
+	result, err := (export.Service{FFmpegPath: ffmpeg, OutputDir: filepath.Join(directory, "exports")}).Run(context.Background(), source, domain.Document{Segments: []domain.Segment{{StartMS: 0, EndMS: 1000}, {StartMS: 100, EndMS: 400}}}, export.Request{Mode: "separate", CutStrategy: "hybrid_smart_cut", Container: "mkv"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.AppliedStrategy != "" || len(result.AppliedStrategies) != 2 || result.AppliedStrategies[0].Segment != 1 || result.AppliedStrategies[0].Strategy != "hybrid_smart_cut" || result.AppliedStrategies[0].OutputName != result.OutputNames[0] || result.AppliedStrategies[1].Segment != 2 || result.AppliedStrategies[1].Strategy != "stream_copy" || result.AppliedStrategies[1].OutputName != result.OutputNames[1] {
+		t.Fatalf("result = %#v", result)
+	}
+	if len(result.Warnings) != 2 || result.Warnings[1].Code != "hybrid_smart_cut_stream_copy_fallback" || !strings.Contains(result.Warnings[1].Message, "Segment 2") {
+		t.Fatalf("warnings = %#v", result.Warnings)
+	}
+	assertPublicOutputNames(t, result, sourcePath)
+}
+
 func containsKeyframes(keyframes []int64, wanted ...int64) bool {
 	for _, timestamp := range wanted {
 		if !slices.Contains(keyframes, timestamp) {
@@ -179,8 +264,12 @@ func containsKeyframes(keyframes []int64, wanted ...int64) bool {
 
 func assertPublicOutputNames(t *testing.T, result export.Result, sourcePath string) {
 	t.Helper()
-	for _, name := range append(result.OutputNames, result.OutputName) {
-		if strings.ContainsAny(name, `/\\`) || strings.Contains(name, sourcePath) || strings.Contains(name, ".videocutlist-export-") {
+	names := append(append([]string(nil), result.OutputNames...), result.OutputName)
+	for _, strategy := range result.AppliedStrategies {
+		names = append(names, strategy.OutputName)
+	}
+	for _, name := range names {
+		if name != "" && (strings.ContainsAny(name, `/\\`) || strings.Contains(name, sourcePath) || strings.Contains(name, ".videocutlist-export-")) {
 			t.Fatalf("result exposed a filesystem path or temporary name: %#v", result)
 		}
 	}

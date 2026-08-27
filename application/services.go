@@ -262,21 +262,22 @@ func jobResult(record store.ExportJob) Job {
 	}
 	if record.State == store.JobSucceeded && record.ResultJSON.Valid {
 		var result struct {
-			OutputName      string    `json:"outputName"`
-			OutputNames     []string  `json:"outputNames"`
-			SizeBytes       int64     `json:"sizeBytes"`
-			RetainUntil     time.Time `json:"retainUntil"`
-			DestinationID   string    `json:"destinationId"`
-			DestinationKind string    `json:"destinationKind"`
-			AppliedStrategy string    `json:"appliedStrategy"`
-			Warnings        []struct {
+			OutputName        string            `json:"outputName"`
+			OutputNames       []string          `json:"outputNames"`
+			SizeBytes         int64             `json:"sizeBytes"`
+			RetainUntil       time.Time         `json:"retainUntil"`
+			DestinationID     string            `json:"destinationId"`
+			DestinationKind   string            `json:"destinationKind"`
+			AppliedStrategy   string            `json:"appliedStrategy"`
+			AppliedStrategies []AppliedStrategy `json:"appliedStrategies"`
+			Warnings          []struct {
 				Code    string `json:"code"`
 				Message string `json:"message"`
 			} `json:"warnings"`
 			Verified bool `json:"verified"`
 		}
-		if json.Unmarshal([]byte(record.ResultJSON.String), &result) == nil && safeOutputNames(result.OutputName, result.OutputNames) && result.SizeBytes >= 0 && !result.RetainUntil.IsZero() {
-			job.Result = &JobResult{OutputName: result.OutputName, OutputNames: result.OutputNames, SizeBytes: result.SizeBytes, RetainUntil: result.RetainUntil, DestinationID: result.DestinationID, DestinationKind: result.DestinationKind}
+		if json.Unmarshal([]byte(record.ResultJSON.String), &result) == nil && safeOutputNames(result.OutputName, result.OutputNames) && safeAppliedStrategies(result.AppliedStrategies) && result.SizeBytes >= 0 && !result.RetainUntil.IsZero() {
+			job.Result = &JobResult{OutputName: result.OutputName, OutputNames: result.OutputNames, AppliedStrategies: result.AppliedStrategies, SizeBytes: result.SizeBytes, RetainUntil: result.RetainUntil, DestinationID: result.DestinationID, DestinationKind: result.DestinationKind}
 			job.AppliedStrategy = result.AppliedStrategy
 			job.Verified = result.Verified
 			for _, warning := range result.Warnings {
@@ -320,6 +321,16 @@ func safeOutputName(name string) bool {
 	}
 	return true
 }
+
+func safeAppliedStrategies(strategies []AppliedStrategy) bool {
+	for _, strategy := range strategies {
+		if strategy.Segment < 1 || (strategy.OutputName != "" && !safeOutputName(strategy.OutputName)) || (strategy.Strategy != "stream_copy" && strategy.Strategy != "stream_copy_preferred" && strategy.Strategy != "precise_reencode" && strategy.Strategy != "hybrid_smart_cut") {
+			return false
+		}
+	}
+	return true
+}
+
 func newID(prefix string) (string, error) {
 	var value [18]byte
 	if _, err := io.ReadFull(rand.Reader, value[:]); err != nil {
