@@ -6,7 +6,13 @@ const media = {
   durationMs: 10_000,
   sizeBytes: 1000,
   container: "mp4",
-  streams: {},
+  streams: {
+    tracks: [
+      { index: 0, type: "video", codec: "h264" },
+      { index: 1, type: "audio", codec: "aac", language: "eng" },
+      { index: 2, type: "subtitle", codec: "ass", language: "eng" },
+    ],
+  },
   etag: "v1",
 };
 const secondMedia = {
@@ -456,6 +462,7 @@ test("exports the saved segments, polls to a safe result, and shows warnings", a
   await page.getByRole("button", { name: "Add In/Out segment" }).click();
   await page.getByRole("button", { name: "Start export" }).click();
   await expect(page.getByText("Export queued.")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Download output 1" })).toHaveCount(0);
   await expect(page.getByText("Export complete.")).toBeVisible({
     timeout: 4_000,
   });
@@ -471,8 +478,10 @@ test("exports the saved segments, polls to a safe result, and shows warnings", a
 });
 
 test("reviews preflight blockers and only enables eligible downloads", async ({ page }) => {
-  await page.route(`${apiOrigin}/api/v1/projects/*/exports/preflight`, (route) =>
-    route.fulfill({
+  let requestedStreamIndexes: number[] | undefined;
+  await page.route(`${apiOrigin}/api/v1/projects/*/exports/preflight`, (route) => {
+    requestedStreamIndexes = route.request().postDataJSON().streamIndexes;
+    return route.fulfill({
       json: {
         allowed: false,
         selection: [0, 2],
@@ -484,11 +493,19 @@ test("reviews preflight blockers and only enables eligible downloads", async ({ 
           },
         ],
       },
-    }),
-  );
+    });
+  });
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   await expect(page.getByLabel("Destination")).toHaveValue("download");
+  await expect(page.getByText("video h264 (#0)")).toBeVisible();
+  await expect(page.getByText("audio aac · eng (#1)")).toBeVisible();
+  await expect(page.getByText("subtitle ass · eng (#2)")).toBeVisible();
+  await page.getByRole("checkbox", { name: "audio aac · eng (#1)" }).uncheck();
+  await expect.poll(() => requestedStreamIndexes).toEqual([0, 2]);
+  await expect(page.getByRole("checkbox", { name: "video h264 (#0)" })).toBeChecked();
+  await expect(page.getByRole("checkbox", { name: "audio aac · eng (#1)" })).not.toBeChecked();
+  await expect(page.getByRole("checkbox", { name: "subtitle ass · eng (#2)" })).toBeChecked();
   await expect(page.getByText("Preview: {source}-1.mkv")).toBeVisible();
   await expect(page.getByText("Selected streams: 0, 2")).toBeVisible();
   await expect(page.getByText("blocked: Stream 1 cannot be exported.")).toBeVisible();
@@ -512,6 +529,12 @@ test("shows stable failed and capacity messages and permits retry", async ({ pag
         state: "failed",
         progress: 1,
         errorCode: "interrupted_by_restart",
+        result: {
+          outputName: "interrupted.mkv",
+          sizeBytes: 42,
+          retainUntil: "2026-08-20T12:00:00Z",
+          destinationKind: "download",
+        },
       },
     }),
   );
@@ -530,6 +553,7 @@ test("shows stable failed and capacity messages and permits retry", async ({ pag
   await expect(
     page.getByText("Export was interrupted by a server restart. Try again."),
   ).toBeVisible({ timeout: 3_000 });
+  await expect(page.getByRole("link", { name: "Download output 1" })).toHaveCount(0);
 });
 
 test("cancels an active export without showing a path", async ({ page }) => {
