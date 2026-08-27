@@ -12,6 +12,14 @@ const media = {
 
 test("project interchange controls wait for media selection", async ({ page }) => {
   await page.goto("/");
+  await expect(page.getByRole("heading", { name: "Choose a video to begin" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Preview" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Timeline editing" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Detection" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Export" })).toBeDisabled();
+  await expect(
+    page.getByText("Select a video from the Media library to unlock the editing workspace."),
+  ).toBeVisible();
   await expect(page.getByRole("button", { name: "Export CSV" })).not.toBeVisible();
   await expect(page.getByRole("button", { name: "Export chapters" })).not.toBeVisible();
   await expect(page.getByLabel("Import CSV or chapters")).not.toBeVisible();
@@ -37,6 +45,9 @@ test("separates media selection from cut-list imports", async ({ page }) => {
   await expect(page.getByLabel("Import CSV or chapters")).toHaveCount(0);
 
   await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await expect(page.getByRole("heading", { name: "Timeline" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Export" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Auto detection" })).toBeVisible();
   await expect(page.getByLabel("Import cut list")).toBeVisible();
   await expect(page.getByLabel("Import CSV or chapters")).toHaveCount(0);
 

@@ -5,11 +5,11 @@
 **Blocked by:** 03
 
 **Category:** enhancement
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] A first-run user has one obvious next action.
-- [ ] Selecting a video reveals preview, timeline, segment, and export workflows in task order.
-- [ ] Disabled actions explain their prerequisite rather than silently failing.
+- [x] A first-run user has one obvious next action.
+- [x] Selecting a video reveals preview, timeline, segment, and export workflows in task order.
+- [x] Disabled actions explain their prerequisite rather than silently failing.
 
 ## Comments
 

@@ -1161,7 +1161,41 @@ export function App() {
       </section>
       <section class="editor-panel" aria-labelledby="timeline-heading">
         <h2 id="timeline-heading">Timeline</h2>
-        <Show when={selected()} fallback={<p>Select a media item.</p>}>
+        <Show
+          when={selected()}
+          fallback={
+            <section class="editor-onboarding" aria-labelledby="editor-onboarding-heading">
+              <h3 id="editor-onboarding-heading">Choose a video to begin</h3>
+              <p>Select a video from the Media library to unlock the editing workspace.</p>
+              <div class="locked-workflows" aria-label="Editor workflows">
+                <p>
+                  <button disabled title="Select a video before opening preview.">
+                    Preview
+                  </button>{" "}
+                  Select a video first.
+                </p>
+                <p>
+                  <button disabled title="Select a video before editing the timeline.">
+                    Timeline editing
+                  </button>{" "}
+                  Select a video first.
+                </p>
+                <p>
+                  <button disabled title="Select a video before running detection.">
+                    Detection
+                  </button>{" "}
+                  Select a video first.
+                </p>
+                <p>
+                  <button disabled title="Select a video before exporting.">
+                    Export
+                  </button>{" "}
+                  Select a video first.
+                </p>
+              </div>
+            </section>
+          }
+        >
           {(item) => (
             <>
               <p>
