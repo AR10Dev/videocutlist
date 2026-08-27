@@ -49,7 +49,12 @@ type LibraryStatus = {
   state: "unconfigured" | "scanning" | "ready_empty" | "ready_with_media" | "failed";
   message: string;
 };
-type LibraryRoot = { alias: string; path: string; state?: "ready" | "unavailable"; message?: string };
+type LibraryRoot = {
+  alias: string;
+  path: string;
+  state?: "ready" | "unavailable";
+  message?: string;
+};
 type ServerSettings = {
   settings: Record<string, unknown> & { mediaRoots?: Record<string, string> };
   revision: number;
@@ -201,15 +206,22 @@ export function App() {
     setServerSettingsStatus("Loading administrator settings…");
     try {
       const response = await api.request("settings");
-      if (response.status === 403) throw new Error("Administrator settings are unavailable: your account is not authorized.");
+      if (response.status === 403)
+        throw new Error("Administrator settings are unavailable: your account is not authorized.");
       if (!response.ok) throw new Error("Administrator settings are unavailable on this server.");
       const value = (await response.json()) as ServerSettings;
       const roots = value.settings.mediaRoots ?? {};
-      setLibraryRoots(Object.entries(roots).map(([alias, path]) => ({ alias, path, ...value.roots?.[alias] })));
+      setLibraryRoots(
+        Object.entries(roots).map(([alias, path]) => ({ alias, path, ...value.roots?.[alias] })),
+      );
       setSettingsRevision(value.revision);
       setServerSettingsStatus("Administrator settings loaded.");
     } catch (error) {
-      setServerSettingsStatus(error instanceof Error ? error.message : "Administrator settings are unavailable on this server.");
+      setServerSettingsStatus(
+        error instanceof Error
+          ? error.message
+          : "Administrator settings are unavailable on this server.",
+      );
     }
   };
   const openSettings = async () => {
@@ -223,7 +235,8 @@ export function App() {
       if (!root.alias.trim()) errors[index] = "Alias is required.";
       else if (aliases.has(root.alias.trim())) errors[index] = "Aliases must be unique.";
       else aliases.add(root.alias.trim());
-      if (!root.path.trim() || !/^(?:\/|[A-Za-z]:[\\/])/.test(root.path.trim())) errors[index] = `${errors[index] ? `${errors[index]} ` : ""}Enter an absolute server path.`;
+      if (!root.path.trim() || !/^(?:\/|[A-Za-z]:[\\/])/.test(root.path.trim()))
+        errors[index] = `${errors[index] ? `${errors[index]} ` : ""}Enter an absolute server path.`;
     });
     setRootErrors(errors);
     return Object.keys(errors).length === 0;
@@ -236,14 +249,30 @@ export function App() {
       const current = await api.request("settings");
       if (!current.ok) throw new Error("Settings could not be reloaded before saving.");
       const value = (await current.json()) as ServerSettings;
-      const mediaRoots = Object.fromEntries(libraryRoots().map((root) => [root.alias.trim(), root.path.trim()]));
-      const response = await api.request("settings", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ revision: value.revision, settings: { ...value.settings, mediaRoots } }) });
-      if (!response.ok) throw new Error(response.status === 409 ? "Settings changed; reload before updating." : "Library settings were rejected. Check each path.");
+      const mediaRoots = Object.fromEntries(
+        libraryRoots().map((root) => [root.alias.trim(), root.path.trim()]),
+      );
+      const response = await api.request("settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          revision: value.revision,
+          settings: { ...value.settings, mediaRoots },
+        }),
+      });
+      if (!response.ok)
+        throw new Error(
+          response.status === 409
+            ? "Settings changed; reload before updating."
+            : "Library settings were rejected. Check each path.",
+        );
       const saved = (await response.json()) as ServerSettings;
       setSettingsRevision(saved.revision);
       setServerSettingsStatus("Library settings saved.");
     } catch (error) {
-      setServerSettingsStatus(error instanceof Error ? error.message : "Library settings could not be saved.");
+      setServerSettingsStatus(
+        error instanceof Error ? error.message : "Library settings could not be saved.",
+      );
     } finally {
       setSettingsPending(false);
     }
@@ -254,10 +283,13 @@ export function App() {
     setServerSettingsStatus("Rescanning media library…");
     try {
       const response = await api.request("settings/media/refresh", { method: "POST" });
-      if (!response.ok) throw new Error("Media library could not be rescanned. Check mounts and permissions.");
+      if (!response.ok)
+        throw new Error("Media library could not be rescanned. Check mounts and permissions.");
       setServerSettingsStatus("Media library rescan started.");
     } catch (error) {
-      setServerSettingsStatus(error instanceof Error ? error.message : "Media library rescan failed.");
+      setServerSettingsStatus(
+        error instanceof Error ? error.message : "Media library rescan failed.",
+      );
     } finally {
       setRescanPending(false);
     }
@@ -1189,834 +1221,867 @@ export function App() {
           <span>Settings</span>
         </button>
       </header>
-      <Show when={settingsOpen()} fallback={<>
-      <section class="media-panel" aria-labelledby="media-heading">
-        <div class="panel-heading">
-          <h2 id="media-heading">File explorer</h2>
-          <button
-            class="icon-button"
-            onClick={() => void refreshMedia()}
-            disabled={refreshing()}
-            aria-label="Refresh media"
-          >
-            ↻
-          </button>
-        </div>
-        <Show when={!selected()}>
-          <section class="library-setup" aria-labelledby="library-setup-heading">
-            <h3 id="library-setup-heading">Server media library</h3>
-            <p>
-              VideoCutlist indexes videos mounted on the server; the browser does not upload or
-              choose a host folder.
-            </p>
-            <p role="status">{libraryMessage()}</p>
-          </section>
-        </Show>
-        <nav class="file-tree" aria-label="Media folders">
-          <button class="folder" aria-current="page">
-            ⌄ Server media library
-          </button>
-          <div class="folder-contents">
-            <Show when={folders().length}>
-              <ul class="folder-list" aria-label="Virtual folders">
-                <For each={folders()}>
-                  {(folder) => (
-                    <li>
-                      <button class="folder" onClick={() => void loadFolder(folder.id)}>
-                        {folder.label}
-                      </button>
-                    </li>
-                  )}
-                </For>
-              </ul>
-            </Show>
-            <span class="folder-label">
-              {activeFolder() ? "Videos in folder" : "Indexed videos"}
-            </span>
-            <ul class="media-list" aria-label="Media list">
-              <For each={media()}>
-                {(item) => (
-                  <li>
-                    <button
-                      aria-pressed={selected()?.id === item.id ? "true" : "false"}
-                      onClick={() => chooseMedia(item)}
-                    >
-                      {item.name}
-                      <span>
-                        {formatTime(item.durationMs, item.durationMs)} · {item.container}
-                      </span>
-                    </button>
-                  </li>
-                )}
-              </For>
-            </ul>
-          </div>
-        </nav>
-        <Show when={nextCursor()}>
-          <button
-            disabled={loadingMore()}
-            onClick={() =>
-              void (activeFolder()
-                ? loadFolder(activeFolder(), nextCursor())
-                : loadMedia(nextCursor()))
-            }
-          >
-            {loadingMore() ? "Loading more…" : "Load more"}
-          </button>
-        </Show>
-      </section>
-      <section class="editor-panel" aria-labelledby="timeline-heading">
-        <h2 id="timeline-heading">Timeline</h2>
-        <Show
-          when={selected()}
-          fallback={
-            <section class="editor-onboarding" aria-labelledby="editor-onboarding-heading">
-              <h3 id="editor-onboarding-heading">Choose a video to begin</h3>
-              <p>Select a video from the Media library to unlock the editing workspace.</p>
-              <div class="locked-workflows" aria-label="Editor workflows">
-                <p>
-                  <button disabled title="Select a video before opening preview.">
-                    Preview
-                  </button>{" "}
-                  Select a video first.
-                </p>
-                <p>
-                  <button disabled title="Select a video before editing the timeline.">
-                    Timeline editing
-                  </button>{" "}
-                  Select a video first.
-                </p>
-                <p>
-                  <button disabled title="Select a video before running detection.">
-                    Detection
-                  </button>{" "}
-                  Select a video first.
-                </p>
-                <p>
-                  <button disabled title="Select a video before exporting.">
-                    Export
-                  </button>{" "}
-                  Select a video first.
-                </p>
+      <Show
+        when={settingsOpen()}
+        fallback={
+          <>
+            <section class="media-panel" aria-labelledby="media-heading">
+              <div class="panel-heading">
+                <h2 id="media-heading">File explorer</h2>
+                <button
+                  class="icon-button"
+                  onClick={() => void refreshMedia()}
+                  disabled={refreshing()}
+                  aria-label="Refresh media"
+                >
+                  ↻
+                </button>
               </div>
-            </section>
-          }
-        >
-          {(item) => (
-            <>
-              <p>
-                <strong>{item().name}</strong> · {formatTime(item().durationMs, duration())}
-              </p>
-              <p id="timeline-description">
-                Playhead {formatTime(playheadMs(), duration())}. In marker{" "}
-                {formatTime(present().inMs, duration())}. Out marker{" "}
-                {formatTime(present().outMs, duration())}.{" "}
-                {present().segments.length
-                  ? `${present().segments.length} segment${present().segments.length === 1 ? "" : "s"} selected.`
-                  : "No segments selected."}
-              </p>
-              <Show
-                when={canStreamPreview()}
-                fallback={
-                  <p class="preview-unavailable" role="status">
-                    Preview is unavailable in this browser. Use the timeline controls to set markers
-                    manually.
+              <Show when={!selected()}>
+                <section class="library-setup" aria-labelledby="library-setup-heading">
+                  <h3 id="library-setup-heading">Server media library</h3>
+                  <p>
+                    VideoCutlist indexes videos mounted on the server; the browser does not upload
+                    or choose a host folder.
                   </p>
+                  <p role="status">{libraryMessage()}</p>
+                </section>
+              </Show>
+              <nav class="file-tree" aria-label="Media folders">
+                <button class="folder" aria-current="page">
+                  ⌄ Server media library
+                </button>
+                <div class="folder-contents">
+                  <Show when={folders().length}>
+                    <ul class="folder-list" aria-label="Virtual folders">
+                      <For each={folders()}>
+                        {(folder) => (
+                          <li>
+                            <button class="folder" onClick={() => void loadFolder(folder.id)}>
+                              {folder.label}
+                            </button>
+                          </li>
+                        )}
+                      </For>
+                    </ul>
+                  </Show>
+                  <span class="folder-label">
+                    {activeFolder() ? "Videos in folder" : "Indexed videos"}
+                  </span>
+                  <ul class="media-list" aria-label="Media list">
+                    <For each={media()}>
+                      {(item) => (
+                        <li>
+                          <button
+                            aria-pressed={selected()?.id === item.id ? "true" : "false"}
+                            onClick={() => chooseMedia(item)}
+                          >
+                            {item.name}
+                            <span>
+                              {formatTime(item.durationMs, item.durationMs)} · {item.container}
+                            </span>
+                          </button>
+                        </li>
+                      )}
+                    </For>
+                  </ul>
+                </div>
+              </nav>
+              <Show when={nextCursor()}>
+                <button
+                  disabled={loadingMore()}
+                  onClick={() =>
+                    void (activeFolder()
+                      ? loadFolder(activeFolder(), nextCursor())
+                      : loadMedia(nextCursor()))
+                  }
+                >
+                  {loadingMore() ? "Loading more…" : "Load more"}
+                </button>
+              </Show>
+            </section>
+            <section class="editor-panel" aria-labelledby="timeline-heading">
+              <h2 id="timeline-heading">Timeline</h2>
+              <Show
+                when={selected()}
+                fallback={
+                  <section class="editor-onboarding" aria-labelledby="editor-onboarding-heading">
+                    <h3 id="editor-onboarding-heading">Choose a video to begin</h3>
+                    <p>Select a video from the Media library to unlock the editing workspace.</p>
+                    <div class="locked-workflows" aria-label="Editor workflows">
+                      <p>
+                        <button disabled title="Select a video before opening preview.">
+                          Preview
+                        </button>{" "}
+                        Select a video first.
+                      </p>
+                      <p>
+                        <button disabled title="Select a video before editing the timeline.">
+                          Timeline editing
+                        </button>{" "}
+                        Select a video first.
+                      </p>
+                      <p>
+                        <button disabled title="Select a video before running detection.">
+                          Detection
+                        </button>{" "}
+                        Select a video first.
+                      </p>
+                      <p>
+                        <button disabled title="Select a video before exporting.">
+                          Export
+                        </button>{" "}
+                        Select a video first.
+                      </p>
+                    </div>
+                  </section>
                 }
               >
-                <video
-                  ref={(element) => {
-                    video = element;
-                  }}
-                  controls
-                  muted={muted()}
-                  aria-label="Preview player"
-                  data-preview-offset={diagnostics()?.offsetMs ?? 0}
-                />
-              </Show>
-              <div
-                class="timeline-visual"
-                role="group"
-                aria-labelledby="timeline-heading timeline-description"
-                style={{ width: `${viewportScale(present().zoom) * 100}%` }}
-              >
-                <TimelineCanvas thumbnailURL={thumbnailURL()} waveform={waveform()} />
-                <span
-                  class="timeline-overlay timeline-in"
-                  style={{
-                    transform: `translateX(${(present().inMs / duration()) * 100}%)`,
-                  }}
-                  aria-label="In marker"
-                />
-                <span
-                  class="timeline-overlay timeline-out"
-                  style={{
-                    transform: `translateX(${(present().outMs / duration()) * 100}%)`,
-                  }}
-                  aria-label="Out marker"
-                />
-                <For each={present().segments}>
-                  {(segment) => (
-                    <span
-                      class="timeline-segment"
-                      style={{
-                        left: `${(segment.startMs / duration()) * 100}%`,
-                        width: `${((segment.endMs - segment.startMs) / duration()) * 100}%`,
-                      }}
-                      aria-label={`Segment ${formatTime(segment.startMs, duration())} to ${formatTime(segment.endMs, duration())}`}
-                    />
-                  )}
-                </For>
-                <span
-                  class="timeline-overlay timeline-playhead"
-                  style={{
-                    transform: `translateX(${(playheadMs() / duration()) * 100}%)`,
-                  }}
-                  aria-label="Playhead"
-                />
-              </div>
-              {assetStatus() && <p role="status">{assetStatus()}</p>}
-              <input
-                id="playhead"
-                aria-label="Timeline playhead"
-                type="range"
-                min="0"
-                max={duration()}
-                step="1"
-                value={playheadMs()}
-                onInput={(event) => {
-                  const value = Number(event.currentTarget.value);
-                  updateTimeline({ playheadMs: value });
-                  markDirty();
-                }}
-              />
-              <p>
-                In: {formatTime(present().inMs, duration())} · Out:{" "}
-                {formatTime(present().outMs, duration())}
-              </p>
-              <div class="controls">
-                <button
-                  onClick={() => {
-                    const step = frameDuration(selected());
-                    updateTimeline({
-                      playheadMs: Math.max(0, playheadMs() - (step || 1000)),
-                    });
-                    markDirty();
-                  }}
-                >
-                  Previous frame
-                </button>
-                <button
-                  onClick={() => {
-                    updateTimeline({
-                      playheadMs: Math.min(
-                        duration(),
-                        playheadMs() + (frameDuration(selected()) || 1000),
-                      ),
-                    });
-                    markDirty();
-                  }}
-                >
-                  Next frame
-                </button>
-                <button
-                  disabled={!timeline().past.length}
-                  onClick={() => {
-                    const next = undoTimeline(timeline());
-                    setTimeline(next);
-                    setPlayheadMs(next.present.playheadMs);
-                    markDirty();
-                  }}
-                >
-                  Undo
-                </button>
-                <button
-                  disabled={!timeline().future.length}
-                  onClick={() => {
-                    const next = redoTimeline(timeline());
-                    setTimeline(next);
-                    setPlayheadMs(next.present.playheadMs);
-                    markDirty();
-                  }}
-                >
-                  Redo
-                </button>
-                <button onClick={addSegment}>Add In/Out segment</button>
-                <button onClick={() => setMarker("inMs", watchedPosition())}>Set In marker</button>
-                <button onClick={() => setMarker("outMs", Math.min(duration(), watchedPosition()))}>
-                  Set Out marker
-                </button>
-                <label>
-                  Timecode{" "}
-                  <input
-                    value={timecode()}
-                    placeholder="0:00.000"
-                    onInput={(event) => setTimecode(event.currentTarget.value)}
-                  />
-                </label>
-                <button
-                  onClick={() => {
-                    const value = parseTimecode(timecode());
-                    if (value === undefined || value > duration())
-                      return setStatus("Invalid timecode.");
-                    updateTimeline({ playheadMs: value });
-                  }}
-                >
-                  Go to timecode
-                </button>
-                <label>
-                  Segment label{" "}
-                  <input
-                    value={segmentLabel()}
-                    onInput={(event) => setSegmentLabel(event.currentTarget.value)}
-                  />
-                </label>
-              </div>
-              <ol aria-label="Selected segments">
-                <For each={present().segments}>
-                  {(segment, index) => (
-                    <li>
-                      {segment.label ?? "Unlabelled"}:{" "}
-                      <span>
-                        {formatTime(segment.startMs, duration())} –{" "}
-                        {formatTime(segment.endMs, duration())}
-                      </span>{" "}
-                      <button onClick={() => moveSegment(index(), -1)} disabled={index() === 0}>
-                        ↑
-                      </button>{" "}
-                      <button
-                        onClick={() => moveSegment(index(), 1)}
-                        disabled={index() === present().segments.length - 1}
-                      >
-                        ↓
-                      </button>{" "}
-                      <button onClick={() => removeSegment(index())}>Remove</button>
-                    </li>
-                  )}
-                </For>
-              </ol>
-              <section aria-labelledby="diagnostics-heading">
-                <h2 id="diagnostics-heading">Preview diagnostics</h2>
-                <dl>
-                  <dt>MSE</dt>
-                  <dd>{canStreamPreview() ? "supported" : "unsupported"}</dd>
-                  <dt>Cache</dt>
-                  <dd>{diagnostics()?.cache ?? "—"}</dd>
-                  <dt>Request ID</dt>
-                  <dd>{diagnostics()?.requestId ?? "—"}</dd>
-                  <dt>Offset</dt>
-                  <dd>{diagnostics() ? `${diagnostics()!.offsetMs} ms` : "—"}</dd>
-                  <dt>Window</dt>
-                  <dd>
-                    {diagnostics()
-                      ? `${diagnostics()!.startMs} ms / ${diagnostics()!.durationMs} ms`
-                      : "—"}
-                  </dd>
-                  <dt>Response</dt>
-                  <dd>{diagnostics() ? `${diagnostics()!.elapsedMs} ms` : "—"}</dd>
-                </dl>
-              </section>
-              <label>
-                <input
-                  type="checkbox"
-                  checked={muted()}
-                  onChange={(event) => {
-                    const value = event.currentTarget.checked;
-                    setMuted(value);
-                    saveSettings({ muted: value });
-                    markDirty();
-                  }}
-                />{" "}
-                Mute preview
-              </label>
-            </>
-          )}
-        </Show>
-      </section>
-      <Show when={selected()}>
-        <section class="project-panel" aria-labelledby="project-heading">
-          <h2 id="project-heading">Project</h2>
-          <label>
-            Project ID{" "}
-            <input
-              value={projectId()}
-              onInput={(event) => {
-                setProjectId(event.currentTarget.value);
-                markDirty();
-              }}
-            />
-          </label>
-          <p>
-            Revision {revision()} {dirty() ? "· unsaved changes" : "· saved"}
-          </p>
-          <p>
-            Interchange files update cut lists; they do not upload or add a video. Videos are
-            indexed from the server&apos;s media library; configure its media roots, then choose a
-            video from File explorer.
-          </p>
-          <div class="controls">
-            <button onClick={newProject}>New project</button>
-            <button onClick={() => void loadProject()}>Load project</button>
-            <button onClick={() => void saveProject()}>Save project</button>
-            <button
-              disabled={!selected()}
-              onClick={() => {
-                const blob = new Blob(
-                  [
-                    projectJson({
-                      version: 1,
-                      mediaId: selected()!.id,
-                      revision: revision(),
-                      segments: present().segments,
-                      uiState: {
-                        playheadMs: playheadMs(),
-                        zoom: present().zoom,
-                        muted: muted(),
-                      },
-                    }),
-                  ],
-                  { type: "application/json" },
-                );
-                const link = document.createElement("a");
-                link.href = URL.createObjectURL(blob);
-                link.download = `${projectId()}.videocutlist.json`;
-                link.click();
-                URL.revokeObjectURL(link.href);
-              }}
-            >
-              Download cut list
-            </button>
-            <Show
-              when={selected()}
-              fallback={<p>Choose a video from File explorer to import a cut list.</p>}
-            >
-              <label>
-                Import cut list{" "}
-                <input
-                  type="file"
-                  accept="application/json,.json"
-                  onChange={(event) => {
-                    const file = event.currentTarget.files?.[0];
-                    if (!file) return;
-                    void file
-                      .text()
-                      .then((text) => {
-                        const imported = parseProjectJson(text);
-                        if (!selected() || imported.mediaId !== selected()!.id)
-                          throw new Error("Select the cut list's media before importing.");
-                        const segments = imported.segments as Segment[];
-                        const error = validateSegments(segments, selected()!.durationMs);
-                        if (error) throw new Error(error);
-                        updateTimeline({ segments });
-                        markDirty();
-                        setStatus("Cut list imported. Save the project to keep it.");
-                      })
-                      .catch((error) =>
-                        setStatus(
-                          error instanceof Error ? error.message : "Cut list import failed.",
-                        ),
-                      );
-                    event.currentTarget.value = "";
-                  }}
-                />
-              </label>
-            </Show>
-            <Show
-              when={selected() && !dirty()}
-              fallback={
-                <p>
-                  Save or load the selected video&apos;s project before importing CSV or chapters.
-                </p>
-              }
-            >
-              <label>
-                Import CSV or chapters{" "}
-                <input
-                  type="file"
-                  accept=".csv,.txt,text/csv,text/plain"
-                  onChange={(event) => {
-                    const file = event.currentTarget.files?.[0];
-                    if (!file || !validInterchangeFileSize(file.size)) {
-                      setStatus("Interchange file exceeds the 1 MiB limit.");
-                      return;
-                    }
-                    const format = file.name.toLowerCase().endsWith(".csv") ? "csv" : "chapters";
-                    void file
-                      .arrayBuffer()
-                      .then((body) =>
-                        api.interchangeRequest(projectId(), format, {
-                          method: "POST",
-                          body,
-                          headers: {
-                            "Content-Type": format === "csv" ? "text/csv" : "text/plain",
-                          },
-                        }),
-                      )
-                      .then(async (response) => {
-                        if (!response.ok) throw new Error();
-                        const value = (await response.json()) as {
-                          segments: Segment[];
-                          revision: number;
-                        };
-                        updateTimeline({ segments: value.segments });
-                        setRevision(value.revision);
-                        setDirty(false);
-                        setStatus("Interchange imported.");
-                      })
-                      .catch(() => setStatus("Interchange import failed."));
-                    event.currentTarget.value = "";
-                  }}
-                />
-              </label>
-            </Show>
-            <button
-              onClick={() =>
-                void api
-                  .interchangeRequest(projectId(), "csv")
-                  .then((response) => (response.ok ? response.blob() : Promise.reject()))
-                  .then((blob) => {
-                    const link = document.createElement("a");
-                    link.href = URL.createObjectURL(blob);
-                    link.download = `${projectId()}.csv`;
-                    link.click();
-                    URL.revokeObjectURL(link.href);
-                  })
-                  .catch(() => setStatus("CSV export failed."))
-              }
-            >
-              Export CSV
-            </button>
-            <button
-              onClick={() =>
-                void api
-                  .interchangeRequest(projectId(), "chapters")
-                  .then((response) => (response.ok ? response.blob() : Promise.reject()))
-                  .then((blob) => {
-                    const link = document.createElement("a");
-                    link.href = URL.createObjectURL(blob);
-                    link.download = `${projectId()}.chapters.txt`;
-                    link.click();
-                    URL.revokeObjectURL(link.href);
-                  })
-                  .catch(() => setStatus("Chapters export failed."))
-              }
-            >
-              Export chapters
-            </button>
-          </div>
-          <Show when={recent().length > 0}>
-            <h3>Recent projects</h3>
-            <ul>
-              {recent().map((item) => (
-                <li>
-                  <button onClick={() => void loadProject(item.id)}>
-                    {item.label} ({item.id})
-                  </button>
-                </li>
-              ))}
-            </ul>
-          </Show>
-        </section>
-      </Show>
-      <Show when={selected()}>
-        <section class="export-panel" aria-labelledby="export-heading">
-          <h2 id="export-heading">Export</h2>
-          <p role="status">{exportStatus() || "Export a saved project."}</p>
-          <label>
-            Mode{" "}
-            <select
-              value={exportMode()}
-              onChange={(event) => setExportMode(event.currentTarget.value as "merge" | "separate")}
-            >
-              <option value="merge">Merge</option>
-              <option value="separate">Separate</option>
-            </select>
-          </label>
-          <label>
-            Selection{" "}
-            <select
-              value={exportSelection()}
-              onChange={(event) =>
-                setExportSelection(event.currentTarget.value as "segments" | "gaps")
-              }
-            >
-              <option value="segments">Segments</option>
-              <option value="gaps">Gaps</option>
-            </select>
-          </label>
-          <fieldset>
-            <legend>Streams</legend>
-            <For each={tracks()}>
-              {(track) => {
-                const checked = () =>
-                  streamIndexes().length === 0 || streamIndexes().includes(track.index);
-                return (
-                  <label>
+                {(item) => (
+                  <>
+                    <p>
+                      <strong>{item().name}</strong> · {formatTime(item().durationMs, duration())}
+                    </p>
+                    <p id="timeline-description">
+                      Playhead {formatTime(playheadMs(), duration())}. In marker{" "}
+                      {formatTime(present().inMs, duration())}. Out marker{" "}
+                      {formatTime(present().outMs, duration())}.{" "}
+                      {present().segments.length
+                        ? `${present().segments.length} segment${present().segments.length === 1 ? "" : "s"} selected.`
+                        : "No segments selected."}
+                    </p>
+                    <Show
+                      when={canStreamPreview()}
+                      fallback={
+                        <p class="preview-unavailable" role="status">
+                          Preview is unavailable in this browser. Use the timeline controls to set
+                          markers manually.
+                        </p>
+                      }
+                    >
+                      <video
+                        ref={(element) => {
+                          video = element;
+                        }}
+                        controls
+                        muted={muted()}
+                        aria-label="Preview player"
+                        data-preview-offset={diagnostics()?.offsetMs ?? 0}
+                      />
+                    </Show>
+                    <div
+                      class="timeline-visual"
+                      role="group"
+                      aria-labelledby="timeline-heading timeline-description"
+                      style={{ width: `${viewportScale(present().zoom) * 100}%` }}
+                    >
+                      <TimelineCanvas thumbnailURL={thumbnailURL()} waveform={waveform()} />
+                      <span
+                        class="timeline-overlay timeline-in"
+                        style={{
+                          transform: `translateX(${(present().inMs / duration()) * 100}%)`,
+                        }}
+                        aria-label="In marker"
+                      />
+                      <span
+                        class="timeline-overlay timeline-out"
+                        style={{
+                          transform: `translateX(${(present().outMs / duration()) * 100}%)`,
+                        }}
+                        aria-label="Out marker"
+                      />
+                      <For each={present().segments}>
+                        {(segment) => (
+                          <span
+                            class="timeline-segment"
+                            style={{
+                              left: `${(segment.startMs / duration()) * 100}%`,
+                              width: `${((segment.endMs - segment.startMs) / duration()) * 100}%`,
+                            }}
+                            aria-label={`Segment ${formatTime(segment.startMs, duration())} to ${formatTime(segment.endMs, duration())}`}
+                          />
+                        )}
+                      </For>
+                      <span
+                        class="timeline-overlay timeline-playhead"
+                        style={{
+                          transform: `translateX(${(playheadMs() / duration()) * 100}%)`,
+                        }}
+                        aria-label="Playhead"
+                      />
+                    </div>
+                    {assetStatus() && <p role="status">{assetStatus()}</p>}
                     <input
-                      type="checkbox"
-                      checked={checked()}
-                      onChange={(event) => {
-                        const all = streamIndexes().length
-                          ? streamIndexes()
-                          : tracks().map((item) => item.index);
-                        setStreamIndexes(
-                          event.currentTarget.checked
-                            ? [...new Set([...all, track.index])]
-                            : all.filter((index) => index !== track.index),
-                        );
+                      id="playhead"
+                      aria-label="Timeline playhead"
+                      type="range"
+                      min="0"
+                      max={duration()}
+                      step="1"
+                      value={playheadMs()}
+                      onInput={(event) => {
+                        const value = Number(event.currentTarget.value);
+                        updateTimeline({ playheadMs: value });
+                        markDirty();
                       }}
-                    />{" "}
-                    {track.type} {track.codec}
-                    {track.language ? ` · ${track.language}` : ""}
-                    {track.disposition?.length ? ` · ${track.disposition.join(", ")}` : ""} (#
-                    {track.index})
-                  </label>
-                );
-              }}
-            </For>
-          </fieldset>
-          <label>
-            Cut strategy{" "}
-            <select
-              value={cutStrategy()}
-              onChange={(event) => {
-                const value = event.currentTarget.value as AppSettings["cutStrategy"];
-                setCutStrategy(value);
-                saveSettings({ cutStrategy: value });
-              }}
-            >
-              <option value="stream_copy_preferred">Stream copy preferred</option>
-              <option value="precise_reencode">Precise re-encode</option>
-              <option value="hybrid_smart_cut" disabled={hybridSmartCutKnownIneligible(selected())}>
-                Hybrid smart cut{hybridSmartCutKnownIneligible(selected()) ? " (unavailable)" : ""}
-              </option>
-            </select>
-          </label>
-          <label>
-            Destination{" "}
-            <select
-              value={destinationId()}
-              onChange={(event) => setDestinationId(event.currentTarget.value)}
-            >
-              <For each={destinations()}>
-                {(destination) => (
-                  <option value={destination.id}>
-                    {destination.label} ({destination.retention ?? "durable"})
-                  </option>
+                    />
+                    <p>
+                      In: {formatTime(present().inMs, duration())} · Out:{" "}
+                      {formatTime(present().outMs, duration())}
+                    </p>
+                    <div class="controls">
+                      <button
+                        onClick={() => {
+                          const step = frameDuration(selected());
+                          updateTimeline({
+                            playheadMs: Math.max(0, playheadMs() - (step || 1000)),
+                          });
+                          markDirty();
+                        }}
+                      >
+                        Previous frame
+                      </button>
+                      <button
+                        onClick={() => {
+                          updateTimeline({
+                            playheadMs: Math.min(
+                              duration(),
+                              playheadMs() + (frameDuration(selected()) || 1000),
+                            ),
+                          });
+                          markDirty();
+                        }}
+                      >
+                        Next frame
+                      </button>
+                      <button
+                        disabled={!timeline().past.length}
+                        onClick={() => {
+                          const next = undoTimeline(timeline());
+                          setTimeline(next);
+                          setPlayheadMs(next.present.playheadMs);
+                          markDirty();
+                        }}
+                      >
+                        Undo
+                      </button>
+                      <button
+                        disabled={!timeline().future.length}
+                        onClick={() => {
+                          const next = redoTimeline(timeline());
+                          setTimeline(next);
+                          setPlayheadMs(next.present.playheadMs);
+                          markDirty();
+                        }}
+                      >
+                        Redo
+                      </button>
+                      <button onClick={addSegment}>Add In/Out segment</button>
+                      <button onClick={() => setMarker("inMs", watchedPosition())}>
+                        Set In marker
+                      </button>
+                      <button
+                        onClick={() => setMarker("outMs", Math.min(duration(), watchedPosition()))}
+                      >
+                        Set Out marker
+                      </button>
+                      <label>
+                        Timecode{" "}
+                        <input
+                          value={timecode()}
+                          placeholder="0:00.000"
+                          onInput={(event) => setTimecode(event.currentTarget.value)}
+                        />
+                      </label>
+                      <button
+                        onClick={() => {
+                          const value = parseTimecode(timecode());
+                          if (value === undefined || value > duration())
+                            return setStatus("Invalid timecode.");
+                          updateTimeline({ playheadMs: value });
+                        }}
+                      >
+                        Go to timecode
+                      </button>
+                      <label>
+                        Segment label{" "}
+                        <input
+                          value={segmentLabel()}
+                          onInput={(event) => setSegmentLabel(event.currentTarget.value)}
+                        />
+                      </label>
+                    </div>
+                    <ol aria-label="Selected segments">
+                      <For each={present().segments}>
+                        {(segment, index) => (
+                          <li>
+                            {segment.label ?? "Unlabelled"}:{" "}
+                            <span>
+                              {formatTime(segment.startMs, duration())} –{" "}
+                              {formatTime(segment.endMs, duration())}
+                            </span>{" "}
+                            <button
+                              onClick={() => moveSegment(index(), -1)}
+                              disabled={index() === 0}
+                            >
+                              ↑
+                            </button>{" "}
+                            <button
+                              onClick={() => moveSegment(index(), 1)}
+                              disabled={index() === present().segments.length - 1}
+                            >
+                              ↓
+                            </button>{" "}
+                            <button onClick={() => removeSegment(index())}>Remove</button>
+                          </li>
+                        )}
+                      </For>
+                    </ol>
+                    <section aria-labelledby="diagnostics-heading">
+                      <h2 id="diagnostics-heading">Preview diagnostics</h2>
+                      <dl>
+                        <dt>MSE</dt>
+                        <dd>{canStreamPreview() ? "supported" : "unsupported"}</dd>
+                        <dt>Cache</dt>
+                        <dd>{diagnostics()?.cache ?? "—"}</dd>
+                        <dt>Request ID</dt>
+                        <dd>{diagnostics()?.requestId ?? "—"}</dd>
+                        <dt>Offset</dt>
+                        <dd>{diagnostics() ? `${diagnostics()!.offsetMs} ms` : "—"}</dd>
+                        <dt>Window</dt>
+                        <dd>
+                          {diagnostics()
+                            ? `${diagnostics()!.startMs} ms / ${diagnostics()!.durationMs} ms`
+                            : "—"}
+                        </dd>
+                        <dt>Response</dt>
+                        <dd>{diagnostics() ? `${diagnostics()!.elapsedMs} ms` : "—"}</dd>
+                      </dl>
+                    </section>
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={muted()}
+                        onChange={(event) => {
+                          const value = event.currentTarget.checked;
+                          setMuted(value);
+                          saveSettings({ muted: value });
+                          markDirty();
+                        }}
+                      />{" "}
+                      Mute preview
+                    </label>
+                  </>
                 )}
-              </For>
-            </select>
-          </label>
-          <label>
-            Filename template{" "}
-            <input
-              value={filenameTemplate()}
-              onInput={(event) => {
-                const value = event.currentTarget.value;
-                setFilenameTemplate(value);
-                saveSettings({ filenameTemplate: value });
-              }}
-              aria-label="Filename template"
-            />
-          </label>
-          <p role="status">
-            Preview:{" "}
-            {filenameTemplate()
-              .replaceAll("{ext}", "mkv")
-              .replaceAll("{segment}", "1")
-              .replaceAll("{mode}", exportMode()) || "server default"}
-          </p>
-          <div aria-label="Export review">
-            <p>
-              Review: {exportMode()} {exportSelection()} · {cutStrategy()}
-            </p>
-            <p>
-              Requested segment bounds:{" "}
-              {present()
-                .segments.map(
-                  (segment) =>
-                    `${formatTime(segment.startMs, duration())}–${formatTime(segment.endMs, duration())}`,
-                )
-                .join(", ") || "none"}
-            </p>
-            <p>Selected streams: {preflight()?.selection?.join(", ") || "default safe streams"}</p>
-            <Show when={cutStrategy() === "stream_copy_preferred"}>
-              <p>
-                Stream-copy cuts may begin at an earlier keyframe; no frame-exactness is claimed.
-              </p>
-            </Show>
-            <Show when={cutStrategy() !== "stream_copy_preferred"}>
-              <p>Boundary precision depends on the selected strategy and requires human review.</p>
-            </Show>
-            <For each={preflight()?.findings ?? []}>
-              {(finding) => (
-                <p role="status">
-                  {finding.severity}: {finding.message}
-                </p>
-              )}
-            </For>
-          </div>
-          <div class="controls">
-            <button
-              disabled={
-                !selected() ||
-                !present().segments.length ||
-                preflightPending() ||
-                (!dirty() && !preflight()?.allowed)
-              }
-              onClick={() => void exportProject()}
-            >
-              Start export
-            </button>
-            <Show when={exportJob()?.state === "queued" || exportJob()?.state === "running"}>
-              <button onClick={() => void cancelExport()}>Cancel export</button>
-            </Show>
-          </div>
-          <Show when={exportJob()?.result}>
-            <div>
-              <div aria-label="Export result">
+              </Show>
+            </section>
+            <Show when={selected()}>
+              <section class="project-panel" aria-labelledby="project-heading">
+                <h2 id="project-heading">Project</h2>
+                <label>
+                  Project ID{" "}
+                  <input
+                    value={projectId()}
+                    onInput={(event) => {
+                      setProjectId(event.currentTarget.value);
+                      markDirty();
+                    }}
+                  />
+                </label>
                 <p>
-                  Output ready:{" "}
-                  {exportJob()!.result!.outputName ?? exportJob()!.result!.outputNames?.join(", ")}
+                  Revision {revision()} {dirty() ? "· unsaved changes" : "· saved"}
                 </p>
                 <p>
-                  Strategy:{" "}
-                  {exportJob()!.appliedStrategy ??
-                    (exportJob()!.result!.appliedStrategies?.length
-                      ? "mixed per segment"
-                      : (exportJob()!.strategy ?? cutStrategy()))}{" "}
-                  · {exportJob()!.verified ? "verified output" : "requires inspection"}
+                  Interchange files update cut lists; they do not upload or add a video. Videos are
+                  indexed from the server&apos;s media library; configure its media roots, then
+                  choose a video from File explorer.
                 </p>
-                <Show when={(exportJob()!.result!.appliedStrategies?.length ?? 0) > 1}>
-                  <For each={exportJob()!.result!.appliedStrategies}>
-                    {(strategy) => (
+                <div class="controls">
+                  <button onClick={newProject}>New project</button>
+                  <button onClick={() => void loadProject()}>Load project</button>
+                  <button onClick={() => void saveProject()}>Save project</button>
+                  <button
+                    disabled={!selected()}
+                    onClick={() => {
+                      const blob = new Blob(
+                        [
+                          projectJson({
+                            version: 1,
+                            mediaId: selected()!.id,
+                            revision: revision(),
+                            segments: present().segments,
+                            uiState: {
+                              playheadMs: playheadMs(),
+                              zoom: present().zoom,
+                              muted: muted(),
+                            },
+                          }),
+                        ],
+                        { type: "application/json" },
+                      );
+                      const link = document.createElement("a");
+                      link.href = URL.createObjectURL(blob);
+                      link.download = `${projectId()}.videocutlist.json`;
+                      link.click();
+                      URL.revokeObjectURL(link.href);
+                    }}
+                  >
+                    Download cut list
+                  </button>
+                  <Show
+                    when={selected()}
+                    fallback={<p>Choose a video from File explorer to import a cut list.</p>}
+                  >
+                    <label>
+                      Import cut list{" "}
+                      <input
+                        type="file"
+                        accept="application/json,.json"
+                        onChange={(event) => {
+                          const file = event.currentTarget.files?.[0];
+                          if (!file) return;
+                          void file
+                            .text()
+                            .then((text) => {
+                              const imported = parseProjectJson(text);
+                              if (!selected() || imported.mediaId !== selected()!.id)
+                                throw new Error("Select the cut list's media before importing.");
+                              const segments = imported.segments as Segment[];
+                              const error = validateSegments(segments, selected()!.durationMs);
+                              if (error) throw new Error(error);
+                              updateTimeline({ segments });
+                              markDirty();
+                              setStatus("Cut list imported. Save the project to keep it.");
+                            })
+                            .catch((error) =>
+                              setStatus(
+                                error instanceof Error ? error.message : "Cut list import failed.",
+                              ),
+                            );
+                          event.currentTarget.value = "";
+                        }}
+                      />
+                    </label>
+                  </Show>
+                  <Show
+                    when={selected() && !dirty()}
+                    fallback={
                       <p>
-                        Segment {strategy.segment}
-                        {strategy.outputName ? ` (${strategy.outputName})` : ""}:{" "}
-                        {strategy.strategy}
+                        Save or load the selected video&apos;s project before importing CSV or
+                        chapters.
+                      </p>
+                    }
+                  >
+                    <label>
+                      Import CSV or chapters{" "}
+                      <input
+                        type="file"
+                        accept=".csv,.txt,text/csv,text/plain"
+                        onChange={(event) => {
+                          const file = event.currentTarget.files?.[0];
+                          if (!file || !validInterchangeFileSize(file.size)) {
+                            setStatus("Interchange file exceeds the 1 MiB limit.");
+                            return;
+                          }
+                          const format = file.name.toLowerCase().endsWith(".csv")
+                            ? "csv"
+                            : "chapters";
+                          void file
+                            .arrayBuffer()
+                            .then((body) =>
+                              api.interchangeRequest(projectId(), format, {
+                                method: "POST",
+                                body,
+                                headers: {
+                                  "Content-Type": format === "csv" ? "text/csv" : "text/plain",
+                                },
+                              }),
+                            )
+                            .then(async (response) => {
+                              if (!response.ok) throw new Error();
+                              const value = (await response.json()) as {
+                                segments: Segment[];
+                                revision: number;
+                              };
+                              updateTimeline({ segments: value.segments });
+                              setRevision(value.revision);
+                              setDirty(false);
+                              setStatus("Interchange imported.");
+                            })
+                            .catch(() => setStatus("Interchange import failed."));
+                          event.currentTarget.value = "";
+                        }}
+                      />
+                    </label>
+                  </Show>
+                  <button
+                    onClick={() =>
+                      void api
+                        .interchangeRequest(projectId(), "csv")
+                        .then((response) => (response.ok ? response.blob() : Promise.reject()))
+                        .then((blob) => {
+                          const link = document.createElement("a");
+                          link.href = URL.createObjectURL(blob);
+                          link.download = `${projectId()}.csv`;
+                          link.click();
+                          URL.revokeObjectURL(link.href);
+                        })
+                        .catch(() => setStatus("CSV export failed."))
+                    }
+                  >
+                    Export CSV
+                  </button>
+                  <button
+                    onClick={() =>
+                      void api
+                        .interchangeRequest(projectId(), "chapters")
+                        .then((response) => (response.ok ? response.blob() : Promise.reject()))
+                        .then((blob) => {
+                          const link = document.createElement("a");
+                          link.href = URL.createObjectURL(blob);
+                          link.download = `${projectId()}.chapters.txt`;
+                          link.click();
+                          URL.revokeObjectURL(link.href);
+                        })
+                        .catch(() => setStatus("Chapters export failed."))
+                    }
+                  >
+                    Export chapters
+                  </button>
+                </div>
+                <Show when={recent().length > 0}>
+                  <h3>Recent projects</h3>
+                  <ul>
+                    {recent().map((item) => (
+                      <li>
+                        <button onClick={() => void loadProject(item.id)}>
+                          {item.label} ({item.id})
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </Show>
+              </section>
+            </Show>
+            <Show when={selected()}>
+              <section class="export-panel" aria-labelledby="export-heading">
+                <h2 id="export-heading">Export</h2>
+                <p role="status">{exportStatus() || "Export a saved project."}</p>
+                <label>
+                  Mode{" "}
+                  <select
+                    value={exportMode()}
+                    onChange={(event) =>
+                      setExportMode(event.currentTarget.value as "merge" | "separate")
+                    }
+                  >
+                    <option value="merge">Merge</option>
+                    <option value="separate">Separate</option>
+                  </select>
+                </label>
+                <label>
+                  Selection{" "}
+                  <select
+                    value={exportSelection()}
+                    onChange={(event) =>
+                      setExportSelection(event.currentTarget.value as "segments" | "gaps")
+                    }
+                  >
+                    <option value="segments">Segments</option>
+                    <option value="gaps">Gaps</option>
+                  </select>
+                </label>
+                <fieldset>
+                  <legend>Streams</legend>
+                  <For each={tracks()}>
+                    {(track) => {
+                      const checked = () =>
+                        streamIndexes().length === 0 || streamIndexes().includes(track.index);
+                      return (
+                        <label>
+                          <input
+                            type="checkbox"
+                            checked={checked()}
+                            onChange={(event) => {
+                              const all = streamIndexes().length
+                                ? streamIndexes()
+                                : tracks().map((item) => item.index);
+                              setStreamIndexes(
+                                event.currentTarget.checked
+                                  ? [...new Set([...all, track.index])]
+                                  : all.filter((index) => index !== track.index),
+                              );
+                            }}
+                          />{" "}
+                          {track.type} {track.codec}
+                          {track.language ? ` · ${track.language}` : ""}
+                          {track.disposition?.length ? ` · ${track.disposition.join(", ")}` : ""} (#
+                          {track.index})
+                        </label>
+                      );
+                    }}
+                  </For>
+                </fieldset>
+                <label>
+                  Cut strategy{" "}
+                  <select
+                    value={cutStrategy()}
+                    onChange={(event) => {
+                      const value = event.currentTarget.value as AppSettings["cutStrategy"];
+                      setCutStrategy(value);
+                      saveSettings({ cutStrategy: value });
+                    }}
+                  >
+                    <option value="stream_copy_preferred">Stream copy preferred</option>
+                    <option value="precise_reencode">Precise re-encode</option>
+                    <option
+                      value="hybrid_smart_cut"
+                      disabled={hybridSmartCutKnownIneligible(selected())}
+                    >
+                      Hybrid smart cut
+                      {hybridSmartCutKnownIneligible(selected()) ? " (unavailable)" : ""}
+                    </option>
+                  </select>
+                </label>
+                <label>
+                  Destination{" "}
+                  <select
+                    value={destinationId()}
+                    onChange={(event) => setDestinationId(event.currentTarget.value)}
+                  >
+                    <For each={destinations()}>
+                      {(destination) => (
+                        <option value={destination.id}>
+                          {destination.label} ({destination.retention ?? "durable"})
+                        </option>
+                      )}
+                    </For>
+                  </select>
+                </label>
+                <label>
+                  Filename template{" "}
+                  <input
+                    value={filenameTemplate()}
+                    onInput={(event) => {
+                      const value = event.currentTarget.value;
+                      setFilenameTemplate(value);
+                      saveSettings({ filenameTemplate: value });
+                    }}
+                    aria-label="Filename template"
+                  />
+                </label>
+                <p role="status">
+                  Preview:{" "}
+                  {filenameTemplate()
+                    .replaceAll("{ext}", "mkv")
+                    .replaceAll("{segment}", "1")
+                    .replaceAll("{mode}", exportMode()) || "server default"}
+                </p>
+                <div aria-label="Export review">
+                  <p>
+                    Review: {exportMode()} {exportSelection()} · {cutStrategy()}
+                  </p>
+                  <p>
+                    Requested segment bounds:{" "}
+                    {present()
+                      .segments.map(
+                        (segment) =>
+                          `${formatTime(segment.startMs, duration())}–${formatTime(segment.endMs, duration())}`,
+                      )
+                      .join(", ") || "none"}
+                  </p>
+                  <p>
+                    Selected streams: {preflight()?.selection?.join(", ") || "default safe streams"}
+                  </p>
+                  <Show when={cutStrategy() === "stream_copy_preferred"}>
+                    <p>
+                      Stream-copy cuts may begin at an earlier keyframe; no frame-exactness is
+                      claimed.
+                    </p>
+                  </Show>
+                  <Show when={cutStrategy() !== "stream_copy_preferred"}>
+                    <p>
+                      Boundary precision depends on the selected strategy and requires human review.
+                    </p>
+                  </Show>
+                  <For each={preflight()?.findings ?? []}>
+                    {(finding) => (
+                      <p role="status">
+                        {finding.severity}: {finding.message}
                       </p>
                     )}
                   </For>
+                </div>
+                <div class="controls">
+                  <button
+                    disabled={
+                      !selected() ||
+                      !present().segments.length ||
+                      preflightPending() ||
+                      (!dirty() && !preflight()?.allowed)
+                    }
+                    onClick={() => void exportProject()}
+                  >
+                    Start export
+                  </button>
+                  <Show when={exportJob()?.state === "queued" || exportJob()?.state === "running"}>
+                    <button onClick={() => void cancelExport()}>Cancel export</button>
+                  </Show>
+                </div>
+                <Show when={exportJob()?.result}>
+                  <div>
+                    <div aria-label="Export result">
+                      <p>
+                        Output ready:{" "}
+                        {exportJob()!.result!.outputName ??
+                          exportJob()!.result!.outputNames?.join(", ")}
+                      </p>
+                      <p>
+                        Strategy:{" "}
+                        {exportJob()!.appliedStrategy ??
+                          (exportJob()!.result!.appliedStrategies?.length
+                            ? "mixed per segment"
+                            : (exportJob()!.strategy ?? cutStrategy()))}{" "}
+                        · {exportJob()!.verified ? "verified output" : "requires inspection"}
+                      </p>
+                      <Show when={(exportJob()!.result!.appliedStrategies?.length ?? 0) > 1}>
+                        <For each={exportJob()!.result!.appliedStrategies}>
+                          {(strategy) => (
+                            <p>
+                              Segment {strategy.segment}
+                              {strategy.outputName ? ` (${strategy.outputName})` : ""}:{" "}
+                              {strategy.strategy}
+                            </p>
+                          )}
+                        </For>
+                      </Show>
+                      <p>
+                        {exportJob()!.result!.sizeBytes.toLocaleString()} bytes · retained until{" "}
+                        {exportJob()!.result!.retainUntil}
+                      </p>
+                    </div>
+                    <Show
+                      when={
+                        exportJob()!.state === "succeeded" &&
+                        exportJob()!.result!.destinationKind === "download"
+                      }
+                    >
+                      <For
+                        each={
+                          exportJob()!.result!.outputNames ??
+                          (exportJob()!.result!.outputName ? [exportJob()!.result!.outputName] : [])
+                        }
+                      >
+                        {(_, position) => (
+                          <a
+                            href={api.url(
+                              `jobs/${encodeURIComponent(exportJob()!.id)}/outputs/${position()}`,
+                            )}
+                            download
+                          >
+                            Download output {position() + 1}
+                          </a>
+                        )}
+                      </For>
+                    </Show>
+                    <p role="note">Please review the exported media before delivery.</p>
+                    <div aria-label="Export warnings">
+                      <For each={exportJob()!.warnings ?? []}>
+                        {(warning) => <p role="status">Warning: {warning}</p>}
+                      </For>
+                    </div>
+                  </div>
                 </Show>
-                <p>
-                  {exportJob()!.result!.sizeBytes.toLocaleString()} bytes · retained until{" "}
-                  {exportJob()!.result!.retainUntil}
-                </p>
-              </div>
-              <Show
-                when={
-                  exportJob()!.state === "succeeded" &&
-                  exportJob()!.result!.destinationKind === "download"
-                }
-              >
-                <For
-                  each={
-                    exportJob()!.result!.outputNames ??
-                    (exportJob()!.result!.outputName ? [exportJob()!.result!.outputName] : [])
-                  }
-                >
-                  {(_, position) => (
-                    <a
-                      href={api.url(
-                        `jobs/${encodeURIComponent(exportJob()!.id)}/outputs/${position()}`,
-                      )}
-                      download
-                    >
-                      Download output {position() + 1}
-                    </a>
-                  )}
-                </For>
-              </Show>
-              <p role="note">Please review the exported media before delivery.</p>
-              <div aria-label="Export warnings">
-                <For each={exportJob()!.warnings ?? []}>
-                  {(warning) => <p role="status">Warning: {warning}</p>}
-                </For>
-              </div>
-            </div>
-          </Show>
-        </section>
-      </Show>
-      <Show when={selected()}>
-        <section class="detection-panel" aria-labelledby="detection-heading">
-          <h2 id="detection-heading">Auto detection</h2>
-          <p role="status">
-            {detectionStatus() || "Review candidates before they change segments."}
-          </p>
-          <div class="controls">
-            <button
-              disabled={
-                !selected() ||
-                detectionJob()?.state === "queued" ||
-                detectionJob()?.state === "running"
-              }
-              onClick={() => void startDetection("silence")}
-            >
-              Detect silence
-            </button>
-            <button
-              disabled={
-                !selected() ||
-                detectionJob()?.state === "queued" ||
-                detectionJob()?.state === "running"
-              }
-              onClick={() => void startDetection("black")}
-            >
-              Detect black frames
-            </button>
-            <button
-              disabled={
-                !selected() ||
-                detectionJob()?.state === "queued" ||
-                detectionJob()?.state === "running"
-              }
-              onClick={() => void startDetection("scene")}
-            >
-              Detect scene changes
-            </button>
-            <Show when={detectionJob()?.state === "queued" || detectionJob()?.state === "running"}>
-              <button onClick={() => void cancelDetection()}>Cancel detection</button>
+              </section>
             </Show>
-          </div>
-          <Show when={detectionCandidates().length > 0}>
-            <ol aria-label="Detection candidates">
-              <For each={detectionCandidates()}>
-                {(candidate) => (
-                  <li>
-                    {candidate.source} · {formatTime(candidate.startMs, duration())}–
-                    {formatTime(candidate.endMs, duration())} ·{" "}
-                    {Math.round(candidate.confidence * 100)}%{" "}
-                    <button onClick={() => acceptDetection(candidate)}>Accept</button>
-                    <button
-                      onClick={() => {
-                        setDetectionCandidates(
-                          detectionCandidates().filter((item) => item.id !== candidate.id),
-                        );
-                        setDetectionStatus("Candidate rejected.");
-                      }}
-                    >
-                      Reject
-                    </button>
-                  </li>
-                )}
-              </For>
-            </ol>
-          </Show>
-        </section>
-      </Show>
-      </>}
+            <Show when={selected()}>
+              <section class="detection-panel" aria-labelledby="detection-heading">
+                <h2 id="detection-heading">Auto detection</h2>
+                <p role="status">
+                  {detectionStatus() || "Review candidates before they change segments."}
+                </p>
+                <div class="controls">
+                  <button
+                    disabled={
+                      !selected() ||
+                      detectionJob()?.state === "queued" ||
+                      detectionJob()?.state === "running"
+                    }
+                    onClick={() => void startDetection("silence")}
+                  >
+                    Detect silence
+                  </button>
+                  <button
+                    disabled={
+                      !selected() ||
+                      detectionJob()?.state === "queued" ||
+                      detectionJob()?.state === "running"
+                    }
+                    onClick={() => void startDetection("black")}
+                  >
+                    Detect black frames
+                  </button>
+                  <button
+                    disabled={
+                      !selected() ||
+                      detectionJob()?.state === "queued" ||
+                      detectionJob()?.state === "running"
+                    }
+                    onClick={() => void startDetection("scene")}
+                  >
+                    Detect scene changes
+                  </button>
+                  <Show
+                    when={detectionJob()?.state === "queued" || detectionJob()?.state === "running"}
+                  >
+                    <button onClick={() => void cancelDetection()}>Cancel detection</button>
+                  </Show>
+                </div>
+                <Show when={detectionCandidates().length > 0}>
+                  <ol aria-label="Detection candidates">
+                    <For each={detectionCandidates()}>
+                      {(candidate) => (
+                        <li>
+                          {candidate.source} · {formatTime(candidate.startMs, duration())}–
+                          {formatTime(candidate.endMs, duration())} ·{" "}
+                          {Math.round(candidate.confidence * 100)}%{" "}
+                          <button onClick={() => acceptDetection(candidate)}>Accept</button>
+                          <button
+                            onClick={() => {
+                              setDetectionCandidates(
+                                detectionCandidates().filter((item) => item.id !== candidate.id),
+                              );
+                              setDetectionStatus("Candidate rejected.");
+                            }}
+                          >
+                            Reject
+                          </button>
+                        </li>
+                      )}
+                    </For>
+                  </ol>
+                </Show>
+              </section>
+            </Show>
+          </>
+        }
       >
         <section class="settings-view" aria-labelledby="settings-heading">
           <div class="panel-heading">
             <h2 id="settings-heading">Settings</h2>
-            <button type="button" onClick={() => setSettingsOpen(false)}>Back to editor</button>
+            <button type="button" onClick={() => setSettingsOpen(false)}>
+              Back to editor
+            </button>
           </div>
-          <p>Browser-local preferences stay in this browser and do not change server configuration.</p>
+          <p>
+            Browser-local preferences stay in this browser and do not change server configuration.
+          </p>
           <section aria-labelledby="library-settings-heading">
             <h3 id="library-settings-heading">Library</h3>
             <p>
-              Media is indexed by the server. Type an absolute path below; this browser cannot choose a host folder.
-              The service account needs read access. In a container, mount the host directory first and enter its container path.
+              Media is indexed by the server. Type an absolute path below; this browser cannot
+              choose a host folder. The service account needs read access. In a container, mount the
+              host directory first and enter its container path.
             </p>
             <Show when={libraryRoots().length > 0} fallback={<p>No media roots configured.</p>}>
               <div class="library-roots" aria-label="Media roots">
@@ -2028,7 +2093,15 @@ export function App() {
                         <input
                           value={root.alias}
                           aria-label={`Alias for media root ${index() + 1}`}
-                          onInput={(event) => setLibraryRoots(libraryRoots().map((item, i) => i === index() ? { ...item, alias: event.currentTarget.value } : item))}
+                          onInput={(event) =>
+                            setLibraryRoots(
+                              libraryRoots().map((item, i) =>
+                                i === index()
+                                  ? { ...item, alias: event.currentTarget.value }
+                                  : item,
+                              ),
+                            )
+                          }
                         />
                       </label>
                       <label>
@@ -2036,25 +2109,59 @@ export function App() {
                         <input
                           value={root.path}
                           aria-label={`Server path for media root ${index() + 1}`}
-                          onInput={(event) => setLibraryRoots(libraryRoots().map((item, i) => i === index() ? { ...item, path: event.currentTarget.value } : item))}
+                          onInput={(event) =>
+                            setLibraryRoots(
+                              libraryRoots().map((item, i) =>
+                                i === index() ? { ...item, path: event.currentTarget.value } : item,
+                              ),
+                            )
+                          }
                         />
                       </label>
-                      <span role="status">{root.state === "unavailable" ? root.message : root.message ?? "Available"}</span>
+                      <span role="status">
+                        {root.state === "unavailable"
+                          ? root.message
+                          : (root.message ?? "Available")}
+                      </span>
                       <Show when={rootErrors()[index()] as string | undefined}>
-                        {(error) => <p class="field-error" role="alert">{error()}</p>}
+                        {(error) => (
+                          <p class="field-error" role="alert">
+                            {error()}
+                          </p>
+                        )}
                       </Show>
-                      <button type="button" onClick={() => setLibraryRoots(libraryRoots().filter((_, i) => i !== index()))}>Remove</button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setLibraryRoots(libraryRoots().filter((_, i) => i !== index()))
+                        }
+                      >
+                        Remove
+                      </button>
                     </div>
                   )}
                 </For>
               </div>
             </Show>
             <div class="settings-actions">
-              <button type="button" onClick={() => setLibraryRoots([...libraryRoots(), { alias: "", path: "" }])}>Add root</button>
-              <button type="button" onClick={() => void saveLibrarySettings()} disabled={settingsPending()}>
+              <button
+                type="button"
+                onClick={() => setLibraryRoots([...libraryRoots(), { alias: "", path: "" }])}
+              >
+                Add root
+              </button>
+              <button
+                type="button"
+                onClick={() => void saveLibrarySettings()}
+                disabled={settingsPending()}
+              >
                 {settingsPending() ? "Saving…" : "Save library settings"}
               </button>
-              <button type="button" onClick={() => void rescanLibrary()} disabled={rescanPending() || settingsPending()}>
+              <button
+                type="button"
+                onClick={() => void rescanLibrary()}
+                disabled={rescanPending() || settingsPending()}
+              >
                 {rescanPending() ? "Rescanning…" : "Rescan library"}
               </button>
             </div>
@@ -2062,20 +2169,31 @@ export function App() {
           </section>
           <section aria-labelledby="exports-settings-heading">
             <h3 id="exports-settings-heading">Exports</h3>
-            <label>Cut strategy (saved in this browser)
-              <select value={cutStrategy()} onChange={(event) => {
-                const value = event.currentTarget.value as AppSettings["cutStrategy"];
-                setCutStrategy(value); saveSettings({ cutStrategy: value });
-              }}>
+            <label>
+              Cut strategy (saved in this browser)
+              <select
+                value={cutStrategy()}
+                onChange={(event) => {
+                  const value = event.currentTarget.value as AppSettings["cutStrategy"];
+                  setCutStrategy(value);
+                  saveSettings({ cutStrategy: value });
+                }}
+              >
                 <option value="stream_copy_preferred">Stream copy preferred</option>
                 <option value="precise_reencode">Precise re-encode</option>
                 <option value="hybrid_smart_cut">Hybrid smart cut</option>
               </select>
             </label>
-            <label>Filename template (saved in this browser)
-              <input value={filenameTemplate()} onInput={(event) => {
-                const value = event.currentTarget.value; setFilenameTemplate(value); saveSettings({ filenameTemplate: value });
-              }} />
+            <label>
+              Filename template (saved in this browser)
+              <input
+                value={filenameTemplate()}
+                onInput={(event) => {
+                  const value = event.currentTarget.value;
+                  setFilenameTemplate(value);
+                  saveSettings({ filenameTemplate: value });
+                }}
+              />
             </label>
           </section>
           <section aria-labelledby="performance-settings-heading">
@@ -2084,14 +2202,30 @@ export function App() {
           </section>
           <section aria-labelledby="editor-settings-heading">
             <h3 id="editor-settings-heading">Editor</h3>
-            <label><input type="checkbox" checked={muted()} onChange={(event) => {
-              const value = event.currentTarget.checked; setMuted(value); saveSettings({ muted: value });
-            }} /> Mute preview by default (saved in this browser)</label>
-            <button type="button" onClick={() => {
-              setSettings(defaultSettings); setCutStrategy(defaultSettings.cutStrategy);
-              setFilenameTemplate(defaultSettings.filenameTemplate); setMuted(defaultSettings.muted);
-              localStorage.setItem(settingsKey, JSON.stringify(defaultSettings));
-            }}>Reset browser preferences</button>
+            <label>
+              <input
+                type="checkbox"
+                checked={muted()}
+                onChange={(event) => {
+                  const value = event.currentTarget.checked;
+                  setMuted(value);
+                  saveSettings({ muted: value });
+                }}
+              />{" "}
+              Mute preview by default (saved in this browser)
+            </label>
+            <button
+              type="button"
+              onClick={() => {
+                setSettings(defaultSettings);
+                setCutStrategy(defaultSettings.cutStrategy);
+                setFilenameTemplate(defaultSettings.filenameTemplate);
+                setMuted(defaultSettings.muted);
+                localStorage.setItem(settingsKey, JSON.stringify(defaultSettings));
+              }}
+            >
+              Reset browser preferences
+            </button>
           </section>
           <section aria-labelledby="about-settings-heading">
             <h3 id="about-settings-heading">About / Diagnostics</h3>
