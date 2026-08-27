@@ -111,6 +111,8 @@ export function App() {
   const [waveform, setWaveform] = createSignal<number[]>([]);
   const [playheadMs, setPlayheadMs] = createSignal(0);
   const [settings, setSettings] = createSignal(() => storedSettings(localStorage));
+  const [settingsOpen, setSettingsOpen] = createSignal(false);
+  const [serverSettingsStatus, setServerSettingsStatus] = createSignal("");
   const [muted, setMuted] = createSignal(settings().muted);
   const [diagnostics, setDiagnostics] = createSignal<PreviewDiagnostics>();
   const [projectId, setProjectId] = createSignal(newProjectId());
@@ -183,6 +185,22 @@ export function App() {
     const next = { ...settings(), ...changes };
     setSettings(next);
     localStorage.setItem(settingsKey, JSON.stringify(next));
+  };
+  const openSettings = async () => {
+    setSettingsOpen(true);
+    setServerSettingsStatus("Checking administrator settings access…");
+    try {
+      const response = await api.request("settings");
+      setServerSettingsStatus(
+        response.status === 403
+          ? "Administrator settings are unavailable: your account is not authorized."
+          : response.ok
+            ? "Administrator settings are available to authorized accounts."
+            : "Administrator settings are unavailable on this server.",
+      );
+    } catch {
+      setServerSettingsStatus("Administrator settings are unavailable on this server.");
+    }
   };
   const updateTimeline = (changes: Partial<ReturnType<typeof present>>) => {
     const next = editTimeline(timeline(), changes);
@@ -1097,7 +1115,21 @@ export function App() {
         <p role="status" aria-live="polite">
           {status()}
         </p>
+        <button
+          class="settings-button"
+          type="button"
+          aria-label="Settings"
+          aria-pressed={settingsOpen() ? "true" : "false"}
+          title="Settings"
+          onClick={() => void openSettings()}
+        >
+          <svg aria-hidden="true" viewBox="0 0 24 24" width="20" height="20">
+            <path d="m9.7 2-.4 2a8 8 0 0 0-1.8 1l-1.8-1-1.7 1.7 1 1.8a8 8 0 0 0-1 1.8l-2 .4v2.4l2 .4a8 8 0 0 0 1 1.8l-1 1.8 1.7 1.7 1.8-1a8 8 0 0 0 1.8 1l.4 2h2.4l.4-2a8 8 0 0 0 1.8-1l1.8 1 1.7-1.7-1-1.8a8 8 0 0 0 1-1.8l2-.4V9.7l-2-.4a8 8 0 0 0-1-1.8l1-1.8-1.7-1.7-1.8 1a8 8 0 0 0-1.8-1l-.4-2zM11 8a4 4 0 1 1 0 8 4 4 0 0 1 0-8" />
+          </svg>
+          <span>Settings</span>
+        </button>
       </header>
+      <Show when={settingsOpen()} fallback={<>
       <section class="media-panel" aria-labelledby="media-heading">
         <div class="panel-heading">
           <h2 id="media-heading">File explorer</h2>
@@ -1845,33 +1877,6 @@ export function App() {
           </Show>
         </section>
       </Show>
-      <section class="settings-panel" aria-labelledby="settings-heading">
-        <h2 id="settings-heading">Settings</h2>
-        <p>Saved in this browser.</p>
-        <label>
-          <input
-            type="checkbox"
-            checked={muted()}
-            onChange={(event) => {
-              const value = event.currentTarget.checked;
-              setMuted(value);
-              saveSettings({ muted: value });
-            }}
-          />
-          Mute preview by default
-        </label>
-        <button
-          onClick={() => {
-            setSettings(defaultSettings);
-            setCutStrategy(defaultSettings.cutStrategy);
-            setFilenameTemplate(defaultSettings.filenameTemplate);
-            setMuted(defaultSettings.muted);
-            localStorage.setItem(settingsKey, JSON.stringify(defaultSettings));
-          }}
-        >
-          Reset settings
-        </button>
-      </section>
       <Show when={selected()}>
         <section class="detection-panel" aria-labelledby="detection-heading">
           <h2 id="detection-heading">Auto detection</h2>
@@ -1937,6 +1942,58 @@ export function App() {
               </For>
             </ol>
           </Show>
+        </section>
+      </Show>
+      </>}
+      >
+        <section class="settings-view" aria-labelledby="settings-heading">
+          <div class="panel-heading">
+            <h2 id="settings-heading">Settings</h2>
+            <button type="button" onClick={() => setSettingsOpen(false)}>Back to editor</button>
+          </div>
+          <p>Browser-local preferences stay in this browser and do not change server configuration.</p>
+          <section aria-labelledby="library-settings-heading">
+            <h3 id="library-settings-heading">Library</h3>
+            <p>Media is indexed by the server. Choosing a host folder is unavailable in the browser.</p>
+          </section>
+          <section aria-labelledby="exports-settings-heading">
+            <h3 id="exports-settings-heading">Exports</h3>
+            <label>Cut strategy (saved in this browser)
+              <select value={cutStrategy()} onChange={(event) => {
+                const value = event.currentTarget.value as AppSettings["cutStrategy"];
+                setCutStrategy(value); saveSettings({ cutStrategy: value });
+              }}>
+                <option value="stream_copy_preferred">Stream copy preferred</option>
+                <option value="precise_reencode">Precise re-encode</option>
+                <option value="hybrid_smart_cut">Hybrid smart cut</option>
+              </select>
+            </label>
+            <label>Filename template (saved in this browser)
+              <input value={filenameTemplate()} onInput={(event) => {
+                const value = event.currentTarget.value; setFilenameTemplate(value); saveSettings({ filenameTemplate: value });
+              }} />
+            </label>
+          </section>
+          <section aria-labelledby="performance-settings-heading">
+            <h3 id="performance-settings-heading">Performance</h3>
+            <p>Performance controls are managed by the server administrator.</p>
+          </section>
+          <section aria-labelledby="editor-settings-heading">
+            <h3 id="editor-settings-heading">Editor</h3>
+            <label><input type="checkbox" checked={muted()} onChange={(event) => {
+              const value = event.currentTarget.checked; setMuted(value); saveSettings({ muted: value });
+            }} /> Mute preview by default (saved in this browser)</label>
+            <button type="button" onClick={() => {
+              setSettings(defaultSettings); setCutStrategy(defaultSettings.cutStrategy);
+              setFilenameTemplate(defaultSettings.filenameTemplate); setMuted(defaultSettings.muted);
+              localStorage.setItem(settingsKey, JSON.stringify(defaultSettings));
+            }}>Reset browser preferences</button>
+          </section>
+          <section aria-labelledby="about-settings-heading">
+            <h3 id="about-settings-heading">About / Diagnostics</h3>
+            <p>VideoCutlist editor diagnostics are available while editing.</p>
+            <p role="status">{serverSettingsStatus()}</p>
+          </section>
         </section>
       </Show>
     </main>
