@@ -1,6 +1,6 @@
 FROM node:26-bookworm-slim AS client
 WORKDIR /src/client
-RUN corepack enable
+RUN npm install --global pnpm@10.34.5
 COPY client/package.json client/pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
 COPY client/ ./
