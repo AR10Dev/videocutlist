@@ -11,6 +11,16 @@ import (
 	"videocutlist/infrastructure/media/probe"
 )
 
+func TestFolderIDIsOpaqueAndStable(t *testing.T) {
+	id := FolderID("library", "clips/2024")
+	if id != FolderID("library", "clips/2024") || len(id) != 45 || id[:2] != "f_" {
+		t.Fatalf("unexpected folder id: %q", id)
+	}
+	if id == "clips/2024" || id == FolderID("library", "other") {
+		t.Fatal("folder IDs must not expose paths or collide")
+	}
+}
+
 type fakeProbe struct{}
 
 func (fakeProbe) ProbeFile(context.Context, *os.File) (probe.Metadata, error) {

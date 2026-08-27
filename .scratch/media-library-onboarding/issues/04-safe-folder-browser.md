@@ -5,12 +5,12 @@
 **Blocked by:** 01, 02
 
 **Category:** enhancement
-**Status:** needs-triage
+**Status:** complete
 
-- [ ] Folder nodes use stable opaque IDs and display labels approved by the security review.
-- [ ] Selecting a video continues to use its existing opaque media ID.
-- [ ] The browser never receives an original-media filesystem path.
-- [ ] The tree handles an empty folder and pagination without pretending all media is loaded.
+- [x] Folder nodes use stable opaque IDs and display labels approved by the security review.
+- [x] Selecting a video continues to use its existing opaque media ID.
+- [x] The browser never receives an original-media filesystem path.
+- [x] The tree handles an empty folder and pagination without pretending all media is loaded.
 
 ## Comments
 

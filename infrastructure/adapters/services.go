@@ -38,6 +38,23 @@ func (m MediaCatalog) List(ctx context.Context, cursor string, limit int) (appli
 	}
 	return result, nil
 }
+func (m MediaCatalog) Browse(ctx context.Context, folderID, cursor string, limit int) (application.FolderPage, error) {
+	folders, items, next, err := m.Store.Browse(ctx, folderID, cursor, limit)
+	if err != nil {
+		return application.FolderPage{}, err
+	}
+	page := application.FolderPage{Folders: make([]application.FolderNode, 0, len(folders)), Items: make([]application.Media, 0, len(items))}
+	for _, folder := range folders {
+		page.Folders = append(page.Folders, application.FolderNode{ID: folder.ID, Label: folder.Label})
+	}
+	for _, item := range items {
+		page.Items = append(page.Items, media(item))
+	}
+	if next != "" {
+		page.NextCursor = &next
+	}
+	return page, nil
+}
 func (m MediaCatalog) Get(ctx context.Context, id string) (application.Media, error) {
 	record, err := m.Store.Get(ctx, id)
 	if err != nil {

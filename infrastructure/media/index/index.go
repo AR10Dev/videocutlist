@@ -46,6 +46,11 @@ type Root struct {
 
 // Media intentionally omits root and relative path so callers cannot return
 // original filesystem paths to clients.
+type Folder struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+}
+
 type Media struct {
 	ID        string         `json:"id"`
 	Name      string         `json:"name"`
@@ -105,6 +110,12 @@ func NewScannerWithLimits(roots []Root, prober probe.Runner, limits ScanLimits) 
 		s.roots[root.Alias] = root
 	}
 	return s, nil
+}
+
+func FolderID(rootAlias, relativePath string) string {
+	relativePath = filepath.ToSlash(filepath.Clean(relativePath))
+	sum := sha256.Sum256([]byte(rootAlias + "\x00" + relativePath))
+	return "f_" + base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
 func MediaID(rootAlias, relativePath string) string {

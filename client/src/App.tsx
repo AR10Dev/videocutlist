@@ -40,6 +40,7 @@ import {
 import { defaultSettings, settingsKey, storedSettings, type AppSettings } from "./settings";
 
 type MediaPage = { items: Media[]; nextCursor?: string | null };
+type FolderPage = { folders: { id: string; label: string }[]; items: Media[]; nextCursor?: string | null };
 type Destination = {
   id: string;
   label: string;
@@ -89,6 +90,8 @@ export function App() {
   const [media, setMedia] = createSignal<Media[]>([]);
   const [selected, setSelected] = createSignal<Media>();
   const [nextCursor, setNextCursor] = createSignal<string>();
+  const [folders, setFolders] = createSignal<{ id: string; label: string }[]>([]);
+  const [activeFolder, setActiveFolder] = createSignal<string>();
   const [loadingMore, setLoadingMore] = createSignal(false);
   const [refreshing, setRefreshing] = createSignal(false);
   const [status, setStatus] = createSignal("Loading media…");
@@ -177,6 +180,19 @@ export function App() {
     setTimeline(next);
     setPlayheadMs(next.present.playheadMs);
     markDirty();
+  };
+  const loadFolder = async (folderId?: string, cursor?: string) => {
+    const params = new URLSearchParams();
+    if (folderId) params.set("folderId", folderId);
+    if (cursor) params.set("cursor", cursor);
+    const query = params.toString() ? `?${params}` : "";
+    const response = await api.request(`media/tree${query}`);
+    if (!response.ok) return;
+    const page = (await response.json()) as FolderPage;
+    setFolders(page.folders);
+    setMedia(cursor ? [...media(), ...page.items] : page.items);
+    setNextCursor(page.nextCursor ?? undefined);
+    setActiveFolder(folderId);
   };
   const loadMedia = async (cursor?: string, refreshed = false) => {
     mediaRequest?.abort();
@@ -332,6 +348,7 @@ export function App() {
   };
   onSettled(() => {
     void loadMedia();
+    void loadFolder();
   });
   createEffect(
     () => selected(),
@@ -1068,7 +1085,16 @@ export function App() {
             ⌄ Media library
           </button>
           <div class="folder-contents">
-            <span class="folder-label">All videos</span>
+            <Show when={folders().length}>
+              <ul class="folder-list" aria-label="Virtual folders">
+                <For each={folders()}>
+                  {(folder) => (
+                    <li><button class="folder" onClick={() => void loadFolder(folder.id)}>{folder.label}</button></li>
+                  )}
+                </For>
+              </ul>
+            </Show>
+            <span class="folder-label">{activeFolder() ? "Videos in folder" : "All videos"}</span>
             <ul class="media-list" aria-label="Media list">
               <For each={media()}>
                 {(item) => (
@@ -1089,7 +1115,7 @@ export function App() {
           </div>
         </nav>
         <Show when={nextCursor()}>
-          <button disabled={loadingMore()} onClick={() => void loadMedia(nextCursor())}>
+          <button disabled={loadingMore()} onClick={() => void (activeFolder() ? loadFolder(activeFolder(), nextCursor()) : loadMedia(nextCursor()))}>
             {loadingMore() ? "Loading more…" : "Load more"}
           </button>
         </Show>

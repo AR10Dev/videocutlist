@@ -26,6 +26,15 @@ type MediaPage struct {
 	Items      []Media `json:"items"`
 	NextCursor *string `json:"nextCursor"`
 }
+type FolderNode struct {
+	ID    string `json:"id"`
+	Label string `json:"label"`
+}
+type FolderPage struct {
+	Folders    []FolderNode `json:"folders"`
+	Items      []Media      `json:"items"`
+	NextCursor *string      `json:"nextCursor"`
+}
 
 type LibraryState string
 

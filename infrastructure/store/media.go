@@ -7,6 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 
 	"videocutlist/infrastructure/media/index"
@@ -60,6 +63,73 @@ func (s *MediaStore) Get(ctx context.Context, id string) (index.Record, error) {
 		return index.Record{}, ErrMediaNotFound
 	}
 	return record, err
+}
+
+// Browse returns direct children of an opaque virtual folder. Paths stay inside
+// this package and are never serialized.
+func (s *MediaStore) Browse(ctx context.Context, folderID, cursor string, limit int) (folders []index.Folder, items []index.Media, next string, err error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id, root_alias, relative_path, size_bytes, mtime_ns, metadata_json FROM media WHERE available = 1`)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	defer rows.Close()
+	type candidate struct {
+		root, path string
+		media      index.Media
+	}
+	var found []candidate
+	for rows.Next() {
+		var r index.Record
+		r, err = scanMedia(rows)
+		if err != nil {
+			return nil, nil, "", err
+		}
+		found = append(found, candidate{r.RootAlias, r.RelativePath, r.Media})
+	}
+	if err = rows.Err(); err != nil {
+		return nil, nil, "", err
+	}
+	// Resolve the opaque folder ID by comparing hashes; no client-supplied path is accepted.
+	for _, c := range found {
+		parts := strings.Split(filepath.ToSlash(c.path), "/")
+		for depth := 0; depth < len(parts); depth++ {
+			parent := strings.Join(parts[:depth], "/")
+			if index.FolderID(c.root, parent) != folderID {
+				continue
+			}
+			if depth == len(parts)-1 {
+				if c.media.ID > cursor {
+					items = append(items, c.media)
+				}
+				continue
+			}
+			label := parts[depth]
+			id := index.FolderID(c.root, strings.Join(parts[:depth+1], "/"))
+			folders = appendUniqueFolder(folders, index.Folder{ID: id, Label: label})
+		}
+	}
+	sort.Slice(folders, func(i, j int) bool { return folders[i].ID < folders[j].ID })
+	sort.Slice(items, func(i, j int) bool { return items[i].ID < items[j].ID })
+	if len(items) > limit {
+		next = items[limit-1].ID
+		items = items[:limit]
+	}
+	return folders, items, next, nil
+}
+
+func appendUniqueFolder(folders []index.Folder, folder index.Folder) []index.Folder {
+	for _, f := range folders {
+		if f.ID == folder.ID {
+			return folders
+		}
+	}
+	return append(folders, folder)
 }
 
 func (s *MediaStore) List(ctx context.Context, cursor string, limit int) (index.Page, error) {

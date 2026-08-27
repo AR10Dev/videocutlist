@@ -28,6 +28,10 @@ const (
 
 type Media = application.Media
 type MediaPage = application.MediaPage
+type FolderPage = application.FolderPage
+type MediaBrowser interface {
+	Browse(context.Context, string, string, int) (application.FolderPage, error)
+}
 type LibraryStatus = application.LibraryStatus
 type LibraryState = application.LibraryState
 
@@ -211,6 +215,9 @@ func (s *Server) dispatch(writer http.ResponseWriter, request *http.Request, id 
 	case routeListMedia:
 		s.listMedia(writer, request, id)
 		return "/api/v1/media", principal.Subject
+	case routeBrowseMedia:
+		s.browseMedia(writer, request, id)
+		return "/api/v1/media/tree", principal.Subject
 	case routeMediaStatus:
 		httpx.WriteJSON(writer, http.StatusOK, s.config.Media.Status())
 		return "/api/v1/media/status", principal.Subject
@@ -353,6 +360,39 @@ func (s *Server) allowed(writer http.ResponseWriter, principal domain.Principal,
 	}
 	Error(writer, http.StatusForbidden, "forbidden", "Permission denied.", id)
 	return false
+}
+
+func (s *Server) browseMedia(writer http.ResponseWriter, request *http.Request, id string) {
+	if !queryKeys(request, "folderId", "cursor", "limit") {
+		httpx.Error(writer, 422, "invalid_query", "Query parameters are invalid.", id)
+		return
+	}
+	q := request.URL.Query()
+	folderID, cursor := q.Get("folderId"), q.Get("cursor")
+	if folderID != "" && !validFolderID(folderID) || cursor != "" && !validMediaID(cursor) {
+		httpx.Error(writer, 422, "invalid_query", "Query parameters are invalid.", id)
+		return
+	}
+	limit := 50
+	var err error
+	if q.Get("limit") != "" {
+		limit, err = strconv.Atoi(q.Get("limit"))
+		if err != nil || limit < 1 || limit > 100 {
+			httpx.Error(writer, 422, "invalid_query", "Query parameters are invalid.", id)
+			return
+		}
+	}
+	browser, ok := s.config.Media.(MediaBrowser)
+	if !ok {
+		internalError(writer, id)
+		return
+	}
+	page, err := browser.Browse(request.Context(), folderID, cursor, limit)
+	if err != nil {
+		internalError(writer, id)
+		return
+	}
+	httpx.WriteJSON(writer, 200, page)
 }
 
 func (s *Server) listMedia(writer http.ResponseWriter, request *http.Request, id string) {

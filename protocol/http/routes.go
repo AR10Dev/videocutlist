@@ -9,6 +9,7 @@ import (
 
 var (
 	mediaIDPattern   = regexp.MustCompile(`^m_[A-Za-z0-9_-]{43}$`)
+	folderIDPattern  = regexp.MustCompile(`^f_[A-Za-z0-9_-]{43}$`)
 	projectIDPattern = regexp.MustCompile(`^p_[A-Za-z0-9_-]{12,64}$`)
 	jobIDPattern     = regexp.MustCompile(`^j_[A-Za-z0-9_-]{12,64}$`)
 )
@@ -18,6 +19,7 @@ type routeKind uint8
 const (
 	routeUnknown routeKind = iota
 	routeListMedia
+	routeBrowseMedia
 	routeMediaStatus
 	routeRefreshMedia
 	routeStartMediaImport
@@ -47,6 +49,7 @@ type route struct {
 }
 
 func validMediaID(value string) bool   { return mediaIDPattern.MatchString(value) }
+func validFolderID(value string) bool  { return folderIDPattern.MatchString(value) }
 func validProjectID(value string) bool { return projectIDPattern.MatchString(value) }
 func validJobID(value string) bool     { return jobIDPattern.MatchString(value) }
 
@@ -65,6 +68,8 @@ func parseRoute(method, path string) route {
 	switch {
 	case len(parts) == 1 && parts[0] == "media" && method == http.MethodGet:
 		return route{kind: routeListMedia}
+	case len(parts) == 2 && parts[0] == "media" && parts[1] == "tree" && method == http.MethodGet:
+		return route{kind: routeBrowseMedia}
 	case len(parts) == 2 && parts[0] == "media" && parts[1] == "status" && method == http.MethodGet:
 		return route{kind: routeMediaStatus}
 	case len(parts) == 1 && parts[0] == "destinations" && method == http.MethodGet:
