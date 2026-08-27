@@ -40,6 +40,9 @@ const (
 	routeCancelJob
 	routeAutomation
 	routeListDestinations
+	routeGetSettings
+	routePutSettings
+	routeRefreshSettings
 	routeDownloadOutput
 )
 
@@ -74,6 +77,12 @@ func parseRoute(method, path string) route {
 		return route{kind: routeMediaStatus}
 	case len(parts) == 1 && parts[0] == "destinations" && method == http.MethodGet:
 		return route{kind: routeListDestinations}
+	case len(parts) == 1 && parts[0] == "settings" && method == http.MethodGet:
+		return route{kind: routeGetSettings}
+	case len(parts) == 1 && parts[0] == "settings" && method == http.MethodPut:
+		return route{kind: routePutSettings}
+	case len(parts) == 3 && parts[0] == "settings" && parts[1] == "media" && parts[2] == "refresh" && method == http.MethodPost:
+		return route{kind: routeRefreshSettings}
 	case len(parts) == 2 && parts[0] == "media" && parts[1] == "refresh" && method == http.MethodPost:
 		return route{kind: routeRefreshMedia}
 	case len(parts) == 2 && parts[0] == "media" && parts[1] == "import" && method == http.MethodPost:

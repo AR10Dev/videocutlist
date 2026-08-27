@@ -7,7 +7,9 @@ servers:
     variables:
       serverBaseUrl:
         default: http://localhost:8787
-        description: Reachable VideoCutlist server base URL; transport provider independent.
+        description: >-
+          Reachable VideoCutlist server base URL; transport provider
+          independent.
 security:
   - bearerAuth: []
   - {}
@@ -311,13 +313,58 @@ paths:
       operationId: downloadJobOutput
       responses:
         "200":
-          description: MKV attachment; only persisted download outputs are eligible
+          description: >-
+            MKV attachment; only persisted download outputs are eligible
           content:
             video/x-matroska:
               schema:
                 type: string
                 format: binary
         "404":
+          $ref: "#/components/responses/Error"
+  /settings:
+    get:
+      summary: Read administrator runtime settings and safe root diagnostics
+      operationId: getSettings
+      responses:
+        "200":
+          description: >-
+            Effective settings (including raw paths) for an authorized
+            administrator
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SettingsResponse"
+        "403":
+          $ref: "#/components/responses/Error"
+    put:
+      summary: Replace administrator runtime settings
+      operationId: updateSettings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SettingsUpdate"
+      responses:
+        "200":
+          description: Updated settings
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /settings/media/refresh:
+    post:
+      summary: Refresh the media library as an administrator
+      operationId: refreshSettingsMedia
+      responses:
+        "204":
+          description: Refresh completed
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
           $ref: "#/components/responses/Error"
 components:
   securitySchemes:
@@ -355,6 +402,48 @@ components:
           schema:
             $ref: "#/components/schemas/Error"
   schemas:
+    SettingsUpdate:
+      type: object
+      required: [revision, settings]
+      properties:
+        revision:
+          type: integer
+          minimum: 1
+        settings:
+          type: object
+          additionalProperties: true
+    SettingsResponse:
+      type: object
+      required:
+        - settings
+        - revision
+        - schemaVersion
+        - updatedAt
+        - pathsConstrained
+        - roots
+      properties:
+        settings:
+          type: object
+          additionalProperties: true
+        revision:
+          type: integer
+        schemaVersion:
+          type: integer
+        updatedAt:
+          type: string
+          format: date-time
+        pathsConstrained:
+          type: boolean
+        roots:
+          type: object
+          additionalProperties:
+            type: object
+            properties:
+              state:
+                type: string
+                enum: [ready, unavailable]
+              message:
+                type: string
     Error:
       type: object
       required:
@@ -529,7 +618,8 @@ components:
         destinationId:
           type: string
           maxLength: 64
-          description: Opaque administrator destination ID; never a filesystem path.
+          description: >-
+            Opaque administrator destination ID; never a filesystem path.
         filenameTemplate:
           type: string
           maxLength: 160
@@ -628,10 +718,12 @@ components:
           properties:
             outputName:
               type: string
-              description: Published merged-export filename, never a filesystem path.
+              description: >-
+                Published merged-export filename, never a filesystem path.
             outputNames:
               type: array
-              description: Published separate-export filenames, never filesystem paths.
+              description: >-
+                Published separate-export filenames, never filesystem paths.
               items:
                 type: string
             sizeBytes:
@@ -678,8 +770,8 @@ components:
           type: string
           description:
             Strategy used by every selected segment; omitted when segments
-            use different strategies. See result.appliedStrategies for per-segment
-            values.
+            use different strategies. See result.appliedStrategies for
+            per-segment values.
         warnings:
           type: array
           items:
@@ -707,7 +799,8 @@ components:
           description: False when the output requires human inspection.
         errorCode:
           type: string
-          description: Stable export failure code; present only when state is failed.
+          description: >-
+            Stable export failure code; present only when state is failed.
         createdAt:
           type: string
           format: date-time

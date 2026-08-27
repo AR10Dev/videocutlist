@@ -11,6 +11,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -19,6 +20,7 @@ import (
 	"videocutlist/application"
 	"videocutlist/domain"
 	"videocutlist/infrastructure/interchange"
+	"videocutlist/infrastructure/store"
 )
 
 const (
@@ -117,26 +119,28 @@ func (f AuthorizerFunc) Allow(principal domain.Principal, action, resource strin
 }
 
 type Config struct {
-	Authenticator Authenticator
-	Media         MediaService
-	MediaImport   application.MediaImportService
-	Preview       PreviewService
-	Assets        AssetService
-	Projects      ProjectService
-	Exports       ExportService
-	Preflight     ExportPreflightService
-	Jobs          JobService
-	Detection     DetectionService
-	Download      application.ExportDownloadService
-	Destinations  []DestinationMetadata
-	Authorize     Authorizer
-	Ready         func(context.Context) error
-	Logger        *log.Logger
-	Metrics       *Metrics
-	BeforeMS      int64
-	AfterMS       int64
-	MaxPreviewMS  int64
-	GridMS        int64
+	Authenticator     Authenticator
+	Media             MediaService
+	MediaImport       application.MediaImportService
+	Preview           PreviewService
+	Assets            AssetService
+	Projects          ProjectService
+	Exports           ExportService
+	Preflight         ExportPreflightService
+	Jobs              JobService
+	Detection         DetectionService
+	Download          application.ExportDownloadService
+	Settings          *store.RuntimeSettingsStore
+	SettingsAllowlist []string
+	Destinations      []DestinationMetadata
+	Authorize         Authorizer
+	Ready             func(context.Context) error
+	Logger            *log.Logger
+	Metrics           *Metrics
+	BeforeMS          int64
+	AfterMS           int64
+	MaxPreviewMS      int64
+	GridMS            int64
 	// ListenerAddress gates the local-only automation command surface.
 	ListenerAddress       string
 	RequireAutomationAuth bool
@@ -212,6 +216,24 @@ func (s *Server) dispatch(writer http.ResponseWriter, request *http.Request, id 
 	case routeListDestinations:
 		httpx.WriteJSON(writer, http.StatusOK, map[string]any{"destinations": s.config.Destinations})
 		return "/api/v1/destinations", principal.Subject
+	case routeGetSettings:
+		if !s.allowed(writer, principal, domain.SettingsManageCapability, "*", id) {
+			return "/api/v1/settings", principal.Subject
+		}
+		s.getSettings(writer, request, id)
+		return "/api/v1/settings", principal.Subject
+	case routePutSettings:
+		if !s.allowed(writer, principal, domain.SettingsManageCapability, "*", id) {
+			return "/api/v1/settings", principal.Subject
+		}
+		s.putSettings(writer, request, id)
+		return "/api/v1/settings", principal.Subject
+	case routeRefreshSettings:
+		if !s.allowed(writer, principal, domain.SettingsManageCapability, "*", id) {
+			return "/api/v1/settings/media/refresh", principal.Subject
+		}
+		s.refreshSettings(writer, request, principal, id)
+		return "/api/v1/settings/media/refresh", principal.Subject
 	case routeListMedia:
 		s.listMedia(writer, request, id)
 		return "/api/v1/media", principal.Subject
@@ -304,6 +326,73 @@ func (s *Server) dispatch(writer http.ResponseWriter, request *http.Request, id 
 	}
 	httpx.Error(writer, http.StatusNotFound, "not_found", "Resource not found.", id)
 	return routeFor(request.URL.Path), principal.Subject
+}
+
+type settingsUpdateRequest struct {
+	Revision int64                 `json:"revision"`
+	Settings store.RuntimeSettings `json:"settings"`
+}
+
+func (s *Server) getSettings(w http.ResponseWriter, r *http.Request, id string) {
+	if s.config.Settings == nil {
+		httpx.Error(w, http.StatusNotFound, "settings_unavailable", "Settings are not available.", id)
+		return
+	}
+	record, err := s.config.Settings.Get(r.Context())
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "settings_unavailable", "Settings are temporarily unavailable.", id)
+		return
+	}
+	roots := make(map[string]any, len(record.Settings.MediaRoots))
+	for alias, path := range record.Settings.MediaRoots {
+		state, message := "ready", "Media root is available to the server."
+		info, statErr := os.Stat(path)
+		if statErr != nil || !info.IsDir() {
+			state, message = "unavailable", "Media root is not available to the server. Check the deployment mount or directory permissions."
+		}
+		roots[alias] = map[string]string{"state": state, "message": message}
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{
+		"settings": record.Settings, "revision": record.Revision, "schemaVersion": record.SchemaVersion,
+		"updatedAt": record.UpdatedAt, "pathsConstrained": len(s.config.SettingsAllowlist) > 0, "roots": roots,
+	})
+}
+
+func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, id string) {
+	if s.config.Settings == nil {
+		httpx.Error(w, http.StatusNotFound, "settings_unavailable", "Settings are not available.", id)
+		return
+	}
+	var input settingsUpdateRequest
+	decoder := json.NewDecoder(io.LimitReader(r.Body, 1<<20))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&input); err != nil || input.Revision < 1 {
+		httpx.Error(w, http.StatusUnprocessableEntity, "invalid_settings", "Settings must be a complete valid document.", id)
+		return
+	}
+	var extra any
+	if decoder.Decode(&extra) != io.EOF {
+		httpx.Error(w, http.StatusUnprocessableEntity, "invalid_settings", "Settings must be a complete valid document.", id)
+		return
+	}
+	record, err := s.config.Settings.Update(r.Context(), input.Revision, input.Settings)
+	if errors.Is(err, store.ErrRuntimeSettingsRevisionConflict) {
+		httpx.Error(w, http.StatusConflict, "settings_revision_conflict", "Settings changed; reload before updating.", id)
+		return
+	}
+	if err != nil {
+		httpx.Error(w, http.StatusUnprocessableEntity, "invalid_settings", "Settings must be a complete valid document.", id)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"settings": record.Settings, "revision": record.Revision, "schemaVersion": record.SchemaVersion, "updatedAt": record.UpdatedAt})
+}
+
+func (s *Server) refreshSettings(w http.ResponseWriter, r *http.Request, _ domain.Principal, id string) {
+	if err := s.config.Media.RefreshMedia(r.Context()); err != nil {
+		httpx.Error(w, http.StatusConflict, "refresh_unavailable", "The media library could not be refreshed. Check the deployment mount or directory permissions.", id)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) downloadOutput(w http.ResponseWriter, r *http.Request, p domain.Principal, encoded, id string) {
