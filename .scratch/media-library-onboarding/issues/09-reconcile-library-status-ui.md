@@ -5,11 +5,11 @@
 **Blocked by:** 03, 06
 
 **Category:** bug
-**Status:** ready-for-agent
+**Status:** done
 
-- [ ] Each status has one visible, actionable message.
-- [ ] The status response is fetched and refreshed without duplicate requests or stale messages.
-- [ ] Browser tests cover every state and the pre-media workflow.
+- [x] Each status has one visible, actionable message.
+- [x] The status response is fetched and refreshed without duplicate requests or stale messages.
+- [x] Browser tests cover every state and the pre-media workflow.
 
 ## Comments
 
