@@ -24,6 +24,12 @@ LosslessCut’s mature product model is a segment-first, local FFmpeg workflow: 
 
 9. **P2 — Advanced expression tooling is optional power-user functionality.** JavaScript expressions can select/edit segments, filter tracks, and generate output filename values. It is useful for batch cut-list operations but is not necessary for the first user-visible release and increases safety/testing scope. [Docs: JavaScript expressions](https://github.com/mifi/lossless-cut/blob/master/docs/expressions.md)
 
+## Current codebase status
+
+- **Implemented:** segment-first projects; separate, merged, and gap exports; explicit ordering; opt-in precise/hybrid strategies; thumbnails, waveform, frame navigation, shortcuts, undo/redo; CSV/chapter interchange; authenticated localhost automation.
+- **Partial:** keyframe caveats lack timeline keyframe marks and actual-boundary reporting; stream handling and output verification need broader tests; export is MKV-only.
+- **Unimplemented and unapproved:** persistent standalone markers, autosave, broader interchange/CLI, expressions, scene-change detection, and other optional automation. Issue 05 owns the scope decisions.
+
 ## Priority recommendations
 
 - **Implement first (P0):** segment/marker model; project autosave/load; separate vs merged export; visible order; keyframe visualization; truthful boundary/status reporting.
@@ -43,35 +49,3 @@ LosslessCut’s mature product model is a segment-first, local FFmpeg workflow: 
 ## Gaps
 
 The repository docs do not provide a controlled benchmark of export speed, exact codec/container compatibility coverage, or a complete guarantee for every stream type. Validate the target app with representative H.264/H.265, variable-frame-rate, subtitle, multi-audio, and low-keyframe fixtures; inspect outputs rather than relying only on FFmpeg exit success.
-
-## Acceptance report
-
-```acceptance-report
-{
-  "criteriaSatisfied": [
-    {
-      "id": "criterion-1",
-      "status": "satisfied",
-      "evidence": "Concrete, prioritized LosslessCut findings include repository file paths, official URLs, and severity labels for keyframe, Smart Cut, stream, remux, and API risks."
-    }
-  ],
-  "changedFiles": [
-    "/workspace/Documents/videocutlist/research.md"
-  ],
-  "testsAddedOrUpdated": [],
-  "commandsRun": [],
-  "validationOutput": [
-    "Research was restricted to official mifi/lossless-cut GitHub README, docs, and source URLs."
-  ],
-  "residualRisks": [
-    "No controlled performance or exhaustive codec/stream compatibility benchmark was found in first-party material.",
-    "Smart Cut remains experimental and keyframe-based lossless cuts may not be frame-exact."
-  ],
-  "noStagedFiles": true,
-  "diffSummary": "Added the requested official-source research brief; no application files changed.",
-  "reviewFindings": [
-    "no blockers: research.md contains cited findings, implementation paths, severity caveats, and priority recommendations"
-  ],
-  "manualNotes": "Only official repository README, docs, and source were retained as evidence."
-}
-```

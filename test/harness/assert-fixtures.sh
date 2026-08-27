@@ -7,10 +7,12 @@ tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 "$root/test/harness/generate-fixtures.sh" "$tmp"
 
-for fixture in avc-aac.mp4 avc-aac.mkv avc-aac.mov avc-video-only-long-gop.mp4 portrait-avc-aac.mp4 unusual-dimensions-avc-aac.mp4 multi-audio-avc-aac.mkv vfr-avc-video-only.mp4 very-short-avc-aac.mp4 audio-only.wav; do
+for fixture in avc-aac.mp4 avc-aac.mkv avc-aac.mov avc-video-only-long-gop.mp4 portrait-avc-aac.mp4 unusual-dimensions-avc-aac.mp4 multi-audio-avc-aac.mkv subtitle-avc-aac.mkv attachment-avc-aac.mkv vfr-avc-video-only.mp4 very-short-avc-aac.mp4 audio-only.wav; do
   ffprobe -v error -show_entries format=duration -of default=nk=1:nw=1 "$tmp/$fixture" >/dev/null
 done
 test "$(ffprobe -v error -select_streams a -show_entries stream=index -of csv=p=0 "$tmp/multi-audio-avc-aac.mkv" | wc -l | tr -d ' ')" = 2
+test "$(ffprobe -v error -select_streams s -show_entries stream=index -of csv=p=0 "$tmp/subtitle-avc-aac.mkv" | wc -l | tr -d ' ')" = 1
+test "$(ffprobe -v error -select_streams t -show_entries stream=index -of csv=p=0 "$tmp/attachment-avc-aac.mkv" | wc -l | tr -d ' ')" = 1
 test "$(ffprobe -v error -select_streams v -show_entries stream=width,height -of csv=p=0 "$tmp/portrait-avc-aac.mp4")" = 180,320
 test "$(ffprobe -v error -select_streams v -show_entries stream=width,height -of csv=p=0 "$tmp/unusual-dimensions-avc-aac.mp4")" = 318,178
 mapfile -t frame_rates < <(ffprobe -v error -select_streams v -show_entries stream=r_frame_rate,avg_frame_rate -of default=nk=1:nw=1 "$tmp/vfr-avc-video-only.mp4")

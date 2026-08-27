@@ -5,7 +5,7 @@
 **Blocked by:** None (ticket 01 is complete)
 
 **Category:** bug
-**Status:** complete
+**Status:** wontfix
 
 - [x] Mixed hybrid and stream-copy fallback exports identify each segment's applied strategy.
 - [x] Job-level strategy remains clearly defined or is replaced without misleading clients.

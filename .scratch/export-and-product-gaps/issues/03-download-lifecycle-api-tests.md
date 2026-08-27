@@ -5,7 +5,7 @@
 **Blocked by:** None (can start immediately)
 
 **Category:** enhancement
-**Status:** completed
+**Status:** wontfix
 
 - [x] Another principal, unknown output positions, and traversal-shaped inputs are rejected.
 - [x] Expired and cancelled exports cannot be downloaded.

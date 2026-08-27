@@ -5,7 +5,7 @@
 **Blocked by:** None (can start immediately)
 
 **Category:** enhancement
-**Status:** complete
+**Status:** wontfix
 
 - [x] Video-only, multi-audio, subtitle, attachment/data, and corrupt-output cases are covered.
 - [x] Preflight defaults and blockers are asserted for each case.

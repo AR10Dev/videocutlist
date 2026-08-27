@@ -89,6 +89,14 @@ test.beforeEach(async ({ page }) => {
         body: "fragment",
       });
     }
+    if (url.pathname === "/api/v1/destinations")
+      return route.fulfill({
+        json: {
+          destinations: [
+            { id: "download", label: "Browser download", kind: "download", retention: "24 hours" },
+          ],
+        },
+      });
     if (url.pathname.endsWith("/exports/preflight") && request.method() === "POST")
       return route.fulfill({ json: { allowed: true, selection: [], findings: [] } });
     if (url.pathname.endsWith("/detections") && request.method() === "POST") {
@@ -431,7 +439,10 @@ test("exports the saved segments, polls to a safe result, and shows warnings", a
                 outputName: "camera-cut.mkv",
                 sizeBytes: 42,
                 retainUntil: "2026-08-20T12:00:00Z",
+                destinationKind: "download",
               },
+              appliedStrategy: "stream_copy",
+              verified: true,
               warnings: ["Cut may start at an earlier keyframe."],
             },
     });
@@ -453,8 +464,35 @@ test("exports the saved segments, polls to a safe result, and shows warnings", a
   );
   await expect(page.getByLabel("Export result")).toContainText("camera-cut.mkv");
   await expect(page.getByLabel("Export result")).toContainText("42 bytes");
+  await expect(page.getByLabel("Export result")).toContainText("stream_copy · verified output");
+  await expect(page.getByRole("link", { name: "Download output 1" })).toBeVisible();
   await expect(page.getByLabel("Export warnings")).toContainText("earlier keyframe");
   await expect(page.locator("main")).not.toContainText("/private/export");
+});
+
+test("reviews preflight blockers and only enables eligible downloads", async ({ page }) => {
+  await page.route(`${apiOrigin}/api/v1/projects/*/exports/preflight`, (route) =>
+    route.fulfill({
+      json: {
+        allowed: false,
+        selection: [0, 2],
+        findings: [
+          {
+            severity: "blocked",
+            code: "unsupported_stream",
+            message: "Stream 1 cannot be exported.",
+          },
+        ],
+      },
+    }),
+  );
+  await page.goto("/");
+  await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await expect(page.getByLabel("Destination")).toHaveValue("download");
+  await expect(page.getByText("Preview: {source}-1.mkv")).toBeVisible();
+  await expect(page.getByText("Selected streams: 0, 2")).toBeVisible();
+  await expect(page.getByText("blocked: Stream 1 cannot be exported.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Start export" })).toBeDisabled();
 });
 
 test("shows stable failed and capacity messages and permits retry", async ({ page }) => {

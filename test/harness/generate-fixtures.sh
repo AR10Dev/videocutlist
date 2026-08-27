@@ -47,8 +47,10 @@ make_h264 "$out/avc-aac.mov"
 present avc-aac.mp4
 present avc-aac.mkv
 present avc-aac.mov
-"$ffmpeg_bin" "${source_video[@]}" -map 0:v:0 -c:v libx264 -g 120 -pix_fmt yuv420p \
-  -an -metadata creation_time=1970-01-01T00:00:00Z "$out/avc-video-only-long-gop.mp4"
+"$ffmpeg_bin" -hide_banner -loglevel error -y -fflags +bitexact \
+  -f lavfi -i testsrc2=size=320x180:rate=30 -t 2 -map 0:v:0 -threads 1 \
+  -c:v libx264 -g 120 -pix_fmt yuv420p -an \
+  -metadata creation_time=1970-01-01T00:00:00Z "$out/avc-video-only-long-gop.mp4"
 present avc-video-only-long-gop.mp4
 "$ffmpeg_bin" -hide_banner -loglevel error -y -fflags +bitexact \
   -f lavfi -i testsrc2=size=180x320:rate=30 -f lavfi -i sine=frequency=660:sample_rate=48000 \
@@ -66,6 +68,20 @@ present unusual-dimensions-avc-aac.mp4
   -threads 1 -c:v libx264 -pix_fmt yuv420p -c:a aac -metadata:s:a:0 language=eng \
   -metadata:s:a:1 language=ita -metadata creation_time=1970-01-01T00:00:00Z "$out/multi-audio-avc-aac.mkv"
 present multi-audio-avc-aac.mkv
+cat >"$out/subtitle.srt" <<'EOF'
+1
+00:00:00,000 --> 00:00:01,500
+Fixture subtitle
+EOF
+"$ffmpeg_bin" -hide_banner -loglevel error -y -fflags +bitexact \
+  -i "$out/avc-aac.mkv" -f srt -i "$out/subtitle.srt" -map 0 -map 1:0 -c copy \
+  -metadata:s:s:0 language=eng "$out/subtitle-avc-aac.mkv"
+present subtitle-avc-aac.mkv
+printf 'videocutlist attachment fixture\n' >"$out/attachment.txt"
+"$ffmpeg_bin" -hide_banner -loglevel error -y -fflags +bitexact \
+  -i "$out/avc-aac.mkv" -map 0 -c copy -attach "$out/attachment.txt" \
+  -metadata:s:t:0 mimetype=text/plain "$out/attachment-avc-aac.mkv"
+present attachment-avc-aac.mkv
 "$ffmpeg_bin" -hide_banner -loglevel error -y -fflags +bitexact \
   -f lavfi -i testsrc2=size=320x180:rate=30 -t 2 -vf "select='if(lt(n,30),not(mod(n,3)),not(mod(n,2)))'" \
   -fps_mode vfr -threads 1 -c:v libx264 -pix_fmt yuv420p -an \

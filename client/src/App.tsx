@@ -1623,11 +1623,12 @@ export function App() {
                 {exportJob()!.result!.outputName ?? exportJob()!.result!.outputNames?.join(", ")}
               </p>
               <p>
-                Strategy: {exportJob()!.appliedStrategy ??
+                Strategy:{" "}
+                {exportJob()!.appliedStrategy ??
                   (exportJob()!.result!.appliedStrategies?.length
                     ? "mixed per segment"
-                    : exportJob()!.strategy ?? cutStrategy())} ·{" "}
-                {exportJob()!.verified ? "verified output" : "requires inspection"}
+                    : (exportJob()!.strategy ?? cutStrategy()))}{" "}
+                · {exportJob()!.verified ? "verified output" : "requires inspection"}
               </p>
               <Show when={(exportJob()!.result!.appliedStrategies?.length ?? 0) > 1}>
                 <For each={exportJob()!.result!.appliedStrategies}>

@@ -5,7 +5,7 @@
 **Blocked by:** None (can start immediately)
 
 **Category:** enhancement
-**Status:** complete
+**Status:** wontfix
 
 - [x] Keyframe-aligned and sparse-keyframe media exercise all three strategies.
 - [x] Results identify the strategy actually used.
