@@ -41,6 +41,21 @@ type LibraryStatus struct {
 	State   LibraryState `json:"state"`
 	Message string       `json:"message"`
 }
+
+type ImportJob struct {
+	ID               string   `json:"id"`
+	State            string   `json:"state"`
+	Progress         float64  `json:"progress"`
+	Indexed          int      `json:"indexed"`
+	ErrorCode        string   `json:"errorCode,omitempty"`
+	ValidationErrors []string `json:"validationErrors,omitempty"`
+}
+
+type MediaImportService interface {
+	StartImport(context.Context, domain.Principal) (ImportJob, error)
+	ImportStatus(context.Context, domain.Principal, string) (ImportJob, error)
+	CancelImport(context.Context, domain.Principal, string) error
+}
 type Segment = domain.Segment
 type UIState = domain.UIState
 type ProjectInput = domain.Document

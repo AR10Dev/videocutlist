@@ -24,6 +24,8 @@ const (
 	defaultPreviewGlobal   = 2
 	defaultPreviewPerUser  = 1
 	defaultExportLimit     = 1
+	defaultMediaMaxFiles   = 10000
+	defaultMediaMaxDepth   = 32
 	defaultCacheMaxBytes   = int64(20 << 30)
 	defaultPreviewBeforeMS = 2_000
 	defaultPreviewAfterMS  = 6_000
@@ -56,6 +58,8 @@ type Config struct {
 	PreviewGlobalLimit  int
 	PreviewPerUserLimit int
 	ExportLimit         int
+	MediaMaxFiles       int
+	MediaMaxDepth       int
 	CacheMaxBytes       int64
 	PreviewBeforeMS     int
 	PreviewAfterMS      int
@@ -153,6 +157,12 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 		return Config{}, err
 	}
 	if c.ExportLimit, err = positiveInt(lookup, "VIDEOCUTLIST_EXPORT_LIMIT", defaultExportLimit); err != nil {
+		return Config{}, err
+	}
+	if c.MediaMaxFiles, err = positiveInt(lookup, "VIDEOCUTLIST_MEDIA_MAX_FILES", defaultMediaMaxFiles); err != nil {
+		return Config{}, err
+	}
+	if c.MediaMaxDepth, err = positiveInt(lookup, "VIDEOCUTLIST_MEDIA_MAX_DEPTH", defaultMediaMaxDepth); err != nil {
 		return Config{}, err
 	}
 	if c.CacheMaxBytes, err = positiveInt64(lookup, "VIDEOCUTLIST_CACHE_MAX_BYTES", defaultCacheMaxBytes); err != nil {

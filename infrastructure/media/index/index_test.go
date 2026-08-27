@@ -17,6 +17,36 @@ func (fakeProbe) ProbeFile(context.Context, *os.File) (probe.Metadata, error) {
 	return probe.Metadata{DurationMS: 1000, Container: "mp4", Video: &probe.Video{Codec: "h264", Width: 320, Height: 180}}, nil
 }
 
+func TestScanEnforcesConfiguredFileLimit(t *testing.T) {
+	root := t.TempDir()
+	for _, name := range []string{"one.mp4", "two.mp4"} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(name), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	scanner, err := NewScannerWithLimits([]Root{{Alias: "library", Path: root}}, fakeProbe{}, ScanLimits{MaxFiles: 1, MaxDepth: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = scanner.Scan(context.Background(), "library")
+	if !errors.Is(err, ErrScanLimit) {
+		t.Fatalf("scan error = %v, want ErrScanLimit", err)
+	}
+}
+
+func TestScanHonorsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	scanner, err := NewScannerWithLimits([]Root{{Alias: "library", Path: t.TempDir()}}, fakeProbe{}, ScanLimits{MaxFiles: 1, MaxDepth: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = scanner.Scan(ctx, "library")
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("scan error = %v, want context.Canceled", err)
+	}
+}
+
 func TestRefreshReportsAnUnavailableConfiguredRoot(t *testing.T) {
 	scanner, err := NewScanner([]Root{{Alias: "camera", Path: filepath.Join(t.TempDir(), "missing")}}, fakeProbe{})
 	if err != nil {

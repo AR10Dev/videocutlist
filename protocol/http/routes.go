@@ -20,6 +20,9 @@ const (
 	routeListMedia
 	routeMediaStatus
 	routeRefreshMedia
+	routeStartMediaImport
+	routeGetMediaImport
+	routeCancelMediaImport
 	routeGetMedia
 	routePreview
 	routeThumbnails
@@ -68,6 +71,12 @@ func parseRoute(method, path string) route {
 		return route{kind: routeListDestinations}
 	case len(parts) == 2 && parts[0] == "media" && parts[1] == "refresh" && method == http.MethodPost:
 		return route{kind: routeRefreshMedia}
+	case len(parts) == 2 && parts[0] == "media" && parts[1] == "import" && method == http.MethodPost:
+		return route{kind: routeStartMediaImport}
+	case len(parts) == 3 && parts[0] == "media" && parts[1] == "import" && validJobID(parts[2]) && method == http.MethodGet:
+		return route{kind: routeGetMediaImport, id: parts[2]}
+	case len(parts) == 3 && parts[0] == "media" && parts[1] == "import" && validJobID(parts[2]) && method == http.MethodDelete:
+		return route{kind: routeCancelMediaImport, id: parts[2]}
 	case len(parts) == 2 && parts[0] == "media" && validMediaID(parts[1]) && method == http.MethodGet:
 		return route{kind: routeGetMedia, id: parts[1]}
 	case len(parts) == 3 && parts[0] == "media" && validMediaID(parts[1]) && parts[2] == "preview" && (method == http.MethodGet || method == http.MethodHead):

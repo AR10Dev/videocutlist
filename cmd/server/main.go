@@ -63,7 +63,7 @@ func run(ctx context.Context) error {
 	for _, alias := range aliases {
 		roots = append(roots, index.Root{Alias: alias, Path: cfg.MediaRoots[alias]})
 	}
-	scanner, err := index.NewScanner(roots, probe.Client{Path: cfg.FFprobePath})
+	scanner, err := index.NewScannerWithLimits(roots, probe.Client{Path: cfg.FFprobePath}, index.ScanLimits{MaxFiles: cfg.MediaMaxFiles, MaxDepth: cfg.MediaMaxDepth})
 	if err != nil {
 		return err
 	}
@@ -120,7 +120,7 @@ func run(ctx context.Context) error {
 	}
 	apiServer, err := httpapi.New(httpapi.Config{
 		Authenticator: authenticator, Media: mediaService, Preview: previewService, Assets: assetService,
-		Projects: projectService, Exports: exportService, Preflight: exportExecutor, Jobs: jobService, Detection: detectionService, Download: exportExecutor,
+		Projects: projectService, Exports: exportService, Preflight: exportExecutor, Jobs: jobService, Detection: detectionService, Download: exportExecutor, MediaImport: mediaService,
 		Destinations: destinationMetadata(cfg.Destinations),
 		Authorize: httpapi.AuthorizerFunc(func(principal domain.Principal, action, resource string) bool {
 			return principal.Allows(action, resource)

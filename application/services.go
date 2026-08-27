@@ -48,6 +48,76 @@ type MediaUseCase struct {
 	Configured bool
 	status     LibraryStatus
 	mu         sync.RWMutex
+	imports    map[string]*mediaImport
+}
+
+type mediaImport struct {
+	job    ImportJob
+	owner  string
+	cancel context.CancelFunc
+}
+
+func (m *MediaUseCase) StartImport(ctx context.Context, principal domain.Principal) (ImportJob, error) {
+	if !m.Configured {
+		return ImportJob{}, errors.New("media library is not configured")
+	}
+	id, err := newID("j_")
+	if err != nil {
+		return ImportJob{}, err
+	}
+	jobCtx, cancel := context.WithCancel(context.Background())
+	m.mu.Lock()
+	if m.imports == nil {
+		m.imports = make(map[string]*mediaImport)
+	}
+	if m.status.State == LibraryScanning {
+		m.mu.Unlock()
+		cancel()
+		return ImportJob{}, ErrBusy
+	}
+	entry := &mediaImport{job: ImportJob{ID: id, State: "queued"}, owner: principal.Subject, cancel: cancel}
+	m.imports[id] = entry
+	m.status = libraryStatus(LibraryScanning)
+	m.mu.Unlock()
+	go m.runImport(jobCtx, entry)
+	return entry.job, nil
+}
+func (m *MediaUseCase) runImport(ctx context.Context, entry *mediaImport) {
+	m.mu.Lock()
+	entry.job.State = "running"
+	m.mu.Unlock()
+	err := m.RefreshMedia(ctx)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if errors.Is(ctx.Err(), context.Canceled) {
+		entry.job.State = "cancelled"
+		return
+	}
+	if err != nil {
+		entry.job.State = "failed"
+		entry.job.ErrorCode = "import_failed"
+		return
+	}
+	entry.job.State, entry.job.Progress = "succeeded", 1
+}
+func (m *MediaUseCase) ImportStatus(_ context.Context, principal domain.Principal, id string) (ImportJob, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	entry, ok := m.imports[id]
+	if !ok || entry.owner != principal.Subject {
+		return ImportJob{}, errors.New("import job not found")
+	}
+	return entry.job, nil
+}
+func (m *MediaUseCase) CancelImport(_ context.Context, principal domain.Principal, id string) error {
+	m.mu.RLock()
+	entry, ok := m.imports[id]
+	m.mu.RUnlock()
+	if !ok || entry.owner != principal.Subject {
+		return errors.New("import job not found")
+	}
+	entry.cancel()
+	return nil
 }
 
 func (m *MediaUseCase) List(ctx context.Context, cursor string, limit int) (MediaPage, error) {

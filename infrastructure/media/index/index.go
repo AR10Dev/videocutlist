@@ -22,6 +22,19 @@ var (
 	ErrNotFound      = errors.New("media not found")
 	ErrOutsideRoot   = errors.New("media is outside configured root")
 	ErrSourceChanged = errors.New("media changed since indexing")
+	ErrScanLimit     = errors.New("media scan limit exceeded")
+)
+
+// ScanLimits bounds work performed by a server-side import. Zero values use
+// conservative defaults so an accidental unbounded walk is never possible.
+type ScanLimits struct {
+	MaxFiles int
+	MaxDepth int
+}
+
+const (
+	defaultMaxFiles = 10000
+	defaultMaxDepth = 32
 )
 
 type Root struct {
@@ -63,14 +76,25 @@ type Catalog interface {
 type Scanner struct {
 	roots  map[string]Root
 	prober probe.Runner
+	limits ScanLimits
 	mu     sync.Mutex
 }
 
 func NewScanner(roots []Root, prober probe.Runner) (*Scanner, error) {
+	return NewScannerWithLimits(roots, prober, ScanLimits{})
+}
+
+func NewScannerWithLimits(roots []Root, prober probe.Runner, limits ScanLimits) (*Scanner, error) {
 	if prober == nil {
 		return nil, errors.New("media prober is required")
 	}
-	s := &Scanner{roots: make(map[string]Root, len(roots)), prober: prober}
+	if limits.MaxFiles <= 0 {
+		limits.MaxFiles = defaultMaxFiles
+	}
+	if limits.MaxDepth <= 0 {
+		limits.MaxDepth = defaultMaxDepth
+	}
+	s := &Scanner{roots: make(map[string]Root, len(roots)), prober: prober, limits: limits}
 	for _, root := range roots {
 		if root.Alias == "" || root.Path == "" {
 			return nil, errors.New("media root alias and path are required")
@@ -103,6 +127,9 @@ func (s *Scanner) Scan(ctx context.Context, alias string) ([]Record, error) {
 			return err
 		}
 		if entry.IsDir() {
+			if strings.Count(filepath.ToSlash(path), "/") > s.limits.MaxDepth {
+				return fs.SkipDir
+			}
 			if filepath.Base(path) == ".videocutlist-exports" {
 				return fs.SkipDir
 			}
@@ -110,6 +137,9 @@ func (s *Scanner) Scan(ctx context.Context, alias string) ([]Record, error) {
 		}
 		if !isMediaPath(path) {
 			return nil
+		}
+		if len(records) >= s.limits.MaxFiles {
+			return ErrScanLimit
 		}
 		file, info, err := openMedia(root, path)
 		if err != nil {

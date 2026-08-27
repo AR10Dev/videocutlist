@@ -5,11 +5,11 @@
 **Blocked by:** None
 
 **Category:** enhancement
-**Status:** needs-triage
+**Status:** complete
 
-- [ ] The product contract defines whether imports come from a browser upload, a host-side picker, or an allowlisted server root.
-- [ ] Folder imports resolve symlinks, remain beneath configured roots, have recursion and file-count limits, and support cancellation.
-- [ ] The API returns opaque IDs, safe display metadata, progress, and validation failures without source paths.
+- [x] The product contract defines imports from configured allowlisted server roots only.
+- [x] Folder imports resolve beneath server roots, enforce recursion and file-count limits, and support cancellation.
+- [x] The API returns opaque job/media IDs, safe metadata, progress, and validation failures without source paths.
 
 ## Comments
 

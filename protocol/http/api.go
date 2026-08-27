@@ -115,6 +115,7 @@ func (f AuthorizerFunc) Allow(principal domain.Principal, action, resource strin
 type Config struct {
 	Authenticator Authenticator
 	Media         MediaService
+	MediaImport   application.MediaImportService
 	Preview       PreviewService
 	Assets        AssetService
 	Projects      ProjectService
@@ -216,6 +217,38 @@ func (s *Server) dispatch(writer http.ResponseWriter, request *http.Request, id 
 	case routeRefreshMedia:
 		s.refreshMedia(writer, request, principal, id)
 		return "/api/v1/media/refresh", principal.Subject
+	case routeStartMediaImport:
+		if !s.allowed(writer, principal, "media_import", "*", id) {
+			return "/api/v1/media/import", principal.Subject
+		}
+		job, err := s.config.MediaImport.StartImport(request.Context(), principal)
+		if err != nil {
+			httpx.Error(writer, http.StatusConflict, "import_unavailable", "Import could not be started.", id)
+			return "/api/v1/media/import", principal.Subject
+		}
+		httpx.WriteJSON(writer, http.StatusAccepted, job)
+		return "/api/v1/media/import", principal.Subject
+	case routeGetMediaImport:
+		if !s.allowed(writer, principal, "media_import", r.id, id) {
+			return "/api/v1/media/import/{jobId}", principal.Subject
+		}
+		job, err := s.config.MediaImport.ImportStatus(request.Context(), principal, r.id)
+		if err != nil {
+			notFound(writer, id)
+			return "/api/v1/media/import/{jobId}", principal.Subject
+		}
+		httpx.WriteJSON(writer, http.StatusOK, job)
+		return "/api/v1/media/import/{jobId}", principal.Subject
+	case routeCancelMediaImport:
+		if !s.allowed(writer, principal, "media_import", r.id, id) {
+			return "/api/v1/media/import/{jobId}", principal.Subject
+		}
+		if err := s.config.MediaImport.CancelImport(request.Context(), principal, r.id); err != nil {
+			notFound(writer, id)
+			return "/api/v1/media/import/{jobId}", principal.Subject
+		}
+		writer.WriteHeader(http.StatusNoContent)
+		return "/api/v1/media/import/{jobId}", principal.Subject
 	case routeGetMedia:
 		s.getMedia(writer, request, r.id, id)
 		return "/api/v1/media/{mediaId}", principal.Subject
