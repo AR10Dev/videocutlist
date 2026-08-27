@@ -5,7 +5,7 @@
 **Blocked by:** None
 
 **Category:** enhancement
-**Status:** complete
+**Status:** wontfix
 
 - [x] The product contract defines imports from configured allowlisted server roots only.
 - [x] Folder imports resolve beneath server roots, enforce recursion and file-count limits, and support cancellation.

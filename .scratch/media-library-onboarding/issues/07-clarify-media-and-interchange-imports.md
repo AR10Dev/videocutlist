@@ -5,7 +5,7 @@
 **Blocked by:** 03
 
 **Category:** enhancement
-**Status:** complete
+**Status:** wontfix
 
 - [x] Labels and help text state that interchange files do not upload or add a video.
 - [x] Import controls appear only when their media/project prerequisites are met.

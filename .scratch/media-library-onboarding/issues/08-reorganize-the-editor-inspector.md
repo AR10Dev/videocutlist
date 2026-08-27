@@ -5,7 +5,7 @@
 **Blocked by:** 06
 
 **Category:** enhancement
-**Status:** complete
+**Status:** wontfix
 
 - [x] Project identifiers do not dominate first-run UI.
 - [x] Export options show source-dependent data only after media selection.

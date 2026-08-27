@@ -5,7 +5,7 @@
 **Blocked by:** 03
 
 **Category:** enhancement
-**Status:** done
+**Status:** wontfix
 
 - [x] A first-run user has one obvious next action.
 - [x] Selecting a video reveals preview, timeline, segment, and export workflows in task order.

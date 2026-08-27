@@ -5,7 +5,7 @@
 **Blocked by:** 01, 02
 
 **Category:** enhancement
-**Status:** complete
+**Status:** wontfix
 
 - [x] Before a video is selected, the primary action explains how to make media available.
 - [x] The view names the configured library using only a safe display label.

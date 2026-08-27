@@ -5,7 +5,7 @@
 **Blocked by:** None
 
 **Category:** enhancement
-**Status:** complete
+**Status:** wontfix
 
 - [x] The response reports a stable state and a user-safe diagnostic message.
 - [x] The response never includes an absolute or relative original-media path.

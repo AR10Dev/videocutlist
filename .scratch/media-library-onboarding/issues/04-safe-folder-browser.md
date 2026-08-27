@@ -5,7 +5,7 @@
 **Blocked by:** 01, 02
 
 **Category:** enhancement
-**Status:** complete
+**Status:** wontfix
 
 - [x] Folder nodes use stable opaque IDs and display labels approved by the security review.
 - [x] Selecting a video continues to use its existing opaque media ID.
