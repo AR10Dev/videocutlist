@@ -3,7 +3,7 @@ info:
   title: VideoCutlist API
   version: 1.0.0
 servers:
-  - url: '{serverBaseUrl}/api/v1'
+  - url: "{serverBaseUrl}/api/v1"
     variables:
       serverBaseUrl:
         default: http://localhost:8787
@@ -20,7 +20,7 @@ paths:
       servers:
         - url: /
       responses:
-        '200':
+        "200":
           description: Prometheus text exposition
           content:
             text/plain:
@@ -32,7 +32,7 @@ paths:
       operationId: health
       security: []
       responses:
-        '200':
+        "200":
           description: Alive
   /ready:
     get:
@@ -40,10 +40,10 @@ paths:
       operationId: ready
       security: []
       responses:
-        '200':
+        "200":
           description: Ready
-        '503':
-          $ref: '#/components/responses/Error'
+        "503":
+          $ref: "#/components/responses/Error"
   /media:
     get:
       summary: List indexed media
@@ -61,50 +61,50 @@ paths:
           schema:
             type: string
       responses:
-        '200':
+        "200":
           description: Media page
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/MediaPage'
+                $ref: "#/components/schemas/MediaPage"
   /media/status:
     get:
       summary: Read media-library status
       operationId: mediaLibraryStatus
       responses:
-        '200':
+        "200":
           description: Safe media-library status
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/LibraryStatus'
+                $ref: "#/components/schemas/LibraryStatus"
   /media/refresh:
     post:
       summary: Refresh the media index
       operationId: refreshMedia
       responses:
-        '204':
+        "204":
           description: Refresh completed
-        '403':
-          $ref: '#/components/responses/Error'
+        "403":
+          $ref: "#/components/responses/Error"
   /media/{mediaId}:
     parameters:
-      - $ref: '#/components/parameters/MediaId'
+      - $ref: "#/components/parameters/MediaId"
     get:
       summary: Read media metadata
       operationId: getMedia
       responses:
-        '200':
+        "200":
           description: Media metadata
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Media'
-        '404':
-          $ref: '#/components/responses/Error'
+                $ref: "#/components/schemas/Media"
+        "404":
+          $ref: "#/components/responses/Error"
   /media/{mediaId}/preview:
     parameters:
-      - $ref: '#/components/parameters/MediaId'
+      - $ref: "#/components/parameters/MediaId"
       - name: centerMs
         in: query
         required: true
@@ -130,7 +130,7 @@ paths:
       summary: Stream a normalized preview
       operationId: streamPreview
       responses:
-        '200':
+        "200":
           description: Fragmented MP4 preview
           headers:
             X-Preview-Start:
@@ -156,37 +156,37 @@ paths:
               schema:
                 type: string
                 format: binary
-        '404':
-          $ref: '#/components/responses/Error'
-        '422':
-          $ref: '#/components/responses/Error'
-        '403':
-          $ref: '#/components/responses/Error'
-        '429':
-          $ref: '#/components/responses/Error'
+        "404":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
     head:
       summary: Check for a cached preview
       operationId: previewStatus
       responses:
-        '200':
+        "200":
           description: Complete cached preview exists
-        '404':
+        "404":
           description: No complete cached preview
   /projects/{projectId}:
     parameters:
-      - $ref: '#/components/parameters/ProjectId'
+      - $ref: "#/components/parameters/ProjectId"
     get:
       summary: Read an owned project
       operationId: getProject
       responses:
-        '200':
+        "200":
           description: Project
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Project'
-        '404':
-          $ref: '#/components/responses/Error'
+                $ref: "#/components/schemas/Project"
+        "404":
+          $ref: "#/components/responses/Error"
     put:
       summary: Save an owned project
       operationId: putProject
@@ -195,21 +195,21 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/ProjectInput'
+              $ref: "#/components/schemas/ProjectInput"
       responses:
-        '200':
+        "200":
           description: Saved project
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Project'
-        '409':
-          $ref: '#/components/responses/Error'
-        '422':
-          $ref: '#/components/responses/Error'
+                $ref: "#/components/schemas/Project"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
   /projects/{projectId}/exports:
     parameters:
-      - $ref: '#/components/parameters/ProjectId'
+      - $ref: "#/components/parameters/ProjectId"
     post:
       summary: Create a durable export
       operationId: createExport
@@ -218,25 +218,25 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/ExportInput'
+              $ref: "#/components/schemas/ExportInput"
       responses:
-        '202':
+        "202":
           description: Export queued
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Job'
-        '404':
-          $ref: '#/components/responses/Error'
-        '403':
-          $ref: '#/components/responses/Error'
-        '429':
-          $ref: '#/components/responses/Error'
-        '422':
-          $ref: '#/components/responses/Error'
+                $ref: "#/components/schemas/Job"
+        "404":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
   /projects/{projectId}/exports/preflight:
     parameters:
-      - $ref: '#/components/parameters/ProjectId'
+      - $ref: "#/components/parameters/ProjectId"
     post:
       summary: Validate export selection without queueing
       operationId: preflightExport
@@ -245,22 +245,22 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/ExportInput'
+              $ref: "#/components/schemas/ExportInput"
       responses:
-        '200':
+        "200":
           description: Structured export findings and deterministic selection
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/ExportPreflight'
-        '422':
-          $ref: '#/components/responses/Error'
+                $ref: "#/components/schemas/ExportPreflight"
+        "422":
+          $ref: "#/components/responses/Error"
   /destinations:
     get:
       summary: List administrator-configured export destinations
       operationId: listDestinations
       responses:
-        '200':
+        "200":
           description: Public destination metadata; roots are never returned
           content:
             application/json:
@@ -272,33 +272,33 @@ paths:
                   destinations:
                     type: array
                     items:
-                      $ref: '#/components/schemas/Destination'
+                      $ref: "#/components/schemas/Destination"
   /jobs/{jobId}:
     parameters:
-      - $ref: '#/components/parameters/JobId'
+      - $ref: "#/components/parameters/JobId"
     get:
       summary: Read an owned job
       operationId: getJob
       responses:
-        '200':
+        "200":
           description: Job
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Job'
-        '404':
-          $ref: '#/components/responses/Error'
+                $ref: "#/components/schemas/Job"
+        "404":
+          $ref: "#/components/responses/Error"
     delete:
       summary: Cancel an owned job
       operationId: cancelJob
       responses:
-        '204':
+        "204":
           description: Cancelled or already terminal
-        '404':
-          $ref: '#/components/responses/Error'
+        "404":
+          $ref: "#/components/responses/Error"
   /jobs/{jobId}/outputs/{position}:
     parameters:
-      - $ref: '#/components/parameters/JobId'
+      - $ref: "#/components/parameters/JobId"
       - name: position
         in: path
         required: true
@@ -310,15 +310,15 @@ paths:
       summary: Download one owned completed download output
       operationId: downloadJobOutput
       responses:
-        '200':
+        "200":
           description: MKV attachment; only persisted download outputs are eligible
           content:
             video/x-matroska:
               schema:
                 type: string
                 format: binary
-        '404':
-          $ref: '#/components/responses/Error'
+        "404":
+          $ref: "#/components/responses/Error"
 components:
   securitySchemes:
     bearerAuth:
@@ -353,7 +353,7 @@ components:
       content:
         application/json:
           schema:
-            $ref: '#/components/schemas/Error'
+            $ref: "#/components/schemas/Error"
   schemas:
     Error:
       type: object
@@ -407,11 +407,11 @@ components:
         items:
           type: array
           items:
-            $ref: '#/components/schemas/Media'
+            $ref: "#/components/schemas/Media"
         nextCursor:
           type:
             - string
-            - 'null'
+            - "null"
     LibraryStatus:
       type: object
       required:
@@ -444,12 +444,12 @@ components:
         segments:
           type: array
           items:
-            $ref: '#/components/schemas/Segment'
+            $ref: "#/components/schemas/Segment"
         uiState:
-          $ref: '#/components/schemas/UIState'
+          $ref: "#/components/schemas/UIState"
     Project:
       allOf:
-        - $ref: '#/components/schemas/ProjectInput'
+        - $ref: "#/components/schemas/ProjectInput"
         - type: object
           required:
             - id
@@ -651,7 +651,8 @@ components:
                 - source_adjacent
             appliedStrategies:
               type: array
-              description: Strategy used for each selected segment; outputName identifies
+              description:
+                Strategy used for each selected segment; outputName identifies
                 separately published outputs.
               items:
                 type: object
@@ -665,7 +666,8 @@ components:
                     minimum: 1
                   outputName:
                     type: string
-                    description: Published separate-export filename, never a filesystem
+                    description:
+                      Published separate-export filename, never a filesystem
                       path.
                   strategy:
                     type: string
@@ -674,7 +676,8 @@ components:
           description: Requested cut strategy.
         appliedStrategy:
           type: string
-          description: Strategy used by every selected segment; omitted when segments
+          description:
+            Strategy used by every selected segment; omitted when segments
             use different strategies. See result.appliedStrategies for per-segment
             values.
         warnings:

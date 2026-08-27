@@ -37,6 +37,7 @@ import {
   validProjectId,
   type RecentProject,
 } from "./projectLifecycle";
+import { defaultSettings, settingsKey, storedSettings, type AppSettings } from "./settings";
 
 type MediaPage = { items: Media[]; nextCursor?: string | null };
 type Destination = {
@@ -97,7 +98,8 @@ export function App() {
   const [thumbnailURL, setThumbnailURL] = createSignal<string>();
   const [waveform, setWaveform] = createSignal<number[]>([]);
   const [playheadMs, setPlayheadMs] = createSignal(0);
-  const [muted, setMuted] = createSignal(false);
+  const [settings, setSettings] = createSignal(() => storedSettings(localStorage));
+  const [muted, setMuted] = createSignal(settings().muted);
   const [diagnostics, setDiagnostics] = createSignal<PreviewDiagnostics>();
   const [projectId, setProjectId] = createSignal(newProjectId());
   const [revision, setRevision] = createSignal(0);
@@ -113,13 +115,11 @@ export function App() {
   const [exportStatus, setExportStatus] = createSignal("");
   const [exportMode, setExportMode] = createSignal<"merge" | "separate">("merge");
   const [exportSelection, setExportSelection] = createSignal<"segments" | "gaps">("segments");
-  const [cutStrategy, setCutStrategy] = createSignal("stream_copy_preferred");
+  const [cutStrategy, setCutStrategy] = createSignal(settings().cutStrategy);
   const [streamIndexes, setStreamIndexes] = createSignal<number[]>([]);
   const [destinations, setDestinations] = createSignal<Destination[]>([]);
   const [destinationId, setDestinationId] = createSignal("download");
-  const [filenameTemplate, setFilenameTemplate] = createSignal(
-    localStorage.getItem("videocutlist.filenameTemplate") ?? "{source}-{segment}.{ext}",
-  );
+  const [filenameTemplate, setFilenameTemplate] = createSignal(settings().filenameTemplate);
   const [preflight, setPreflight] = createSignal<{
     allowed: boolean;
     selection: number[];
@@ -166,6 +166,11 @@ export function App() {
   const markDirty = () => {
     editorVersion++;
     setDirty(true);
+  };
+  const saveSettings = (changes: Partial<AppSettings>) => {
+    const next = { ...settings(), ...changes };
+    setSettings(next);
+    localStorage.setItem(settingsKey, JSON.stringify(next));
   };
   const updateTimeline = (changes: Partial<ReturnType<typeof present>>) => {
     const next = editTimeline(timeline(), changes);
@@ -1039,42 +1044,57 @@ export function App() {
     }
   };
   return (
-    <main aria-label="VideoCutlist segment selection">
-      <header>
+    <main class="app-shell" aria-label="VideoCutlist segment selection">
+      <header class="app-header">
         <h1>VideoCutlist</h1>
         <p role="status" aria-live="polite">
           {status()}
         </p>
       </header>
-      <section aria-labelledby="media-heading">
-        <h2 id="media-heading">Media</h2>
-        <ul class="media-list" aria-label="Media list">
-          <For each={media()}>
-            {(item) => (
-              <li>
-                <button
-                  aria-pressed={selected()?.id === item.id ? "true" : "false"}
-                  onClick={() => chooseMedia(item)}
-                >
-                  {item.name}
-                  <span>
-                    {formatTime(item.durationMs, item.durationMs)} · {item.container}
-                  </span>
-                </button>
-              </li>
-            )}
-          </For>
-        </ul>
+      <section class="media-panel" aria-labelledby="media-heading">
+        <div class="panel-heading">
+          <h2 id="media-heading">File explorer</h2>
+          <button
+            class="icon-button"
+            onClick={() => void refreshMedia()}
+            disabled={refreshing()}
+            aria-label="Refresh media"
+          >
+            ↻
+          </button>
+        </div>
+        <nav class="file-tree" aria-label="Media folders">
+          <button class="folder" aria-current="page">
+            ⌄ Media library
+          </button>
+          <div class="folder-contents">
+            <span class="folder-label">All videos</span>
+            <ul class="media-list" aria-label="Media list">
+              <For each={media()}>
+                {(item) => (
+                  <li>
+                    <button
+                      aria-pressed={selected()?.id === item.id ? "true" : "false"}
+                      onClick={() => chooseMedia(item)}
+                    >
+                      {item.name}
+                      <span>
+                        {formatTime(item.durationMs, item.durationMs)} · {item.container}
+                      </span>
+                    </button>
+                  </li>
+                )}
+              </For>
+            </ul>
+          </div>
+        </nav>
         <Show when={nextCursor()}>
           <button disabled={loadingMore()} onClick={() => void loadMedia(nextCursor())}>
             {loadingMore() ? "Loading more…" : "Load more"}
           </button>
         </Show>
-        <button disabled={refreshing()} onClick={() => void refreshMedia()}>
-          {refreshing() ? "Refreshing media…" : "Refresh media"}
-        </button>
       </section>
-      <section aria-labelledby="timeline-heading">
+      <section class="editor-panel" aria-labelledby="timeline-heading">
         <h2 id="timeline-heading">Timeline</h2>
         <Show when={selected()} fallback={<p>Select a media item.</p>}>
           {(item) => (
@@ -1090,6 +1110,25 @@ export function App() {
                   ? `${present().segments.length} segment${present().segments.length === 1 ? "" : "s"} selected.`
                   : "No segments selected."}
               </p>
+              <Show
+                when={canStreamPreview()}
+                fallback={
+                  <p class="preview-unavailable" role="status">
+                    Preview is unavailable in this browser. Use the timeline controls to set markers
+                    manually.
+                  </p>
+                }
+              >
+                <video
+                  ref={(element) => {
+                    video = element;
+                  }}
+                  controls
+                  muted={muted()}
+                  aria-label="Preview player"
+                  data-preview-offset={diagnostics()?.offsetMs ?? 0}
+                />
+              </Show>
               <div
                 class="timeline-visual"
                 role="group"
@@ -1251,25 +1290,6 @@ export function App() {
                   )}
                 </For>
               </ol>
-              <Show
-                when={canStreamPreview()}
-                fallback={
-                  <p role="status">
-                    Preview is unavailable in this browser. Use the timeline controls to set markers
-                    manually.
-                  </p>
-                }
-              >
-                <video
-                  ref={(element) => {
-                    video = element;
-                  }}
-                  controls
-                  muted={muted()}
-                  aria-label="Preview player"
-                  data-preview-offset={diagnostics()?.offsetMs ?? 0}
-                />
-              </Show>
               <section aria-labelledby="diagnostics-heading">
                 <h2 id="diagnostics-heading">Preview diagnostics</h2>
                 <dl>
@@ -1296,7 +1316,9 @@ export function App() {
                   type="checkbox"
                   checked={muted()}
                   onChange={(event) => {
-                    setMuted(event.currentTarget.checked);
+                    const value = event.currentTarget.checked;
+                    setMuted(value);
+                    saveSettings({ muted: value });
                     markDirty();
                   }}
                 />{" "}
@@ -1306,7 +1328,7 @@ export function App() {
           )}
         </Show>
       </section>
-      <section aria-labelledby="project-heading">
+      <section class="project-panel" aria-labelledby="project-heading">
         <h2 id="project-heading">Project</h2>
         <label>
           Project ID{" "}
@@ -1468,7 +1490,7 @@ export function App() {
           </ul>
         </Show>
       </section>
-      <section aria-labelledby="export-heading">
+      <section class="export-panel" aria-labelledby="export-heading">
         <h2 id="export-heading">Export</h2>
         <p role="status">{exportStatus() || "Export a saved project."}</p>
         <label>
@@ -1528,7 +1550,11 @@ export function App() {
           Cut strategy{" "}
           <select
             value={cutStrategy()}
-            onChange={(event) => setCutStrategy(event.currentTarget.value)}
+            onChange={(event) => {
+              const value = event.currentTarget.value as AppSettings["cutStrategy"];
+              setCutStrategy(value);
+              saveSettings({ cutStrategy: value });
+            }}
           >
             <option value="stream_copy_preferred">Stream copy preferred</option>
             <option value="precise_reencode">Precise re-encode</option>
@@ -1559,7 +1585,7 @@ export function App() {
             onInput={(event) => {
               const value = event.currentTarget.value;
               setFilenameTemplate(value);
-              localStorage.setItem("videocutlist.filenameTemplate", value);
+              saveSettings({ filenameTemplate: value });
             }}
             aria-label="Filename template"
           />
@@ -1678,7 +1704,60 @@ export function App() {
           </div>
         </Show>
       </section>
-      <section aria-labelledby="detection-heading">
+      <section class="settings-panel" aria-labelledby="settings-heading">
+        <h2 id="settings-heading">Settings</h2>
+        <p>Saved in this browser and used for new exports.</p>
+        <label>
+          Default cut strategy
+          <select
+            value={cutStrategy()}
+            onChange={(event) => {
+              const value = event.currentTarget.value as AppSettings["cutStrategy"];
+              setCutStrategy(value);
+              saveSettings({ cutStrategy: value });
+            }}
+          >
+            <option value="stream_copy_preferred">Stream copy preferred</option>
+            <option value="precise_reencode">Precise re-encode</option>
+            <option value="hybrid_smart_cut">Hybrid smart cut</option>
+          </select>
+        </label>
+        <label>
+          Default filename template
+          <input
+            value={filenameTemplate()}
+            onInput={(event) => {
+              const value = event.currentTarget.value;
+              setFilenameTemplate(value);
+              saveSettings({ filenameTemplate: value });
+            }}
+          />
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={muted()}
+            onChange={(event) => {
+              const value = event.currentTarget.checked;
+              setMuted(value);
+              saveSettings({ muted: value });
+            }}
+          />
+          Mute preview by default
+        </label>
+        <button
+          onClick={() => {
+            setSettings(defaultSettings);
+            setCutStrategy(defaultSettings.cutStrategy);
+            setFilenameTemplate(defaultSettings.filenameTemplate);
+            setMuted(defaultSettings.muted);
+            localStorage.setItem(settingsKey, JSON.stringify(defaultSettings));
+          }}
+        >
+          Reset settings
+        </button>
+      </section>
+      <section class="detection-panel" aria-labelledby="detection-heading">
         <h2 id="detection-heading">Auto detection</h2>
         <p role="status">{detectionStatus() || "Review candidates before they change segments."}</p>
         <div class="controls">
