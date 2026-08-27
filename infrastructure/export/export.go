@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -55,6 +56,7 @@ type Result struct {
 	DestinationID   string    `json:"destinationId,omitempty"`
 	DestinationKind string    `json:"destinationKind,omitempty"`
 	Warnings        []Warning `json:"warnings,omitempty"`
+	AppliedStrategy string    `json:"appliedStrategy,omitempty"`
 	Verified        bool      `json:"verified"`
 }
 
@@ -111,27 +113,25 @@ func (s Service) Run(ctx context.Context, source *os.File, document domain.Docum
 	}
 	var keyframes []int64
 	hybridInterior := false
-	if request.CutStrategy == "hybrid_smart_cut" {
+	if request.CutStrategy != "precise_reencode" {
 		var err error
-		metadata, err = (probe.Client{Path: s.FFprobePath}).ProbeFile(ctx, source)
-		if err != nil {
-			return Result{}, fmt.Errorf("probe smart-cut source: %w", err)
-		}
-		if !hybridSupported(metadata) || strings.ToLower(filepath.Ext(source.Name())) != ".mkv" {
-			return Result{}, fmt.Errorf("%w: %w: hybrid smart cut requires H.264 CFR MKV", ErrInvalidRequest, ErrHybridSmartCutUnsupportedMedia)
-		}
 		keyframes, err = (probe.Client{Path: s.FFprobePath}).Keyframes(ctx, source)
 		if err != nil {
-			return Result{}, fmt.Errorf("probe smart-cut keyframes: %w", err)
+			return Result{}, fmt.Errorf("probe export keyframes: %w", err)
 		}
-		frameTimes, err := (probe.Client{Path: s.FFprobePath}).FrameTimes(ctx, source)
-		if err != nil || !constantFrameTimes(frameTimes) {
-			return Result{}, fmt.Errorf("%w: %w: hybrid smart cut requires finite CFR timestamps", ErrInvalidRequest, ErrHybridSmartCutUnsupportedMedia)
-		}
-		for _, segment := range segments {
-			if hasInteriorKeyframe(segment, keyframes) {
-				hybridInterior = true
-				break
+		if request.CutStrategy == "hybrid_smart_cut" {
+			if !hybridSupported(metadata) || strings.ToLower(filepath.Ext(source.Name())) != ".mkv" {
+				return Result{}, fmt.Errorf("%w: %w: hybrid smart cut requires H.264 CFR MKV", ErrInvalidRequest, ErrHybridSmartCutUnsupportedMedia)
+			}
+			frameTimes, err := (probe.Client{Path: s.FFprobePath}).FrameTimes(ctx, source)
+			if err != nil || !constantFrameTimes(frameTimes) {
+				return Result{}, fmt.Errorf("%w: %w: hybrid smart cut requires finite CFR timestamps", ErrInvalidRequest, ErrHybridSmartCutUnsupportedMedia)
+			}
+			for _, segment := range segments {
+				if hasInteriorKeyframe(segment, keyframes) {
+					hybridInterior = true
+					break
+				}
 			}
 		}
 	}
@@ -182,7 +182,7 @@ func (s Service) Run(ctx context.Context, source *os.File, document domain.Docum
 		}
 	}
 	if request.Mode == "separate" {
-		result := Result{OutputNames: make([]string, 0, len(segmentFiles)), RetainUntil: now(s).Add(destinationRetention(destination, s)), DestinationID: destination.ID, DestinationKind: destination.Kind}
+		result := Result{OutputNames: make([]string, 0, len(segmentFiles)), RetainUntil: now(s).Add(destinationRetention(destination, s)), DestinationID: destination.ID, DestinationKind: destination.Kind, AppliedStrategy: usedStrategy(request.CutStrategy, hybridInterior)}
 		published := make([]string, 0, len(segmentFiles))
 		committed := false
 		defer func() {
@@ -216,6 +216,8 @@ func (s Service) Run(ctx context.Context, source *os.File, document domain.Docum
 			result.Warnings = []Warning{{Code: "experimental_precise_reencode", Message: "Experimental full re-encode mode; output boundaries and codec behavior require inspection."}}
 		} else if request.CutStrategy == "hybrid_smart_cut" {
 			result.Warnings = hybridWarnings(segments, keyframes, hybridInterior)
+		} else if hasPotentiallyInexactCut(segments, keyframes) {
+			result.Warnings = []Warning{{Code: "stream_copy_cut_may_not_be_frame_exact", Message: "Stream-copy cuts can start on an earlier keyframe; requested non-keyframe boundaries are not frame-exact."}}
 		}
 		result.Verified = request.CutStrategy != "precise_reencode"
 		committed = true
@@ -251,7 +253,7 @@ func (s Service) Run(ctx context.Context, source *os.File, document domain.Docum
 	if err != nil {
 		return Result{}, err
 	}
-	result := Result{OutputName: outputName, SizeBytes: info.Size(), RetainUntil: now(s).Add(destinationRetention(destination, s)), DestinationID: destination.ID, DestinationKind: destination.Kind, Verified: request.CutStrategy != "precise_reencode"}
+	result := Result{OutputName: outputName, SizeBytes: info.Size(), RetainUntil: now(s).Add(destinationRetention(destination, s)), DestinationID: destination.ID, DestinationKind: destination.Kind, AppliedStrategy: usedStrategy(request.CutStrategy, hybridInterior), Verified: request.CutStrategy != "precise_reencode"}
 	if s.Artifacts != nil {
 		s.Artifacts.Put(request.JobID, []Artifact{{Path: finalPath, Name: outputName, Kind: destination.Kind, Expires: result.RetainUntil}})
 	}
@@ -259,7 +261,7 @@ func (s Service) Run(ctx context.Context, source *os.File, document domain.Docum
 		result.Warnings = []Warning{{Code: "experimental_precise_reencode", Message: "Experimental full re-encode mode; output boundaries and codec behavior require inspection."}}
 	} else if request.CutStrategy == "hybrid_smart_cut" {
 		result.Warnings = hybridWarnings(segments, keyframes, hybridInterior)
-	} else if hasPotentiallyInexactCut(segments) {
+	} else if hasPotentiallyInexactCut(segments, keyframes) {
 		result.Warnings = []Warning{{
 			Code:    "stream_copy_cut_may_not_be_frame_exact",
 			Message: "Stream-copy cuts can start on an earlier keyframe; requested non-keyframe boundaries are not frame-exact.",
@@ -539,9 +541,16 @@ func selectedSegments(segments []domain.Segment, selection string, duration int6
 	return gaps
 }
 
-func hasPotentiallyInexactCut(segments []domain.Segment) bool {
+func usedStrategy(requested string, hybridInterior bool) string {
+	if requested == "hybrid_smart_cut" && !hybridInterior {
+		return "stream_copy"
+	}
+	return requested
+}
+
+func hasPotentiallyInexactCut(segments []domain.Segment, keyframes []int64) bool {
 	for _, segment := range segments {
-		if segment.StartMS > 0 {
+		if !slices.Contains(keyframes, segment.StartMS) {
 			return true
 		}
 	}

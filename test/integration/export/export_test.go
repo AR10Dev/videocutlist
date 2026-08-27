@@ -2,10 +2,12 @@ package export_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -92,6 +94,99 @@ func TestHybridSmartCutMKVFixtureAndFallback(t *testing.T) {
 	}
 	if _, err := (probe.Client{}).Probe(context.Background(), filepath.Join(service.OutputDir, result.OutputName)); err != nil {
 		t.Fatalf("hybrid output does not probe: %v", err)
+	}
+}
+
+func TestExportStrategiesReportTruthfulBoundaryWarnings(t *testing.T) {
+	ffmpeg, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg is required")
+	}
+	if _, err := exec.LookPath("ffprobe"); err != nil {
+		t.Skip("ffprobe is required")
+	}
+	directory := t.TempDir()
+	sourcePath := filepath.Join(directory, "keyframe-layout.mkv")
+	fixture := exec.Command(ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=30", "-f", "lavfi", "-i", "sine=frequency=880:sample_rate=48000", "-t", "2", "-map", "0:v:0", "-map", "1:a:0", "-c:v", "libx264", "-g", "15", "-pix_fmt", "yuv420p", "-c:a", "libopus", sourcePath)
+	if output, err := fixture.CombinedOutput(); err != nil {
+		t.Skipf("cannot generate fixture: %v: %s", err, output)
+	}
+	source, err := os.Open(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	service := export.Service{FFmpegPath: ffmpeg, OutputDir: filepath.Join(directory, "exports")}
+	keyframes, err := (probe.Client{}).Keyframes(context.Background(), source)
+	if err != nil || !containsKeyframes(keyframes, 0, 500, 1000) {
+		t.Fatalf("fixture keyframes = %v, err = %v", keyframes, err)
+	}
+
+	tests := []struct {
+		name       string
+		start, end int64
+		strategy   string
+		used       string
+		code       string
+		message    string
+		verified   bool
+		warnings   int
+	}{
+		{"aligned stream copy", 0, 1000, "stream_copy_preferred", "stream_copy_preferred", "", "", true, 0},
+		{"sparse stream copy", 100, 400, "stream_copy_preferred", "stream_copy_preferred", "stream_copy_cut_may_not_be_frame_exact", "not frame-exact", true, 1},
+		{"aligned precise re-encode", 0, 1000, "precise_reencode", "precise_reencode", "experimental_precise_reencode", "full re-encode", false, 1},
+		{"sparse precise re-encode", 100, 400, "precise_reencode", "precise_reencode", "experimental_precise_reencode", "full re-encode", false, 1},
+		{"aligned hybrid smart cut", 0, 1000, "hybrid_smart_cut", "hybrid_smart_cut", "experimental_hybrid_smart_cut", "leading video boundary is re-encoded", true, 1},
+		{"sparse hybrid smart cut", 100, 400, "hybrid_smart_cut", "stream_copy", "hybrid_smart_cut_stream_copy_fallback", "stream-copied and may not be frame-exact", true, 1},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := service.Run(context.Background(), source, domain.Document{Segments: []domain.Segment{{StartMS: test.start, EndMS: test.end}}}, export.Request{Mode: "merge", CutStrategy: test.strategy, Container: "mkv"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.AppliedStrategy != test.used || result.Verified != test.verified {
+				t.Fatalf("result = %#v, want strategy %q and verified %v", result, test.used, test.verified)
+			}
+			assertPublicOutputNames(t, result, sourcePath)
+			if len(result.Warnings) != test.warnings {
+				t.Fatalf("warnings = %#v", result.Warnings)
+			}
+			if test.code != "" && (result.Warnings[0].Code != test.code || !strings.Contains(result.Warnings[0].Message, test.message)) {
+				t.Fatalf("warning = %#v", result.Warnings[0])
+			}
+			if _, err := (probe.Client{}).Probe(context.Background(), filepath.Join(service.OutputDir, result.OutputName)); err != nil {
+				t.Fatalf("output does not probe: %v", err)
+			}
+		})
+	}
+
+	result, err := service.Run(context.Background(), source, domain.Document{Segments: []domain.Segment{{StartMS: 0, EndMS: 1000}, {StartMS: 100, EndMS: 400}}}, export.Request{Mode: "separate", CutStrategy: "stream_copy_preferred", Container: "mkv"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertPublicOutputNames(t, result, sourcePath)
+}
+
+func containsKeyframes(keyframes []int64, wanted ...int64) bool {
+	for _, timestamp := range wanted {
+		if !slices.Contains(keyframes, timestamp) {
+			return false
+		}
+	}
+	return true
+}
+
+func assertPublicOutputNames(t *testing.T, result export.Result, sourcePath string) {
+	t.Helper()
+	for _, name := range append(result.OutputNames, result.OutputName) {
+		if strings.ContainsAny(name, `/\\`) || strings.Contains(name, sourcePath) || strings.Contains(name, ".videocutlist-export-") {
+			t.Fatalf("result exposed a filesystem path or temporary name: %#v", result)
+		}
+	}
+	encoded, err := json.Marshal(result)
+	if err != nil || strings.Contains(string(encoded), filepath.Dir(sourcePath)) {
+		t.Fatalf("result exposed an internal path: %s, err = %v", encoded, err)
 	}
 }
 

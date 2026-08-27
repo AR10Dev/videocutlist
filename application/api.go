@@ -52,6 +52,7 @@ type Job struct {
 	Warnings        []string        `json:"warnings,omitempty"`
 	WarningDetails  []ExportFinding `json:"warningDetails,omitempty"`
 	Strategy        string          `json:"strategy,omitempty"`
+	AppliedStrategy string          `json:"appliedStrategy,omitempty"`
 	Mode            string          `json:"mode,omitempty"`
 	Selection       string          `json:"selection,omitempty"`
 	SelectedStreams []int           `json:"selectedStreams,omitempty"`

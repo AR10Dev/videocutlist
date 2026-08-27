@@ -426,10 +426,30 @@ components:
               format: date-time
             destinationId: {type: string}
             destinationKind: {type: string, enum: [download, archive, source_adjacent]}
+        strategy:
+          type: string
+          description: Requested cut strategy.
+        appliedStrategy:
+          type: string
+          description: >-
+            Strategy actually used; hybrid fallback reports stream_copy.
         warnings:
           type: array
           items:
             type: string
+        warningDetails:
+          type: array
+          items:
+            type: object
+            required: [severity, code, message]
+            properties:
+              severity: {type: string}
+              code: {type: string}
+              message: {type: string}
+              streamIndex: {type: integer, minimum: 0}
+        verified:
+          type: boolean
+          description: False when the output requires human inspection.
         errorCode:
           type: string
           description: >-

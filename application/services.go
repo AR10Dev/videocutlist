@@ -268,6 +268,7 @@ func jobResult(record store.ExportJob) Job {
 			RetainUntil     time.Time `json:"retainUntil"`
 			DestinationID   string    `json:"destinationId"`
 			DestinationKind string    `json:"destinationKind"`
+			AppliedStrategy string    `json:"appliedStrategy"`
 			Warnings        []struct {
 				Code    string `json:"code"`
 				Message string `json:"message"`
@@ -276,6 +277,7 @@ func jobResult(record store.ExportJob) Job {
 		}
 		if json.Unmarshal([]byte(record.ResultJSON.String), &result) == nil && safeOutputNames(result.OutputName, result.OutputNames) && result.SizeBytes >= 0 && !result.RetainUntil.IsZero() {
 			job.Result = &JobResult{OutputName: result.OutputName, OutputNames: result.OutputNames, SizeBytes: result.SizeBytes, RetainUntil: result.RetainUntil, DestinationID: result.DestinationID, DestinationKind: result.DestinationKind}
+			job.AppliedStrategy = result.AppliedStrategy
 			job.Verified = result.Verified
 			for _, warning := range result.Warnings {
 				if len(job.Warnings) == 10 {

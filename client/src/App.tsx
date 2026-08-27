@@ -67,6 +67,7 @@ type ExportJob = {
   warnings?: string[];
   warningDetails?: { severity: string; code: string; message: string; streamIndex?: number }[];
   strategy?: string;
+  appliedStrategy?: string;
   mode?: string;
   selection?: string;
   selectedStreams?: number[];
@@ -1621,8 +1622,8 @@ export function App() {
                 {exportJob()!.result!.outputName ?? exportJob()!.result!.outputNames?.join(", ")}
               </p>
               <p>
-                Strategy: {exportJob()!.strategy ?? cutStrategy()} ·{" "}
-                {exportJob()!.verified ? "verified output" : "verification pending"}
+                Strategy: {exportJob()!.appliedStrategy ?? exportJob()!.strategy ?? cutStrategy()} ·{" "}
+                {exportJob()!.verified ? "verified output" : "requires inspection"}
               </p>
               <p>
                 {exportJob()!.result!.sizeBytes.toLocaleString()} bytes · retained until{" "}
