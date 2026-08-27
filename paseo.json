@@ -1,0 +1,34 @@
+{
+  "worktree": {
+    "setup": "make client-install",
+    "teardown": "rm -rf client/dist infrastructure/webassets/dist"
+  },
+  "scripts": {
+    "check": {
+      "command": "make check"
+    },
+    "test": {
+      "command": "make test"
+    },
+    "build": {
+      "command": "make build"
+    },
+    "smoke": {
+      "command": "make smoke"
+    }
+  },
+  "metadataGeneration": {
+    "title": {
+      "instructions": "Use a concise, task-shaped title in imperative mood. Mention the affected feature when useful; omit issue numbers and trailing punctuation."
+    },
+    "branchName": {
+      "instructions": "Use <type>/<short-kebab-case-description>. Prefer feat/ for new behavior, fix/ for bugs, docs/ for documentation, refactor/ for restructuring, test/ for tests, and chore/ for maintenance. Keep names short, lowercase, and descriptive."
+    },
+    "commitMessage": {
+      "instructions": "Use Conventional Commits with a required lowercase scope: type(scope): imperative subject. Keep the subject concise, specific, and without a trailing period. Use feat, fix, docs, refactor, test, chore, or build as appropriate."
+    },
+    "pullRequest": {
+      "instructions": "Use a concise title matching the Conventional Commit style with a scope. Write the body with Summary and Testing sections; use short bullets, name the user-visible impact, list exact validation commands run, and include Risks or Follow-up only when relevant. Do not claim tests or behavior that were not verified."
+    }
+  }
+}
