@@ -17,10 +17,10 @@ func TestJobStateTransitionsAndRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	if _, err := jobs.Create(ctx, store.ExportJob{ID: "queued", OwnerLogin: "editor", ProjectID: "project", ProjectRevision: 1, RequestJSON: `{}`}); err != nil {
+	if _, err := jobs.Create(ctx, store.ExportJob{ID: "j_000000000101", OwnerLogin: "editor", ProjectID: "project", ProjectRevision: 1, RequestJSON: `{}`}); err != nil {
 		t.Fatal(err)
 	}
-	for _, id := range []string{"restart", "done"} {
+	for _, id := range []string{"j_000000000102", "j_000000000103"} {
 		if _, err := jobs.Create(ctx, store.ExportJob{ID: id, OwnerLogin: "editor", ProjectID: "project", ProjectRevision: 1, RequestJSON: `{}`}); err != nil {
 			t.Fatal(err)
 		}
@@ -31,24 +31,24 @@ func TestJobStateTransitionsAndRecovery(t *testing.T) {
 	if count, err := jobs.Recover(ctx); err != nil || count != 2 {
 		t.Fatalf("recover = %d, %v", count, err)
 	}
-	queued, err := jobs.Get(ctx, "editor", "queued")
+	queued, err := jobs.Get(ctx, "editor", "j_000000000101")
 	if err != nil || queued.State != store.JobQueued {
 		t.Fatalf("queued job after recovery = %#v, %v", queued, err)
 	}
-	job, err := jobs.Get(ctx, "editor", "restart")
+	job, err := jobs.Get(ctx, "editor", "j_000000000102")
 	if err != nil || job.State != store.JobFailed || job.ErrorCode.String != "interrupted_by_restart" {
 		t.Fatalf("recovered job = %#v, %v", job, err)
 	}
-	if _, err := jobs.Start(ctx, "editor", "restart"); !errors.Is(err, store.ErrJobState) {
+	if _, err := jobs.Start(ctx, "editor", "j_000000000102"); !errors.Is(err, store.ErrJobState) {
 		t.Fatalf("terminal job restarted: %v", err)
 	}
-	if _, err := jobs.Create(ctx, store.ExportJob{ID: "completed", OwnerLogin: "editor", ProjectID: "project", ProjectRevision: 1, RequestJSON: `{}`}); err != nil {
+	if _, err := jobs.Create(ctx, store.ExportJob{ID: "j_000000000104", OwnerLogin: "editor", ProjectID: "project", ProjectRevision: 1, RequestJSON: `{}`}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := jobs.Start(ctx, "editor", "completed"); err != nil {
+	if _, err := jobs.Start(ctx, "editor", "j_000000000104"); err != nil {
 		t.Fatal(err)
 	}
-	completed, err := jobs.Succeed(ctx, "editor", "completed", `{"outputName":"export.mkv","retainUntil":"2026-01-01T00:00:00Z"}`)
+	completed, err := jobs.Succeed(ctx, "editor", "j_000000000104", `{"outputName":"export.mkv","retainUntil":"2026-01-01T00:00:00Z"}`)
 	if err != nil || completed.State != store.JobSucceeded || !completed.ResultJSON.Valid {
 		t.Fatalf("completed job = %#v, %v", completed, err)
 	}
@@ -58,10 +58,10 @@ func TestJobLookupIgnoresCompatibilityOwner(t *testing.T) {
 	db := openJobsDB(t)
 	jobs, _ := store.NewJobStore(db)
 	ctx := context.Background()
-	if _, err := jobs.Create(ctx, store.ExportJob{ID: "shared", OwnerLogin: "a", ProjectID: "project", ProjectRevision: 1, RequestJSON: `{}`}); err != nil {
+	if _, err := jobs.Create(ctx, store.ExportJob{ID: "j_000000000105", OwnerLogin: "a", ProjectID: "project", ProjectRevision: 1, RequestJSON: `{}`}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := jobs.Get(ctx, "b", "shared"); err != nil {
+	if _, err := jobs.Get(ctx, "b", "j_000000000105"); err != nil {
 		t.Fatalf("single-user lookup = %v", err)
 	}
 }

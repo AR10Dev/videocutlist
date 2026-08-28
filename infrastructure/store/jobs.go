@@ -5,7 +5,13 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"regexp"
 	"time"
+)
+
+var (
+	jobIDPattern   = regexp.MustCompile(`^j_[A-Za-z0-9_-]{12,64}$`)
+	batchIDPattern = regexp.MustCompile(`^b_[A-Za-z0-9_-]{12,64}$`)
 )
 
 // JobKind identifies durable work. All kinds share one state machine.
@@ -38,8 +44,8 @@ func NewJobsStore(db *sql.DB) (*JobsStore, error) {
 }
 
 func (s *JobsStore) Create(ctx context.Context, job Job) (Job, error) {
-	if job.ID == "" || job.BatchID == "" || job.RequestJSON == "" || !validJobKind(job.Kind) {
-		return Job{}, errors.New("job id, batch, kind, and request are required")
+	if !jobIDPattern.MatchString(job.ID) || !batchIDPattern.MatchString(job.BatchID) || job.RequestJSON == "" || !validJobKind(job.Kind) {
+		return Job{}, errors.New("valid job ID, batch ID, kind, and request are required")
 	}
 	if job.Kind != JobScan && (job.ProjectID == "" || job.ProjectItemID == "") {
 		return Job{}, errors.New("project job requires project and item")

@@ -24,7 +24,7 @@ func TestRunRecoversUnifiedJobsOnStartup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	job, err := jobs.Create(context.Background(), store.Job{ID: "j_restart", BatchID: "b_restart", Kind: store.JobScan, RequestJSON: `{}`})
+	job, err := jobs.Create(context.Background(), store.Job{ID: "j_restart00000", BatchID: "b_restart00000", Kind: store.JobScan, RequestJSON: `{}`})
 	if err != nil {
 		t.Fatal(err)
 	}
