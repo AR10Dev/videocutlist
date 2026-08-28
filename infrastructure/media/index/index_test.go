@@ -84,6 +84,59 @@ func TestRefreshKeepsSuccessfulRootsWhenAnotherRootFails(t *testing.T) {
 	}
 }
 
+func TestRefreshReportsSafePerRootStatuses(t *testing.T) {
+	good := t.TempDir()
+	if err := os.WriteFile(filepath.Join(good, "clip.mp4"), []byte("clip"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	limited := t.TempDir()
+	if err := os.WriteFile(filepath.Join(limited, "clip.mp4"), []byte("clip"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	scanner, err := NewScannerWithLimits([]Root{{Alias: "good", Path: good}, {Alias: "limited", Path: limited}, {Alias: "missing", Path: filepath.Join(t.TempDir(), "missing")}}, fakeProbe{}, ScanLimits{MaxFiles: 0, MaxDepth: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := scanner.Refresh(context.Background(), &memoryCatalog{}); err == nil {
+		t.Fatal("refresh unexpectedly succeeded")
+	}
+	statuses := scanner.RootStatuses()
+	if statuses["good"].State != "ready_with_media" || statuses["good"].ErrorCode != "" {
+		t.Fatalf("good status = %#v", statuses["good"])
+	}
+	if statuses["missing"].State != "failed" || statuses["missing"].ErrorCode != "scan_failed" {
+		t.Fatalf("missing status = %#v", statuses["missing"])
+	}
+}
+
+func TestRefreshPreservesCatalogOnScanLimit(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "clip.mp4"), []byte("clip"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	catalog := &memoryCatalog{}
+	scanner, err := NewScanner([]Root{{Alias: "library", Path: root}}, fakeProbe{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := scanner.Refresh(context.Background(), catalog); err != nil {
+		t.Fatal(err)
+	}
+	if err := scanner.ReconfigureLimits(ScanLimits{MaxFiles: 0, MaxDepth: 1}); err == nil {
+		t.Fatal("zero limit accepted")
+	}
+	scanner.limits.MaxFiles = 1
+	if err := os.WriteFile(filepath.Join(root, "second.mp4"), []byte("second"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := scanner.Refresh(context.Background(), catalog); err == nil {
+		t.Fatal("scan limit not reported")
+	}
+	if len(catalog.records) != 1 {
+		t.Fatalf("catalog replaced after scan limit: %#v", catalog.records)
+	}
+}
+
 func TestRefreshKeepsPreviousCatalogOnProbeFailure(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "clip.mp4"), []byte("clip"), 0o600); err != nil {

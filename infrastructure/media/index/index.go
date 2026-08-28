@@ -78,12 +78,19 @@ type Catalog interface {
 	List(context.Context, string, int) (Page, error)
 }
 
+type RootStatus struct {
+	State     string `json:"state"`
+	ErrorCode string `json:"errorCode,omitempty"`
+}
+
 type Scanner struct {
-	roots  map[string]Root
-	prober probe.Runner
-	limits ScanLimits
-	mu     sync.Mutex
-	config sync.RWMutex
+	roots    map[string]Root
+	prober   probe.Runner
+	limits   ScanLimits
+	mu       sync.Mutex
+	config   sync.RWMutex
+	statusMu sync.RWMutex
+	status   map[string]RootStatus
 }
 
 func NewScanner(roots []Root, prober probe.Runner) (*Scanner, error) {
@@ -100,7 +107,7 @@ func NewScannerWithLimits(roots []Root, prober probe.Runner, limits ScanLimits) 
 	if limits.MaxDepth <= 0 {
 		limits.MaxDepth = defaultMaxDepth
 	}
-	s := &Scanner{roots: make(map[string]Root, len(roots)), prober: prober, limits: limits}
+	s := &Scanner{roots: make(map[string]Root, len(roots)), prober: prober, limits: limits, status: make(map[string]RootStatus, len(roots))}
 	for _, root := range roots {
 		if root.Alias == "" || root.Path == "" {
 			return nil, errors.New("media root alias and path are required")
@@ -109,6 +116,7 @@ func NewScannerWithLimits(roots []Root, prober probe.Runner, limits ScanLimits) 
 			return nil, fmt.Errorf("duplicate media root alias %q", root.Alias)
 		}
 		s.roots[root.Alias] = root
+		s.status[root.Alias] = RootStatus{State: "ready_empty"}
 	}
 	return s, nil
 }
@@ -235,6 +243,12 @@ func (s *Scanner) Reconfigure(ctx context.Context, roots []Root, allowlist []str
 	for _, root := range validated {
 		s.roots[root.Alias] = root
 	}
+	s.statusMu.Lock()
+	s.status = make(map[string]RootStatus, len(validated))
+	for _, root := range validated {
+		s.status[root.Alias] = RootStatus{State: "ready_empty"}
+	}
+	s.statusMu.Unlock()
 	s.mu.Unlock()
 	s.config.Unlock()
 	if remover, ok := catalog.(RootCatalog); ok {
@@ -318,6 +332,33 @@ func (s *Scanner) root(alias string) (Root, error) {
 	return root, nil
 }
 
+func (s *Scanner) RootStatuses() map[string]RootStatus {
+	s.statusMu.RLock()
+	defer s.statusMu.RUnlock()
+	result := make(map[string]RootStatus, len(s.status))
+	for alias, status := range s.status {
+		result[alias] = status
+	}
+	return result
+}
+
+func (s *Scanner) setRootStatus(alias string, status RootStatus) {
+	s.statusMu.Lock()
+	s.status[alias] = status
+	s.statusMu.Unlock()
+}
+
+func rootErrorCode(err error) string {
+	switch {
+	case errors.Is(err, ErrScanLimit):
+		return "scan_limit"
+	case errors.Is(err, context.Canceled):
+		return "cancelled"
+	default:
+		return "scan_failed"
+	}
+}
+
 func (s *Scanner) Refresh(ctx context.Context, catalog Catalog) error {
 	s.config.RLock()
 	defer s.config.RUnlock()
@@ -333,8 +374,10 @@ func (s *Scanner) Refresh(ctx context.Context, catalog Catalog) error {
 	sort.Strings(aliases)
 	var firstErr error
 	for _, alias := range aliases {
+		s.setRootStatus(alias, RootStatus{State: "scanning"})
 		records, err := s.Scan(ctx, alias)
 		if err != nil {
+			s.setRootStatus(alias, RootStatus{State: "failed", ErrorCode: rootErrorCode(err)})
 			if firstErr == nil {
 				firstErr = err
 			}
@@ -344,13 +387,20 @@ func (s *Scanner) Refresh(ctx context.Context, catalog Catalog) error {
 			continue
 		}
 		if err := catalog.Sync(ctx, alias, records); err != nil {
+			s.setRootStatus(alias, RootStatus{State: "failed", ErrorCode: rootErrorCode(err)})
 			if firstErr == nil {
 				firstErr = err
 			}
 			if ctx.Err() != nil {
 				break
 			}
+			continue
 		}
+		state := "ready_with_media"
+		if len(records) == 0 {
+			state = "ready_empty"
+		}
+		s.setRootStatus(alias, RootStatus{State: state})
 	}
 	return firstErr
 }

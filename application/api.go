@@ -46,9 +46,15 @@ const (
 	LibraryFailed         LibraryState = "failed"
 )
 
+type RootLibraryStatus struct {
+	State     LibraryState `json:"state"`
+	ErrorCode string       `json:"errorCode,omitempty"`
+}
+
 type LibraryStatus struct {
-	State   LibraryState `json:"state"`
-	Message string       `json:"message"`
+	State   LibraryState                 `json:"state"`
+	Message string                       `json:"message"`
+	Roots   map[string]RootLibraryStatus `json:"roots,omitempty"`
 }
 
 type ImportJob struct {

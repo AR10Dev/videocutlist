@@ -12,10 +12,15 @@ import (
 	"time"
 
 	"videocutlist/domain"
+	"videocutlist/infrastructure/media/index"
 	"videocutlist/infrastructure/store"
 )
 
 var ErrJobState = store.ErrJobState
+
+type RootStatusCatalog interface {
+	RootStatuses() map[string]index.RootStatus
+}
 
 type MediaCatalog interface {
 	List(context.Context, string, int) (MediaPage, error)
@@ -215,11 +220,18 @@ func (m *MediaUseCase) Status() LibraryStatus {
 		return libraryStatus(LibraryUnconfigured)
 	}
 	m.mu.RLock()
-	defer m.mu.RUnlock()
-	if m.status.State == "" {
-		return libraryStatus(LibraryScanning)
+	status := m.status
+	m.mu.RUnlock()
+	if status.State == "" {
+		status = libraryStatus(LibraryScanning)
 	}
-	return m.status
+	if catalog, ok := m.Catalog.(RootStatusCatalog); ok {
+		status.Roots = make(map[string]RootLibraryStatus)
+		for alias, root := range catalog.RootStatuses() {
+			status.Roots[alias] = RootLibraryStatus{State: LibraryState(root.State), ErrorCode: root.ErrorCode}
+		}
+	}
+	return status
 }
 func (m *MediaUseCase) setStatusForRefresh(refreshID uint64, state LibraryState) {
 	m.mu.Lock()

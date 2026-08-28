@@ -63,7 +63,8 @@ func (m MediaCatalog) Get(ctx context.Context, id string) (application.Media, er
 	}
 	return media(record.Media), nil
 }
-func (m MediaCatalog) Refresh(ctx context.Context) error { return m.Scanner.Refresh(ctx, m.Store) }
+func (m MediaCatalog) Refresh(ctx context.Context) error         { return m.Scanner.Refresh(ctx, m.Store) }
+func (m MediaCatalog) RootStatuses() map[string]index.RootStatus { return m.Scanner.RootStatuses() }
 func (m MediaCatalog) Preview(ctx context.Context, request application.PreviewSpec) (domain.PreviewSpec, error) {
 	item, err := m.Store.Get(ctx, request.MediaID)
 	if err != nil {
