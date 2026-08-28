@@ -5,7 +5,7 @@
 **Blocked by:** None
 
 **Category:** bug
-**Status:** completed
+**Status:** needs-validation
 
 - [ ] Existing legacy project-save requests are converted to a valid version-2 document with a non-empty name and one ordered item.
 - [ ] Existing export, detection, and interchange flows resolve a valid selected project item rather than reading removed legacy document fields.
