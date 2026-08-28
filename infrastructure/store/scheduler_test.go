@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -97,6 +98,94 @@ func TestSchedulerBoundedExecutionCancellationAndShutdown(t *testing.T) {
 	if err := s.Shutdown(context.Background()); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestSchedulerCancellationBeforeExecutionSkipsRunnerWork(t *testing.T) {
+	db, err := store.OpenDatabase(context.Background(), t.TempDir()+"/jobs.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	jobs, _ := store.NewJobsStore(db)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var executions atomic.Int32
+	s, err := store.NewScheduler(jobs, store.SchedulerConfig{QueueCapacity: 1, WorkerLimit: 1}, func(ctx context.Context, _ store.Job) error {
+		close(started)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-release:
+			executions.Add(1)
+			return nil
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Start()
+	if _, err := s.Submit(context.Background(), []store.Job{schedulerJob("31")}); err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	if _, err := s.Cancel(context.Background(), "j_000000000031"); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	if err := s.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if executions.Load() != 0 {
+		t.Fatalf("runner executed cancelled job %d times", executions.Load())
+	}
+}
+
+func TestSchedulerStartAndShutdownAreIdempotent(t *testing.T) {
+	db, err := store.OpenDatabase(context.Background(), t.TempDir()+"/jobs.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	jobs, _ := store.NewJobsStore(db)
+	started := make(chan struct{}, 3)
+	release := make(chan struct{})
+	s, err := store.NewScheduler(jobs, store.SchedulerConfig{QueueCapacity: 3, WorkerLimit: 2}, func(ctx context.Context, _ store.Job) error {
+		started <- struct{}{}
+		select {
+		case <-release:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Start()
+	s.Start()
+	if _, err := s.Submit(context.Background(), []store.Job{schedulerJob("41"), schedulerJob("42"), schedulerJob("43")}); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatal("expected bounded workers to start")
+		}
+	}
+	select {
+	case <-started:
+		t.Fatal("Start created more than the configured workers")
+	case <-time.After(25 * time.Millisecond):
+	}
+	close(release)
+	if err := s.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	s.Start()
 }
 
 func TestSchedulerLeavesQueuedAndRecoversRunningOnRestart(t *testing.T) {

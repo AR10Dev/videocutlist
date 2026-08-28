@@ -36,6 +36,8 @@ type Scheduler struct {
 
 	mu      sync.Mutex
 	running map[string]context.CancelFunc
+	started bool
+	stopped bool
 	wake    chan struct{}
 	stop    chan struct{}
 	done    sync.WaitGroup
@@ -109,18 +111,28 @@ func validateNewJob(job Job) error {
 
 // Start begins bounded workers. Queued jobs are intentionally left queued on shutdown.
 func (s *Scheduler) Start() {
+	s.mu.Lock()
+	if s.started || s.stopped {
+		s.mu.Unlock()
+		return
+	}
+	s.started = true
+	s.done.Add(s.config.WorkerLimit)
 	for range s.config.WorkerLimit {
-		s.done.Add(1)
 		go s.worker()
 	}
+	s.mu.Unlock()
 	s.signal()
 }
 
 func (s *Scheduler) Shutdown(ctx context.Context) error {
-	close(s.stop)
 	s.mu.Lock()
-	for _, cancel := range s.running {
-		cancel()
+	if !s.stopped {
+		s.stopped = true
+		close(s.stop)
+		for _, cancel := range s.running {
+			cancel()
+		}
 	}
 	s.mu.Unlock()
 	finished := make(chan struct{})
@@ -134,15 +146,17 @@ func (s *Scheduler) Shutdown(ctx context.Context) error {
 }
 
 func (s *Scheduler) Cancel(ctx context.Context, id string) (Job, error) {
+	// Serializing the state transition with runner registration ensures a claimed
+	// job receives cancellation before the runner may begin.
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	job, err := s.jobs.Cancel(ctx, id)
 	if err != nil {
 		return Job{}, err
 	}
-	s.mu.Lock()
 	if cancel := s.running[id]; cancel != nil {
 		cancel()
 	}
-	s.mu.Unlock()
 	return job, nil
 }
 
@@ -175,8 +189,16 @@ func (s *Scheduler) worker() {
 		ctx, cancel := context.WithCancel(context.Background())
 		s.mu.Lock()
 		s.running[job.ID] = cancel
+		current, stateErr := s.jobs.Get(context.Background(), job.ID)
+		if stateErr != nil || current.State != JobRunning || s.stopped {
+			cancel()
+		}
 		s.mu.Unlock()
-		err = s.runner(ctx, job)
+		if ctx.Err() == nil {
+			err = s.runner(ctx, job)
+		} else {
+			err = ctx.Err()
+		}
 		cancel()
 		s.mu.Lock()
 		delete(s.running, job.ID)
