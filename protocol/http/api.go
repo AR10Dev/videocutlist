@@ -124,6 +124,12 @@ func (f AuthorizerFunc) Allow(principal domain.Principal, action, resource strin
 	return f(principal, action, resource)
 }
 
+type BatchExportService interface {
+	Submit(context.Context, application.BatchExportRequest) (string, []application.Job, error)
+	Progress(context.Context, string) (store.JobState, float64, error)
+	Cancel(context.Context, string) error
+}
+
 type Config struct {
 	Authenticator        Authenticator
 	Media                MediaService
@@ -132,6 +138,7 @@ type Config struct {
 	Assets               AssetService
 	Projects             ProjectService
 	Exports              ExportService
+	BatchExports         BatchExportService
 	Preflight            ExportPreflightService
 	Jobs                 JobService
 	Detection            DetectionService
@@ -307,6 +314,12 @@ func (s *Server) dispatch(writer http.ResponseWriter, request *http.Request, id 
 	case routeCreateExport:
 		s.createExport(writer, request, principal, r.id, id)
 		return "/api/v1/projects/{projectId}/exports", principal.Subject
+	case routeGetBatch:
+		s.getBatch(writer, request, principal, r.id, id)
+		return "/api/v1/batches/{batchId}", principal.Subject
+	case routeCancelBatch:
+		s.cancelBatch(writer, request, principal, r.id, id)
+		return "/api/v1/batches/{batchId}", principal.Subject
 	case routePreflightExport:
 		s.preflightExport(writer, request, principal, r.id, id)
 		return "/api/v1/projects/{projectId}/exports/preflight", principal.Subject
@@ -783,6 +796,35 @@ func (s *Server) putProject(writer http.ResponseWriter, request *http.Request, p
 	}
 	httpx.WriteJSON(writer, 200, saved)
 }
+func (s *Server) getBatch(writer http.ResponseWriter, request *http.Request, principal domain.Principal, batchID string, id string) {
+	if s.config.BatchExports == nil || !s.allowed(writer, principal, "export", batchID, id) {
+		if s.config.BatchExports == nil {
+			internalError(writer, id)
+		}
+		return
+	}
+	state, progress, err := s.config.BatchExports.Progress(request.Context(), batchID)
+	if err != nil {
+		notFound(writer, id)
+		return
+	}
+	httpx.WriteJSON(writer, http.StatusOK, map[string]any{"batchId": batchID, "state": state, "progress": progress})
+}
+
+func (s *Server) cancelBatch(writer http.ResponseWriter, request *http.Request, principal domain.Principal, batchID string, id string) {
+	if s.config.BatchExports == nil || !s.allowed(writer, principal, "export", batchID, id) {
+		if s.config.BatchExports == nil {
+			internalError(writer, id)
+		}
+		return
+	}
+	if err := s.config.BatchExports.Cancel(request.Context(), batchID); err != nil {
+		notFound(writer, id)
+		return
+	}
+	writer.WriteHeader(http.StatusNoContent)
+}
+
 func (s *Server) preflightExport(writer http.ResponseWriter, request *http.Request, principal domain.Principal, project string, id string) {
 	if s.config.Preflight == nil || !s.allowed(writer, principal, "export", project, id) {
 		if s.config.Preflight == nil {
@@ -813,6 +855,24 @@ func (s *Server) preflightExport(writer http.ResponseWriter, request *http.Reque
 }
 func (s *Server) createExport(writer http.ResponseWriter, request *http.Request, principal domain.Principal, project string, id string) {
 	if !s.allowed(writer, principal, "export", project, id) {
+		return
+	}
+	if s.config.BatchExports != nil {
+		var input ExportInput
+		if httpx.ReadJSON(request, &input) != nil {
+			httpx.Error(writer, http.StatusUnprocessableEntity, "invalid_export", "Export is invalid.", id)
+			return
+		}
+		batchID, jobs, err := s.config.BatchExports.Submit(request.Context(), application.BatchExportRequest{ProjectID: project, ItemIDs: input.ItemIDs})
+		if err != nil {
+			if errors.Is(err, store.ErrQueueFull) {
+				httpx.Error(writer, http.StatusTooManyRequests, "export_busy", "Export capacity is full.", id)
+			} else {
+				httpx.Error(writer, http.StatusUnprocessableEntity, "invalid_export", "Export is invalid.", id)
+			}
+			return
+		}
+		httpx.WriteJSON(writer, http.StatusAccepted, map[string]any{"batchId": batchID, "jobs": jobs})
 		return
 	}
 	owned, err := s.config.Projects.Get(request.Context(), project)

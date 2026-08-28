@@ -223,11 +223,11 @@ paths:
               $ref: "#/components/schemas/ExportInput"
       responses:
         "202":
-          description: Export queued
+          description: Batch export queued
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Job"
+                $ref: "#/components/schemas/BatchExportSubmission"
         "404":
           $ref: "#/components/responses/Error"
         "403":
@@ -235,6 +235,33 @@ paths:
         "429":
           $ref: "#/components/responses/Error"
         "422":
+          $ref: "#/components/responses/Error"
+  /batches/{batchId}:
+    parameters:
+      - name: batchId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      summary: Get durable batch export progress
+      operationId: getBatchProgress
+      responses:
+        "200":
+          description: Batch progress
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BatchProgress"
+        "404":
+          $ref: "#/components/responses/Error"
+    delete:
+      summary: Cancel a batch export
+      operationId: cancelBatch
+      responses:
+        "204":
+          description: Batch cancellation requested
+        "404":
           $ref: "#/components/responses/Error"
   /projects/{projectId}/exports/preflight:
     parameters:
@@ -624,6 +651,40 @@ components:
           type: string
           maxLength: 160
           description: Restricted template using documented variables only.
+        itemIds:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+          description: >-
+            Optional ordered project-item selection; omitted selects all.
+    BatchExportSubmission:
+      type: object
+      required:
+        - batchId
+        - jobs
+      properties:
+        batchId:
+          type: string
+        jobs:
+          type: array
+          items:
+            $ref: "#/components/schemas/Job"
+    BatchProgress:
+      type: object
+      required:
+        - batchId
+        - state
+        - progress
+      properties:
+        batchId:
+          type: string
+        state:
+          type: string
+        progress:
+          type: number
+          minimum: 0
+          maximum: 1
     Destination:
       type: object
       required:

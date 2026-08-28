@@ -12,6 +12,7 @@ var (
 	folderIDPattern  = regexp.MustCompile(`^f_[A-Za-z0-9_-]{43}$`)
 	projectIDPattern = regexp.MustCompile(`^p_[A-Za-z0-9_-]{12,64}$`)
 	jobIDPattern     = regexp.MustCompile(`^j_[A-Za-z0-9_-]{12,64}$`)
+	batchIDPattern   = regexp.MustCompile(`^b_[A-Za-z0-9_-]{12,64}$`)
 )
 
 type routeKind uint8
@@ -44,6 +45,8 @@ const (
 	routePutSettings
 	routeRefreshSettings
 	routeDownloadOutput
+	routeGetBatch
+	routeCancelBatch
 )
 
 type route struct {
@@ -55,6 +58,7 @@ func validMediaID(value string) bool   { return mediaIDPattern.MatchString(value
 func validFolderID(value string) bool  { return folderIDPattern.MatchString(value) }
 func validProjectID(value string) bool { return projectIDPattern.MatchString(value) }
 func validJobID(value string) bool     { return jobIDPattern.MatchString(value) }
+func validBatchID(value string) bool   { return batchIDPattern.MatchString(value) }
 
 func parseRoute(method, path string) route {
 	if !strings.HasPrefix(path, "/api/v1/") || strings.Contains(path, "\\") {
@@ -119,6 +123,10 @@ func parseRoute(method, path string) route {
 		return route{kind: routeDownloadOutput, id: parts[1] + ":" + parts[3]}
 	case len(parts) == 2 && parts[0] == "jobs" && validJobID(parts[1]) && method == http.MethodDelete:
 		return route{kind: routeCancelJob, id: parts[1]}
+	case len(parts) == 2 && parts[0] == "batches" && validBatchID(parts[1]) && method == http.MethodGet:
+		return route{kind: routeGetBatch, id: parts[1]}
+	case len(parts) == 2 && parts[0] == "batches" && validBatchID(parts[1]) && method == http.MethodDelete:
+		return route{kind: routeCancelBatch, id: parts[1]}
 	case len(parts) == 1 && parts[0] == "automation" && method == http.MethodPost:
 		return route{kind: routeAutomation}
 	default:

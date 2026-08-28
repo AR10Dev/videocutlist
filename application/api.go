@@ -75,13 +75,14 @@ type Project struct {
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 type ExportInput struct {
-	Mode             string `json:"mode"`
-	Selection        string `json:"selection"`
-	StreamIndexes    []int  `json:"streamIndexes,omitempty"`
-	CutStrategy      string `json:"cutStrategy"`
-	Container        string `json:"container"`
-	DestinationID    string `json:"destinationId,omitempty"`
-	FilenameTemplate string `json:"filenameTemplate,omitempty"`
+	Mode             string   `json:"mode"`
+	Selection        string   `json:"selection"`
+	StreamIndexes    []int    `json:"streamIndexes,omitempty"`
+	CutStrategy      string   `json:"cutStrategy"`
+	Container        string   `json:"container"`
+	DestinationID    string   `json:"destinationId,omitempty"`
+	FilenameTemplate string   `json:"filenameTemplate,omitempty"`
+	ItemIDs          []string `json:"itemIds,omitempty"`
 }
 type Job struct {
 	ID              string               `json:"id"`

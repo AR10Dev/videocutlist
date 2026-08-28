@@ -18,6 +18,7 @@ func TestParseRoute(t *testing.T) {
 	media := "m_" + strings.Repeat("a", 43)
 	project := "p_" + strings.Repeat("b", 12)
 	job := "j_" + strings.Repeat("c", 12)
+	batch := "b_" + strings.Repeat("d", 12)
 	tests := []struct {
 		name, method, path string
 		kind               routeKind
@@ -41,6 +42,8 @@ func TestParseRoute(t *testing.T) {
 		{"chapter export", http.MethodGet, "/api/v1/projects/" + project + "/interchange/chapters", routeExportInterchange, project + ":chapters"},
 		{"detection", http.MethodPost, "/api/v1/projects/" + project + "/detections", routeCreateDetection, project},
 		{"job delete", http.MethodDelete, "/api/v1/jobs/" + job, routeCancelJob, job},
+		{"batch get", http.MethodGet, "/api/v1/batches/" + batch, routeGetBatch, batch},
+		{"batch delete", http.MethodDelete, "/api/v1/batches/" + batch, routeCancelBatch, batch},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
