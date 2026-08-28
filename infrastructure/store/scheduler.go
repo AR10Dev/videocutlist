@@ -9,7 +9,10 @@ import (
 	"time"
 )
 
-var ErrQueueFull = errors.New("job queue capacity exceeded")
+var (
+	ErrQueueFull     = errors.New("job queue capacity exceeded")
+	ErrSourceChanged = errors.New("source_changed")
+)
 
 // SchedulerConfig keeps durable backlog admission independent of active workers.
 type SchedulerConfig struct {
@@ -148,6 +151,31 @@ func (s *Scheduler) Shutdown(ctx context.Context) error {
 	}
 }
 
+func (s *Scheduler) CancelBatch(ctx context.Context, batchID string) error {
+	rows, err := s.jobs.db.QueryContext(ctx, `SELECT id FROM jobs WHERE batch_id=? AND state IN ('queued','running')`, batchID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if _, err := s.Cancel(ctx, id); err != nil && !errors.Is(err, ErrJobState) {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *Scheduler) Cancel(ctx context.Context, id string) (Job, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -214,7 +242,11 @@ func (s *Scheduler) worker() {
 		} else if ctx.Err() != nil {
 			_, _ = s.jobs.Cancel(context.Background(), job.ID)
 		} else {
-			_, _ = s.jobs.Fail(context.Background(), job.ID, "job_failed")
+			code := "job_failed"
+			if errors.Is(err, ErrSourceChanged) {
+				code = "source_changed"
+			}
+			_, _ = s.jobs.Fail(context.Background(), job.ID, code)
 		}
 	}
 }

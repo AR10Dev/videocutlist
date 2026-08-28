@@ -32,14 +32,18 @@ type BatchExportRequest struct {
 }
 
 type BatchExportUseCase struct {
-	Projects ProjectRepository
-	Media    MediaCatalog
-	Jobs     *store.JobsStore
-	Settings *store.RuntimeSettingsState
+	Projects  ProjectRepository
+	Media     MediaCatalog
+	Jobs      *store.JobsStore
+	Scheduler *store.Scheduler
+	Settings  *store.RuntimeSettingsState
+	// RunSnapshot executes an immutable export snapshot after source validation.
+	RunSnapshot func(context.Context, ExportSnapshot) error
 }
 
 func (b BatchExportUseCase) Submit(ctx context.Context, request BatchExportRequest) (string, []Job, error) {
 	if b.Projects == nil || b.Media == nil || b.Jobs == nil {
+
 		return "", nil, errors.New("batch export dependencies are required")
 	}
 	project, err := b.Projects.Get(ctx, request.ProjectID)
@@ -82,7 +86,12 @@ func (b BatchExportUseCase) Submit(ctx context.Context, request BatchExportReque
 	if len(jobs) == 0 {
 		return "", nil, errors.New("no project items selected")
 	}
-	created, err := b.Jobs.CreateBatch(ctx, jobs)
+	var created []store.Job
+	if b.Scheduler != nil {
+		created, err = b.Scheduler.Submit(ctx, jobs)
+	} else {
+		created, err = b.Jobs.CreateBatch(ctx, jobs)
+	}
 	if err != nil {
 		return "", nil, err
 	}
@@ -104,7 +113,30 @@ func cloneProjectItem(item domain.ProjectItem) domain.ProjectItem {
 }
 
 func (b BatchExportUseCase) Cancel(ctx context.Context, batchID string) error {
+	if b.Scheduler != nil {
+		return b.Scheduler.CancelBatch(ctx, batchID)
+	}
 	return b.Jobs.CancelBatch(ctx, batchID)
+}
+
+// RunQueuedSnapshot is the scheduler runner seam for immutable exports. It
+// rechecks the source before handing the snapshot to the actual exporter.
+func (b BatchExportUseCase) RunQueuedSnapshot(ctx context.Context, job store.Job) error {
+	if b.RunSnapshot == nil || b.Media == nil {
+		return errors.New("batch export runner is not configured")
+	}
+	var snapshot ExportSnapshot
+	if err := json.Unmarshal([]byte(job.RequestJSON), &snapshot); err != nil {
+		return errors.New("invalid export snapshot")
+	}
+	media, err := b.Media.Get(ctx, snapshot.Source.MediaID)
+	if err != nil {
+		return errors.New("source_changed")
+	}
+	if err := ValidateSnapshot(snapshot, media); err != nil {
+		return err
+	}
+	return b.RunSnapshot(ctx, snapshot)
 }
 
 func (b BatchExportUseCase) Progress(ctx context.Context, batchID string) (store.JobState, float64, error) {
@@ -114,7 +146,7 @@ func (b BatchExportUseCase) Progress(ctx context.Context, batchID string) (store
 // ValidateSnapshot reports source_changed when current metadata differs from the queued snapshot.
 func ValidateSnapshot(snapshot ExportSnapshot, media Media) error {
 	if media.ID != snapshot.Source.MediaID || media.ETag != snapshot.Source.ETag || media.SizeBytes != snapshot.Source.SizeBytes || media.DurationMS != snapshot.Source.DurationMS {
-		return fmt.Errorf("source_changed")
+		return fmt.Errorf("%w", store.ErrSourceChanged)
 	}
 	return nil
 }

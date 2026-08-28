@@ -3,6 +3,7 @@ package application
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	"videocutlist/domain"
@@ -64,6 +65,55 @@ func TestBatchExportSnapshotsItemsInProjectOrder(t *testing.T) {
 	}
 	if state, progress, err := uc.Progress(context.Background(), batchID); err != nil || state != store.JobQueued || progress != 0 {
 		t.Fatalf("progress = %s %v %v", state, progress, err)
+	}
+}
+
+func TestBatchExportUsesSchedulerCapacity(t *testing.T) {
+	db, err := store.OpenDatabase(context.Background(), t.TempDir()+"/jobs.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	jobs, _ := store.NewJobsStore(db)
+	scheduler, err := store.NewScheduler(jobs, store.SchedulerConfig{QueueCapacity: 1, WorkerLimit: 1}, func(context.Context, store.Job) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := "m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	items := []domain.ProjectItem{{ID: "i_aaaaaaaaaaaaaaaaaaaaaaaa", MediaID: id}, {ID: "i_bbbbbbbbbbbbbbbbbbbbbbbb", MediaID: id}}
+	uc := BatchExportUseCase{
+		Projects:  batchProjectRepo{project: ProjectRecord{Document: domain.Document{SchemaVersion: 2, Name: "Batch", Items: items}}},
+		Media:     batchCatalog{media: map[string]Media{id: {ID: id, ETag: "a", SizeBytes: 1, DurationMS: 10}}},
+		Jobs:      jobs,
+		Scheduler: scheduler,
+	}
+	if _, _, err := uc.Submit(context.Background(), BatchExportRequest{ProjectID: "p_aaaaaaaaaaaa"}); !errors.Is(err, store.ErrQueueFull) {
+		t.Fatalf("capacity error = %v", err)
+	}
+	var count int
+	if err := db.QueryRowContext(context.Background(), `SELECT COUNT(*) FROM jobs`).Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 {
+		t.Fatalf("rejected batch created %d jobs", count)
+	}
+}
+
+func TestBatchExportRunnerRejectsChangedSource(t *testing.T) {
+	id := "m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	called := false
+	uc := BatchExportUseCase{
+		Media:       batchCatalog{media: map[string]Media{id: {ID: id, ETag: "changed", SizeBytes: 1, DurationMS: 10}}},
+		RunSnapshot: func(context.Context, ExportSnapshot) error { called = true; return nil },
+	}
+	snapshot := ExportSnapshot{Source: SourceSnapshot{MediaID: id, ETag: "original", SizeBytes: 1, DurationMS: 10}}
+	payload, _ := json.Marshal(snapshot)
+	err := uc.RunQueuedSnapshot(context.Background(), store.Job{RequestJSON: string(payload)})
+	if err == nil || err.Error() != "source_changed" {
+		t.Fatalf("runner error = %v", err)
+	}
+	if called {
+		t.Fatal("export runner called for changed source")
 	}
 }
 
