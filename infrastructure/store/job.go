@@ -59,13 +59,13 @@ func MigrateJobs(ctx context.Context, db *sql.DB) error {
 }
 
 func (s *JobStore) Create(ctx context.Context, job ExportJob) (ExportJob, error) {
-	if job.ID == "" || job.OwnerLogin == "" || job.ProjectID == "" || job.ProjectRevision <= 0 || job.RequestJSON == "" {
-		return ExportJob{}, errors.New("job id, owner, project, revision, and request are required")
+	if job.ID == "" || job.ProjectID == "" || job.ProjectRevision <= 0 || job.RequestJSON == "" {
+		return ExportJob{}, errors.New("job id, project, revision, and request are required")
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err := s.db.ExecContext(ctx, `INSERT INTO export_jobs
-(id, owner_login, project_id, project_revision, state, request_json, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, job.ID, job.OwnerLogin, job.ProjectID, job.ProjectRevision, JobQueued, job.RequestJSON, now, now)
+(id, project_id, project_revision, state, request_json, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?)`, job.ID, job.ProjectID, job.ProjectRevision, JobQueued, job.RequestJSON, now, now)
 	if err != nil {
 		return ExportJob{}, fmt.Errorf("create export job: %w", err)
 	}
@@ -73,8 +73,9 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, job.ID, job.OwnerLogin, job.ProjectID, job.Pro
 }
 
 func (s *JobStore) Get(ctx context.Context, owner, id string) (ExportJob, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id, owner_login, project_id, project_revision, state, request_json, result_json, error_code, created_at, updated_at
-FROM export_jobs WHERE id = ? AND owner_login = ?`, id, owner)
+	_ = owner // compatibility until ticket 03 removes ownership parameters.
+	row := s.db.QueryRowContext(ctx, `SELECT id, project_id, project_revision, state, request_json, result_json, error_code, created_at, updated_at
+FROM export_jobs WHERE id = ?`, id)
 	job, err := scanJob(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ExportJob{}, ErrJobNotFound
@@ -119,9 +120,10 @@ func (s *JobStore) Recover(ctx context.Context) (int64, error) {
 }
 
 func (s *JobStore) transition(ctx context.Context, owner, id string, from, to JobState, resultJSON, errorCode sql.NullString) (ExportJob, error) {
+	_ = owner // compatibility until ticket 03 removes ownership parameters.
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	result, err := s.db.ExecContext(ctx, `UPDATE export_jobs SET state = ?, result_json = ?, error_code = ?, updated_at = ?
-WHERE id = ? AND owner_login = ? AND state = ?`, to, resultJSON, errorCode, now, id, owner, from)
+WHERE id = ? AND state = ?`, to, resultJSON, errorCode, now, id, from)
 	if err != nil {
 		return ExportJob{}, err
 	}
@@ -143,7 +145,7 @@ type jobScanner interface{ Scan(...any) error }
 func scanJob(row jobScanner) (ExportJob, error) {
 	var job ExportJob
 	var created, updated string
-	if err := row.Scan(&job.ID, &job.OwnerLogin, &job.ProjectID, &job.ProjectRevision, &job.State, &job.RequestJSON, &job.ResultJSON, &job.ErrorCode, &created, &updated); err != nil {
+	if err := row.Scan(&job.ID, &job.ProjectID, &job.ProjectRevision, &job.State, &job.RequestJSON, &job.ResultJSON, &job.ErrorCode, &created, &updated); err != nil {
 		return ExportJob{}, err
 	}
 	var err error

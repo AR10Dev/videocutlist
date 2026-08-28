@@ -205,8 +205,14 @@ func TestExportDownloadEnforcesDurableLifecycle(t *testing.T) {
 	if _, err := jobs.Cancel(ctx, "owner", "j_download_cancelled"); err != nil {
 		t.Fatal(err)
 	}
+	other, _, err := executor.Download(ctx, domain.Principal{Subject: "other"}, "j_download_ok", 0)
+	if err != nil {
+		t.Fatalf("single-user download = %v", err)
+	}
+	if err := other.Close(); err != nil {
+		t.Fatal(err)
+	}
 	for _, test := range []struct{ owner, id string }{
-		{"other", "j_download_ok"},
 		{"owner", "j_download_expired"},
 		{"owner", "j_download_archive"},
 		{"owner", "j_download_source"},

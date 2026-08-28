@@ -770,7 +770,7 @@ func (s *Server) putProject(writer http.ResponseWriter, request *http.Request, p
 		httpx.Error(writer, 422, "invalid_project", "Project is invalid.", id)
 		return
 	}
-	saved, err := s.config.Projects.Save(request.Context(), principal, project, domain.Document(input), media.DurationMS)
+	saved, err := s.config.Projects.Save(request.Context(), principal, project, domain.Document{MediaID: input.MediaID, Revision: input.Revision, Segments: input.Segments, UIState: input.UIState}, media.DurationMS)
 	if err != nil {
 		httpx.Error(writer, http.StatusConflict, "revision_conflict", "Project revision conflicts.", id)
 		return

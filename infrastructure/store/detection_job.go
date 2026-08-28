@@ -33,21 +33,22 @@ func NewDetectionJobStore(db *sql.DB) (*DetectionJobStore, error) {
 	return &DetectionJobStore{db}, nil
 }
 func (s *DetectionJobStore) Create(ctx context.Context, j DetectionJob) (DetectionJob, error) {
-	if j.ID == "" || j.OwnerLogin == "" || j.ProjectID == "" || j.MediaID == "" || j.ProjectRevision <= 0 {
-		return DetectionJob{}, errors.New("detection job fields are required")
+	if j.ID == "" || j.ProjectID == "" || j.MediaID == "" || j.ProjectRevision <= 0 {
+		return DetectionJob{}, errors.New("detection job id, project, media, and revision are required")
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err := s.db.ExecContext(ctx, `INSERT INTO detection_jobs(id,owner_login,project_id,media_id,project_revision,kind,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?, ?,?)`, j.ID, j.OwnerLogin, j.ProjectID, j.MediaID, j.ProjectRevision, j.Kind, JobQueued, now, now)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO detection_jobs(id,project_id,media_id,project_revision,kind,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)`, j.ID, j.ProjectID, j.MediaID, j.ProjectRevision, j.Kind, JobQueued, now, now)
 	if err != nil {
 		return DetectionJob{}, err
 	}
 	return s.Get(ctx, j.OwnerLogin, j.ID)
 }
 func (s *DetectionJobStore) Get(ctx context.Context, owner, id string) (DetectionJob, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id,owner_login,project_id,media_id,project_revision,kind,state,result_json,error_code,created_at,updated_at FROM detection_jobs WHERE id=? AND owner_login=?`, id, owner)
+	_ = owner // compatibility until ticket 03 removes ownership parameters.
+	row := s.db.QueryRowContext(ctx, `SELECT id,project_id,media_id,project_revision,kind,state,result_json,error_code,created_at,updated_at FROM detection_jobs WHERE id=?`, id)
 	var j DetectionJob
 	var c, u string
-	err := row.Scan(&j.ID, &j.OwnerLogin, &j.ProjectID, &j.MediaID, &j.ProjectRevision, &j.Kind, &j.State, &j.ResultJSON, &j.ErrorCode, &c, &u)
+	err := row.Scan(&j.ID, &j.ProjectID, &j.MediaID, &j.ProjectRevision, &j.Kind, &j.State, &j.ResultJSON, &j.ErrorCode, &c, &u)
 	if errors.Is(err, sql.ErrNoRows) {
 		return DetectionJob{}, ErrJobNotFound
 	}
@@ -65,8 +66,9 @@ func (s *DetectionJobStore) Get(ctx context.Context, owner, id string) (Detectio
 	return j, nil
 }
 func (s *DetectionJobStore) transition(ctx context.Context, owner, id string, from, to JobState, result, errorCode sql.NullString) (DetectionJob, error) {
+	_ = owner // compatibility until ticket 03 removes ownership parameters.
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	r, e := s.db.ExecContext(ctx, `UPDATE detection_jobs SET state=?,result_json=?,error_code=?,updated_at=? WHERE id=? AND owner_login=? AND state=?`, to, result, errorCode, now, id, owner, from)
+	r, e := s.db.ExecContext(ctx, `UPDATE detection_jobs SET state=?,result_json=?,error_code=?,updated_at=? WHERE id=? AND state=?`, to, result, errorCode, now, id, from)
 	if e != nil {
 		return DetectionJob{}, e
 	}

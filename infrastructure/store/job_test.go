@@ -54,15 +54,15 @@ func TestJobStateTransitionsAndRecovery(t *testing.T) {
 	}
 }
 
-func TestJobOwnerIsNotRevealed(t *testing.T) {
+func TestJobLookupIgnoresCompatibilityOwner(t *testing.T) {
 	db := openJobsDB(t)
 	jobs, _ := store.NewJobStore(db)
 	ctx := context.Background()
-	if _, err := jobs.Create(ctx, store.ExportJob{ID: "private", OwnerLogin: "a", ProjectID: "p", ProjectRevision: 1, RequestJSON: `{}`}); err != nil {
+	if _, err := jobs.Create(ctx, store.ExportJob{ID: "shared", OwnerLogin: "a", ProjectID: "p", ProjectRevision: 1, RequestJSON: `{}`}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := jobs.Get(ctx, "b", "private"); !errors.Is(err, store.ErrJobNotFound) {
-		t.Fatalf("cross-owner get = %v", err)
+	if _, err := jobs.Get(ctx, "b", "shared"); err != nil {
+		t.Fatalf("single-user lookup = %v", err)
 	}
 }
 
@@ -80,7 +80,7 @@ func openJobsDB(t *testing.T) *sql.DB {
 	if err := store.MigrateJobs(ctx, db); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.ExecContext(ctx, `INSERT INTO projects (id, owner_login, revision, document_json, created_at, updated_at) VALUES ('project', 'editor', 1, '{}', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`); err != nil {
+	if _, err := db.ExecContext(ctx, `INSERT INTO projects (id, revision, document_json, created_at, updated_at) VALUES ('project', 1, '{}', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`); err != nil {
 		t.Fatal(err)
 	}
 	return db

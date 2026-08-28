@@ -46,8 +46,9 @@ func MigrateProjects(ctx context.Context, db *sql.DB) error {
 }
 
 func (s *ProjectStore) Get(ctx context.Context, owner, id string) (ProjectRecord, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id, owner_login, revision, document_json, created_at, updated_at
-FROM projects WHERE id = ? AND owner_login = ?`, id, owner)
+	_ = owner // compatibility until ticket 02 removes ownership parameters.
+	row := s.db.QueryRowContext(ctx, `SELECT id, revision, document_json, created_at, updated_at
+FROM projects WHERE id = ?`, id)
 	record, err := scanProject(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ProjectRecord{}, ErrProjectNotFound // Do not reveal a different owner's project.
@@ -57,13 +58,14 @@ FROM projects WHERE id = ? AND owner_login = ?`, id, owner)
 
 // Save creates at revision zero and otherwise conditionally increments revision.
 func (s *ProjectStore) Save(ctx context.Context, owner, id string, expectedRevision int64, documentJSON string) (ProjectRecord, error) {
-	if owner == "" || id == "" || expectedRevision < 0 {
-		return ProjectRecord{}, errors.New("project owner, id, and revision are required")
+	if id == "" || expectedRevision < 0 {
+		return ProjectRecord{}, errors.New("project id and revision are required")
 	}
+	_ = owner // compatibility until ticket 02 removes ownership parameters.
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if expectedRevision == 0 {
 		_, err := s.db.ExecContext(ctx, `INSERT INTO projects
-(id, owner_login, revision, document_json, created_at, updated_at) VALUES (?, ?, 1, ?, ?, ?)`, id, owner, documentJSON, now, now)
+(id, revision, document_json, created_at, updated_at) VALUES (?, 1, ?, ?, ?)`, id, documentJSON, now, now)
 		if err == nil {
 			return s.Get(ctx, owner, id)
 		}
@@ -80,7 +82,7 @@ func (s *ProjectStore) Save(ctx context.Context, owner, id string, expectedRevis
 		return ProjectRecord{}, fmt.Errorf("create project: %w", err)
 	}
 	result, err := s.db.ExecContext(ctx, `UPDATE projects SET revision = revision + 1, document_json = ?, updated_at = ?
-WHERE id = ? AND owner_login = ? AND revision = ?`, documentJSON, now, id, owner, expectedRevision)
+WHERE id = ? AND revision = ?`, documentJSON, now, id, expectedRevision)
 	if err != nil {
 		return ProjectRecord{}, fmt.Errorf("update project: %w", err)
 	}
@@ -113,7 +115,7 @@ type projectScanner interface{ Scan(...any) error }
 func scanProject(row projectScanner) (ProjectRecord, error) {
 	var record ProjectRecord
 	var created, updated string
-	if err := row.Scan(&record.ID, &record.OwnerLogin, &record.Revision, &record.DocumentJSON, &created, &updated); err != nil {
+	if err := row.Scan(&record.ID, &record.Revision, &record.DocumentJSON, &created, &updated); err != nil {
 		return ProjectRecord{}, err
 	}
 	var err error

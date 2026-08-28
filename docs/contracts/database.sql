@@ -14,7 +14,6 @@ CREATE TABLE media (
 
 CREATE TABLE projects (
   id TEXT PRIMARY KEY,
-  owner_login TEXT NOT NULL,
   revision INTEGER NOT NULL,
   document_json TEXT NOT NULL,
   created_at TEXT NOT NULL,
@@ -23,7 +22,6 @@ CREATE TABLE projects (
 
 CREATE TABLE export_jobs (
   id TEXT PRIMARY KEY,
-  owner_login TEXT NOT NULL,
   project_id TEXT NOT NULL,
   project_revision INTEGER NOT NULL,
   state TEXT NOT NULL,
