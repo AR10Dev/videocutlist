@@ -165,7 +165,11 @@ func (s *Scheduler) worker() {
 			continue
 		}
 		if err != nil {
-			select { case <-time.After(100 * time.Millisecond): case <-s.stop: return }
+			select {
+			case <-time.After(100 * time.Millisecond):
+			case <-s.stop:
+				return
+			}
 			continue
 		}
 		ctx, cancel := context.WithCancel(context.Background())
@@ -189,7 +193,9 @@ func (s *Scheduler) worker() {
 
 func (s *Scheduler) claim(ctx context.Context) (Job, error) {
 	tx, err := s.jobs.db.BeginTx(ctx, nil)
-	if err != nil { return Job{}, err }
+	if err != nil {
+		return Job{}, err
+	}
 	defer tx.Rollback()
 	var id string
 	if err := tx.QueryRowContext(ctx, `SELECT id FROM jobs WHERE state=? ORDER BY created_at,id LIMIT 1`, JobQueued).Scan(&id); err != nil {
@@ -197,14 +203,27 @@ func (s *Scheduler) claim(ctx context.Context) (Job, error) {
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	r, err := tx.ExecContext(ctx, `UPDATE jobs SET state=?,updated_at=? WHERE id=? AND state=?`, JobRunning, now, id, JobQueued)
-	if err != nil { return Job{}, err }
+	if err != nil {
+		return Job{}, err
+	}
 	n, err := r.RowsAffected()
-	if err != nil || n != 1 { return Job{}, sql.ErrNoRows }
+	if err != nil || n != 1 {
+		return Job{}, sql.ErrNoRows
+	}
 	row := tx.QueryRowContext(ctx, `SELECT id,batch_id,kind,COALESCE(project_id,''),COALESCE(project_item_id,''),state,request_json,result_json,error_code,created_at,updated_at FROM jobs WHERE id=?`, id)
 	job, err := scanUnifiedJob(row)
-	if err != nil { return Job{}, err }
-	if err := tx.Commit(); err != nil { return Job{}, err }
+	if err != nil {
+		return Job{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Job{}, err
+	}
 	return job, nil
 }
 
-func (s *Scheduler) signal() { select { case s.wake <- struct{}{}: default: } }
+func (s *Scheduler) signal() {
+	select {
+	case s.wake <- struct{}{}:
+	default:
+	}
+}
