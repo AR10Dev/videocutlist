@@ -378,6 +378,22 @@ test("MVP browser behavior: list, metadata, settle, cancel, offset, markers, res
   expect(new Set(requestOrigins)).toEqual(new Set([apiOrigin]));
 });
 
+test("keeps playback position, markers, and undo history synchronized", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await expect(page.getByText("Preview ready.")).toBeVisible();
+
+  await page.getByLabel("Preview player").evaluate((video) => {
+    const player = video as HTMLVideoElement;
+    player.currentTime = 2.5;
+    player.dispatchEvent(new Event("timeupdate"));
+  });
+  await expect(page.getByLabel("Timeline playhead")).toHaveValue("2500");
+  await expect(page.getByRole("button", { name: "Undo" })).toBeDisabled();
+  await page.getByRole("button", { name: "Set In marker" }).click();
+  await expect(page.getByText("In: 0:02.500")).toBeVisible();
+});
+
 test("shows a safe preview failure and maps markers from the watched preview", async ({ page }) => {
   await page.unroute(`${apiOrigin}/api/v1/**`);
   await page.route(`${apiOrigin}/api/v1/**`, (route) => {

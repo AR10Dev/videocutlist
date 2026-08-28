@@ -3,6 +3,7 @@ import {
   createTimelineHistory,
   editTimeline,
   redoTimeline,
+  updateTimelinePlayback,
   undoTimeline,
   type TimelineHistory,
 } from "./timeline";
@@ -145,7 +146,7 @@ export function App() {
   const [timecode, setTimecode] = createSignal("");
   const [thumbnailURL, setThumbnailURL] = createSignal<string>();
   const [waveform, setWaveform] = createSignal<number[]>([]);
-  const [playheadMs, setPlayheadMs] = createSignal(0);
+  const [previewCenterMs, setPreviewCenterMs] = createSignal(0);
   const [settings, setSettings] = createSignal(() => storedSettings(localStorage));
   const [settingsOpen, setSettingsOpen] = createSignal(false);
   const [serverSettingsStatus, setServerSettingsStatus] = createSignal("");
@@ -194,6 +195,7 @@ export function App() {
       zoom: 1,
     }),
   );
+  const playheadMs = () => timeline().present.playheadMs;
   let video: HTMLVideoElement | undefined;
   let mediaRequest: AbortController | undefined;
   let metadataRequest: AbortController | undefined;
@@ -351,8 +353,13 @@ export function App() {
   const updateTimeline = (changes: Partial<ReturnType<typeof present>>) => {
     const next = editTimeline(timeline(), changes);
     setTimeline(next);
-    setPlayheadMs(next.present.playheadMs);
+    if (changes.playheadMs !== undefined) setPreviewCenterMs(next.present.playheadMs);
     markDirty();
+  };
+  const updatePlaybackPosition = (positionMs: number) => {
+    const nextPosition = Math.max(0, Math.min(duration(), Math.round(positionMs)));
+    if (nextPosition === present().playheadMs) return;
+    setTimeline(updateTimelinePlayback(timeline(), nextPosition));
   };
   const loadFolder = async (folderId?: string, cursor?: string) => {
     const request = ++folderRequestVersion;
@@ -517,7 +524,7 @@ export function App() {
     metadataRequest = controller;
     const request = ++metadataRequestVersion;
     setSelected(item);
-    setPlayheadMs(0);
+    setPreviewCenterMs(0);
     setTimeline(
       createTimelineHistory({
         playheadMs: 0,
@@ -617,7 +624,7 @@ export function App() {
     },
   );
   createEffect(
-    () => [selected(), playheadMs(), muted()] as const,
+    () => [selected(), previewCenterMs(), muted()] as const,
     ([item, position, isMuted]) => {
       cleanupPreview?.();
       cleanupPreview = undefined;
@@ -660,12 +667,12 @@ export function App() {
       };
     },
   );
-  const watchedPosition = () => {
+  const watchedPosition = () => playheadMs();
+  const syncPreviewPosition = (currentTime: number) => {
     const item = selected();
     const info = diagnostics();
-    return item && info && video
-      ? watchedMediaPosition(info.startMs, video.currentTime, item.durationMs)
-      : playheadMs();
+    if (item && info)
+      updatePlaybackPosition(watchedMediaPosition(info.startMs, currentTime, item.durationMs));
   };
   const setMarker = (kind: "inMs" | "outMs", value: number) => {
     setTimeline(editTimeline(timeline(), { [kind]: value }));
@@ -848,7 +855,7 @@ export function App() {
           zoom: project.uiState.zoom,
         }),
       );
-      setPlayheadMs(project.uiState.playheadMs);
+      setPreviewCenterMs(project.uiState.playheadMs);
       setMuted(project.uiState.muted);
       setDirty(false);
       remember(project.id, item.name);
@@ -871,7 +878,7 @@ export function App() {
     setRevision(0);
     setDirty(false);
     setSelected();
-    setPlayheadMs(0);
+    setPreviewCenterMs(0);
     setMuted(false);
     setDiagnostics();
     setTimeline(
@@ -1260,13 +1267,13 @@ export function App() {
       event.preventDefault();
       const next = event.shiftKey ? redoTimeline(timeline()) : undoTimeline(timeline());
       setTimeline(next);
-      setPlayheadMs(next.present.playheadMs);
+      setPreviewCenterMs(next.present.playheadMs);
       markDirty();
     } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "y") {
       event.preventDefault();
       const next = redoTimeline(timeline());
       setTimeline(next);
-      setPlayheadMs(next.present.playheadMs);
+      setPreviewCenterMs(next.present.playheadMs);
       markDirty();
     }
   };
@@ -1433,6 +1440,11 @@ export function App() {
                         muted={muted()}
                         aria-label="Preview player"
                         data-preview-offset={diagnostics()?.offsetMs ?? 0}
+                        onTimeUpdate={(event) =>
+                          syncPreviewPosition(event.currentTarget.currentTime)
+                        }
+                        onSeeking={(event) => syncPreviewPosition(event.currentTarget.currentTime)}
+                        onSeeked={(event) => syncPreviewPosition(event.currentTarget.currentTime)}
                       />
                     </Show>
                     <div
@@ -1525,7 +1537,7 @@ export function App() {
                         onClick={() => {
                           const next = undoTimeline(timeline());
                           setTimeline(next);
-                          setPlayheadMs(next.present.playheadMs);
+                          setPreviewCenterMs(next.present.playheadMs);
                           markDirty();
                         }}
                       >
@@ -1536,7 +1548,7 @@ export function App() {
                         onClick={() => {
                           const next = redoTimeline(timeline());
                           setTimeline(next);
-                          setPlayheadMs(next.present.playheadMs);
+                          setPreviewCenterMs(next.present.playheadMs);
                           markDirty();
                         }}
                       >

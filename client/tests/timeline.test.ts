@@ -6,6 +6,7 @@ import {
   editTimeline,
   redoTimeline,
   resetTimelineHistory,
+  updateTimelinePlayback,
   undoTimeline,
   type TimelineSnapshot,
 } from "../src/timeline";
@@ -32,6 +33,15 @@ describe("timeline history", () => {
     expect(undone.present).toEqual(initial);
     expect(canRedoTimeline(undone)).toBe(true);
     expect(redoTimeline(undone).present).toEqual(changed.present);
+  });
+
+  it("updates playback without creating undo history", () => {
+    const history = editTimeline(createTimelineHistory(initial), { inMs: 200 });
+    const played = updateTimelinePlayback(history, 750);
+    expect(played.present.playheadMs).toBe(750);
+    expect(played.past).toEqual(history.past);
+    expect(played.future).toEqual(history.future);
+    expect(undoTimeline(played).present.inMs).toBe(initial.inMs);
   });
 
   it("clears redo after a new edit", () => {

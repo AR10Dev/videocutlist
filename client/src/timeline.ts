@@ -41,6 +41,14 @@ export const editTimeline = (
   return { present: next, past: [...history.past, copy(history.present)], future: [] };
 };
 
+export const updateTimelinePlayback = (
+  history: TimelineHistory,
+  playheadMs: number,
+): TimelineHistory => ({
+  ...history,
+  present: { ...history.present, playheadMs },
+});
+
 export const undoTimeline = (history: TimelineHistory): TimelineHistory => {
   const previous = history.past.at(-1);
   if (!previous) return history;
