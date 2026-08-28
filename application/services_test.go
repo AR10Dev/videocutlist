@@ -59,6 +59,9 @@ type cancellableCatalog struct {
 func (c *cancellableCatalog) List(context.Context, string, int) (MediaPage, error) {
 	return MediaPage{Items: c.items}, nil
 }
+func (c *cancellableCatalog) Browse(context.Context, string, string, int) (FolderPage, error) {
+	return FolderPage{}, nil
+}
 func (c *cancellableCatalog) Get(context.Context, string) (Media, error) { return Media{}, nil }
 func (c *cancellableCatalog) Refresh(ctx context.Context) error {
 	close(c.started)
@@ -84,6 +87,9 @@ func (c *boundedRecoveryCatalog) List(ctx context.Context, _ string, _ int) (Med
 	case <-ctx.Done():
 		return MediaPage{}, ctx.Err()
 	}
+}
+func (c *boundedRecoveryCatalog) Browse(context.Context, string, string, int) (FolderPage, error) {
+	return FolderPage{}, nil
 }
 func (c *boundedRecoveryCatalog) Get(context.Context, string) (Media, error) { return Media{}, nil }
 func (c *boundedRecoveryCatalog) Refresh(ctx context.Context) error {
