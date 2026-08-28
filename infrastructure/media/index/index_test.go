@@ -189,6 +189,9 @@ func TestRefreshCancellationPreservesExistingCatalog(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := len(catalog.records)
+	if _, err := catalog.Get(context.Background(), MediaID("library", "clip.mp4")); err != nil {
+		t.Fatalf("initial catalog missing clip: %v", err)
+	}
 	started := make(chan struct{})
 	scanner.prober = cancellingProbe{started: started}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -201,6 +204,9 @@ func TestRefreshCancellationPreservesExistingCatalog(t *testing.T) {
 	}
 	if len(catalog.records) != before {
 		t.Fatalf("catalog changed after cancelled refresh: %#v", catalog.records)
+	}
+	if _, err := catalog.Get(context.Background(), MediaID("library", "clip.mp4")); err != nil {
+		t.Fatalf("original catalog record unavailable after cancellation: %v", err)
 	}
 }
 

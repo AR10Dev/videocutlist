@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"videocutlist/application"
@@ -162,8 +163,9 @@ type Config struct {
 }
 
 type Server struct {
-	config  Config
-	metrics *Metrics
+	config     Config
+	metrics    *Metrics
+	settingsMu sync.Mutex
 }
 
 func New(config Config) (*Server, error) {
@@ -396,20 +398,37 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, id string) 
 		httpx.Error(w, http.StatusUnprocessableEntity, "invalid_settings", "Settings must be a complete valid document.", id)
 		return
 	}
-	record, err := s.config.Settings.Update(r.Context(), input.Revision, input.Settings)
-	if errors.Is(err, store.ErrRuntimeSettingsRevisionConflict) {
+	s.settingsMu.Lock()
+	defer s.settingsMu.Unlock()
+	previous, err := s.config.Settings.Get(r.Context())
+	if err != nil {
+		httpx.Error(w, http.StatusInternalServerError, "settings_unavailable", "Settings are temporarily unavailable.", id)
+		return
+	}
+	if previous.Revision != input.Revision {
 		httpx.Error(w, http.StatusConflict, "settings_revision_conflict", "Settings changed; reload before updating.", id)
 		return
 	}
-	if err != nil {
-		httpx.Error(w, http.StatusUnprocessableEntity, "invalid_settings", "Settings must be a complete valid document.", id)
-		return
-	}
 	if s.config.ApplyRuntimeSettings != nil {
-		if err := s.config.ApplyRuntimeSettings(record.Settings); err != nil {
+		if err := s.config.ApplyRuntimeSettings(input.Settings); err != nil {
 			httpx.Error(w, http.StatusUnprocessableEntity, "invalid_settings", "Settings could not be applied safely.", id)
 			return
 		}
+	}
+	record, err := s.config.Settings.Update(r.Context(), input.Revision, input.Settings)
+	if err != nil {
+		if s.config.ApplyRuntimeSettings != nil {
+			if rollbackErr := s.config.ApplyRuntimeSettings(previous.Settings); rollbackErr != nil {
+				httpx.Error(w, http.StatusInternalServerError, "settings_unavailable", "Settings could not be restored safely.", id)
+				return
+			}
+		}
+		if errors.Is(err, store.ErrRuntimeSettingsRevisionConflict) {
+			httpx.Error(w, http.StatusConflict, "settings_revision_conflict", "Settings changed; reload before updating.", id)
+			return
+		}
+		httpx.Error(w, http.StatusUnprocessableEntity, "invalid_settings", "Settings must be a complete valid document.", id)
+		return
 	}
 	if s.config.RuntimeSettings != nil {
 		s.config.RuntimeSettings.Replace(record.Settings)
