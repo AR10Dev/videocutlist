@@ -243,12 +243,12 @@ func (p *projectsStub) Save(_ context.Context, _ string, _ string, document doma
 func TestProjectUseCaseValidatesBeforeRevisionSave(t *testing.T) {
 	repository := &projectsStub{}
 	useCase := ProjectUseCase{Repository: repository}
-	bad := domain.Document{MediaID: "m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", UIState: domain.UIState{Zoom: 0}}
+	bad := domain.Document{SchemaVersion: domain.ProjectSchemaVersion, Name: "Project", Items: []domain.ProjectItem{{ID: "i_aaaaaaaaaaaaaaaaaaaaaaaa", MediaID: "m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", EditorState: &domain.UIState{Zoom: 0}}}}
 	if _, err := useCase.Save(context.Background(), domain.Principal{Subject: "editor"}, "p_aaaaaaaaaaaa", bad, 1_000); err == nil || repository.saves != 0 {
 		t.Fatalf("invalid save = %v, saves = %d", err, repository.saves)
 	}
 	good := bad
-	good.UIState.Zoom = 1
+	good.Items[0].EditorState.Zoom = 1
 	saved, err := useCase.Save(context.Background(), domain.Principal{Subject: "editor"}, "p_aaaaaaaaaaaa", good, 1_000)
 	if err != nil || saved.Revision != 1 || repository.saves != 1 {
 		t.Fatalf("saved = %#v, err = %v, saves = %d", saved, err, repository.saves)

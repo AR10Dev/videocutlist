@@ -31,6 +31,22 @@ func TestValidateProjectRequiresOrderedIndependentItems(t *testing.T) {
 	}
 }
 
+func TestLegacyProjectRejectsMultipleItemsAndUpdatesOneItem(t *testing.T) {
+	document := Document{SchemaVersion: ProjectSchemaVersion, Name: "Batch", Items: []ProjectItem{{ID: "i_aaaaaaaaaaaaaaaaaaaaaaaa", MediaID: mediaID, Segments: []Segment{{StartMS: 0, EndMS: 100}}, EditorState: &UIState{Zoom: 1}}}}
+	legacy, err := LegacyProject(document)
+	if err != nil || legacy.MediaID != mediaID || len(legacy.Segments) != 1 {
+		t.Fatalf("legacy project = %#v, %v", legacy, err)
+	}
+	updated, err := ReplaceLegacySegments(document, []Segment{{StartMS: 200, EndMS: 300}})
+	if err != nil || updated.Items[0].Segments[0].StartMS != 200 {
+		t.Fatalf("updated project = %#v, %v", updated, err)
+	}
+	document.Items = append(document.Items, ProjectItem{ID: "i_bbbbbbbbbbbbbbbbbbbbbbbb", MediaID: mediaID})
+	if _, err := LegacyProject(document); err != ErrLegacyProjectItemCount {
+		t.Fatalf("multi-item legacy project error = %v", err)
+	}
+}
+
 func TestValidateRejectsOverlappingAndOutOfRangeSegments(t *testing.T) {
 	document := Document{
 		MediaID:  mediaID,

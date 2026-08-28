@@ -77,6 +77,15 @@ func (p *ProjectInput) UnmarshalJSON(data []byte) error {
 
 type Project = application.Project
 type ExportInput = application.ExportInput
+
+func legacyProject(document domain.Document) (domain.Document, error) {
+	return domain.LegacyProject(document)
+}
+
+func legacyProjectError(w http.ResponseWriter, id string) {
+	httpx.Error(w, http.StatusConflict, "legacy_project_multi_item", "This operation requires a single-item project.", id)
+}
+
 type Job = application.Job
 type PreviewSpec = application.PreviewSpec
 type PreviewResult = application.PreviewResult
@@ -770,7 +779,9 @@ func (s *Server) putProject(writer http.ResponseWriter, request *http.Request, p
 		httpx.Error(writer, 422, "invalid_project", "Project is invalid.", id)
 		return
 	}
-	saved, err := s.config.Projects.Save(request.Context(), principal, project, domain.Document{MediaID: input.MediaID, Revision: input.Revision, Segments: input.Segments, UIState: input.UIState}, media.DurationMS)
+	document := domain.Document{SchemaVersion: domain.ProjectSchemaVersion, Name: "Untitled project", Items: []domain.ProjectItem{{ID: domain.StableProjectItemID(project), MediaID: input.MediaID, Segments: input.Segments, EditorState: &input.UIState}}, Revision: input.Revision}
+	document, _ = legacyProject(document)
+	saved, err := s.config.Projects.Save(request.Context(), principal, project, document, media.DurationMS)
 	if err != nil {
 		httpx.Error(writer, http.StatusConflict, "revision_conflict", "Project revision conflicts.", id)
 		return
@@ -787,6 +798,10 @@ func (s *Server) preflightExport(writer http.ResponseWriter, request *http.Reque
 	owned, err := s.config.Projects.Get(request.Context(), principal, project)
 	if err != nil {
 		notFound(writer, id)
+		return
+	}
+	if owned.Document, err = legacyProject(owned.Document); err != nil {
+		legacyProjectError(writer, id)
 		return
 	}
 	var input ExportInput
@@ -808,6 +823,10 @@ func (s *Server) createExport(writer http.ResponseWriter, request *http.Request,
 	owned, err := s.config.Projects.Get(request.Context(), principal, project)
 	if err != nil {
 		notFound(writer, id)
+		return
+	}
+	if owned.Document, err = legacyProject(owned.Document); err != nil {
+		legacyProjectError(writer, id)
 		return
 	}
 	var input ExportInput
@@ -837,6 +856,10 @@ func (s *Server) createDetection(writer http.ResponseWriter, request *http.Reque
 	owned, err := s.config.Projects.Get(request.Context(), principal, project)
 	if err != nil {
 		notFound(writer, id)
+		return
+	}
+	if owned.Document, err = legacyProject(owned.Document); err != nil {
+		legacyProjectError(writer, id)
 		return
 	}
 	var input DetectionRequest
@@ -901,6 +924,10 @@ func (s *Server) automation(w http.ResponseWriter, r *http.Request, p domain.Pri
 			notFound(w, id)
 			return
 		}
+		if project.Document, err = legacyProject(project.Document); err != nil {
+			legacyProjectError(w, id)
+			return
+		}
 		media, err := s.config.Media.Get(r.Context(), project.MediaID)
 		if err != nil {
 			notFound(w, id)
@@ -916,7 +943,11 @@ func (s *Server) automation(w http.ResponseWriter, r *http.Request, p domain.Pri
 			httpx.Error(w, http.StatusUnprocessableEntity, "invalid_interchange", "Interchange input is invalid.", id)
 			return
 		}
-		project.Segments = segments
+		project.Document, err = domain.ReplaceLegacySegments(project.Document, segments)
+		if err != nil {
+			legacyProjectError(w, id)
+			return
+		}
 		saved, err := s.config.Projects.Save(r.Context(), p, command.ProjectID, project.Document, media.DurationMS)
 		if err != nil {
 			httpx.Error(w, http.StatusConflict, "revision_conflict", "Project revision conflicts.", id)
@@ -930,6 +961,10 @@ func (s *Server) automation(w http.ResponseWriter, r *http.Request, p domain.Pri
 		project, err := s.config.Projects.Get(r.Context(), p, command.ProjectID)
 		if err != nil {
 			notFound(w, id)
+			return
+		}
+		if project.Document, err = legacyProject(project.Document); err != nil {
+			legacyProjectError(w, id)
 			return
 		}
 		var data []byte
@@ -973,6 +1008,10 @@ func (s *Server) importInterchange(w http.ResponseWriter, r *http.Request, p dom
 		notFound(w, id)
 		return
 	}
+	if project.Document, err = legacyProject(project.Document); err != nil {
+		legacyProjectError(w, id)
+		return
+	}
 	media, err := s.config.Media.Get(r.Context(), project.MediaID)
 	if err != nil {
 		notFound(w, id)
@@ -993,7 +1032,11 @@ func (s *Server) importInterchange(w http.ResponseWriter, r *http.Request, p dom
 		httpx.Error(w, 422, "invalid_interchange", "Interchange input is invalid.", id)
 		return
 	}
-	project.Segments = segments
+	project.Document, err = domain.ReplaceLegacySegments(project.Document, segments)
+	if err != nil {
+		legacyProjectError(w, id)
+		return
+	}
 	saved, err := s.config.Projects.Save(r.Context(), p, parts[0], project.Document, media.DurationMS)
 	if err != nil {
 		httpx.Error(w, 409, "revision_conflict", "Project revision conflicts.", id)
@@ -1009,6 +1052,10 @@ func (s *Server) exportInterchange(w http.ResponseWriter, r *http.Request, p dom
 	project, err := s.config.Projects.Get(r.Context(), p, parts[0])
 	if err != nil {
 		notFound(w, id)
+		return
+	}
+	if project.Document, err = legacyProject(project.Document); err != nil {
+		legacyProjectError(w, id)
 		return
 	}
 	var data []byte

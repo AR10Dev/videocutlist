@@ -277,7 +277,15 @@ func (p ProjectUseCase) Get(ctx context.Context, principal domain.Principal, id 
 	return Project{ID: id, Document: record.Document, UpdatedAt: record.UpdatedAt}, nil
 }
 func (p ProjectUseCase) Save(ctx context.Context, principal domain.Principal, id string, input ProjectInput, duration int64) (Project, error) {
-	if err := domain.Validate(input, duration); err != nil {
+	if err := domain.ValidateProject(input); err != nil {
+		return Project{}, err
+	}
+	legacy, err := domain.LegacyProject(input)
+	if err != nil {
+		return Project{}, err
+	}
+	legacy.Revision = input.Revision
+	if err := domain.Validate(legacy, duration); err != nil {
 		return Project{}, err
 	}
 	record, err := p.Repository.Save(ctx, principal.Subject, id, input)

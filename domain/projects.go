@@ -19,6 +19,8 @@ var (
 
 const ProjectSchemaVersion = 2
 
+var ErrLegacyProjectItemCount = errors.New("legacy project operations require exactly one item")
+
 type Segment struct {
 	StartMS int64  `json:"startMs"`
 	EndMS   int64  `json:"endMs"`
@@ -68,6 +70,32 @@ type Document struct {
 func StableProjectItemID(projectID string) string {
 	sum := sha256.Sum256([]byte(projectID))
 	return "i_" + base64.RawURLEncoding.EncodeToString(sum[:18])
+}
+
+// LegacyProject adapts a one-item batch for callers not yet moved to item APIs.
+// It rejects multi-item projects rather than choosing one implicitly.
+func LegacyProject(document Document) (Document, error) {
+	if len(document.Items) != 1 {
+		return Document{}, ErrLegacyProjectItemCount
+	}
+	item := document.Items[0]
+	document.MediaID = item.MediaID
+	document.Segments = append([]Segment(nil), item.Segments...)
+	if item.EditorState != nil {
+		document.UIState = *item.EditorState
+	}
+	return document, nil
+}
+
+// ReplaceLegacySegments updates the sole batch item used by a legacy operation.
+func ReplaceLegacySegments(document Document, segments []Segment) (Document, error) {
+	document, err := LegacyProject(document)
+	if err != nil {
+		return Document{}, err
+	}
+	document.Items[0].Segments = append([]Segment(nil), segments...)
+	document.Segments = append([]Segment(nil), segments...)
+	return document, nil
 }
 
 // ValidateProject checks document-only invariants. Item media duration checks
