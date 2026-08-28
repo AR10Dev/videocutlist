@@ -5,11 +5,12 @@
 **Blocked by:** 30
 
 **Category:** bug
-**Status:** ready-for-agent
+**Status:** completed
 
-- [ ] A failed runtime application through `putSettings` leaves persisted settings unchanged.
-- [ ] A failed settings persistence restores previously applied runtime settings.
+- [x] A failed runtime application through `putSettings` leaves persisted settings unchanged.
+- [x] A failed settings persistence restores previously applied runtime settings.
 
 ## Comments
 
 - Opened from post-merge review of ticket 30. Unit tests cover runtime rollback, but no HTTP/integration regression proves the full persistence ordering or rollback after `Settings.Update` failure.
+- Added HTTP integration tests for runtime-apply failure and injected SQLite persistence failure; `make check` passes.
