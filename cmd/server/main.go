@@ -159,23 +159,30 @@ func run(ctx context.Context) error {
 		return err
 	}
 	applyRuntime := func(settings store.RuntimeSettings) error {
-		if err := cfg.ApplyRuntimeSettings(settings); err != nil {
-			return err
+		previous := cfg.RuntimeSettings()
+		roots := func(value store.RuntimeSettings) []index.Root {
+			result := make([]index.Root, 0, len(value.MediaRoots))
+			for alias, path := range value.MediaRoots {
+				result = append(result, index.Root{Alias: alias, Path: path})
+			}
+			return result
 		}
-		roots := make([]index.Root, 0, len(settings.MediaRoots))
-		for alias, path := range settings.MediaRoots {
-			roots = append(roots, index.Root{Alias: alias, Path: path})
-		}
-		if err := scanner.Reconfigure(ctx, roots, nil, mediaStore); err != nil {
-			return err
-		}
-		if err := scanner.ReconfigureLimits(index.ScanLimits{MaxFiles: settings.MediaMaxFiles, MaxDepth: settings.MediaMaxDepth}); err != nil {
-			return err
-		}
-		if err := limiter.SetLimits(settings.PreviewGlobalLimit, settings.PreviewPerUserLimit); err != nil {
-			return err
-		}
-		return cacheStore.SetMaxBytes(settings.CacheMaxBytes)
+		return applyRuntimeSettingsTransactional(
+			settings, previous,
+			cfg.ApplyRuntimeSettings,
+			func(value store.RuntimeSettings) error {
+				return scanner.Reconfigure(ctx, roots(value), nil, mediaStore)
+			},
+			func(value store.RuntimeSettings) error {
+				return scanner.ReconfigureLimits(index.ScanLimits{MaxFiles: value.MediaMaxFiles, MaxDepth: value.MediaMaxDepth})
+			},
+			func(value store.RuntimeSettings) error {
+				return limiter.SetLimits(value.PreviewGlobalLimit, value.PreviewPerUserLimit)
+			},
+			func(value store.RuntimeSettings) error {
+				return cacheStore.SetMaxBytes(value.CacheMaxBytes)
+			},
+		)
 	}
 	apiServer, err := httpapi.New(httpapi.Config{
 		Authenticator: authenticator, Media: mediaService, Preview: previewService, Assets: assetService,
