@@ -27,6 +27,14 @@ func (fakeProbe) ProbeFile(context.Context, *os.File) (probe.Metadata, error) {
 	return probe.Metadata{DurationMS: 1000, Container: "mp4", Video: &probe.Video{Codec: "h264", Width: 320, Height: 180}}, nil
 }
 
+func TestScannerRejectsPathLikeAliases(t *testing.T) {
+	for _, alias := range []string{"../media", "/media", "media/root", " media"} {
+		if _, err := NewScanner([]Root{{Alias: alias, Path: t.TempDir()}}, fakeProbe{}); err == nil {
+			t.Fatalf("path-like alias %q accepted", alias)
+		}
+	}
+}
+
 func TestScanEnforcesConfiguredFileLimit(t *testing.T) {
 	root := t.TempDir()
 	for _, name := range []string{"one.mp4", "two.mp4"} {
@@ -61,6 +69,14 @@ type failingProbe struct{}
 
 func (failingProbe) ProbeFile(context.Context, *os.File) (probe.Metadata, error) {
 	return probe.Metadata{}, errors.New("probe failed")
+}
+
+type cancellingProbe struct{ started chan struct{} }
+
+func (p cancellingProbe) ProbeFile(ctx context.Context, _ *os.File) (probe.Metadata, error) {
+	close(p.started)
+	<-ctx.Done()
+	return probe.Metadata{}, ctx.Err()
 }
 
 func TestRefreshKeepsSuccessfulRootsWhenAnotherRootFails(t *testing.T) {
@@ -156,6 +172,35 @@ func TestRefreshKeepsPreviousCatalogOnProbeFailure(t *testing.T) {
 	}
 	if len(catalog.records) != 1 {
 		t.Fatalf("previous catalog was replaced: %#v", catalog.records)
+	}
+}
+
+func TestRefreshCancellationPreservesExistingCatalog(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "clip.mp4"), []byte("clip"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	catalog := &memoryCatalog{}
+	scanner, err := NewScanner([]Root{{Alias: "library", Path: root}}, fakeProbe{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := scanner.Refresh(context.Background(), catalog); err != nil {
+		t.Fatal(err)
+	}
+	before := len(catalog.records)
+	started := make(chan struct{})
+	scanner.prober = cancellingProbe{started: started}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- scanner.Refresh(ctx, catalog) }()
+	<-started
+	cancel()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("refresh error = %v, want cancellation", err)
+	}
+	if len(catalog.records) != before {
+		t.Fatalf("catalog changed after cancelled refresh: %#v", catalog.records)
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -23,6 +24,7 @@ var (
 	ErrOutsideRoot   = errors.New("media is outside configured root")
 	ErrSourceChanged = errors.New("media changed since indexing")
 	ErrScanLimit     = errors.New("media scan limit exceeded")
+	validAlias       = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
 )
 
 // ScanLimits bounds work performed by a server-side import. Zero values use
@@ -109,8 +111,11 @@ func NewScannerWithLimits(roots []Root, prober probe.Runner, limits ScanLimits) 
 	}
 	s := &Scanner{roots: make(map[string]Root, len(roots)), prober: prober, limits: limits, status: make(map[string]RootStatus, len(roots))}
 	for _, root := range roots {
-		if root.Alias == "" || root.Path == "" {
-			return nil, errors.New("media root alias and path are required")
+		if !validAlias.MatchString(root.Alias) {
+			return nil, errors.New("media root alias must be a safe label")
+		}
+		if root.Path == "" {
+			return nil, errors.New("media root path is required")
 		}
 		if _, ok := s.roots[root.Alias]; ok {
 			return nil, fmt.Errorf("duplicate media root alias %q", root.Alias)
@@ -276,8 +281,8 @@ func validateRoots(roots []Root, allowlist []string) ([]Root, error) {
 	result := make([]Root, 0, len(roots))
 	seen := make(map[string]struct{}, len(roots))
 	for _, root := range roots {
-		if strings.TrimSpace(root.Alias) == "" || !filepath.IsAbs(root.Path) {
-			return nil, errors.New("media root alias and absolute path are required")
+		if !validAlias.MatchString(root.Alias) || !filepath.IsAbs(root.Path) {
+			return nil, errors.New("media root alias must be a safe label and path must be absolute")
 		}
 		if _, ok := seen[root.Alias]; ok {
 			return nil, fmt.Errorf("duplicate media root alias %q", root.Alias)
