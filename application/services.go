@@ -291,7 +291,7 @@ func (p ProjectUseCase) Get(ctx context.Context, id string) (Project, error) {
 	if err != nil {
 		return Project{}, err
 	}
-	return Project{ID: id, Document: record.Document, UpdatedAt: record.UpdatedAt}, nil
+	return Project{ID: id, Document: record.Document, Revision: record.Document.Revision, UpdatedAt: record.UpdatedAt}, nil
 }
 
 func (p ProjectUseCase) Save(ctx context.Context, id string, input ProjectInput) (Project, error) {
@@ -318,7 +318,7 @@ func (p ProjectUseCase) save(ctx context.Context, id string, input ProjectInput)
 	if err != nil {
 		return Project{}, err
 	}
-	return Project{ID: id, Document: record.Document, UpdatedAt: record.UpdatedAt}, nil
+	return Project{ID: id, Document: record.Document, Revision: record.Document.Revision, UpdatedAt: record.UpdatedAt}, nil
 }
 
 type ExportUseCase struct {

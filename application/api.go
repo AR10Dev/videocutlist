@@ -71,6 +71,7 @@ type ProjectInput = domain.Document
 type Project struct {
 	domain.Document
 	ID        string    `json:"id"`
+	Revision  int64     `json:"revision"`
 	UpdatedAt time.Time `json:"updatedAt"`
 }
 type ExportInput struct {
