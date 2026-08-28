@@ -155,9 +155,12 @@ func (s *Scanner) Scan(ctx context.Context, alias string) ([]Record, error) {
 		if len(records) >= s.limits.MaxFiles {
 			return ErrScanLimit
 		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
 		file, info, err := openMedia(root, path)
 		if err != nil {
-			return nil
+			return err
 		}
 		if !info.Mode().IsRegular() {
 			_ = file.Close()
@@ -166,7 +169,7 @@ func (s *Scanner) Scan(ctx context.Context, alias string) ([]Record, error) {
 		metadata, err := s.prober.ProbeFile(ctx, file)
 		closeErr := file.Close()
 		if err != nil {
-			return nil // Corrupt and unsupported files are not usable media.
+			return err
 		}
 		if closeErr != nil {
 			return closeErr
@@ -328,16 +331,28 @@ func (s *Scanner) Refresh(ctx context.Context, catalog Catalog) error {
 	}
 	s.mu.Unlock()
 	sort.Strings(aliases)
+	var firstErr error
 	for _, alias := range aliases {
 		records, err := s.Scan(ctx, alias)
 		if err != nil {
-			return err
+			if firstErr == nil {
+				firstErr = err
+			}
+			if ctx.Err() != nil {
+				break
+			}
+			continue
 		}
 		if err := catalog.Sync(ctx, alias, records); err != nil {
-			return err
+			if firstErr == nil {
+				firstErr = err
+			}
+			if ctx.Err() != nil {
+				break
+			}
 		}
 	}
-	return nil
+	return firstErr
 }
 
 // Open resolves a catalog record server-side and returns an open file, never a

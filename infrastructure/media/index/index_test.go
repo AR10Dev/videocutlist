@@ -57,6 +57,55 @@ func TestScanHonorsCancellation(t *testing.T) {
 	}
 }
 
+type failingProbe struct{}
+
+func (failingProbe) ProbeFile(context.Context, *os.File) (probe.Metadata, error) {
+	return probe.Metadata{}, errors.New("probe failed")
+}
+
+func TestRefreshKeepsSuccessfulRootsWhenAnotherRootFails(t *testing.T) {
+	good := t.TempDir()
+	if err := os.WriteFile(filepath.Join(good, "clip.mp4"), []byte("clip"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	catalog := &memoryCatalog{}
+	scanner, err := NewScanner([]Root{
+		{Alias: "good", Path: good},
+		{Alias: "missing", Path: filepath.Join(t.TempDir(), "missing")},
+	}, fakeProbe{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := scanner.Refresh(context.Background(), catalog); err == nil {
+		t.Fatal("refresh succeeded despite failed root")
+	}
+	if len(catalog.records) != 1 || catalog.records[MediaID("good", "clip.mp4")].RootAlias != "good" {
+		t.Fatalf("successful root was not published: %#v", catalog.records)
+	}
+}
+
+func TestRefreshKeepsPreviousCatalogOnProbeFailure(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "clip.mp4"), []byte("clip"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	catalog := &memoryCatalog{}
+	scanner, err := NewScanner([]Root{{Alias: "library", Path: root}}, fakeProbe{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := scanner.Refresh(context.Background(), catalog); err != nil {
+		t.Fatal(err)
+	}
+	scanner.prober = failingProbe{}
+	if err := scanner.Refresh(context.Background(), catalog); err == nil {
+		t.Fatal("refresh succeeded despite probe failure")
+	}
+	if len(catalog.records) != 1 {
+		t.Fatalf("previous catalog was replaced: %#v", catalog.records)
+	}
+}
+
 func TestRefreshReportsAnUnavailableConfiguredRoot(t *testing.T) {
 	scanner, err := NewScanner([]Root{{Alias: "camera", Path: filepath.Join(t.TempDir(), "missing")}}, fakeProbe{})
 	if err != nil {
