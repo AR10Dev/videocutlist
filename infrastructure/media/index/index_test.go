@@ -314,9 +314,13 @@ func (m *memoryCatalog) Sync(_ context.Context, alias string, records []Record) 
 	return nil
 }
 
-func (m *memoryCatalog) RemoveRoot(_ context.Context, alias string) error {
+func (m *memoryCatalog) RemoveRoots(_ context.Context, aliases []string) error {
+	removed := make(map[string]struct{}, len(aliases))
+	for _, alias := range aliases {
+		removed[alias] = struct{}{}
+	}
 	for id, record := range m.records {
-		if record.RootAlias == alias {
+		if _, ok := removed[record.RootAlias]; ok {
 			delete(m.records, id)
 		}
 	}
@@ -361,6 +365,39 @@ func TestReconfigureValidatesAllowlistAndRemovesRecords(t *testing.T) {
 	}
 	if err := scanner.Reconfigure(context.Background(), []Root{{Alias: "escape", Path: filepath.Join(t.TempDir(), "other")}}, []string{parent}, catalog); err == nil {
 		t.Fatal("allowlist escape accepted")
+	}
+}
+
+type failingRootCatalog struct {
+	memoryCatalog
+	err error
+}
+
+func (m *failingRootCatalog) RemoveRoots(context.Context, []string) error { return m.err }
+
+func TestReconfigureFailurePreservesRootsAndCatalog(t *testing.T) {
+	parent := t.TempDir()
+	oldRoot := filepath.Join(parent, "old")
+	newRoot := filepath.Join(parent, "new")
+	if err := os.Mkdir(oldRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(newRoot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	catalog := &failingRootCatalog{memoryCatalog: memoryCatalog{records: map[string]Record{"id": {RootAlias: "old"}}}, err: errors.New("remove failed")}
+	scanner, err := NewScanner([]Root{{Alias: "old", Path: oldRoot}}, fakeProbe{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := scanner.Reconfigure(context.Background(), []Root{{Alias: "new", Path: newRoot}}, []string{parent}, catalog); err == nil {
+		t.Fatal("failed root removal accepted")
+	}
+	if _, err := scanner.Scan(context.Background(), "old"); err != nil {
+		t.Fatalf("old root was removed after failed catalog update: %v", err)
+	}
+	if _, err := catalog.Get(context.Background(), "id"); err != nil {
+		t.Fatalf("catalog changed after failed root update: %v", err)
 	}
 }
 

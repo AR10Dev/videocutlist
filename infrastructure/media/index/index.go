@@ -211,9 +211,9 @@ func (s *Scanner) ReconfigureLimits(limits ScanLimits) error {
 	return nil
 }
 
-// RootCatalog can hide records belonging to a removed media root.
+// RootCatalog atomically hides records from removed media roots.
 type RootCatalog interface {
-	RemoveRoot(context.Context, string) error
+	RemoveRoots(context.Context, []string) error
 }
 
 // Reconfigure validates and atomically replaces the active roots. Existing
@@ -239,6 +239,13 @@ func (s *Scanner) Reconfigure(ctx context.Context, roots []Root, allowlist []str
 			removed = append(removed, alias)
 		}
 	}
+	if remover, ok := catalog.(RootCatalog); ok && len(removed) > 0 {
+		if err := remover.RemoveRoots(ctx, removed); err != nil {
+			s.mu.Unlock()
+			s.config.Unlock()
+			return err
+		}
+	}
 	for _, root := range s.roots {
 		if root.handle != nil {
 			_ = root.handle.Close()
@@ -256,13 +263,6 @@ func (s *Scanner) Reconfigure(ctx context.Context, roots []Root, allowlist []str
 	s.statusMu.Unlock()
 	s.mu.Unlock()
 	s.config.Unlock()
-	if remover, ok := catalog.(RootCatalog); ok {
-		for _, alias := range removed {
-			if err := remover.RemoveRoot(ctx, alias); err != nil {
-				return err
-			}
-		}
-	}
 	return nil
 }
 
