@@ -56,5 +56,8 @@ func (c Coordinator) Execute(ctx context.Context, owner, jobID string, source *o
 		}
 		return Result{}, err
 	}
+	if c.Exporter.Artifacts != nil {
+		c.Exporter.Artifacts.ClearManifest(jobID)
+	}
 	return result, nil
 }

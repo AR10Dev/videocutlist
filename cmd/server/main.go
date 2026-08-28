@@ -67,10 +67,6 @@ func run(ctx context.Context) error {
 		return err
 	}
 	mediaStore, _ := store.NewMediaStore(db)
-	if _, err := unifiedJobs.Recover(ctx); err != nil {
-		return err
-	}
-
 	roots := make([]index.Root, 0, len(cfg.MediaRoots))
 	aliases := make([]string, 0, len(cfg.MediaRoots))
 	for alias := range cfg.MediaRoots {
@@ -110,6 +106,12 @@ func run(ctx context.Context) error {
 	assetService := &assets.Service{Scanner: scanner, Media: mediaStore, FFmpegPath: cfg.FFmpegPath, CacheDir: cfg.CacheDir, MaxBytes: cfg.CacheMaxBytes}
 	projectService := application.ProjectUseCase{Repository: adapters.ProjectRepository{Store: projectStore}, Media: mediaCatalog}
 	artifacts := exporter.NewArtifactStore()
+	if err := artifacts.Reconcile(ctx, unifiedJobs, cfg.FFprobePath, cfg.Destinations); err != nil {
+		return err
+	}
+	if _, err := unifiedJobs.Recover(ctx); err != nil {
+		return err
+	}
 	artifacts.Cleanup(time.Now().UTC())
 	go func() {
 		ticker := time.NewTicker(15 * time.Minute)
@@ -129,7 +131,11 @@ func run(ctx context.Context) error {
 	exportExecutor.Settings = runtimeState
 	batchExports := application.BatchExportUseCase{Projects: adapters.ProjectRepository{Store: projectStore}, Media: mediaCatalog, Jobs: unifiedJobs, Settings: runtimeState}
 	scheduler, err := store.NewScheduler(unifiedJobs, store.SchedulerConfig{QueueCapacity: cfg.ExportLimit * 4, WorkerLimit: cfg.ExportLimit}, func(ctx context.Context, job store.Job) error {
-		return batchExports.RunQueuedSnapshot(ctx, job)
+		if err := batchExports.RunQueuedSnapshot(ctx, job); err != nil {
+			return err
+		}
+		artifacts.ClearManifest(job.ID)
+		return nil
 	})
 	if err != nil {
 		return err

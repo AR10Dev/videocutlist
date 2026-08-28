@@ -1,12 +1,108 @@
 package export
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"sync"
 	"testing"
 	"time"
+
+	"videocutlist/infrastructure/media/probe"
+	"videocutlist/infrastructure/store"
 )
+
+func TestArtifactReconcilePublishesOnlyValidatedOwnedOutput(t *testing.T) {
+	dir := t.TempDir()
+	ffprobe, fixture := fakeFFprobe(t, probe.Metadata{Container: "matroska", DurationMS: 1000, Streams: sourceStreams().Streams})
+	output := filepath.Join(dir, "published.mkv")
+	data, err := os.ReadFile(fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(output, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	db, err := store.OpenDatabase(context.Background(), filepath.Join(dir, "jobs.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	jobs, err := store.NewJobsStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := store.Job{ID: "j_000000000081", BatchID: "b_000000000081", Kind: store.JobExport, ProjectID: "p_000000000081", ProjectItemID: "i_aaaaaaaaaaaaaaaaaaaaaaaa", RequestJSON: `{}`}
+	if _, err := jobs.Create(context.Background(), job); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := jobs.Start(context.Background(), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := WriteManifest(dir, job.ID, KindDownload, []string{"published.mkv"}, time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifacts := NewArtifactStore()
+	if err := artifacts.Reconcile(context.Background(), jobs, ffprobe, []Destination{{Kind: KindDownload, Root: dir}}); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := jobs.Get(context.Background(), job.ID)
+	if err != nil || stored.State != store.JobSucceeded {
+		t.Fatalf("job = %#v, err = %v", stored, err)
+	}
+	if _, _, err := artifacts.Open(job.ID, 0, time.Now()); err != nil {
+		t.Fatalf("reconciled artifact unavailable: %v", err)
+	}
+	if _, err := os.Stat(manifest); !os.IsNotExist(err) {
+		t.Fatal("manifest was not removed after reconciliation")
+	}
+}
+
+func TestArtifactReconcileCleansInvalidOwnedOutputOnly(t *testing.T) {
+	dir := t.TempDir()
+	db, err := store.OpenDatabase(context.Background(), filepath.Join(dir, "jobs.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	jobs, err := store.NewJobsStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := store.Job{ID: "j_000000000082", BatchID: "b_000000000082", Kind: store.JobExport, ProjectID: "p_000000000082", ProjectItemID: "i_aaaaaaaaaaaaaaaaaaaaaaaa", RequestJSON: `{}`}
+	if _, err := jobs.Create(context.Background(), job); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := jobs.Start(context.Background(), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(dir, "incomplete.mkv")
+	if err := os.WriteFile(output, []byte("not media"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := WriteManifest(dir, job.ID, KindDownload, []string{"incomplete.mkv"}, time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	unrelated := filepath.Join(dir, "unrelated.mkv")
+	if err := os.WriteFile(unrelated, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	artifacts := NewArtifactStore()
+	if err := artifacts.Reconcile(context.Background(), jobs, filepath.Join(dir, "missing-ffprobe"), []Destination{{Kind: KindDownload, Root: dir}}); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := jobs.Get(context.Background(), job.ID)
+	if err != nil || stored.State != store.JobRunning {
+		t.Fatalf("invalid artifact changed job: %#v, %v", stored, err)
+	}
+	if _, err := os.Stat(output); !os.IsNotExist(err) {
+		t.Fatal("invalid owned output was not cleaned")
+	}
+	if _, err := os.Stat(unrelated); err != nil {
+		t.Fatalf("unrelated file was touched: %v", err)
+	}
+}
 
 func TestArtifactStoreOpenRejectsSymlinkOutsideRoot(t *testing.T) {
 	dir := t.TempDir()

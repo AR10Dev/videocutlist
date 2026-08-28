@@ -164,6 +164,20 @@ func (s Service) Run(ctx context.Context, source *os.File, document domain.Docum
 	if err != nil {
 		return Result{}, err
 	}
+	var manifestPath string
+	manifestPublished := false
+	if s.Artifacts != nil && request.JobID != "" && request.Mode != "separate" {
+		manifestPath, err = WriteManifest(outputDir, request.JobID, destination.Kind, []string{outputName}, now(s).Add(destinationRetention(destination, s)))
+		if err != nil {
+			return Result{}, err
+		}
+		s.Artifacts.RegisterManifest(request.JobID, manifestPath)
+		defer func() {
+			if manifestPath != "" && !manifestPublished {
+				s.Artifacts.ClearManifest(request.JobID)
+			}
+		}()
+	}
 	temporaryOutput, err := os.CreateTemp(outputDir, ".videocutlist-export-*.mkv")
 	if err != nil {
 		return Result{}, fmt.Errorf("create export temporary file: %w", err)
@@ -193,6 +207,20 @@ func (s Service) Run(ctx context.Context, source *os.File, document domain.Docum
 		result := Result{OutputNames: make([]string, 0, len(segmentFiles)), RetainUntil: now(s).Add(destinationRetention(destination, s)), DestinationID: destination.ID, DestinationKind: destination.Kind, AppliedStrategy: uniformStrategy(appliedStrategies), AppliedStrategies: appliedStrategies}
 		published := make([]string, 0, len(segmentFiles))
 		committed := false
+		separateNames := make([]string, len(segmentFiles))
+		for i := range separateNames {
+			separateNames[i], err = outputFileName(outputDir, request, source.Name(), i, now(s))
+			if err != nil {
+				return Result{}, err
+			}
+		}
+		if s.Artifacts != nil && request.JobID != "" {
+			manifestPath, err = WriteManifest(outputDir, request.JobID, destination.Kind, separateNames, result.RetainUntil)
+			if err != nil {
+				return Result{}, err
+			}
+			s.Artifacts.RegisterManifest(request.JobID, manifestPath)
+		}
 		defer func() {
 			if !committed {
 				for _, path := range published {
@@ -204,10 +232,7 @@ func (s Service) Run(ctx context.Context, source *os.File, document domain.Docum
 			if err := verifyOutput(ctx, s.FFprobePath, segmentFile, metadata, request.StreamIndexes, segments[i].EndMS-segments[i].StartMS); err != nil {
 				return Result{}, fmt.Errorf("validate export: %w", err)
 			}
-			name, err := outputFileName(outputDir, request, source.Name(), i, now(s))
-			if err != nil {
-				return Result{}, err
-			}
+			name := separateNames[i]
 			publishedPath := filepath.Join(outputDir, name)
 			if err := os.Rename(segmentFile, publishedPath); err != nil {
 				return Result{}, err
@@ -258,6 +283,7 @@ func (s Service) Run(ctx context.Context, source *os.File, document domain.Docum
 	if err := os.Rename(temporaryPath, finalPath); err != nil {
 		return Result{}, fmt.Errorf("publish export: %w", err)
 	}
+	manifestPublished = true
 	info, err := os.Stat(finalPath)
 	if err != nil {
 		return Result{}, err
