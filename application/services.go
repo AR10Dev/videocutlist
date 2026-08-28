@@ -30,9 +30,16 @@ type ProjectRecord struct {
 	UpdatedAt time.Time
 }
 type ProjectRepository interface {
-	Get(context.Context, string, string) (ProjectRecord, error)
-	Save(context.Context, string, string, domain.Document) (ProjectRecord, error)
+	Get(context.Context, string) (ProjectRecord, error)
+	Save(context.Context, string, domain.Document) (ProjectRecord, error)
 }
+
+type ProjectItemError struct {
+	ItemID string
+	Code   string
+}
+
+func (e *ProjectItemError) Error() string { return "project item " + e.ItemID + ": " + e.Code }
 
 type ExportJobs interface {
 	Create(context.Context, store.ExportJob) (store.ExportJob, error)
@@ -267,28 +274,47 @@ func (m *PreviewManager) Cached(ctx context.Context, spec domain.PreviewSpec) (b
 	return true, reader.Close()
 }
 
-type ProjectUseCase struct{ Repository ProjectRepository }
+type ProjectUseCase struct {
+	Repository ProjectRepository
+	Media      MediaCatalog
+}
 
-func (p ProjectUseCase) Get(ctx context.Context, principal domain.Principal, id string) (Project, error) {
-	record, err := p.Repository.Get(ctx, principal.Subject, id)
+func (p ProjectUseCase) Create(ctx context.Context, id string, input ProjectInput) (Project, error) {
+	if input.Revision != 0 {
+		return Project{}, store.ErrRevisionConflict
+	}
+	return p.save(ctx, id, input)
+}
+
+func (p ProjectUseCase) Get(ctx context.Context, id string) (Project, error) {
+	record, err := p.Repository.Get(ctx, id)
 	if err != nil {
 		return Project{}, err
 	}
 	return Project{ID: id, Document: record.Document, UpdatedAt: record.UpdatedAt}, nil
 }
-func (p ProjectUseCase) Save(ctx context.Context, principal domain.Principal, id string, input ProjectInput, duration int64) (Project, error) {
+
+func (p ProjectUseCase) Save(ctx context.Context, id string, input ProjectInput) (Project, error) {
+	return p.save(ctx, id, input)
+}
+
+func (p ProjectUseCase) save(ctx context.Context, id string, input ProjectInput) (Project, error) {
+	if p.Media == nil {
+		return Project{}, errors.New("project media catalog is required")
+	}
 	if err := domain.ValidateProject(input); err != nil {
 		return Project{}, err
 	}
-	legacy, err := domain.LegacyProject(input)
-	if err != nil {
-		return Project{}, err
+	for _, item := range input.Items {
+		media, err := p.Media.Get(ctx, item.MediaID)
+		if err != nil {
+			return Project{}, &ProjectItemError{ItemID: item.ID, Code: "media_unavailable"}
+		}
+		if err := domain.ValidateProjectItem(item, media.DurationMS); err != nil {
+			return Project{}, &ProjectItemError{ItemID: item.ID, Code: "invalid"}
+		}
 	}
-	legacy.Revision = input.Revision
-	if err := domain.Validate(legacy, duration); err != nil {
-		return Project{}, err
-	}
-	record, err := p.Repository.Save(ctx, principal.Subject, id, input)
+	record, err := p.Repository.Save(ctx, id, input)
 	if err != nil {
 		return Project{}, err
 	}

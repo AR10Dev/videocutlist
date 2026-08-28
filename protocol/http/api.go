@@ -754,7 +754,7 @@ func (s *Server) getProject(writer http.ResponseWriter, request *http.Request, p
 	if !s.allowed(writer, principal, "project_read", project, id) {
 		return
 	}
-	value, err := s.config.Projects.Get(request.Context(), principal, project)
+	value, err := s.config.Projects.Get(request.Context(), project)
 	if err != nil {
 		notFound(writer, id)
 		return
@@ -774,14 +774,9 @@ func (s *Server) putProject(writer http.ResponseWriter, request *http.Request, p
 		httpx.Error(writer, 422, "invalid_project", "Project is invalid.", id)
 		return
 	}
-	media, err := s.config.Media.Get(request.Context(), input.MediaID)
-	if err != nil {
-		httpx.Error(writer, 422, "invalid_project", "Project is invalid.", id)
-		return
-	}
 	document := domain.Document{SchemaVersion: domain.ProjectSchemaVersion, Name: "Untitled project", Items: []domain.ProjectItem{{ID: domain.StableProjectItemID(project), MediaID: input.MediaID, Segments: input.Segments, EditorState: &input.UIState}}, Revision: input.Revision}
 	document, _ = legacyProject(document)
-	saved, err := s.config.Projects.Save(request.Context(), principal, project, document, media.DurationMS)
+	saved, err := s.config.Projects.Save(request.Context(), project, document)
 	if err != nil {
 		httpx.Error(writer, http.StatusConflict, "revision_conflict", "Project revision conflicts.", id)
 		return
@@ -795,7 +790,7 @@ func (s *Server) preflightExport(writer http.ResponseWriter, request *http.Reque
 		}
 		return
 	}
-	owned, err := s.config.Projects.Get(request.Context(), principal, project)
+	owned, err := s.config.Projects.Get(request.Context(), project)
 	if err != nil {
 		notFound(writer, id)
 		return
@@ -820,7 +815,7 @@ func (s *Server) createExport(writer http.ResponseWriter, request *http.Request,
 	if !s.allowed(writer, principal, "export", project, id) {
 		return
 	}
-	owned, err := s.config.Projects.Get(request.Context(), principal, project)
+	owned, err := s.config.Projects.Get(request.Context(), project)
 	if err != nil {
 		notFound(writer, id)
 		return
@@ -853,7 +848,7 @@ func (s *Server) createDetection(writer http.ResponseWriter, request *http.Reque
 		}
 		return
 	}
-	owned, err := s.config.Projects.Get(request.Context(), principal, project)
+	owned, err := s.config.Projects.Get(request.Context(), project)
 	if err != nil {
 		notFound(writer, id)
 		return
@@ -919,7 +914,7 @@ func (s *Server) automation(w http.ResponseWriter, r *http.Request, p domain.Pri
 			return
 		}
 		// Reuse the canonical HTTP interchange path and return only its opaque project ID.
-		project, err := s.config.Projects.Get(r.Context(), p, command.ProjectID)
+		project, err := s.config.Projects.Get(r.Context(), command.ProjectID)
 		if err != nil {
 			notFound(w, id)
 			return
@@ -948,7 +943,7 @@ func (s *Server) automation(w http.ResponseWriter, r *http.Request, p domain.Pri
 			legacyProjectError(w, id)
 			return
 		}
-		saved, err := s.config.Projects.Save(r.Context(), p, command.ProjectID, project.Document, media.DurationMS)
+		saved, err := s.config.Projects.Save(r.Context(), command.ProjectID, project.Document)
 		if err != nil {
 			httpx.Error(w, http.StatusConflict, "revision_conflict", "Project revision conflicts.", id)
 			return
@@ -958,7 +953,7 @@ func (s *Server) automation(w http.ResponseWriter, r *http.Request, p domain.Pri
 		if !validProjectID(command.ProjectID) || (command.Format != "csv" && command.Format != "chapters") || !s.allowed(w, p, "project_export", command.ProjectID, id) {
 			return
 		}
-		project, err := s.config.Projects.Get(r.Context(), p, command.ProjectID)
+		project, err := s.config.Projects.Get(r.Context(), command.ProjectID)
 		if err != nil {
 			notFound(w, id)
 			return
@@ -1003,7 +998,7 @@ func (s *Server) importInterchange(w http.ResponseWriter, r *http.Request, p dom
 	if len(parts) != 2 || !s.allowed(w, p, "project_import", parts[0], id) {
 		return
 	}
-	project, err := s.config.Projects.Get(r.Context(), p, parts[0])
+	project, err := s.config.Projects.Get(r.Context(), parts[0])
 	if err != nil {
 		notFound(w, id)
 		return
@@ -1037,7 +1032,7 @@ func (s *Server) importInterchange(w http.ResponseWriter, r *http.Request, p dom
 		legacyProjectError(w, id)
 		return
 	}
-	saved, err := s.config.Projects.Save(r.Context(), p, parts[0], project.Document, media.DurationMS)
+	saved, err := s.config.Projects.Save(r.Context(), parts[0], project.Document)
 	if err != nil {
 		httpx.Error(w, 409, "revision_conflict", "Project revision conflicts.", id)
 		return
@@ -1049,7 +1044,7 @@ func (s *Server) exportInterchange(w http.ResponseWriter, r *http.Request, p dom
 	if len(parts) != 2 || !s.allowed(w, p, "project_export", parts[0], id) {
 		return
 	}
-	project, err := s.config.Projects.Get(r.Context(), p, parts[0])
+	project, err := s.config.Projects.Get(r.Context(), parts[0])
 	if err != nil {
 		notFound(w, id)
 		return

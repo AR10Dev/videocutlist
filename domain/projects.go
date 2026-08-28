@@ -122,12 +122,53 @@ func ValidateProject(document Document) error {
 			return fmt.Errorf("item %d duplicates an item ID", i)
 		}
 		seen[item.ID] = struct{}{}
-		if err := validateSegments(item.Segments, -1); err != nil {
+		if err := ValidateProjectItem(item, -1); err != nil {
 			return fmt.Errorf("item %d: %w", i, err)
 		}
-		if item.EditorState != nil && (item.EditorState.PlayheadMS < 0 || item.EditorState.Zoom <= 0 || math.IsNaN(item.EditorState.Zoom) || math.IsInf(item.EditorState.Zoom, 0)) {
-			return fmt.Errorf("item %d has invalid editor state", i)
+	}
+	return nil
+}
+
+// ValidateProjectItem checks an item's editor and export state. A negative
+// duration skips the catalog-backed segment bound check.
+func ValidateProjectItem(item ProjectItem, durationMS int64) error {
+	if err := validateSegments(item.Segments, durationMS); err != nil {
+		return err
+	}
+	if item.EditorState != nil && (item.EditorState.PlayheadMS < 0 || (durationMS >= 0 && item.EditorState.PlayheadMS > durationMS) || item.EditorState.Zoom <= 0 || math.IsNaN(item.EditorState.Zoom) || math.IsInf(item.EditorState.Zoom, 0)) {
+		return errors.New("invalid editor state")
+	}
+	if err := validateExportOptions(item.ExportOptions); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateExportOptions(options ExportOptions) error {
+	if options.Mode != "" && options.Mode != "merge" && options.Mode != "separate" {
+		return errors.New("invalid export mode")
+	}
+	if options.Selection != "" && options.Selection != "segments" && options.Selection != "gaps" {
+		return errors.New("invalid export selection")
+	}
+	if options.CutStrategy != "" && options.CutStrategy != "stream_copy_preferred" && options.CutStrategy != "precise_reencode" && options.CutStrategy != "hybrid_smart_cut" {
+		return errors.New("invalid export cut strategy")
+	}
+	if options.Container != "" && options.Container != "mkv" {
+		return errors.New("invalid export container")
+	}
+	if len(options.DestinationID) > 64 || len(options.FilenameTemplate) > 160 || strings.ContainsAny(options.DestinationID, "/\\") || strings.Contains(options.FilenameTemplate, "\x00") {
+		return errors.New("invalid export destination")
+	}
+	seen := make(map[int]struct{}, len(options.StreamIndexes))
+	for _, index := range options.StreamIndexes {
+		if index < 0 {
+			return errors.New("invalid export stream index")
 		}
+		if _, ok := seen[index]; ok {
+			return errors.New("duplicate export stream index")
+		}
+		seen[index] = struct{}{}
 	}
 	return nil
 }

@@ -230,29 +230,72 @@ type projectsStub struct {
 	document domain.Document
 }
 
-func (p *projectsStub) Get(context.Context, string, string) (ProjectRecord, error) {
+func (p *projectsStub) Get(context.Context, string) (ProjectRecord, error) {
 	return ProjectRecord{Document: p.document, UpdatedAt: time.Now()}, nil
 }
-func (p *projectsStub) Save(_ context.Context, _ string, _ string, document domain.Document) (ProjectRecord, error) {
+func (p *projectsStub) Save(_ context.Context, _ string, document domain.Document) (ProjectRecord, error) {
+	if document.Revision == 0 && p.saves > 0 {
+		return ProjectRecord{}, store.ErrRevisionConflict
+	}
 	p.saves++
 	document.Revision++
 	p.document = document
 	return ProjectRecord{Document: document, UpdatedAt: time.Now()}, nil
 }
 
-func TestProjectUseCaseValidatesBeforeRevisionSave(t *testing.T) {
+func TestProjectUseCaseSavesValidatedBatchAtomically(t *testing.T) {
+	mediaID := "m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	repository := &projectsStub{}
-	useCase := ProjectUseCase{Repository: repository}
-	bad := domain.Document{SchemaVersion: domain.ProjectSchemaVersion, Name: "Project", Items: []domain.ProjectItem{{ID: "i_aaaaaaaaaaaaaaaaaaaaaaaa", MediaID: "m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", EditorState: &domain.UIState{Zoom: 0}}}}
-	if _, err := useCase.Save(context.Background(), domain.Principal{Subject: "editor"}, "p_aaaaaaaaaaaa", bad, 1_000); err == nil || repository.saves != 0 {
-		t.Fatalf("invalid save = %v, saves = %d", err, repository.saves)
-	}
-	good := bad
-	good.Items[0].EditorState.Zoom = 1
-	saved, err := useCase.Save(context.Background(), domain.Principal{Subject: "editor"}, "p_aaaaaaaaaaaa", good, 1_000)
-	if err != nil || saved.Revision != 1 || repository.saves != 1 {
+	catalog := &projectCatalogStub{media: map[string]Media{mediaID: {ID: mediaID, DurationMS: 1_000}}}
+	useCase := ProjectUseCase{Repository: repository, Media: catalog}
+	input := domain.Document{SchemaVersion: domain.ProjectSchemaVersion, Name: "Batch", Items: []domain.ProjectItem{
+		{ID: "i_aaaaaaaaaaaaaaaaaaaaaaaa", MediaID: mediaID, Segments: []domain.Segment{{StartMS: 0, EndMS: 300}}, EditorState: &domain.UIState{Zoom: 1}},
+		{ID: "i_bbbbbbbbbbbbbbbbbbbbbbbb", MediaID: mediaID, Segments: []domain.Segment{{StartMS: 400, EndMS: 900}}, ExportOptions: domain.ExportOptions{Mode: "separate", Container: "mkv"}},
+	}}
+	saved, err := useCase.Create(context.Background(), "p_aaaaaaaaaaaa", input)
+	if err != nil || saved.Revision != 1 || repository.saves != 1 || len(saved.Items) != 2 {
 		t.Fatalf("saved = %#v, err = %v, saves = %d", saved, err, repository.saves)
 	}
+	stale := saved.Document
+	stale.Revision = 0
+	if _, err := useCase.Create(context.Background(), "p_aaaaaaaaaaaa", stale); !errors.Is(err, store.ErrRevisionConflict) || repository.saves != 1 {
+		t.Fatalf("duplicate create = %v, saves = %d", err, repository.saves)
+	}
+	bad := saved.Document
+	bad.Revision = saved.Revision
+	bad.Items[1].Segments[0].EndMS = 1_001
+	if _, err := useCase.Save(context.Background(), "p_aaaaaaaaaaaa", bad); err == nil || repository.saves != 1 {
+		t.Fatalf("out-of-range save = %v, saves = %d", err, repository.saves)
+	}
+	bad.Items[1].Segments[0].EndMS = 900
+	bad.Items[1].MediaID = "m_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	var itemErr *ProjectItemError
+	if _, err := useCase.Save(context.Background(), "p_aaaaaaaaaaaa", bad); !errors.As(err, &itemErr) || itemErr.ItemID != bad.Items[1].ID || itemErr.Code != "media_unavailable" || repository.saves != 1 {
+		t.Fatalf("missing media save = %v, saves = %d", err, repository.saves)
+	}
+	if got, err := useCase.Get(context.Background(), "p_aaaaaaaaaaaa"); err != nil || got.Revision != 1 || len(got.Items) != 2 {
+		t.Fatalf("stored project = %#v, err = %v", got, err)
+	}
+}
+
+type projectCatalogStub struct{ media map[string]Media }
+
+func (c *projectCatalogStub) Get(_ context.Context, id string) (Media, error) {
+	media, ok := c.media[id]
+	if !ok {
+		return Media{}, errors.New("media unavailable")
+	}
+	return media, nil
+}
+func (*projectCatalogStub) List(context.Context, string, int) (MediaPage, error) {
+	return MediaPage{}, nil
+}
+func (*projectCatalogStub) Browse(context.Context, string, string, int) (FolderPage, error) {
+	return FolderPage{}, nil
+}
+func (*projectCatalogStub) Refresh(context.Context) error { return nil }
+func (*projectCatalogStub) Preview(context.Context, PreviewSpec) (domain.PreviewSpec, error) {
+	return domain.PreviewSpec{}, nil
 }
 
 type jobsStub struct {

@@ -104,7 +104,7 @@ func run(ctx context.Context) error {
 	}
 	previewService := application.PreviewUseCase{Catalog: mediaCatalog, Manager: previewManager}
 	assetService := &assets.Service{Scanner: scanner, Media: mediaStore, FFmpegPath: cfg.FFmpegPath, CacheDir: cfg.CacheDir, MaxBytes: cfg.CacheMaxBytes}
-	projectService := application.ProjectUseCase{Repository: adapters.ProjectRepository{Store: projectStore}}
+	projectService := application.ProjectUseCase{Repository: adapters.ProjectRepository{Store: projectStore}, Media: mediaCatalog}
 	artifacts := exporter.NewArtifactStore()
 	artifacts.Cleanup(time.Now().UTC())
 	go func() {

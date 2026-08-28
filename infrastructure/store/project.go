@@ -20,7 +20,6 @@ var projectsMigration string
 
 type ProjectRecord struct {
 	ID           string
-	OwnerLogin   string
 	Revision     int64
 	DocumentJSON string
 	CreatedAt    time.Time
@@ -45,8 +44,7 @@ func MigrateProjects(ctx context.Context, db *sql.DB) error {
 	return err
 }
 
-func (s *ProjectStore) Get(ctx context.Context, owner, id string) (ProjectRecord, error) {
-	_ = owner // compatibility until ticket 02 removes ownership parameters.
+func (s *ProjectStore) Get(ctx context.Context, id string) (ProjectRecord, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT id, revision, document_json, created_at, updated_at
 FROM projects WHERE id = ?`, id)
 	record, err := scanProject(row)
@@ -57,19 +55,18 @@ FROM projects WHERE id = ?`, id)
 }
 
 // Save creates at revision zero and otherwise conditionally increments revision.
-func (s *ProjectStore) Save(ctx context.Context, owner, id string, expectedRevision int64, documentJSON string) (ProjectRecord, error) {
+func (s *ProjectStore) Save(ctx context.Context, id string, expectedRevision int64, documentJSON string) (ProjectRecord, error) {
 	if id == "" || expectedRevision < 0 {
 		return ProjectRecord{}, errors.New("project id and revision are required")
 	}
-	_ = owner // compatibility until ticket 02 removes ownership parameters.
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if expectedRevision == 0 {
 		_, err := s.db.ExecContext(ctx, `INSERT INTO projects
 (id, revision, document_json, created_at, updated_at) VALUES (?, 1, ?, ?, ?)`, id, documentJSON, now, now)
 		if err == nil {
-			return s.Get(ctx, owner, id)
+			return s.Get(ctx, id)
 		}
-		if _, ownerErr := s.Get(ctx, owner, id); ownerErr == nil {
+		if _, ownerErr := s.Get(ctx, id); ownerErr == nil {
 			return ProjectRecord{}, ErrRevisionConflict
 		} else if !errors.Is(ownerErr, ErrProjectNotFound) {
 			return ProjectRecord{}, ownerErr
@@ -91,9 +88,9 @@ WHERE id = ? AND revision = ?`, documentJSON, now, id, expectedRevision)
 		return ProjectRecord{}, err
 	}
 	if affected == 1 {
-		return s.Get(ctx, owner, id)
+		return s.Get(ctx, id)
 	}
-	if _, ownerErr := s.Get(ctx, owner, id); ownerErr == nil {
+	if _, ownerErr := s.Get(ctx, id); ownerErr == nil {
 		return ProjectRecord{}, ErrRevisionConflict
 	} else if !errors.Is(ownerErr, ErrProjectNotFound) {
 		return ProjectRecord{}, ownerErr

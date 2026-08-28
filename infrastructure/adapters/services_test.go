@@ -121,7 +121,7 @@ func TestExportSourceCancellationPersistsCancelled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := projects.Save(ctx, "owner", "project", 0, `{}`); err != nil {
+	if _, err := projects.Save(ctx, "project", 0, `{}`); err != nil {
 		t.Fatal(err)
 	}
 	jobs, err := store.NewJobStore(db)
@@ -162,7 +162,7 @@ func TestExportDownloadEnforcesDurableLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := projects.Save(ctx, "owner", "project", 0, `{}`); err != nil {
+	if _, err := projects.Save(ctx, "project", 0, `{}`); err != nil {
 		t.Fatal(err)
 	}
 	jobs, err := store.NewJobStore(db)

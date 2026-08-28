@@ -60,11 +60,15 @@ type projectStub struct {
 	getCalls, saveCalls int
 }
 
-func (p *projectStub) Get(context.Context, auth.Principal, string) (api.Project, error) {
+func (p *projectStub) Create(_ context.Context, id string, input auth.Document) (api.Project, error) {
+	p.saveCalls++
+	return api.Project{ID: id, Document: input}, nil
+}
+func (p *projectStub) Get(context.Context, string) (api.Project, error) {
 	p.getCalls++
 	return p.get, nil
 }
-func (p *projectStub) Save(_ context.Context, _ auth.Principal, id string, input auth.Document, _ int64) (api.Project, error) {
+func (p *projectStub) Save(_ context.Context, id string, input auth.Document) (api.Project, error) {
 	p.saveCalls++
 	return api.Project{ID: id, Document: input}, nil
 }

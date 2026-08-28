@@ -158,8 +158,9 @@ type AssetService interface {
 	Waveform(context.Context, domain.Principal, AssetSpec) (AssetResult, error)
 }
 type ProjectService interface {
-	Get(context.Context, domain.Principal, string) (Project, error)
-	Save(context.Context, domain.Principal, string, ProjectInput, int64) (Project, error)
+	Create(context.Context, string, ProjectInput) (Project, error)
+	Get(context.Context, string) (Project, error)
+	Save(context.Context, string, ProjectInput) (Project, error)
 }
 type ExportService interface {
 	Create(context.Context, domain.Principal, string, Project, ExportInput) (Job, error)

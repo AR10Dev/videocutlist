@@ -139,10 +139,11 @@ func (routeTestPreview) Cached(context.Context, PreviewSpec) (bool, error) { ret
 
 type routeTestProjects struct{}
 
-func (routeTestProjects) Get(context.Context, domain.Principal, string) (Project, error) {
+func (routeTestProjects) Create(context.Context, string, application.ProjectInput) (Project, error) {
 	return Project{}, nil
 }
-func (routeTestProjects) Save(context.Context, domain.Principal, string, application.ProjectInput, int64) (Project, error) {
+func (routeTestProjects) Get(context.Context, string) (Project, error) { return Project{}, nil }
+func (routeTestProjects) Save(context.Context, string, application.ProjectInput) (Project, error) {
 	return Project{}, nil
 }
 

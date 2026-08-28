@@ -118,19 +118,19 @@ func (r PreviewRunner) Start(ctx context.Context, spec domain.PreviewSpec) (*app
 
 type ProjectRepository struct{ Store *store.ProjectStore }
 
-func (p ProjectRepository) Get(ctx context.Context, owner, id string) (application.ProjectRecord, error) {
-	record, err := p.Store.Get(ctx, owner, id)
+func (p ProjectRepository) Get(ctx context.Context, id string) (application.ProjectRecord, error) {
+	record, err := p.Store.Get(ctx, id)
 	if err != nil {
 		return application.ProjectRecord{}, err
 	}
 	return project(record)
 }
-func (p ProjectRepository) Save(ctx context.Context, owner, id string, document domain.Document) (application.ProjectRecord, error) {
+func (p ProjectRepository) Save(ctx context.Context, id string, document domain.Document) (application.ProjectRecord, error) {
 	data, err := json.Marshal(document)
 	if err != nil {
 		return application.ProjectRecord{}, err
 	}
-	record, err := p.Store.Save(ctx, owner, id, document.Revision, string(data))
+	record, err := p.Store.Save(ctx, id, document.Revision, string(data))
 	if err != nil {
 		return application.ProjectRecord{}, err
 	}
