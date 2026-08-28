@@ -107,7 +107,7 @@ func (s *MediaStore) Browse(ctx context.Context, folderID, cursor string, limit 
 		parts := strings.Split(filepath.ToSlash(c.path), "/")
 		for depth := 0; depth < len(parts); depth++ {
 			parent := strings.Join(parts[:depth], "/")
-			if index.FolderID(c.root, parent) != folderID {
+			if folderID != "" && index.FolderID(c.root, parent) != folderID {
 				continue
 			}
 			if depth == len(parts)-1 {
@@ -119,6 +119,7 @@ func (s *MediaStore) Browse(ctx context.Context, folderID, cursor string, limit 
 			label := parts[depth]
 			id := index.FolderID(c.root, strings.Join(parts[:depth+1], "/"))
 			folders = appendUniqueFolder(folders, index.Folder{ID: id, Label: label})
+			break
 		}
 	}
 	sort.Slice(folders, func(i, j int) bool { return folders[i].ID < folders[j].ID })

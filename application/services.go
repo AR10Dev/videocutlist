@@ -19,6 +19,7 @@ var ErrJobState = store.ErrJobState
 
 type MediaCatalog interface {
 	List(context.Context, string, int) (MediaPage, error)
+	Browse(context.Context, string, string, int) (FolderPage, error)
 	Get(context.Context, string) (Media, error)
 	Refresh(context.Context) error
 	Preview(context.Context, PreviewSpec) (domain.PreviewSpec, error)
@@ -136,6 +137,9 @@ func (m *MediaUseCase) CancelImport(_ context.Context, principal domain.Principa
 
 func (m *MediaUseCase) List(ctx context.Context, cursor string, limit int) (MediaPage, error) {
 	return m.Catalog.List(ctx, cursor, limit)
+}
+func (m *MediaUseCase) Browse(ctx context.Context, folderID, cursor string, limit int) (FolderPage, error) {
+	return m.Catalog.Browse(ctx, folderID, cursor, limit)
 }
 func (m *MediaUseCase) Get(ctx context.Context, id string) (Media, error) {
 	return m.Catalog.Get(ctx, id)

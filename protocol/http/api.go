@@ -31,9 +31,6 @@ const (
 type Media = application.Media
 type MediaPage = application.MediaPage
 type FolderPage = application.FolderPage
-type MediaBrowser interface {
-	Browse(context.Context, string, string, int) (application.FolderPage, error)
-}
 type LibraryStatus = application.LibraryStatus
 type LibraryState = application.LibraryState
 
@@ -482,12 +479,7 @@ func (s *Server) browseMedia(writer http.ResponseWriter, request *http.Request, 
 			return
 		}
 	}
-	browser, ok := s.config.Media.(MediaBrowser)
-	if !ok {
-		internalError(writer, id)
-		return
-	}
-	page, err := browser.Browse(request.Context(), folderID, cursor, limit)
+	page, err := s.config.Media.Browse(request.Context(), folderID, cursor, limit)
 	if err != nil {
 		internalError(writer, id)
 		return
