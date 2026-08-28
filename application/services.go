@@ -436,36 +436,74 @@ func (e *ExportUseCase) Cancel(ctx context.Context, owner, id string) error {
 	return err
 }
 
-type JobUseCase struct {
-	Exports    *ExportUseCase
-	Detections *DetectionUseCase
+type UnifiedJobs interface {
+	Get(context.Context, string) (store.Job, error)
+	Cancel(context.Context, string) (store.Job, error)
 }
 
-func (j JobUseCase) Get(ctx context.Context, principal domain.Principal, id string) (Job, error) {
-	if j.Exports != nil {
-		if value, err := j.Exports.Get(ctx, principal.Subject, id); err == nil {
-			return value, nil
-		}
+type JobUseCase struct{ Jobs UnifiedJobs }
+
+func (j JobUseCase) Get(ctx context.Context, _ domain.Principal, id string) (Job, error) {
+	if j.Jobs == nil {
+		return Job{}, store.ErrJobNotFound
 	}
-	if j.Detections != nil {
-		value, err := j.Detections.Get(ctx, principal, id)
-		if err != nil {
-			return Job{}, err
-		}
-		return detectionJobAsJob(value), nil
+	value, err := j.Jobs.Get(ctx, id)
+	if err != nil {
+		return Job{}, err
 	}
-	return Job{}, store.ErrJobNotFound
+	return unifiedJobResult(value), nil
 }
-func (j JobUseCase) Cancel(ctx context.Context, principal domain.Principal, id string) error {
-	if j.Exports != nil {
-		if err := j.Exports.Cancel(ctx, principal.Subject, id); err == nil {
-			return nil
+func (j JobUseCase) Cancel(ctx context.Context, _ domain.Principal, id string) error {
+	if j.Jobs == nil {
+		return store.ErrJobNotFound
+	}
+	_, err := j.Jobs.Cancel(ctx, id)
+	if errors.Is(err, store.ErrJobState) {
+		return nil
+	}
+	return err
+}
+
+func unifiedJobResult(value store.Job) Job {
+	switch value.Kind {
+	case store.JobExport:
+		return jobResult(store.ExportJob{ID: value.ID, ProjectID: value.ProjectID, State: value.State, RequestJSON: value.RequestJSON, ResultJSON: value.ResultJSON, ErrorCode: value.ErrorCode, CreatedAt: value.CreatedAt, UpdatedAt: value.UpdatedAt})
+	case store.JobDetect:
+		result, err := storeDetectionJobResult(value)
+		if err == nil {
+			return detectionJobAsJob(result)
 		}
 	}
-	if j.Detections != nil {
-		return j.Detections.Cancel(ctx, principal, id)
+	job := Job{ID: value.ID, Type: string(value.Kind), State: string(value.State), CreatedAt: value.CreatedAt, UpdatedAt: value.UpdatedAt}
+	if value.State == store.JobRunning {
+		job.Progress = .5
+	} else if value.State == store.JobSucceeded || value.State == store.JobFailed || value.State == store.JobCancelled {
+		job.Progress = 1
 	}
-	return store.ErrJobNotFound
+	if value.ErrorCode.Valid {
+		code := value.ErrorCode.String
+		job.ErrorCode = &code
+	}
+	return job
+}
+
+func storeDetectionJobResult(value store.Job) (DetectionJob, error) {
+	var request struct {
+		MediaID string `json:"mediaId"`
+		Kind    string `json:"kind"`
+	}
+	if err := json.Unmarshal([]byte(value.RequestJSON), &request); err != nil {
+		return DetectionJob{}, err
+	}
+	result := DetectionJob{ID: value.ID, Type: string(value.Kind), State: string(value.State), MediaID: request.MediaID, ProjectID: value.ProjectID, Kind: domain.DetectionKind(request.Kind)}
+	if value.ResultJSON.Valid {
+		_ = json.Unmarshal([]byte(value.ResultJSON.String), &result.Candidates)
+	}
+	if value.ErrorCode.Valid {
+		code := value.ErrorCode.String
+		result.ErrorCode = &code
+	}
+	return result, nil
 }
 
 func detectionJobAsJob(value DetectionJob) Job {

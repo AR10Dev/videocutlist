@@ -436,26 +436,25 @@ func TestExportAdmissionPrecedesDurableCreation(t *testing.T) {
 	<-executor.cancelled
 }
 
-func TestJobCancellationOrchestratesExecutorAndRepository(t *testing.T) {
-	jobs, executor := &jobsStub{}, &executorStub{started: make(chan struct{}), cancelled: make(chan struct{})}
-	useCase := NewExportUseCase(jobs, executor, 1)
-	job, err := useCase.Create(context.Background(), domain.Principal{Subject: "editor"}, "p_aaaaaaaaaaaa", project(), input())
+func TestJobUseCaseCancelsThroughUnifiedStore(t *testing.T) {
+	db, err := store.OpenDatabase(context.Background(), t.TempDir()+"/jobs.db")
 	if err != nil {
 		t.Fatal(err)
 	}
-	<-executor.started
-	jobs.mu.Lock()
-	jobs.job.State = "running"
-	jobs.mu.Unlock()
-	if err := (JobUseCase{Exports: useCase}).Cancel(context.Background(), domain.Principal{Subject: "editor"}, job.ID); err != nil {
+	defer db.Close()
+	jobs, err := store.NewJobsStore(db)
+	if err != nil {
 		t.Fatal(err)
 	}
-	<-executor.cancelled
-	jobs.mu.Lock()
-	cancels := jobs.cancels
-	jobs.mu.Unlock()
-	if cancels != 1 {
-		t.Fatalf("repository cancels = %d", cancels)
+	if _, err := jobs.Create(context.Background(), store.Job{ID: "j_aaaaaaaaaaaa", BatchID: "b_aaaaaaaaaaaa", Kind: store.JobScan, RequestJSON: `{}`}); err != nil {
+		t.Fatal(err)
+	}
+	if err := (JobUseCase{Jobs: jobs}).Cancel(context.Background(), domain.Principal{Subject: "editor"}, "j_aaaaaaaaaaaa"); err != nil {
+		t.Fatal(err)
+	}
+	job, err := jobs.Get(context.Background(), "j_aaaaaaaaaaaa")
+	if err != nil || job.State != store.JobCancelled {
+		t.Fatalf("cancelled job = %#v, %v", job, err)
 	}
 }
 

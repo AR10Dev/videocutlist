@@ -2,8 +2,10 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	_ "embed"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -126,7 +128,8 @@ func migrateUnifiedJobs(ctx context.Context, db *sql.DB) error {
 			if item == "" {
 				return fmt.Errorf("legacy export job %q has no project item", id)
 			}
-			if _, err := tx.ExecContext(ctx, `INSERT INTO jobs (id,batch_id,kind,project_id,project_item_id,state,request_json,result_json,error_code,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`, id, "b_"+id, JobExport, pid, item, state, request, result, code, created, updated); err != nil {
+			unifiedID := legacyUnifiedJobID(JobExport, id)
+			if _, err := tx.ExecContext(ctx, `INSERT INTO jobs (id,batch_id,kind,project_id,project_item_id,state,request_json,result_json,error_code,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`, unifiedID, "b_"+unifiedID, JobExport, pid, item, state, request, result, code, created, updated); err != nil {
 				return err
 			}
 		}
@@ -152,7 +155,8 @@ func migrateUnifiedJobs(ctx context.Context, db *sql.DB) error {
 			if err != nil {
 				return err
 			}
-			if _, err = tx.ExecContext(ctx, `INSERT INTO jobs (id,batch_id,kind,project_id,project_item_id,state,request_json,result_json,error_code,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`, id, "b_"+id, JobDetect, pid, item, state, string(request), result, code, created, updated); err != nil {
+			unifiedID := legacyUnifiedJobID(JobDetect, id)
+			if _, err = tx.ExecContext(ctx, `INSERT INTO jobs (id,batch_id,kind,project_id,project_item_id,state,request_json,result_json,error_code,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`, unifiedID, "b_"+unifiedID, JobDetect, pid, item, state, string(request), result, code, created, updated); err != nil {
 				return err
 			}
 		}
@@ -165,6 +169,13 @@ func migrateUnifiedJobs(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 	return tx.Commit()
+}
+
+// legacyUnifiedJobID keeps independent legacy ID namespaces distinct without
+// carrying legacy IDs or filesystem data into the shared job namespace.
+func legacyUnifiedJobID(kind JobKind, id string) string {
+	sum := sha256.Sum256([]byte(string(kind) + "\x00" + id))
+	return "j_" + base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
 func migrateSingleUserBatch(ctx context.Context, db *sql.DB) error {

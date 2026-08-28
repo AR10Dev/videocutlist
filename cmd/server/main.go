@@ -62,6 +62,10 @@ func run(ctx context.Context) error {
 	projectStore, _ := store.NewProjectStore(db)
 	jobStore, _ := store.NewJobStore(db)
 	detectionStore, _ := store.NewDetectionJobStore(db)
+	unifiedJobs, err := store.NewJobsStore(db)
+	if err != nil {
+		return err
+	}
 	mediaStore, _ := store.NewMediaStore(db)
 	if _, err := jobStore.Recover(ctx); err != nil {
 		return err
@@ -128,7 +132,7 @@ func run(ctx context.Context) error {
 	detectionService := application.NewDetectionUseCase(detectionStore, detection.Service{Scanner: scanner, Catalog: mediaStore, FFmpegPath: cfg.FFmpegPath}, cfg.ExportLimit)
 	detectionService.SetLimitProvider(func() int { return runtimeState.Snapshot().ExportLimit })
 	exportService.SetLimitProvider(func() int { return runtimeState.Snapshot().ExportLimit })
-	jobService := application.JobUseCase{Exports: exportService, Detections: detectionService}
+	jobService := application.JobUseCase{Jobs: unifiedJobs}
 	authenticator, err := httpapi.NewAuthenticator(httpapi.AuthConfig{
 		Mode: cfg.AuthMode, BearerToken: cfg.BearerToken, BearerSubject: cfg.BearerSubject,
 	})

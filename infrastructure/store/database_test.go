@@ -60,7 +60,7 @@ func TestOpenDatabaseMigratesLegacyProjectToBatchDocument(t *testing.T) {
 	if _, err := legacy.Exec(`INSERT INTO export_jobs VALUES ('j_export', 'old-user', 'p_legacy', 4, 'queued', '{"destinationId":"download"}', NULL, NULL, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := legacy.Exec(`INSERT INTO detection_jobs VALUES ('j_detection', 'old-user', 'p_legacy', ?, 4, 'scene', 'queued', NULL, NULL, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`, mediaID); err != nil {
+	if _, err := legacy.Exec(`INSERT INTO detection_jobs VALUES ('j_export', 'old-user', 'p_legacy', ?, 4, 'scene', 'queued', NULL, NULL, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`, mediaID); err != nil {
 		t.Fatal(err)
 	}
 	if err := legacy.Close(); err != nil {
@@ -91,9 +91,26 @@ func TestOpenDatabaseMigratesLegacyProjectToBatchDocument(t *testing.T) {
 	if item.ID != domain.StableProjectItemID("p_legacy") || item.MediaID != mediaID || len(item.Segments) != 1 || item.EditorState == nil || item.EditorState.Zoom != 2 {
 		t.Fatalf("migrated item = %#v", item)
 	}
-	var migratedJobs int
-	if err := db.QueryRow(`SELECT COUNT(*) FROM jobs WHERE kind IN ('export', 'detection') AND project_id = 'p_legacy' AND project_item_id = ?`, domain.StableProjectItemID("p_legacy")).Scan(&migratedJobs); err != nil || migratedJobs != 2 {
-		t.Fatalf("migrated jobs = %d, %v", migratedJobs, err)
+	rows, err := db.Query(`SELECT id FROM jobs WHERE kind IN ('export', 'detection') AND project_id = 'p_legacy' AND project_item_id = ?`, domain.StableProjectItemID("p_legacy"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil || len(ids) != 2 || ids[0] == ids[1] {
+		t.Fatalf("migrated job IDs = %#v, %v", ids, err)
+	}
+	for _, id := range ids {
+		if len(id) != 45 || id[:2] != "j_" {
+			t.Fatalf("migrated job ID is not opaque: %q", id)
+		}
 	}
 	var retained string
 	if err := db.QueryRow(`SELECT id FROM media WHERE id = ?`, mediaID).Scan(&retained); err != nil || retained != mediaID {

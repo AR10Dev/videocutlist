@@ -45,6 +45,42 @@ func TestUnifiedJobsTransitionsAndDerivedBatch(t *testing.T) {
 	}
 }
 
+func TestUnifiedJobsCancellationFailureAndRestartRecovery(t *testing.T) {
+	db, err := store.OpenDatabase(context.Background(), t.TempDir()+"/jobs.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	jobs, err := store.NewJobsStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	for _, id := range []string{"j_queued", "j_failed", "j_restarted"} {
+		if _, err := jobs.Create(ctx, store.Job{ID: id, BatchID: "b_" + id, Kind: store.JobScan, RequestJSON: `{}`}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if job, err := jobs.Cancel(ctx, "j_queued"); err != nil || job.State != store.JobCancelled {
+		t.Fatalf("queued cancel = %#v, %v", job, err)
+	}
+	if _, err := jobs.Start(ctx, "j_failed"); err != nil {
+		t.Fatal(err)
+	}
+	if job, err := jobs.Fail(ctx, "j_failed", "failed"); err != nil || job.State != store.JobFailed || !job.ErrorCode.Valid || job.ErrorCode.String != "failed" {
+		t.Fatalf("running failure = %#v, %v", job, err)
+	}
+	if _, err := jobs.Start(ctx, "j_restarted"); err != nil {
+		t.Fatal(err)
+	}
+	if recovered, err := jobs.Recover(ctx); err != nil || recovered != 1 {
+		t.Fatalf("recovery = %d, %v", recovered, err)
+	}
+	if job, err := jobs.Get(ctx, "j_restarted"); err != nil || job.State != store.JobFailed || !job.ErrorCode.Valid || job.ErrorCode.String != "interrupted_by_restart" {
+		t.Fatalf("recovered job = %#v, %v", job, err)
+	}
+}
+
 func TestUnifiedJobsConcurrentTerminalTransitions(t *testing.T) {
 	db, err := store.OpenDatabase(context.Background(), t.TempDir()+"/jobs.db")
 	if err != nil {
