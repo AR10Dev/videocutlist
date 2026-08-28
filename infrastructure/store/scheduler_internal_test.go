@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-func TestSchedulerCancelBeforeStartSkipsRunner(t *testing.T) {
+func TestSchedulerCancelBetweenClaimAndRegistrationSkipsRunner(t *testing.T) {
 	db, err := OpenDatabase(context.Background(), t.TempDir()+"/jobs.db")
 	if err != nil {
 		t.Fatal(err)
@@ -28,7 +28,7 @@ func TestSchedulerCancelBeforeStartSkipsRunner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	scheduler.beforeInvoke = func() {
+	scheduler.afterClaim = func() {
 		close(entered)
 		<-release
 	}
@@ -49,7 +49,7 @@ func TestSchedulerCancelBeforeStartSkipsRunner(t *testing.T) {
 			t.Fatal(err)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("cancellation did not complete at the claim-to-start barrier")
+		t.Fatal("cancellation did not complete at the claim-to-registration barrier")
 	}
 	close(release)
 	if err := scheduler.Shutdown(context.Background()); err != nil {
@@ -85,7 +85,7 @@ func TestSchedulerConcurrentSubmitClaimAndCancel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	scheduler.beforeInvoke = func() {
+	scheduler.afterClaim = func() {
 		once.Do(func() {
 			close(entered)
 			<-release

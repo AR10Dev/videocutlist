@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -100,7 +101,38 @@ func TestSchedulerBoundedExecutionCancellationAndShutdown(t *testing.T) {
 	}
 }
 
-func TestSchedulerCancellationBeforeExecutionSkipsRunnerWork(t *testing.T) {
+func TestSchedulerQueuedCancellationNeverInvokesRunner(t *testing.T) {
+	db, err := store.OpenDatabase(context.Background(), t.TempDir()+"/jobs.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	jobs, _ := store.NewJobsStore(db)
+	var executions atomic.Int32
+	s, err := store.NewScheduler(jobs, store.SchedulerConfig{QueueCapacity: 1, WorkerLimit: 1}, func(context.Context, store.Job) error {
+		executions.Add(1)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Submit(context.Background(), []store.Job{schedulerJob("31")}); err != nil {
+		t.Fatal(err)
+	}
+	cancelled, err := s.Cancel(context.Background(), "j_000000000031")
+	if err != nil || cancelled.State != store.JobCancelled {
+		t.Fatalf("cancelled = %#v, %v", cancelled, err)
+	}
+	s.Start()
+	if err := s.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if executions.Load() != 0 {
+		t.Fatalf("runner executed cancelled job %d times", executions.Load())
+	}
+}
+
+func TestSchedulerRunningCancellationWaitsForRunnerTerminalState(t *testing.T) {
 	db, err := store.OpenDatabase(context.Background(), t.TempDir()+"/jobs.db")
 	if err != nil {
 		t.Fatal(err)
@@ -108,36 +140,80 @@ func TestSchedulerCancellationBeforeExecutionSkipsRunnerWork(t *testing.T) {
 	defer db.Close()
 	jobs, _ := store.NewJobsStore(db)
 	started := make(chan struct{})
-	release := make(chan struct{})
-	var executions atomic.Int32
+	returned := make(chan struct{})
 	s, err := store.NewScheduler(jobs, store.SchedulerConfig{QueueCapacity: 1, WorkerLimit: 1}, func(ctx context.Context, _ store.Job) error {
 		close(started)
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-release:
-			executions.Add(1)
-			return nil
-		}
+		<-ctx.Done()
+		<-returned
+		return ctx.Err()
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	s.Start()
-	if _, err := s.Submit(context.Background(), []store.Job{schedulerJob("31")}); err != nil {
+	if _, err := s.Submit(context.Background(), []store.Job{schedulerJob("32")}); err != nil {
 		t.Fatal(err)
 	}
 	<-started
-	if _, err := s.Cancel(context.Background(), "j_000000000031"); err != nil {
-		t.Fatal(err)
+	cancelled, err := s.Cancel(context.Background(), "j_000000000032")
+	if err != nil || cancelled.State != store.JobRunning {
+		t.Fatalf("running cancellation = %#v, %v", cancelled, err)
 	}
-	close(release)
+	current, err := jobs.Get(context.Background(), "j_000000000032")
+	if err != nil || current.State != store.JobRunning {
+		t.Fatalf("job terminalized before runner returned: %#v, %v", current, err)
+	}
+	close(returned)
+	waitForJobState(t, jobs, "j_000000000032", store.JobCancelled)
 	if err := s.Shutdown(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if executions.Load() != 0 {
-		t.Fatalf("runner executed cancelled job %d times", executions.Load())
+}
+
+func TestSchedulerConcurrentSubmitClaimAndCancel(t *testing.T) {
+	db, err := store.OpenDatabase(context.Background(), t.TempDir()+"/jobs.db")
+	if err != nil {
+		t.Fatal(err)
 	}
+	defer db.Close()
+	jobs, _ := store.NewJobsStore(db)
+	s, err := store.NewScheduler(jobs, store.SchedulerConfig{QueueCapacity: 32, WorkerLimit: 2}, func(ctx context.Context, _ store.Job) error {
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Start()
+	var wg sync.WaitGroup
+	for i := 0; i < 16; i++ {
+		job := schedulerJob(fmt.Sprintf("%02d", 50+i))
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := s.Submit(context.Background(), []store.Job{job}); err == nil {
+				_, _ = s.Cancel(context.Background(), job.ID)
+			}
+		}()
+	}
+	wg.Wait()
+	if err := s.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func waitForJobState(t *testing.T, jobs *store.JobsStore, id string, want store.JobState) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		job, err := jobs.Get(context.Background(), id)
+		if err == nil && job.State == want {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	job, err := jobs.Get(context.Background(), id)
+	t.Fatalf("job state = %#v, %v; want %s", job, err, want)
 }
 
 func TestSchedulerStartAndShutdownAreIdempotent(t *testing.T) {

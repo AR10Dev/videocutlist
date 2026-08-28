@@ -38,12 +38,12 @@ type Scheduler struct {
 	running map[string]runningJob
 	started bool
 
-	// beforeInvoke is a test seam at the final pre-invocation gate.
-	beforeInvoke func()
-	stopped      bool
-	wake         chan struct{}
-	stop         chan struct{}
-	done         sync.WaitGroup
+	// afterClaim is a test seam for the claimed-but-not-registered handoff.
+	afterClaim func()
+	stopped    bool
+	wake       chan struct{}
+	stop       chan struct{}
+	done       sync.WaitGroup
 }
 
 func NewScheduler(jobs *JobsStore, config SchedulerConfig, runner JobRunner) (*Scheduler, error) {
@@ -151,18 +151,19 @@ func (s *Scheduler) Shutdown(ctx context.Context) error {
 func (s *Scheduler) Cancel(ctx context.Context, id string) (Job, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	job, err := s.jobs.Cancel(ctx, id)
+	job, err := s.jobs.Get(ctx, id)
 	if err != nil {
 		return Job{}, err
 	}
-	if running, ok := s.running[id]; ok {
-		if job.State == JobCancelled && !running.started {
-			running.cancelled = true
-			s.running[id] = running
+	if job.State == JobRunning {
+		if running, ok := s.running[id]; ok {
+			running.cancel()
+			return job, nil
 		}
-		running.cancel()
+		// A claimed job is not executable until its context is registered. It is
+		// therefore still safe to terminally cancel this short handoff window.
 	}
-	return job, nil
+	return s.jobs.Cancel(ctx, id)
 }
 
 func (s *Scheduler) worker() {
@@ -191,15 +192,15 @@ func (s *Scheduler) worker() {
 			}
 			continue
 		}
+		if s.afterClaim != nil {
+			s.afterClaim()
+		}
 		ctx, cancel := context.WithCancel(context.Background())
 		s.mu.Lock()
 		s.running[job.ID] = runningJob{cancel: cancel}
 		s.mu.Unlock()
-		if s.beforeInvoke != nil {
-			s.beforeInvoke()
-		}
-		if !s.beginRunner(job.ID, ctx) {
-			cancel()
+		current, getErr := s.jobs.Get(context.Background(), job.ID)
+		if getErr != nil || current.State != JobRunning {
 			err = context.Canceled
 		} else {
 			err = s.runner(ctx, job)
@@ -219,29 +220,7 @@ func (s *Scheduler) worker() {
 }
 
 type runningJob struct {
-	cancelled bool
-	cancel    context.CancelFunc
-	started   bool
-}
-
-// beginRunner is the cancellation gate. A successful return acknowledges that
-// invocation has begun before the caller enters the arbitrary runner function;
-// cancellation that acquires the gate first marks the job cancelled and makes
-// invocation impossible. The scheduler mutex is released before runner code.
-func (s *Scheduler) beginRunner(id string, ctx context.Context) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	running, ok := s.running[id]
-	if !ok || running.cancelled || s.stopped || ctx.Err() != nil {
-		return false
-	}
-	current, err := s.jobs.Get(context.Background(), id)
-	if err != nil || current.State != JobRunning {
-		return false
-	}
-	running.started = true
-	s.running[id] = running
-	return true
+	cancel context.CancelFunc
 }
 
 func (s *Scheduler) claim(ctx context.Context) (Job, error) {

@@ -5,10 +5,10 @@
 **Blocked by:** 04
 
 **Category:** bug
-**Status:** ready-for-agent
+**Status:** completed
 
-- [ ] A cancellation racing with worker claim prevents the runner from executing after the job becomes cancelled.
-- [ ] Concurrent submission, claiming, and cancellation races are covered by regression tests.
+- [x] A cancellation racing with worker claim prevents the runner from executing after the job becomes cancelled.
+- [x] Concurrent submission, claiming, and cancellation races are covered by regression tests.
 - [x] Repeated scheduler start or shutdown calls are safe and do not add workers or panic.
 
 ## Comments
@@ -20,3 +20,4 @@
 - Added an explicit final invocation gate. Cancellation that transitions a registered-but-unacknowledged job marks it cancelled; the gate then skips the runner. A successful gate acknowledgement linearizes execution before arbitrary runner code without holding the scheduler mutex during that code. `make check` passed.
 - Registered a running job before the start boundary and atomically marks it started under the scheduler mutex. Cancellation at the deterministic pre-start barrier cancels the context and skips runner invocation; concurrent submit, claim, and cancellation coverage was added. `make check` passed.
 - Serialized cancellation with runner registration, checked the durable state before execution, and made start/shutdown idempotent. Added cancellation and lifecycle concurrency tests. `make check` passed.
+- Running cancellation now requests only context cancellation; the worker transitions to cancelled after runner return. Queued and claimed-but-unregistered jobs still become terminal immediately. Deterministic handoff and concurrent submit/claim/cancel tests cover the boundary.
