@@ -62,6 +62,33 @@ test("shows one actionable loading message while status is pending", async ({ pa
   release();
 });
 
+test("browses folders, paginates within the active folder, and returns to root", async ({ page }) => {
+  const treeRequests: string[] = [];
+  await page.route(`${apiOrigin}/api/v1/**`, async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname === "/api/v1/media/status")
+      return route.fulfill({ json: { state: "ready_with_media", message: "Media library is ready." } });
+    if (url.pathname === "/api/v1/media/tree") {
+      treeRequests.push(url.search);
+      const folder = url.searchParams.get("folderId");
+      const cursor = url.searchParams.get("cursor");
+      if (!folder) return route.fulfill({ json: { folders: [{ id: "f_" + "x".repeat(43), label: "Clips" }], items: [{ id: "m_" + "a".repeat(43), name: "root.mp4", durationMs: 1000, container: "mp4" }] } });
+      if (!cursor) return route.fulfill({ json: { folders: [], items: [{ id: "m_" + "b".repeat(43), name: "clip-1.mp4", durationMs: 1000, container: "mp4" }], nextCursor: "m_" + "c".repeat(43) } });
+      return route.fulfill({ json: { folders: [], items: [{ id: "m_" + "d".repeat(43), name: "clip-2.mp4", durationMs: 1000, container: "mp4" }] } });
+    }
+    if (url.pathname === "/api/v1/destinations") return route.fulfill({ json: { destinations: [] } });
+    return route.fulfill({ status: 404 });
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Clips" }).click();
+  await expect(page.getByRole("button", { name: "clip-1.mp4" })).toBeVisible();
+  await page.getByRole("button", { name: "Load more" }).click();
+  await expect(page.getByRole("button", { name: "clip-2.mp4" })).toBeVisible();
+  await page.getByRole("button", { name: /Server media library/ }).click();
+  await expect(page.getByRole("button", { name: "root.mp4" })).toBeVisible();
+  expect(treeRequests).toEqual(["", "?folderId=f_" + "x".repeat(43), "?folderId=f_" + "x".repeat(43) + "&cursor=m_" + "c".repeat(43), ""]);
+});
+
 test("loads status once and refreshes it after a rescan", async ({ page }) => {
   let statusRequests = 0;
   await page.route(`${apiOrigin}/api/v1/**`, async (route) => {

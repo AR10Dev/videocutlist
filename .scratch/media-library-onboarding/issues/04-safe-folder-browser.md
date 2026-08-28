@@ -19,4 +19,4 @@
 
 Implemented safe folder browsing wiring and navigation. `application.MediaService` now exposes `Browse` directly, the HTTP handler calls it without a failing optional assertion, and root browsing handles empty `folderId` while preserving opaque IDs. The client root control and refresh clear folder/cursor state and reload the tree; pagination uses the captured folder request and ignores stale responses.
 
-Evidence: `gofmt -w ...` and `go test ./application ./infrastructure/store ./protocol/http ./test/integration/api` (108 passed); `git diff --check` passed. Client checks were not run because dependencies are unavailable in this worktree.
+Evidence: `gofmt -w protocol/http/routes_test.go`, `go test ./protocol/http ./application` (69 passed), and `git diff --check` passed. Added production handler dispatch coverage for opaque folder/cursor queries and Playwright coverage for root navigation, refresh status, and folder pagination. Client checks remain unavailable because dependencies are not installed in this worktree.

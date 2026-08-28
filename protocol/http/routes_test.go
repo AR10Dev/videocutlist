@@ -24,6 +24,7 @@ func TestParseRoute(t *testing.T) {
 		id                 string
 	}{
 		{"list", http.MethodGet, "/api/v1/media", routeListMedia, ""},
+		{"browse root", http.MethodGet, "/api/v1/media/tree", routeBrowseMedia, ""},
 		{"status", http.MethodGet, "/api/v1/media/status", routeMediaStatus, ""},
 		{"refresh", http.MethodPost, "/api/v1/media/refresh", routeRefreshMedia, ""},
 		{"settings get", http.MethodGet, "/api/v1/settings", routeGetSettings, ""},
@@ -69,13 +70,21 @@ func TestParseRouteRejectsMalformedIDsAndPaths(t *testing.T) {
 	}
 }
 
-type routeTestMedia struct{ gets int }
+type routeTestMedia struct {
+	gets        int
+	browses     int
+	folderID    string
+	cursor      string
+	browseLimit int
+}
 
 func (m *routeTestMedia) List(context.Context, string, int) (MediaPage, error) {
 	return MediaPage{}, nil
 }
-func (m *routeTestMedia) Browse(context.Context, string, string, int) (FolderPage, error) {
-	return FolderPage{}, nil
+func (m *routeTestMedia) Browse(_ context.Context, folderID, cursor string, limit int) (FolderPage, error) {
+	m.browses++
+	m.folderID, m.cursor, m.browseLimit = folderID, cursor, limit
+	return FolderPage{Folders: []application.FolderNode{{ID: "f_folder", Label: "Folder"}}}, nil
 }
 func (m *routeTestMedia) Get(context.Context, string) (Media, error) {
 	m.gets++
@@ -84,6 +93,32 @@ func (m *routeTestMedia) Get(context.Context, string) (Media, error) {
 func (m *routeTestMedia) RefreshMedia(context.Context) error { return nil }
 func (m *routeTestMedia) Status() LibraryStatus {
 	return LibraryStatus{State: LibraryReadyEmpty, Message: "No supported media was found."}
+}
+
+func TestBrowseMediaDispatchesOpaqueQueryToProductionService(t *testing.T) {
+	authenticator, err := NewAuthenticator(AuthConfig{Mode: "none"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	media := &routeTestMedia{}
+	server, err := New(Config{Authenticator: authenticator, Media: media, Preview: routeTestPreview{}, Projects: routeTestProjects{}, Exports: routeTestExports{}, Jobs: routeTestJobs{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	folderID := "f_" + strings.Repeat("x", 43)
+	cursor := "m_" + strings.Repeat("y", 43)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/media/tree?folderId="+folderID+"&cursor="+cursor+"&limit=25", nil)
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d, want %d", recorder.Code, http.StatusOK)
+	}
+	if media.browses != 1 || media.folderID != folderID || media.cursor != cursor || media.browseLimit != 25 {
+		t.Fatalf("browse=(%d, %q, %q, %d)", media.browses, media.folderID, media.cursor, media.browseLimit)
+	}
+	if strings.Contains(recorder.Body.String(), "path") {
+		t.Fatalf("browse response leaked a path: %s", recorder.Body.String())
+	}
 }
 
 type routeTestAssets struct{}

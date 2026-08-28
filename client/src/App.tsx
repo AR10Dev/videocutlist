@@ -360,13 +360,25 @@ export function App() {
     if (folderId) params.set("folderId", folderId);
     if (cursor) params.set("cursor", cursor);
     const query = params.toString() ? `?${params}` : "";
+    if (!folderId && !cursor) setStatus("Loading media…");
     const response = await api.request(`media/tree${query}`);
     if (request !== folderRequestVersion || !response.ok) return;
     const page = (await response.json()) as FolderPage;
+    if (request !== folderRequestVersion) return;
+    let library: LibraryStatus | undefined;
+    if (!folderId && !cursor) {
+      const libraryResponse = await api.request("media/status");
+      if (request !== folderRequestVersion) return;
+      if (libraryResponse.ok) library = (await libraryResponse.json()) as LibraryStatus;
+      if (request !== folderRequestVersion) return;
+    }
+    if (request !== folderRequestVersion) return;
+    if (library) setLibraryStatus(library);
     setFolders(page.folders);
     setMedia(cursor ? [...media(), ...page.items] : page.items);
     setNextCursor(page.nextCursor ?? undefined);
     setActiveFolder(folderId);
+    if (!folderId && !cursor) setStatus("Choose media to begin.");
   };
   const loadMedia = async (cursor?: string, refreshed = false) => {
     mediaRequest?.abort();
