@@ -5,7 +5,7 @@
 **Blocked by:** 05, 08, 11
 
 **Category:** enhancement
-**Status:** ready-for-agent
+**Status:** blocked
 
 - [ ] A project can add, remove, select, and reorder media items with an explicit unsaved-change guard.
 - [ ] Each item keeps independent segments, playhead, zoom, undo, and redo state.

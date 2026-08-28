@@ -5,7 +5,7 @@
 **Blocked by:** 05
 
 **Category:** bug
-**Status:** completed
+**Status:** needs-review
 
 - [x] Each export writes into a job-owned temporary location and records enough safe metadata to reconcile that job only.
 - [x] FFprobe validation succeeds before publication.

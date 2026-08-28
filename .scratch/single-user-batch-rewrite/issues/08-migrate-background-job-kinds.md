@@ -5,7 +5,7 @@
 **Blocked by:** 04, 07
 
 **Category:** enhancement
-**Status:** completed
+**Status:** blocked
 
 - [x] Detection jobs store immutable detector request parameters and project/media references.
 - [x] Detection results contain review candidates and safe metadata only.

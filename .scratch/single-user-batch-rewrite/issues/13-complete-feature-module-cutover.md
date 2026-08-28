@@ -5,7 +5,7 @@
 **Blocked by:** 06, 08, 09, 10, 12
 
 **Category:** enhancement
-**Status:** ready-for-agent
+**Status:** blocked
 
 - [ ] Backend behavior lives under `internal/db`, `library`, `projects`, `jobs`, `preview`, `export`, `detection`, `settings`, `httpapi`, and `web`.
 - [ ] The old horizontal `domain`, `application`, `protocol`, and pass-through adapter packages have no remaining production callers and are removed.
