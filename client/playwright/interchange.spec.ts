@@ -25,6 +25,37 @@ test("project interchange controls wait for media selection", async ({ page }) =
   await expect(page.getByLabel("Import CSV or chapters")).not.toBeVisible();
 });
 
+test("gates interchange exports until the project is persisted", async ({ page }) => {
+  await page.addInitScript(() => {
+    window.VIDEOCUTLIST_CONFIG = {
+      serverBaseUrl: "http://127.0.0.1:8787",
+      authentication: { type: "none" },
+    };
+  });
+  await page.route("http://127.0.0.1:8787/api/v1/**", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname === "/api/v1/media") return route.fulfill({ json: { items: [media] } });
+    if (url.pathname === `/api/v1/media/${media.id}`) return route.fulfill({ json: media });
+    if (url.pathname === "/api/v1/media/status")
+      return route.fulfill({ json: { state: "ready_empty", message: "Ready" } });
+    if (route.request().method() === "PUT")
+      return route.fulfill({ json: { id: "p_saved", revision: 1 } });
+    return route.fulfill({ status: 404 });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await expect(page.getByRole("button", { name: "Export CSV" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Export chapters" })).toBeDisabled();
+  await expect(
+    page.getByText("Save or load the selected video's project before exporting CSV or chapters."),
+  ).toBeVisible();
+
+  await page.getByRole("button", { name: "Save project" }).click();
+  await expect(page.getByRole("button", { name: "Export CSV" })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Export chapters" })).toBeEnabled();
+});
+
 test("separates media selection from cut-list imports", async ({ page }) => {
   await page.addInitScript(() => {
     window.VIDEOCUTLIST_CONFIG = {
@@ -36,6 +67,8 @@ test("separates media selection from cut-list imports", async ({ page }) => {
     const url = new URL(route.request().url());
     if (url.pathname === "/api/v1/media") return route.fulfill({ json: { items: [media] } });
     if (url.pathname === `/api/v1/media/${media.id}`) return route.fulfill({ json: media });
+    if (url.pathname === "/api/v1/media/status")
+      return route.fulfill({ json: { state: "ready_empty", message: "Ready" } });
     if (route.request().method() === "PUT") return route.fulfill({ json: { revision: 1 } });
     return route.fulfill({ status: 404 });
   });

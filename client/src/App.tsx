@@ -949,9 +949,25 @@ export function App() {
     ]) => {
       if (!item) {
         setPreflight(undefined);
+        setPreflightPending(false);
         return;
       }
       if (exportTimer) window.clearTimeout(exportTimer);
+      if (dirty()) {
+        setPreflight({
+          allowed: false,
+          selection: [],
+          findings: [
+            {
+              severity: "blocked",
+              code: "project_not_persisted",
+              message: "Save the project before running export preflight.",
+            },
+          ],
+        });
+        setPreflightPending(false);
+        return;
+      }
       setPreflightPending(true);
       const version = ++preflightVersion;
       exportTimer = window.setTimeout(async () => {
@@ -1005,20 +1021,21 @@ export function App() {
     },
   );
   const exportProject = async () => {
-    const saved = await saveProject();
-    if (!saved) return;
-    // Saving changes the revision and schedules a fresh preflight; the export
-    // endpoint repeats it authoritatively, so do not strand the button meanwhile.
-    setPreflightPending(false);
+    const activeJob = exportJob();
+    if (activeJob?.state === "queued" || activeJob?.state === "running") {
+      setExportStatus(`Export job ${activeJob.id} is already active.`);
+      return;
+    }
+    if (preflightPending() || !preflight()?.allowed) return;
+    if (dirty() && !(await saveProject())) return;
     const request = ++exportRequest;
-    exportController?.abort();
     const controller = new AbortController();
     exportController = controller;
     if (exportTimer) clearTimeout(exportTimer);
     setExportStatus("Starting export…");
     let response: Response;
     try {
-      response = await api.request(`projects/${encodeURIComponent(saved.id)}/exports`, {
+      response = await api.request(`projects/${encodeURIComponent(projectId())}/exports`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1097,22 +1114,21 @@ export function App() {
   const cancelExport = async () => {
     const job = exportJob();
     if (!job || (job.state !== "queued" && job.state !== "running")) return;
-    const request = ++exportRequest;
-    exportController?.abort();
-    if (exportTimer) clearTimeout(exportTimer);
     try {
       const response = await api.request(`jobs/${encodeURIComponent(job.id)}`, {
         method: "DELETE",
       });
-      if (request !== exportRequest) return;
       if (!response.ok) throw new Error("Export could not be cancelled. Try again.");
+      exportController?.abort();
+      exportController = undefined;
+      if (exportTimer) clearTimeout(exportTimer);
+      exportTimer = undefined;
       setExportJob({ ...job, state: "cancelled" });
       setExportStatus("Export cancelled.");
     } catch (error) {
-      if (request === exportRequest)
-        setExportStatus(
-          error instanceof Error ? error.message : "Export could not be cancelled. Try again.",
-        );
+      setExportStatus(
+        error instanceof Error ? error.message : "Export could not be cancelled. Try again.",
+      );
     }
   };
   const startDetection = async (kind: DetectionKind) => {
@@ -1792,7 +1808,11 @@ export function App() {
                       />
                     </label>
                   </Show>
+                  <p>
+                    Save or load the selected video&apos;s project before exporting CSV or chapters.
+                  </p>
                   <button
+                    disabled={!selected() || dirty()}
                     onClick={() =>
                       void api
                         .interchangeRequest(projectId(), "csv")
@@ -1810,6 +1830,7 @@ export function App() {
                     Export CSV
                   </button>
                   <button
+                    disabled={!selected() || dirty()}
                     onClick={() =>
                       void api
                         .interchangeRequest(projectId(), "chapters")
@@ -1991,12 +2012,17 @@ export function App() {
                   </For>
                 </div>
                 <div class="controls">
+                  <Show when={exportJob()?.state === "queued" || exportJob()?.state === "running"}>
+                    <p role="status">Export job {exportJob()!.id} is active; wait or cancel it.</p>
+                  </Show>
                   <button
                     disabled={
                       !selected() ||
                       !present().segments.length ||
                       preflightPending() ||
-                      (!dirty() && !preflight()?.allowed)
+                      !preflight()?.allowed ||
+                      exportJob()?.state === "queued" ||
+                      exportJob()?.state === "running"
                     }
                     onClick={() => void exportProject()}
                   >
