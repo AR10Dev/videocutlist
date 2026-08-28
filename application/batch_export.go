@@ -42,8 +42,7 @@ type BatchExportUseCase struct {
 }
 
 func (b BatchExportUseCase) Submit(ctx context.Context, request BatchExportRequest) (string, []Job, error) {
-	if b.Projects == nil || b.Media == nil || b.Jobs == nil {
-
+	if b.Projects == nil || b.Media == nil || b.Jobs == nil || b.Scheduler == nil {
 		return "", nil, errors.New("batch export dependencies are required")
 	}
 	project, err := b.Projects.Get(ctx, request.ProjectID)
@@ -86,12 +85,7 @@ func (b BatchExportUseCase) Submit(ctx context.Context, request BatchExportReque
 	if len(jobs) == 0 {
 		return "", nil, errors.New("no project items selected")
 	}
-	var created []store.Job
-	if b.Scheduler != nil {
-		created, err = b.Scheduler.Submit(ctx, jobs)
-	} else {
-		created, err = b.Jobs.CreateBatch(ctx, jobs)
-	}
+	created, err := b.Scheduler.Submit(ctx, jobs)
 	if err != nil {
 		return "", nil, err
 	}
@@ -113,10 +107,10 @@ func cloneProjectItem(item domain.ProjectItem) domain.ProjectItem {
 }
 
 func (b BatchExportUseCase) Cancel(ctx context.Context, batchID string) error {
-	if b.Scheduler != nil {
-		return b.Scheduler.CancelBatch(ctx, batchID)
+	if b.Scheduler == nil {
+		return errors.New("batch export dependencies are required")
 	}
-	return b.Jobs.CancelBatch(ctx, batchID)
+	return b.Scheduler.CancelBatch(ctx, batchID)
 }
 
 // RunQueuedSnapshot is the scheduler runner seam for immutable exports. It

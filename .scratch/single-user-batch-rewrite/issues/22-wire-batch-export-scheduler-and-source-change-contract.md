@@ -5,13 +5,14 @@
 **Blocked by:** 21
 
 **Category:** bug
-**Status:** ready-for-agent
+**Status:** completed
 
-- [ ] Production server wiring constructs the scheduler and routes batch export submission, execution, and cancellation through it.
-- [ ] Batch export cannot fall back to direct store insertion or store-only cancellation when scheduler behavior is required.
-- [ ] Missing or changed sources cause the persisted child failure code `source_changed`.
-- [ ] A regression test proves cancelling a running batch-export child cancels its execution context.
+- [x] Production server wiring constructs the scheduler and routes batch export submission, execution, and cancellation through it.
+- [x] Batch export cannot fall back to direct store insertion or store-only cancellation when scheduler behavior is required.
+- [x] Missing or changed sources cause the persisted child failure code `source_changed`.
+- [x] A regression test proves cancelling a running batch-export child cancels its execution context.
 
 ## Comments
 
 - Opened from post-merge review of ticket 21. The new batch-export use case and runner have no production wiring, nil scheduler fallback bypasses required admission/cancellation behavior, raw `source_changed` errors do not match the scheduler sentinel, and cancellation coverage only exercises queued store jobs.
+- Wired the mandatory scheduler into server startup with bounded workers, routed immutable snapshot execution through the export adapter, removed direct-store fallbacks, propagated the shared source-change sentinel, and added a running-child cancellation context regression test. `make check` passed.

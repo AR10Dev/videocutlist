@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -218,6 +219,31 @@ func (e ExportExecutor) Download(ctx context.Context, principal domain.Principal
 		return nil, "", err
 	}
 	return file, artifact.Name, nil
+}
+
+func (e ExportExecutor) ExecuteBatchSnapshot(ctx context.Context, id string, snapshot application.ExportSnapshot) error {
+	source, _, err := e.Scanner.Open(ctx, e.Media, snapshot.Source.MediaID)
+	if err != nil {
+		return fmt.Errorf("open batch source: %w", err)
+	}
+	defer source.Close()
+	file, ok := source.(*os.File)
+	if !ok {
+		return errors.New("media source is not a file")
+	}
+	coordinator := e.Coordinator
+	if snapshot.RuntimeSettings != nil {
+		applyRuntimeSettings(&coordinator.Exporter, *snapshot.RuntimeSettings)
+	}
+	item := snapshot.Item
+	document := domain.Document{SchemaVersion: domain.ProjectSchemaVersion, Name: "Batch export", Items: []domain.ProjectItem{item}}
+	_, err = coordinator.Exporter.Run(ctx, file, document, exporter.Request{
+		Mode: item.ExportOptions.Mode, Selection: item.ExportOptions.Selection,
+		StreamIndexes: item.ExportOptions.StreamIndexes, CutStrategy: item.ExportOptions.CutStrategy,
+		Container: item.ExportOptions.Container, DestinationID: item.ExportOptions.DestinationID,
+		FilenameTemplate: item.ExportOptions.FilenameTemplate, JobID: id,
+	})
+	return err
 }
 
 func (e ExportExecutor) Execute(ctx context.Context, owner, id string, document domain.Document) error {

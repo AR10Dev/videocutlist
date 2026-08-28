@@ -127,6 +127,19 @@ func run(ctx context.Context) error {
 		FFmpegPath: cfg.FFmpegPath, FFprobePath: cfg.FFprobePath, OutputDir: cfg.ExportDir, Destinations: cfg.Destinations, Artifacts: artifacts,
 	})
 	exportExecutor.Settings = runtimeState
+	batchExports := application.BatchExportUseCase{Projects: adapters.ProjectRepository{Store: projectStore}, Media: mediaCatalog, Jobs: unifiedJobs, Settings: runtimeState}
+	scheduler, err := store.NewScheduler(unifiedJobs, store.SchedulerConfig{QueueCapacity: cfg.ExportLimit * 4, WorkerLimit: cfg.ExportLimit}, func(ctx context.Context, job store.Job) error {
+		return batchExports.RunQueuedSnapshot(ctx, job)
+	})
+	if err != nil {
+		return err
+	}
+	batchExports.Scheduler = scheduler
+	batchExports.RunSnapshot = func(ctx context.Context, snapshot application.ExportSnapshot) error {
+		return exportExecutor.ExecuteBatchSnapshot(ctx, snapshot.Item.ID, snapshot)
+	}
+	scheduler.Start()
+	defer scheduler.Shutdown(context.Background())
 	exportService := application.NewExportUseCase(jobStore, exportExecutor, cfg.ExportLimit)
 	exportService.Settings = runtimeState
 	detectionService := application.NewDetectionUseCase(detectionStore, detection.Service{Scanner: scanner, Catalog: mediaStore, FFmpegPath: cfg.FFmpegPath}, cfg.ExportLimit)

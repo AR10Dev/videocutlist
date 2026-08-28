@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"videocutlist/domain"
 	"videocutlist/infrastructure/store"
@@ -36,8 +37,12 @@ func TestBatchExportSnapshotsItemsInProjectOrder(t *testing.T) {
 	}
 	defer db.Close()
 	jobs, _ := store.NewJobsStore(db)
+	scheduler, err := store.NewScheduler(jobs, store.SchedulerConfig{QueueCapacity: 4, WorkerLimit: 1}, func(context.Context, store.Job) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
 	items := []domain.ProjectItem{{ID: "i_aaaaaaaaaaaaaaaaaaaaaaaa", MediaID: "m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Segments: []domain.Segment{{StartMS: 0, EndMS: 100}}, ExportOptions: domain.ExportOptions{Container: "mkv"}}, {ID: "i_bbbbbbbbbbbbbbbbbbbbbbbb", MediaID: "m_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Segments: []domain.Segment{{StartMS: 100, EndMS: 200}}}}
-	uc := BatchExportUseCase{Projects: batchProjectRepo{}, Media: batchCatalog{media: map[string]Media{"m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": {ID: items[0].MediaID, ETag: "a", SizeBytes: 10, DurationMS: 300}, "m_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb": {ID: items[1].MediaID, ETag: "b", SizeBytes: 20, DurationMS: 400}}}, Jobs: jobs}
+	uc := BatchExportUseCase{Projects: batchProjectRepo{}, Media: batchCatalog{media: map[string]Media{"m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": {ID: items[0].MediaID, ETag: "a", SizeBytes: 10, DurationMS: 300}, "m_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb": {ID: items[1].MediaID, ETag: "b", SizeBytes: 20, DurationMS: 400}}}, Jobs: jobs, Scheduler: scheduler}
 	uc.Projects = batchProjectRepo{project: ProjectRecord{Document: domain.Document{SchemaVersion: 2, Name: "Batch", Items: items, Revision: 7}}}
 	batchID, submitted, err := uc.Submit(context.Background(), BatchExportRequest{ProjectID: "p_aaaaaaaaaaaa", ItemIDs: []string{items[1].ID, items[0].ID}})
 	if err != nil {
@@ -117,6 +122,58 @@ func TestBatchExportRunnerRejectsChangedSource(t *testing.T) {
 	}
 }
 
+func TestBatchExportRunningCancellationPropagatesContext(t *testing.T) {
+	db, err := store.OpenDatabase(context.Background(), t.TempDir()+"/jobs.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	jobs, _ := store.NewJobsStore(db)
+	started := make(chan struct{})
+	id := "m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	catalog := batchCatalog{media: map[string]Media{id: {ID: id, ETag: "a", SizeBytes: 1, DurationMS: 10}}}
+	var uc BatchExportUseCase
+	scheduler, err := store.NewScheduler(jobs, store.SchedulerConfig{QueueCapacity: 1, WorkerLimit: 1}, func(ctx context.Context, job store.Job) error {
+		return uc.RunQueuedSnapshot(ctx, job)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	uc = BatchExportUseCase{
+		Projects: batchProjectRepo{project: ProjectRecord{Document: domain.Document{SchemaVersion: 2, Name: "Batch", Items: []domain.ProjectItem{{ID: "i_aaaaaaaaaaaaaaaaaaaaaaaa", MediaID: id}}}}},
+		Media:    catalog, Jobs: jobs, Scheduler: scheduler,
+		RunSnapshot: func(ctx context.Context, _ ExportSnapshot) error {
+			close(started)
+			<-ctx.Done()
+			return ctx.Err()
+		},
+	}
+	scheduler.Start()
+	defer scheduler.Shutdown(context.Background())
+	batchID, submitted, err := uc.Submit(context.Background(), BatchExportRequest{ProjectID: "p_aaaaaaaaaaaa"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-started
+	if err := uc.Cancel(context.Background(), batchID); err != nil {
+		t.Fatal(err)
+	}
+	state, progress, err := uc.Progress(context.Background(), batchID)
+	if err != nil || state != store.JobRunning {
+		t.Fatalf("running cancellation = %s %v %v", state, progress, err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		job, getErr := jobs.Get(context.Background(), submitted[0].ID)
+		if getErr == nil && job.State == store.JobCancelled {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	job, getErr := jobs.Get(context.Background(), submitted[0].ID)
+	t.Fatalf("job = %#v, err = %v; want cancelled", job, getErr)
+}
+
 func TestBatchExportCancellationAndSourceFingerprint(t *testing.T) {
 	db, err := store.OpenDatabase(context.Background(), t.TempDir()+"/jobs.db")
 	if err != nil {
@@ -124,9 +181,13 @@ func TestBatchExportCancellationAndSourceFingerprint(t *testing.T) {
 	}
 	defer db.Close()
 	jobs, _ := store.NewJobsStore(db)
+	scheduler, err := store.NewScheduler(jobs, store.SchedulerConfig{QueueCapacity: 1, WorkerLimit: 1}, func(context.Context, store.Job) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
 	id := "m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	item := domain.ProjectItem{ID: "i_aaaaaaaaaaaaaaaaaaaaaaaa", MediaID: id}
-	uc := BatchExportUseCase{Projects: batchProjectRepo{project: ProjectRecord{Document: domain.Document{SchemaVersion: 2, Name: "Batch", Items: []domain.ProjectItem{item}}}}, Media: batchCatalog{media: map[string]Media{id: {ID: id, ETag: "a", SizeBytes: 1, DurationMS: 10}}}, Jobs: jobs}
+	uc := BatchExportUseCase{Projects: batchProjectRepo{project: ProjectRecord{Document: domain.Document{SchemaVersion: 2, Name: "Batch", Items: []domain.ProjectItem{item}}}}, Media: batchCatalog{media: map[string]Media{id: {ID: id, ETag: "a", SizeBytes: 1, DurationMS: 10}}}, Jobs: jobs, Scheduler: scheduler}
 	batchID, _, err := uc.Submit(context.Background(), BatchExportRequest{ProjectID: "p_aaaaaaaaaaaa"})
 	if err != nil {
 		t.Fatal(err)
