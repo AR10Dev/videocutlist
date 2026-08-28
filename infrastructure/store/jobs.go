@@ -61,6 +61,40 @@ func (s *JobsStore) Create(ctx context.Context, job Job) (Job, error) {
 	return s.Get(ctx, job.ID)
 }
 
+func (s *JobsStore) CreateBatch(ctx context.Context, jobs []Job) ([]Job, error) {
+	if len(jobs) == 0 {
+		return nil, errors.New("batch requires jobs")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	for _, job := range jobs {
+		if !jobIDPattern.MatchString(job.ID) || !batchIDPattern.MatchString(job.BatchID) || job.RequestJSON == "" || !validJobKind(job.Kind) || job.Kind != JobExport || job.ProjectID == "" || job.ProjectItemID == "" {
+			return nil, errors.New("valid export jobs are required")
+		}
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	for _, job := range jobs {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO jobs (id,batch_id,kind,project_id,project_item_id,state,request_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)`, job.ID, job.BatchID, job.Kind, job.ProjectID, job.ProjectItemID, JobQueued, job.RequestJSON, now, now); err != nil {
+			return nil, fmt.Errorf("create batch: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	result := make([]Job, 0, len(jobs))
+	for _, job := range jobs {
+		value, err := s.Get(ctx, job.ID)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, value)
+	}
+	return result, nil
+}
+
 func (s *JobsStore) Get(ctx context.Context, id string) (Job, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT id,batch_id,kind,COALESCE(project_id,''),COALESCE(project_item_id,''),state,request_json,result_json,error_code,created_at,updated_at FROM jobs WHERE id=?`, id)
 	return scanUnifiedJob(row)
