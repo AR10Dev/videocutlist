@@ -1,16 +1,20 @@
-# 02: Import media through a bounded server-side job
+# 02: Keep bounded media import jobs coherent
 
-**What to build:** A user can add a permitted file or folder to the media library through a server-side import job that reports progress and item-level results without sending original filesystem paths to the browser.
+**What to build:** Cancelling or completing a server-side media import leaves the library in an accurate state and does not retain terminal jobs indefinitely.
 
 **Blocked by:** None
 
-**Category:** enhancement
-**Status:** wontfix
+**Category:** bug
+**Status:** ready-for-agent
 
-- [x] The product contract defines imports from configured allowlisted server roots only.
-- [x] Folder imports resolve beneath server roots, enforce recursion and file-count limits, and support cancellation.
-- [x] The API returns opaque job/media IDs, safe metadata, progress, and validation failures without source paths.
+- [ ] Cancelling an import records the job as cancelled without leaving the library in `LibraryFailed`.
+- [ ] After cancellation, the library reports the last known usable state or recomputes ready-empty versus ready-with-media.
+- [ ] Succeeded, failed, and cancelled imports remain queryable for a documented bounded interval, then leave the in-memory job map.
+- [ ] Ownership checks and opaque job IDs remain unchanged while terminal jobs are queryable.
+- [ ] Go tests cover cancellation during catalog refresh and terminal-job expiry.
 
 ## Comments
 
-LosslessCut can use native folder access because it is a desktop app. VideoCutlist cannot expose that model directly in its browser API.
+The bounded import contract was previously completed. Reopened after the review at `c2dcedf` found that `RefreshMedia` records context cancellation as `LibraryFailed` and terminal entries remain in `MediaUseCase.imports` indefinitely.
+
+Browser clients still receive only opaque job and media IDs; original filesystem paths remain server-side.

@@ -1,20 +1,23 @@
-# 08: Make the inspector contextual
+# 08: Make the editing workspace focused and contextual
 
-**What to build:** The right inspector presents project, export, detection, and settings only when each section is useful for the selected video and current task.
+**What to build:** A user editing one video sees the preview, timeline, cut list, and next export action first; project administration, detection, diagnostics, and uncommon export controls appear only when requested.
 
 **Blocked by:** 06
 
 **Category:** enhancement
-**Status:** wontfix
+**Status:** ready-for-agent
 
-- [x] Project identifiers do not dominate first-run UI.
-- [x] Export options show source-dependent data only after media selection.
-- [x] App settings remain available without duplicating active-export controls.
+- [ ] The primary workspace shows source name and duration, synchronized current/In/Out times, preview, timeline, segment rows, and one `Export N segments` action.
+- [ ] Every segment row shows its order, label, start, end, and duration with remove and descriptively labelled reorder controls.
+- [ ] Project ID and interchange actions move behind a Project disclosure or menu.
+- [ ] Detection moves behind a separate tool or disclosure and does not compete with manual clipping.
+- [ ] Preview request IDs, cache timings, and similar diagnostics move out of the editor into About/Diagnostics under Settings.
+- [ ] Export review shows scope, destination, filename, duration/count, and the stream-copy keyframe warning; stream selection, templates, and uncommon strategy controls are under Advanced.
+- [ ] Before media selection, mobile layout presents the media library before the editor; after selection, the clipping task remains usable at 320 px without horizontal overflow.
+- [ ] Playwright coverage exercises first run, media selection, one-segment editing, export review, mobile order, and accessible reorder names.
 
 ## Comments
 
-This ticket changes task flow, not visual decoration.
+The first contextual-inspector pass was previously completed. Reopened after the review at `c2dcedf` found that the selected-media workspace still presents project UUID, interchange, preview diagnostics, export internals, and three detection actions at once.
 
-- Project, export, and auto-detection inspector sections render only after media selection; settings remain available on first run.
-- Export cut strategy and filename controls are contextual; settings only expose browser defaults and reset.
-- Validation: `pnpm --dir client test`, `pnpm --dir client run test:e2e`, `pnpm --dir client run build`, `pnpm --dir client run lint`, `pnpm --dir client run format:check`.
+Use LosslessCut's segment-first layout as the reference boundary. Do not add multi-track editing controls or expose codec settings that this product does not support.
