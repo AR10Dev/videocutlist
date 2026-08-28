@@ -59,10 +59,13 @@ type ExportExecutor interface {
 type MediaUseCase struct {
 	Catalog    MediaCatalog
 	Configured bool
-	status     LibraryStatus
-	mu         sync.RWMutex
-	imports    map[string]*mediaImport
-	refreshID  uint64
+	// Scheduler and UnifiedJobs are the durable production path for refreshes.
+	Scheduler   *store.Scheduler
+	UnifiedJobs *store.JobsStore
+	status      LibraryStatus
+	mu          sync.RWMutex
+	imports     map[string]*mediaImport
+	refreshID   uint64
 }
 
 type mediaImport struct {
@@ -77,6 +80,21 @@ var mediaImportRetention = time.Minute
 func (m *MediaUseCase) StartImport(ctx context.Context, principal domain.Principal) (ImportJob, error) {
 	if !m.Configured {
 		return ImportJob{}, errors.New("media library is not configured")
+	}
+	if m.Scheduler != nil && m.UnifiedJobs != nil {
+		id, err := newID("j_")
+		if err != nil {
+			return ImportJob{}, err
+		}
+		batchID, err := newID("b_")
+		if err != nil {
+			return ImportJob{}, err
+		}
+		jobs, err := m.Scheduler.Submit(ctx, []store.Job{{ID: id, BatchID: batchID, Kind: store.JobScan, RequestJSON: `{}`}})
+		if err != nil {
+			return ImportJob{}, err
+		}
+		return importJobResult(jobs[0]), nil
 	}
 	id, err := newID("j_")
 	if err != nil {
@@ -127,7 +145,14 @@ func (m *MediaUseCase) runImport(ctx context.Context, entry *mediaImport) {
 		m.mu.Unlock()
 	})
 }
-func (m *MediaUseCase) ImportStatus(_ context.Context, principal domain.Principal, id string) (ImportJob, error) {
+func (m *MediaUseCase) ImportStatus(ctx context.Context, principal domain.Principal, id string) (ImportJob, error) {
+	if m.Scheduler != nil && m.UnifiedJobs != nil {
+		job, err := m.UnifiedJobs.Get(ctx, id)
+		if err != nil || job.Kind != store.JobScan {
+			return ImportJob{}, store.ErrJobNotFound
+		}
+		return importJobResult(job), nil
+	}
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	entry, ok := m.imports[id]
@@ -136,7 +161,15 @@ func (m *MediaUseCase) ImportStatus(_ context.Context, principal domain.Principa
 	}
 	return entry.job, nil
 }
-func (m *MediaUseCase) CancelImport(_ context.Context, principal domain.Principal, id string) error {
+func (m *MediaUseCase) CancelImport(ctx context.Context, principal domain.Principal, id string) error {
+	if m.Scheduler != nil && m.UnifiedJobs != nil {
+		job, err := m.UnifiedJobs.Get(ctx, id)
+		if err != nil || job.Kind != store.JobScan {
+			return store.ErrJobNotFound
+		}
+		_, err = m.Scheduler.Cancel(ctx, id)
+		return err
+	}
 	m.mu.RLock()
 	entry, ok := m.imports[id]
 	m.mu.RUnlock()
@@ -240,6 +273,17 @@ func (m *MediaUseCase) setStatusForRefresh(refreshID uint64, state LibraryState)
 		m.status = libraryStatus(state)
 	}
 }
+func importJobResult(job store.Job) ImportJob {
+	out := ImportJob{ID: job.ID, State: string(job.State), Progress: 0}
+	if job.State == store.JobSucceeded {
+		out.Progress = 1
+	}
+	if job.ErrorCode.Valid {
+		out.ErrorCode = job.ErrorCode.String
+	}
+	return out
+}
+
 func libraryStatus(state LibraryState) LibraryStatus {
 	messages := map[LibraryState]string{
 		LibraryUnconfigured:   "No media library is configured.",

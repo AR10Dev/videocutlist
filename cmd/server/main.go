@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -61,7 +62,6 @@ func run(ctx context.Context) error {
 	runtimeState := store.NewRuntimeSettingsState(effectiveSettings.Settings)
 	projectStore, _ := store.NewProjectStore(db)
 	jobStore, _ := store.NewJobStore(db)
-	detectionStore, _ := store.NewDetectionJobStore(db)
 	unifiedJobs, err := store.NewJobsStore(db)
 	if err != nil {
 		return err
@@ -96,6 +96,7 @@ func run(ctx context.Context) error {
 	})
 	mediaCatalog := adapters.MediaCatalog{Scanner: scanner, Store: mediaStore}
 	mediaService := &application.MediaUseCase{Catalog: mediaCatalog, Configured: len(cfg.MediaRoots) > 0}
+	detectionService := application.NewDetectionUseCase(nil, detection.Service{Scanner: scanner, Catalog: mediaStore, FFmpegPath: cfg.FFmpegPath}, cfg.ExportLimit)
 	_ = mediaService.RefreshMedia(ctx)
 	previewRunner := adapters.PreviewRunner{Scanner: scanner, Media: mediaStore, FFmpeg: ffmpeg.Runner{Path: cfg.FFmpegPath}}
 	previewManager, err := application.NewPreviewManager(adapters.PreviewCache{Store: cacheStore}, previewRunner, application.Validator(validator), limiter)
@@ -131,16 +132,41 @@ func run(ctx context.Context) error {
 	exportExecutor.Settings = runtimeState
 	batchExports := application.BatchExportUseCase{Projects: adapters.ProjectRepository{Store: projectStore}, Media: mediaCatalog, Jobs: unifiedJobs, Settings: runtimeState}
 	scheduler, err := store.NewScheduler(unifiedJobs, store.SchedulerConfig{QueueCapacity: cfg.ExportLimit * 4, WorkerLimit: cfg.ExportLimit}, func(ctx context.Context, job store.Job) error {
-		if err := batchExports.RunQueuedSnapshot(ctx, job); err != nil {
+		switch job.Kind {
+		case store.JobExport:
+			if err := batchExports.RunQueuedSnapshot(ctx, job); err != nil {
+				return err
+			}
+			artifacts.ClearManifest(job.ID)
+			return nil
+		case store.JobScan:
+			return mediaService.RefreshMedia(ctx)
+		case store.JobDetect:
+			var request application.DetectionRequest
+			if err := json.Unmarshal([]byte(job.RequestJSON), &request); err != nil {
+				return err
+			}
+			request.ProjectID = job.ProjectID
+			candidates, err := detectionService.Detector.Detect(ctx, request)
+			if err != nil {
+				return err
+			}
+			data, err := json.Marshal(candidates)
+			if err != nil {
+				return err
+			}
+			_, err = unifiedJobs.Succeed(ctx, job.ID, string(data))
 			return err
+		default:
+			return errors.New("unsupported job kind")
 		}
-		artifacts.ClearManifest(job.ID)
-		return nil
 	})
 	if err != nil {
 		return err
 	}
 	batchExports.Scheduler = scheduler
+	mediaService.Scheduler, mediaService.UnifiedJobs = scheduler, unifiedJobs
+	detectionService.Scheduler, detectionService.UnifiedJobs = scheduler, unifiedJobs
 	batchExports.RunSnapshot = func(ctx context.Context, snapshot application.ExportSnapshot) error {
 		return exportExecutor.ExecuteBatchSnapshot(ctx, snapshot.Item.ID, snapshot)
 	}
@@ -148,7 +174,6 @@ func run(ctx context.Context) error {
 	defer scheduler.Shutdown(context.Background())
 	exportService := application.NewExportUseCase(jobStore, exportExecutor, cfg.ExportLimit)
 	exportService.Settings = runtimeState
-	detectionService := application.NewDetectionUseCase(detectionStore, detection.Service{Scanner: scanner, Catalog: mediaStore, FFmpegPath: cfg.FFmpegPath}, cfg.ExportLimit)
 	detectionService.SetLimitProvider(func() int { return runtimeState.Snapshot().ExportLimit })
 	exportService.SetLimitProvider(func() int { return runtimeState.Snapshot().ExportLimit })
 	jobService := application.JobUseCase{Jobs: unifiedJobs}

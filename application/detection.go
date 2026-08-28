@@ -39,13 +39,17 @@ type DetectionJobs interface {
 	Cancel(context.Context, string, string) (store.DetectionJob, error)
 }
 type DetectionUseCase struct {
-	Jobs     DetectionJobs
-	Detector Detector
-	slots    chan struct{}
-	limit    func() int
-	active   int
-	mu       sync.Mutex
-	cancel   map[string]context.CancelFunc
+	Jobs DetectionJobs
+	// UnifiedJobs and Scheduler are the durable production path. Jobs is retained
+	// only for compatibility with older callers while they migrate.
+	UnifiedJobs *store.JobsStore
+	Scheduler   *store.Scheduler
+	Detector    Detector
+	slots       chan struct{}
+	limit       func() int
+	active      int
+	mu          sync.Mutex
+	cancel      map[string]context.CancelFunc
 }
 
 func NewDetectionUseCase(j DetectionJobs, d Detector, limit int) *DetectionUseCase {
@@ -59,6 +63,26 @@ func (e *DetectionUseCase) SetLimitProvider(provider func() int) { e.limit = pro
 func (e *DetectionUseCase) Create(ctx context.Context, p domain.Principal, projectID string, request DetectionRequest) (DetectionJob, error) {
 	if request.ProjectRevision < 1 || request.MediaID == "" || !request.Kind.Valid() {
 		return DetectionJob{}, errors.New("invalid detection request")
+	}
+	if e.Scheduler != nil && e.UnifiedJobs != nil {
+		request.ProjectID = projectID
+		data, err := json.Marshal(request)
+		if err != nil {
+			return DetectionJob{}, err
+		}
+		id, err := newID("j_")
+		if err != nil {
+			return DetectionJob{}, err
+		}
+		batchID, err := newID("b_")
+		if err != nil {
+			return DetectionJob{}, err
+		}
+		jobs, err := e.Scheduler.Submit(ctx, []store.Job{{ID: id, BatchID: batchID, Kind: store.JobDetect, ProjectID: projectID, ProjectItemID: domain.StableProjectItemID(projectID), RequestJSON: string(data)}})
+		if err != nil {
+			return DetectionJob{}, err
+		}
+		return detectionJobResult(jobs[0]), nil
 	}
 	e.mu.Lock()
 	limit := cap(e.slots)
@@ -115,6 +139,16 @@ func (e *DetectionUseCase) run(ctx context.Context, owner, id string, request De
 	_, _ = e.Jobs.Succeed(context.Background(), owner, id, string(data))
 }
 func (e *DetectionUseCase) Get(ctx context.Context, p domain.Principal, id string) (DetectionJob, error) {
+	if e.UnifiedJobs != nil {
+		j, err := e.UnifiedJobs.Get(ctx, id)
+		if err != nil {
+			return DetectionJob{}, err
+		}
+		if j.Kind != store.JobDetect {
+			return DetectionJob{}, store.ErrJobNotFound
+		}
+		return detectionJobResult(j), nil
+	}
 	j, err := e.Jobs.Get(ctx, p.Subject, id)
 	if err != nil {
 		return DetectionJob{}, err
@@ -122,6 +156,10 @@ func (e *DetectionUseCase) Get(ctx context.Context, p domain.Principal, id strin
 	return detectionResult(j), nil
 }
 func (e *DetectionUseCase) Cancel(ctx context.Context, p domain.Principal, id string) error {
+	if e.UnifiedJobs != nil && e.Scheduler != nil {
+		_, err := e.Scheduler.Cancel(ctx, id)
+		return err
+	}
 	j, err := e.Jobs.Get(ctx, p.Subject, id)
 	if err != nil {
 		return err
@@ -140,6 +178,20 @@ func (e *DetectionUseCase) Cancel(ctx context.Context, p domain.Principal, id st
 	}
 	return nil
 }
+func detectionJobResult(j store.Job) DetectionJob {
+	var request DetectionRequest
+	_ = json.Unmarshal([]byte(j.RequestJSON), &request)
+	out := DetectionJob{ID: j.ID, Type: "detection", State: string(j.State), MediaID: request.MediaID, ProjectID: request.ProjectID, ProjectRevision: request.ProjectRevision, Kind: request.Kind}
+	if j.State == store.JobSucceeded && j.ResultJSON.Valid {
+		_ = json.Unmarshal([]byte(j.ResultJSON.String), &out.Candidates)
+	}
+	if j.ErrorCode.Valid {
+		v := j.ErrorCode.String
+		out.ErrorCode = &v
+	}
+	return out
+}
+
 func detectionResult(j store.DetectionJob) DetectionJob {
 	out := DetectionJob{ID: j.ID, Type: "detection", State: string(j.State), MediaID: j.MediaID, ProjectID: j.ProjectID, ProjectRevision: j.ProjectRevision, Kind: domain.DetectionKind(j.Kind)}
 	if j.State == store.JobSucceeded && j.ResultJSON.Valid {

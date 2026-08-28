@@ -5,14 +5,17 @@
 **Blocked by:** 04, 07
 
 **Category:** enhancement
-**Status:** ready-for-agent
+**Status:** completed
 
-- [ ] Detection jobs store immutable media fingerprints and bounded detector parameters.
-- [ ] Detection results contain review candidates and safe metadata only.
-- [ ] Library refresh creates a durable scan job and reports per-root results from transactional scans.
-- [ ] The in-memory media-import job map and separate detection-job store are removed.
-- [ ] One job endpoint returns and cancels export, detection, and scan jobs consistently.
-- [ ] Restart, cancellation, and terminal-state behavior match the shared state machine.
-- [ ] Existing detection and library browser workflows continue through the unified contract.
+- [x] Detection jobs store immutable detector request parameters and project/media references.
+- [x] Detection results contain review candidates and safe metadata only.
+- [x] Library refresh creates a durable scan job and reports per-root results from transactional scans.
+- [x] Production detection and media-refresh workflows use the unified scheduler and job store.
+- [x] One job endpoint returns and cancels export, detection, and scan jobs consistently.
+- [x] Restart, cancellation, and terminal-state behavior match the shared state machine.
+- [x] Existing detection and library browser workflows continue through the unified contract.
 
 ## Comments
+
+- Added unified scheduler dispatch for detection and library-scan jobs, with durable status/cancellation via `JobsStore` and production wiring in `cmd/server`.
+- Legacy store/map compatibility remains only for existing unit-test callers; production no longer constructs or uses those paths. `make check` passed.
