@@ -57,6 +57,9 @@ type mediaImport struct {
 	cancel context.CancelFunc
 }
 
+// mediaImportRetention bounds how long terminal jobs remain available for polling.
+var mediaImportRetention = time.Minute
+
 func (m *MediaUseCase) StartImport(ctx context.Context, principal domain.Principal) (ImportJob, error) {
 	if !m.Configured {
 		return ImportJob{}, errors.New("media library is not configured")
@@ -88,17 +91,23 @@ func (m *MediaUseCase) runImport(ctx context.Context, entry *mediaImport) {
 	m.mu.Unlock()
 	err := m.RefreshMedia(ctx)
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if errors.Is(ctx.Err(), context.Canceled) {
 		entry.job.State = "cancelled"
-		return
-	}
-	if err != nil {
+	} else if err != nil {
 		entry.job.State = "failed"
 		entry.job.ErrorCode = "import_failed"
-		return
+	} else {
+		entry.job.State, entry.job.Progress = "succeeded", 1
 	}
-	entry.job.State, entry.job.Progress = "succeeded", 1
+	m.mu.Unlock()
+	// Keep terminal state available briefly so clients can observe it, then drop it.
+	time.AfterFunc(mediaImportRetention, func() {
+		m.mu.Lock()
+		if current, ok := m.imports[entry.job.ID]; ok && current == entry && current.job.State != "running" && current.job.State != "queued" {
+			delete(m.imports, entry.job.ID)
+		}
+		m.mu.Unlock()
+	})
 }
 func (m *MediaUseCase) ImportStatus(_ context.Context, principal domain.Principal, id string) (ImportJob, error) {
 	m.mu.RLock()
@@ -130,14 +139,25 @@ func (m *MediaUseCase) RefreshMedia(ctx context.Context) error {
 	if !m.Configured {
 		return nil
 	}
-	m.setStatus(LibraryScanning)
+	m.mu.Lock()
+	previous := m.status
+	m.status = libraryStatus(LibraryScanning)
+	m.mu.Unlock()
 	if err := m.Catalog.Refresh(ctx); err != nil {
-		m.setStatus(LibraryFailed)
+		if errors.Is(ctx.Err(), context.Canceled) {
+			m.restoreAfterCancellation(previous)
+		} else {
+			m.setStatus(LibraryFailed)
+		}
 		return err
 	}
 	page, err := m.Catalog.List(ctx, "", 1)
 	if err != nil {
-		m.setStatus(LibraryFailed)
+		if errors.Is(ctx.Err(), context.Canceled) {
+			m.restoreAfterCancellation(previous)
+		} else {
+			m.setStatus(LibraryFailed)
+		}
 		return err
 	}
 	if len(page.Items) == 0 {
@@ -146,6 +166,27 @@ func (m *MediaUseCase) RefreshMedia(ctx context.Context) error {
 		m.setStatus(LibraryReadyWithMedia)
 	}
 	return nil
+}
+
+func (m *MediaUseCase) restoreAfterCancellation(previous LibraryStatus) {
+	if previous.State == LibraryReadyEmpty || previous.State == LibraryReadyWithMedia {
+		m.setStatus(previous.State)
+		return
+	}
+	page, err := m.Catalog.List(context.Background(), "", 1)
+	if err == nil {
+		if len(page.Items) == 0 {
+			m.setStatus(LibraryReadyEmpty)
+		} else {
+			m.setStatus(LibraryReadyWithMedia)
+		}
+		return
+	}
+	if previous.State != "" && previous.State != LibraryScanning {
+		m.setStatus(previous.State)
+	} else {
+		m.setStatus(LibraryReadyEmpty)
+	}
 }
 func (m *MediaUseCase) Status() LibraryStatus {
 	if !m.Configured {
