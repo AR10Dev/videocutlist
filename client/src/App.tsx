@@ -387,7 +387,7 @@ export function App() {
     setActiveFolder(folderId);
     if (!folderId && !cursor) setStatus("Choose media to begin.");
   };
-  const loadMedia = async (cursor?: string, refreshed = false) => {
+  const _loadMedia = async (cursor?: string, refreshed = false) => {
     mediaRequest?.abort();
     const controller = new AbortController();
     mediaRequest = controller;
@@ -1609,49 +1609,23 @@ export function App() {
                       <For each={present().segments}>
                         {(segment, index) => (
                           <li>
-                            {segment.label ?? "Unlabelled"}:{" "}
+                            <strong>Segment {index() + 1}</strong> · {segment.label ?? "Unlabelled"}:{" "}
                             <span>
                               {formatTime(segment.startMs, duration())} –{" "}
                               {formatTime(segment.endMs, duration())}
                             </span>{" "}
-                            <button
-                              onClick={() => moveSegment(index(), -1)}
-                              disabled={index() === 0}
-                            >
-                              ↑
+                            <span class="segment-duration">({formatTime(segment.endMs - segment.startMs, duration())} duration)</span>{" "}
+                            <button aria-label={`Move segment ${index() + 1} up`} onClick={() => moveSegment(index(), -1)} disabled={index() === 0}>
+                              Move up
                             </button>{" "}
-                            <button
-                              onClick={() => moveSegment(index(), 1)}
-                              disabled={index() === present().segments.length - 1}
-                            >
-                              ↓
+                            <button aria-label={`Move segment ${index() + 1} down`} onClick={() => moveSegment(index(), 1)} disabled={index() === present().segments.length - 1}>
+                              Move down
                             </button>{" "}
-                            <button onClick={() => removeSegment(index())}>Remove</button>
+                            <button onClick={() => removeSegment(index())}>Remove segment</button>
                           </li>
                         )}
                       </For>
                     </ol>
-                    <section aria-labelledby="diagnostics-heading">
-                      <h2 id="diagnostics-heading">Preview diagnostics</h2>
-                      <dl>
-                        <dt>MSE</dt>
-                        <dd>{canStreamPreview() ? "supported" : "unsupported"}</dd>
-                        <dt>Cache</dt>
-                        <dd>{diagnostics()?.cache ?? "—"}</dd>
-                        <dt>Request ID</dt>
-                        <dd>{diagnostics()?.requestId ?? "—"}</dd>
-                        <dt>Offset</dt>
-                        <dd>{diagnostics() ? `${diagnostics()!.offsetMs} ms` : "—"}</dd>
-                        <dt>Window</dt>
-                        <dd>
-                          {diagnostics()
-                            ? `${diagnostics()!.startMs} ms / ${diagnostics()!.durationMs} ms`
-                            : "—"}
-                        </dd>
-                        <dt>Response</dt>
-                        <dd>{diagnostics() ? `${diagnostics()!.elapsedMs} ms` : "—"}</dd>
-                      </dl>
-                    </section>
                     <label>
                       <input
                         type="checkbox"
@@ -1672,6 +1646,8 @@ export function App() {
             <Show when={selected()}>
               <section class="project-panel" aria-labelledby="project-heading">
                 <h2 id="project-heading">Project</h2>
+                <details>
+                  <summary>Project administration and interchange</summary>
                 <label>
                   Project ID{" "}
                   <input
@@ -1860,12 +1836,15 @@ export function App() {
                     ))}
                   </ul>
                 </Show>
+                </details>
               </section>
             </Show>
             <Show when={selected()}>
               <section class="export-panel" aria-labelledby="export-heading">
                 <h2 id="export-heading">Export</h2>
                 <p role="status">{exportStatus() || "Export a saved project."}</p>
+                <details>
+                  <summary>Advanced export options</summary>
                 <label>
                   Mode{" "}
                   <select
@@ -1976,7 +1955,13 @@ export function App() {
                     .replaceAll("{segment}", "1")
                     .replaceAll("{mode}", exportMode()) || "server default"}
                 </p>
+                </details>
                 <div aria-label="Export review">
+                  <p>
+                    Scope: {exportSelection()} · {present().segments.length} segment{present().segments.length === 1 ? "" : "s"} · {formatTime(present().segments.reduce((total, segment) => total + segment.endMs - segment.startMs, 0), duration())} total
+                  </p>
+                  <p>Destination: {destinations().find((item) => item.id === destinationId())?.label ?? destinationId()}</p>
+                  <p>Filename: {filenameTemplate().replaceAll("{ext}", "mkv").replaceAll("{segment}", "1").replaceAll("{mode}", exportMode()) || "server default"}</p>
                   <p>
                     Review: {exportMode()} {exportSelection()} · {cutStrategy()}
                   </p>
@@ -2016,6 +2001,7 @@ export function App() {
                     <p role="status">Export job {exportJob()!.id} is active; wait or cancel it.</p>
                   </Show>
                   <button
+                    aria-label="Start export"
                     disabled={
                       !selected() ||
                       !present().segments.length ||
@@ -2026,7 +2012,7 @@ export function App() {
                     }
                     onClick={() => void exportProject()}
                   >
-                    Start export
+                    Export {present().segments.length} segment{present().segments.length === 1 ? "" : "s"}
                   </button>
                   <Show when={exportJob()?.state === "queued" || exportJob()?.state === "running"}>
                     <button onClick={() => void cancelExport()}>Cancel export</button>
@@ -2101,6 +2087,8 @@ export function App() {
             <Show when={selected()}>
               <section class="detection-panel" aria-labelledby="detection-heading">
                 <h2 id="detection-heading">Auto detection</h2>
+                <details>
+                  <summary>Detection tools</summary>
                 <p role="status">
                   {detectionStatus() || "Review candidates before they change segments."}
                 </p>
@@ -2165,6 +2153,7 @@ export function App() {
                     </For>
                   </ol>
                 </Show>
+                </details>
               </section>
             </Show>
           </>
@@ -2528,7 +2517,18 @@ export function App() {
           </section>
           <section aria-labelledby="about-settings-heading">
             <h3 id="about-settings-heading">About / Diagnostics</h3>
-            <p>VideoCutlist editor diagnostics are available while editing.</p>
+            <p>Preview request and cache diagnostics are kept out of the clipping workspace.</p>
+            <details>
+              <summary>Preview diagnostics</summary>
+              <dl>
+                <dt>MSE</dt><dd>{canStreamPreview() ? "supported" : "unsupported"}</dd>
+                <dt>Cache</dt><dd>{diagnostics()?.cache ?? "—"}</dd>
+                <dt>Request ID</dt><dd>{diagnostics()?.requestId ?? "—"}</dd>
+                <dt>Offset</dt><dd>{diagnostics() ? `${diagnostics()!.offsetMs} ms` : "—"}</dd>
+                <dt>Window</dt><dd>{diagnostics() ? `${diagnostics()!.startMs} ms / ${diagnostics()!.durationMs} ms` : "—"}</dd>
+                <dt>Response</dt><dd>{diagnostics() ? `${diagnostics()!.elapsedMs} ms` : "—"}</dd>
+              </dl>
+            </details>
             <p role="status">{serverSettingsStatus()}</p>
           </section>
         </section>

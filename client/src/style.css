@@ -149,6 +149,21 @@ section {
 .detection-panel {
   border-radius: 6px;
 }
+details {
+  margin-top: 10px;
+  border-top: 1px solid #30323a;
+  padding-top: 8px;
+}
+details > summary {
+  cursor: pointer;
+  color: #e0e2e7;
+  font-weight: 650;
+  padding: 4px 0;
+}
+.segment-duration {
+  color: #a9acb5;
+  white-space: nowrap;
+}
 
 h2 {
   margin: 0 0 14px;
@@ -452,7 +467,7 @@ ul {
   .app-shell {
     padding: 8px;
     grid-template-columns: 1fr;
-    grid-template-areas: "header" "editor" "media" "project" "export" "settings" "detection";
+    grid-template-areas: "header" "media" "editor" "project" "export" "settings" "detection";
     gap: 8px;
   }
   header,
