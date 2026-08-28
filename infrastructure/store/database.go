@@ -26,6 +26,9 @@ var detectionJobsMigration string
 //go:embed migrations/006_runtime_settings.sql
 var runtimeSettingsMigration string
 
+//go:embed migrations/007_jobs.sql
+var unifiedJobsMigration string
+
 // OpenDatabase opens the single-host SQLite store and applies ordered,
 // idempotent migrations.
 func OpenDatabase(ctx context.Context, path string) (*sql.DB, error) {
@@ -50,6 +53,7 @@ func OpenDatabase(ctx context.Context, path string) (*sql.DB, error) {
 		cacheMigration,
 		detectionJobsMigration,
 		runtimeSettingsMigration,
+		unifiedJobsMigration,
 	} {
 		if _, err := db.ExecContext(ctx, statement); err != nil {
 			_ = db.Close()
@@ -60,6 +64,10 @@ func OpenDatabase(ctx context.Context, path string) (*sql.DB, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("migrate single-user batch schema: %w", err)
 	}
+	if err := migrateUnifiedJobs(ctx, db); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("migrate unified jobs: %w", err)
+	}
 	return db, nil
 }
 
@@ -67,6 +75,96 @@ type legacyProjectDocument struct {
 	MediaID  string           `json:"mediaId"`
 	Segments []domain.Segment `json:"segments"`
 	UIState  domain.UIState   `json:"uiState"`
+}
+
+func migrateUnifiedJobs(ctx context.Context, db *sql.DB) error {
+	var existing int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM jobs`).Scan(&existing); err != nil || existing != 0 {
+		return err
+	}
+	items := make(map[string]string)
+	rows, err := db.QueryContext(ctx, `SELECT id, document_json FROM projects`)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var id, raw string
+		if err := rows.Scan(&id, &raw); err != nil {
+			rows.Close()
+			return err
+		}
+		var document domain.Document
+		if err := json.Unmarshal([]byte(raw), &document); err != nil {
+			rows.Close()
+			return err
+		}
+		if len(document.Items) > 0 {
+			items[id] = document.Items[0].ID
+		}
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	copyExport := func() error {
+		rows, err := tx.QueryContext(ctx, `SELECT id,project_id,state,request_json,result_json,error_code,created_at,updated_at FROM export_jobs`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id, pid, state, request, created, updated string
+			var result, code sql.NullString
+			if err := rows.Scan(&id, &pid, &state, &request, &result, &code, &created, &updated); err != nil {
+				return err
+			}
+			item := items[pid]
+			if item == "" {
+				return fmt.Errorf("legacy export job %q has no project item", id)
+			}
+			if _, err := tx.ExecContext(ctx, `INSERT INTO jobs (id,batch_id,kind,project_id,project_item_id,state,request_json,result_json,error_code,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`, id, "b_"+id, JobExport, pid, item, state, request, result, code, created, updated); err != nil {
+				return err
+			}
+		}
+		return rows.Err()
+	}
+	copyDetection := func() error {
+		rows, err := tx.QueryContext(ctx, `SELECT id,project_id,media_id,kind,state,result_json,error_code,created_at,updated_at FROM detection_jobs`)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var id, pid, media, kind, state, created, updated string
+			var result, code sql.NullString
+			if err := rows.Scan(&id, &pid, &media, &kind, &state, &result, &code, &created, &updated); err != nil {
+				return err
+			}
+			item := items[pid]
+			if item == "" {
+				return fmt.Errorf("legacy detection job %q has no project item", id)
+			}
+			request, err := json.Marshal(map[string]string{"mediaId": media, "kind": kind})
+			if err != nil {
+				return err
+			}
+			if _, err = tx.ExecContext(ctx, `INSERT INTO jobs (id,batch_id,kind,project_id,project_item_id,state,request_json,result_json,error_code,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`, id, "b_"+id, JobDetect, pid, item, state, string(request), result, code, created, updated); err != nil {
+				return err
+			}
+		}
+		return rows.Err()
+	}
+	if err := copyExport(); err != nil {
+		return err
+	}
+	if err := copyDetection(); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func migrateSingleUserBatch(ctx context.Context, db *sql.DB) error {

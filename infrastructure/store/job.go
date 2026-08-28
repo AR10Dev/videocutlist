@@ -7,6 +7,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"videocutlist/domain"
 )
 
 type JobState string
@@ -20,13 +22,14 @@ const (
 )
 
 var (
-	ErrJobNotFound = errors.New("export job not found")
-	ErrJobState    = errors.New("invalid export job transition")
+	ErrJobNotFound = errors.New("job not found")
+	ErrJobState    = errors.New("invalid job transition")
 )
 
 //go:embed migrations/003_export_jobs.sql
 var jobsMigration string
 
+// ExportJob is a compatibility view while export execution moves to JobsStore.
 type ExportJob struct {
 	ID              string
 	OwnerLogin      string
@@ -40,120 +43,96 @@ type ExportJob struct {
 	UpdatedAt       time.Time
 }
 
-type JobStore struct{ db *sql.DB }
-
-func NewJobStore(db *sql.DB) (*JobStore, error) {
-	if db == nil {
-		return nil, errors.New("job database is required")
-	}
-	return &JobStore{db: db}, nil
+type JobStore struct {
+	db   *sql.DB
+	jobs *JobsStore
 }
 
-// MigrateJobs applies the E01 durable export-jobs schema after projects.
+func NewJobStore(db *sql.DB) (*JobStore, error) {
+	jobs, err := NewJobsStore(db)
+	if err != nil {
+		return nil, err
+	}
+	return &JobStore{db: db, jobs: jobs}, nil
+}
 func MigrateJobs(ctx context.Context, db *sql.DB) error {
 	if db == nil {
 		return errors.New("job database is required")
 	}
 	_, err := db.ExecContext(ctx, jobsMigration)
+	if err != nil {
+		return err
+	}
+	_, err = db.ExecContext(ctx, unifiedJobsMigration)
 	return err
 }
-
 func (s *JobStore) Create(ctx context.Context, job ExportJob) (ExportJob, error) {
-	if job.ID == "" || job.ProjectID == "" || job.ProjectRevision <= 0 || job.RequestJSON == "" {
-		return ExportJob{}, errors.New("job id, project, revision, and request are required")
-	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err := s.db.ExecContext(ctx, `INSERT INTO export_jobs
-(id, project_id, project_revision, state, request_json, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?)`, job.ID, job.ProjectID, job.ProjectRevision, JobQueued, job.RequestJSON, now, now)
+	item, err := s.item(ctx, job.ProjectID)
 	if err != nil {
-		return ExportJob{}, fmt.Errorf("create export job: %w", err)
+		return ExportJob{}, err
 	}
-	return s.Get(ctx, job.OwnerLogin, job.ID)
+	_, err = s.jobs.Create(ctx, Job{ID: job.ID, BatchID: "b_" + job.ID, Kind: JobExport, ProjectID: job.ProjectID, ProjectItemID: item, RequestJSON: job.RequestJSON})
+	if err != nil {
+		return ExportJob{}, err
+	}
+	return s.Get(ctx, "", job.ID)
 }
-
-func (s *JobStore) Get(ctx context.Context, owner, id string) (ExportJob, error) {
-	_ = owner // compatibility until ticket 03 removes ownership parameters.
-	row := s.db.QueryRowContext(ctx, `SELECT id, project_id, project_revision, state, request_json, result_json, error_code, created_at, updated_at
-FROM export_jobs WHERE id = ?`, id)
-	job, err := scanJob(row)
-	if errors.Is(err, sql.ErrNoRows) {
+func (s *JobStore) Get(ctx context.Context, _, id string) (ExportJob, error) {
+	job, err := s.jobs.Get(ctx, id)
+	if err != nil {
+		return ExportJob{}, err
+	}
+	if job.Kind != JobExport {
 		return ExportJob{}, ErrJobNotFound
 	}
-	return job, err
+	return exportView(job), nil
 }
-
-func (s *JobStore) Start(ctx context.Context, owner, id string) (ExportJob, error) {
-	return s.transition(ctx, owner, id, JobQueued, JobRunning, sql.NullString{}, sql.NullString{})
-}
-
-func (s *JobStore) Succeed(ctx context.Context, owner, id, resultJSON string) (ExportJob, error) {
-	return s.transition(ctx, owner, id, JobRunning, JobSucceeded, sql.NullString{String: resultJSON, Valid: true}, sql.NullString{})
-}
-
-func (s *JobStore) Fail(ctx context.Context, owner, id, code string) (ExportJob, error) {
-	return s.transition(ctx, owner, id, JobRunning, JobFailed, sql.NullString{}, sql.NullString{String: code, Valid: code != ""})
-}
-
-func (s *JobStore) Cancel(ctx context.Context, owner, id string) (ExportJob, error) {
-	job, err := s.Get(ctx, owner, id)
+func (s *JobStore) Start(ctx context.Context, _, id string) (ExportJob, error) {
+	job, err := s.jobs.Start(ctx, id)
 	if err != nil {
 		return ExportJob{}, err
 	}
-	if job.State == JobQueued {
-		return s.transition(ctx, owner, id, JobQueued, JobCancelled, sql.NullString{}, sql.NullString{})
-	}
-	if job.State == JobRunning {
-		return s.transition(ctx, owner, id, JobRunning, JobCancelled, sql.NullString{}, sql.NullString{})
-	}
-	return ExportJob{}, ErrJobState
+	return exportView(job), nil
 }
-
-// Recover records the only safe result for an OS process interrupted by restart.
-func (s *JobStore) Recover(ctx context.Context) (int64, error) {
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	result, err := s.db.ExecContext(ctx, `UPDATE export_jobs SET state = ?, error_code = ?, updated_at = ? WHERE state IN (?, ?)`, JobFailed, "interrupted_by_restart", now, JobQueued, JobRunning)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected()
-}
-
-func (s *JobStore) transition(ctx context.Context, owner, id string, from, to JobState, resultJSON, errorCode sql.NullString) (ExportJob, error) {
-	_ = owner // compatibility until ticket 03 removes ownership parameters.
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	result, err := s.db.ExecContext(ctx, `UPDATE export_jobs SET state = ?, result_json = ?, error_code = ?, updated_at = ?
-WHERE id = ? AND state = ?`, to, resultJSON, errorCode, now, id, from)
+func (s *JobStore) Succeed(ctx context.Context, _, id, result string) (ExportJob, error) {
+	job, err := s.jobs.Succeed(ctx, id, result)
 	if err != nil {
 		return ExportJob{}, err
 	}
-	affected, err := result.RowsAffected()
+	return exportView(job), nil
+}
+func (s *JobStore) Fail(ctx context.Context, _, id, code string) (ExportJob, error) {
+	job, err := s.jobs.Fail(ctx, id, code)
 	if err != nil {
 		return ExportJob{}, err
 	}
-	if affected == 1 {
-		return s.Get(ctx, owner, id)
-	}
-	if _, err := s.Get(ctx, owner, id); err != nil {
-		return ExportJob{}, err
-	}
-	return ExportJob{}, ErrJobState
+	return exportView(job), nil
 }
-
-type jobScanner interface{ Scan(...any) error }
-
-func scanJob(row jobScanner) (ExportJob, error) {
-	var job ExportJob
-	var created, updated string
-	if err := row.Scan(&job.ID, &job.ProjectID, &job.ProjectRevision, &job.State, &job.RequestJSON, &job.ResultJSON, &job.ErrorCode, &created, &updated); err != nil {
+func (s *JobStore) Cancel(ctx context.Context, _, id string) (ExportJob, error) {
+	job, err := s.jobs.Cancel(ctx, id)
+	if err != nil {
 		return ExportJob{}, err
 	}
-	var err error
-	if job.CreatedAt, err = time.Parse(time.RFC3339Nano, created); err != nil {
-		return ExportJob{}, err
+	return exportView(job), nil
+}
+func (s *JobStore) Recover(ctx context.Context) (int64, error) { return s.jobs.Recover(ctx) }
+func (s *JobStore) item(ctx context.Context, projectID string) (string, error) {
+	if projectID == "" {
+		return "", errors.New("project is required")
 	}
-	if job.UpdatedAt, err = time.Parse(time.RFC3339Nano, updated); err != nil {
-		return ExportJob{}, err
+	var document string
+	if err := s.db.QueryRowContext(ctx, `SELECT document_json FROM projects WHERE id=?`, projectID).Scan(&document); err != nil {
+		return "", fmt.Errorf("project item: %w", err)
 	}
-	return job, nil
+	var item sql.NullString
+	if err := s.db.QueryRowContext(ctx, `SELECT json_extract(?, '$.items[0].id')`, document).Scan(&item); err != nil {
+		return "", err
+	}
+	if !item.Valid || item.String == "" {
+		return domain.StableProjectItemID(projectID), nil
+	}
+	return item.String, nil
+}
+func exportView(job Job) ExportJob {
+	return ExportJob{ID: job.ID, ProjectID: job.ProjectID, State: job.State, RequestJSON: job.RequestJSON, ResultJSON: job.ResultJSON, ErrorCode: job.ErrorCode, CreatedAt: job.CreatedAt, UpdatedAt: job.UpdatedAt}
 }

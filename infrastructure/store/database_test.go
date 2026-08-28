@@ -24,7 +24,7 @@ func TestOpenDatabaseAppliesAllMigrations(t *testing.T) {
 	} else {
 		reopened.Close()
 	}
-	for _, table := range []string{"media", "projects", "export_jobs", "detection_jobs", "cache_entries", "runtime_settings"} {
+	for _, table := range []string{"media", "projects", "export_jobs", "detection_jobs", "jobs", "cache_entries", "runtime_settings"} {
 		var name string
 		if err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&name); err != nil {
 			t.Fatalf("missing %s: %v", table, err)
@@ -57,6 +57,12 @@ func TestOpenDatabaseMigratesLegacyProjectToBatchDocument(t *testing.T) {
 	if _, err := legacy.Exec(`INSERT INTO projects VALUES ('p_legacy', 'old-user', 4, ?, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`, legacyDocument); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := legacy.Exec(`INSERT INTO export_jobs VALUES ('j_export', 'old-user', 'p_legacy', 4, 'queued', '{"destinationId":"download"}', NULL, NULL, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := legacy.Exec(`INSERT INTO detection_jobs VALUES ('j_detection', 'old-user', 'p_legacy', ?, 4, 'scene', 'queued', NULL, NULL, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`, mediaID); err != nil {
+		t.Fatal(err)
+	}
 	if err := legacy.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +72,7 @@ func TestOpenDatabaseMigratesLegacyProjectToBatchDocument(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	for _, table := range []string{"projects", "export_jobs", "detection_jobs"} {
+	for _, table := range []string{"projects", "export_jobs", "detection_jobs", "jobs"} {
 		assertNoOwnerColumn(t, db, table)
 	}
 	var revision int64
@@ -84,6 +90,10 @@ func TestOpenDatabaseMigratesLegacyProjectToBatchDocument(t *testing.T) {
 	item := document.Items[0]
 	if item.ID != domain.StableProjectItemID("p_legacy") || item.MediaID != mediaID || len(item.Segments) != 1 || item.EditorState == nil || item.EditorState.Zoom != 2 {
 		t.Fatalf("migrated item = %#v", item)
+	}
+	var migratedJobs int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM jobs WHERE kind IN ('export', 'detection') AND project_id = 'p_legacy' AND project_item_id = ?`, domain.StableProjectItemID("p_legacy")).Scan(&migratedJobs); err != nil || migratedJobs != 2 {
+		t.Fatalf("migrated jobs = %d, %v", migratedJobs, err)
 	}
 	var retained string
 	if err := db.QueryRow(`SELECT id FROM media WHERE id = ?`, mediaID).Scan(&retained); err != nil || retained != mediaID {

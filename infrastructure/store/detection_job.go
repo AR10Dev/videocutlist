@@ -3,10 +3,13 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 )
 
+// DetectionJob is a compatibility view while detection execution moves to JobsStore.
 type DetectionJob struct {
 	ID, OwnerLogin, ProjectID, MediaID string
 	ProjectRevision                    int64
@@ -21,85 +24,88 @@ func MigrateDetectionJobs(ctx context.Context, db *sql.DB) error {
 		return errors.New("detection job database is required")
 	}
 	_, err := db.ExecContext(ctx, detectionJobsMigration)
+	if err != nil {
+		return err
+	}
+	_, err = db.ExecContext(ctx, unifiedJobsMigration)
 	return err
 }
 
-type DetectionJobStore struct{ db *sql.DB }
+type DetectionJobStore struct {
+	db   *sql.DB
+	jobs *JobsStore
+}
 
 func NewDetectionJobStore(db *sql.DB) (*DetectionJobStore, error) {
-	if db == nil {
-		return nil, errors.New("detection job database is required")
+	jobs, err := NewJobsStore(db)
+	if err != nil {
+		return nil, err
 	}
-	return &DetectionJobStore{db}, nil
+	return &DetectionJobStore{db: db, jobs: jobs}, nil
 }
 func (s *DetectionJobStore) Create(ctx context.Context, j DetectionJob) (DetectionJob, error) {
-	if j.ID == "" || j.ProjectID == "" || j.MediaID == "" || j.ProjectRevision <= 0 {
+	if j.ID == "" || j.ProjectID == "" || j.MediaID == "" || j.ProjectRevision < 1 {
 		return DetectionJob{}, errors.New("detection job id, project, media, and revision are required")
 	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err := s.db.ExecContext(ctx, `INSERT INTO detection_jobs(id,project_id,media_id,project_revision,kind,state,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)`, j.ID, j.ProjectID, j.MediaID, j.ProjectRevision, j.Kind, JobQueued, now, now)
+	item, err := (&JobStore{db: s.db}).item(ctx, j.ProjectID)
 	if err != nil {
 		return DetectionJob{}, err
 	}
-	return s.Get(ctx, j.OwnerLogin, j.ID)
+	request, err := json.Marshal(map[string]string{"mediaId": j.MediaID, "kind": j.Kind})
+	if err != nil {
+		return DetectionJob{}, err
+	}
+	_, err = s.jobs.Create(ctx, Job{ID: j.ID, BatchID: "b_" + j.ID, Kind: JobDetect, ProjectID: j.ProjectID, ProjectItemID: item, RequestJSON: string(request)})
+	if err != nil {
+		return DetectionJob{}, err
+	}
+	return s.Get(ctx, "", j.ID)
 }
-func (s *DetectionJobStore) Get(ctx context.Context, owner, id string) (DetectionJob, error) {
-	_ = owner // compatibility until ticket 03 removes ownership parameters.
-	row := s.db.QueryRowContext(ctx, `SELECT id,project_id,media_id,project_revision,kind,state,result_json,error_code,created_at,updated_at FROM detection_jobs WHERE id=?`, id)
-	var j DetectionJob
-	var c, u string
-	err := row.Scan(&j.ID, &j.ProjectID, &j.MediaID, &j.ProjectRevision, &j.Kind, &j.State, &j.ResultJSON, &j.ErrorCode, &c, &u)
-	if errors.Is(err, sql.ErrNoRows) {
+func (s *DetectionJobStore) Get(ctx context.Context, _, id string) (DetectionJob, error) {
+	job, err := s.jobs.Get(ctx, id)
+	if err != nil {
+		return DetectionJob{}, err
+	}
+	if job.Kind != JobDetect {
 		return DetectionJob{}, ErrJobNotFound
 	}
-	if err != nil {
-		return DetectionJob{}, err
-	}
-	j.CreatedAt, err = time.Parse(time.RFC3339Nano, c)
-	if err != nil {
-		return DetectionJob{}, err
-	}
-	j.UpdatedAt, err = time.Parse(time.RFC3339Nano, u)
-	if err != nil {
-		return DetectionJob{}, err
-	}
-	return j, nil
+	return detectionView(job)
 }
-func (s *DetectionJobStore) transition(ctx context.Context, owner, id string, from, to JobState, result, errorCode sql.NullString) (DetectionJob, error) {
-	_ = owner // compatibility until ticket 03 removes ownership parameters.
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	r, e := s.db.ExecContext(ctx, `UPDATE detection_jobs SET state=?,result_json=?,error_code=?,updated_at=? WHERE id=? AND state=?`, to, result, errorCode, now, id, from)
+func (s *DetectionJobStore) Start(ctx context.Context, _, id string) (DetectionJob, error) {
+	j, e := s.jobs.Start(ctx, id)
 	if e != nil {
 		return DetectionJob{}, e
 	}
-	n, _ := r.RowsAffected()
-	if n == 1 {
-		return s.Get(ctx, owner, id)
-	}
-	if _, e = s.Get(ctx, owner, id); e != nil {
-		return DetectionJob{}, e
-	}
-	return DetectionJob{}, ErrJobState
+	return detectionView(j)
 }
-func (s *DetectionJobStore) Start(ctx context.Context, o, id string) (DetectionJob, error) {
-	return s.transition(ctx, o, id, JobQueued, JobRunning, sql.NullString{}, sql.NullString{})
-}
-func (s *DetectionJobStore) Succeed(ctx context.Context, o, id, result string) (DetectionJob, error) {
-	return s.transition(ctx, o, id, JobRunning, JobSucceeded, sql.NullString{String: result, Valid: true}, sql.NullString{})
-}
-func (s *DetectionJobStore) Fail(ctx context.Context, o, id, code string) (DetectionJob, error) {
-	return s.transition(ctx, o, id, JobRunning, JobFailed, sql.NullString{}, sql.NullString{String: code, Valid: true})
-}
-func (s *DetectionJobStore) Cancel(ctx context.Context, o, id string) (DetectionJob, error) {
-	j, e := s.Get(ctx, o, id)
+func (s *DetectionJobStore) Succeed(ctx context.Context, _, id, result string) (DetectionJob, error) {
+	j, e := s.jobs.Succeed(ctx, id, result)
 	if e != nil {
 		return DetectionJob{}, e
 	}
-	if j.State == JobQueued {
-		return s.transition(ctx, o, id, JobQueued, JobCancelled, sql.NullString{}, sql.NullString{})
+	return detectionView(j)
+}
+func (s *DetectionJobStore) Fail(ctx context.Context, _, id, code string) (DetectionJob, error) {
+	j, e := s.jobs.Fail(ctx, id, code)
+	if e != nil {
+		return DetectionJob{}, e
 	}
-	if j.State == JobRunning {
-		return s.transition(ctx, o, id, JobRunning, JobCancelled, sql.NullString{}, sql.NullString{})
+	return detectionView(j)
+}
+func (s *DetectionJobStore) Cancel(ctx context.Context, _, id string) (DetectionJob, error) {
+	j, e := s.jobs.Cancel(ctx, id)
+	if e != nil {
+		return DetectionJob{}, e
 	}
-	return DetectionJob{}, ErrJobState
+	return detectionView(j)
+}
+func detectionView(job Job) (DetectionJob, error) {
+	var request struct {
+		MediaID string `json:"mediaId"`
+		Kind    string `json:"kind"`
+	}
+	if err := json.Unmarshal([]byte(job.RequestJSON), &request); err != nil {
+		return DetectionJob{}, fmt.Errorf("decode detection request: %w", err)
+	}
+	return DetectionJob{ID: job.ID, ProjectID: job.ProjectID, MediaID: request.MediaID, Kind: request.Kind, State: job.State, ResultJSON: job.ResultJSON, ErrorCode: job.ErrorCode, CreatedAt: job.CreatedAt, UpdatedAt: job.UpdatedAt}, nil
 }

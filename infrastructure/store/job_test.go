@@ -28,12 +28,12 @@ func TestJobStateTransitionsAndRecovery(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if count, err := jobs.Recover(ctx); err != nil || count != 3 {
+	if count, err := jobs.Recover(ctx); err != nil || count != 2 {
 		t.Fatalf("recover = %d, %v", count, err)
 	}
 	queued, err := jobs.Get(ctx, "editor", "queued")
-	if err != nil || queued.State != store.JobFailed {
-		t.Fatalf("recovered queued job = %#v, %v", queued, err)
+	if err != nil || queued.State != store.JobQueued {
+		t.Fatalf("queued job after recovery = %#v, %v", queued, err)
 	}
 	job, err := jobs.Get(ctx, "editor", "restart")
 	if err != nil || job.State != store.JobFailed || job.ErrorCode.String != "interrupted_by_restart" {
@@ -58,7 +58,7 @@ func TestJobLookupIgnoresCompatibilityOwner(t *testing.T) {
 	db := openJobsDB(t)
 	jobs, _ := store.NewJobStore(db)
 	ctx := context.Background()
-	if _, err := jobs.Create(ctx, store.ExportJob{ID: "shared", OwnerLogin: "a", ProjectID: "p", ProjectRevision: 1, RequestJSON: `{}`}); err != nil {
+	if _, err := jobs.Create(ctx, store.ExportJob{ID: "shared", OwnerLogin: "a", ProjectID: "project", ProjectRevision: 1, RequestJSON: `{}`}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := jobs.Get(ctx, "b", "shared"); err != nil {
@@ -80,7 +80,7 @@ func openJobsDB(t *testing.T) *sql.DB {
 	if err := store.MigrateJobs(ctx, db); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.ExecContext(ctx, `INSERT INTO projects (id, revision, document_json, created_at, updated_at) VALUES ('project', 1, '{}', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`); err != nil {
+	if _, err := db.ExecContext(ctx, `INSERT INTO projects (id, revision, document_json, created_at, updated_at) VALUES ('project', 1, '{"schemaVersion":2,"name":"Project","items":[{"id":"i_aaaaaaaaaaaaaaaaaaaaaaaa","mediaId":"m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","segments":[]}]}', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`); err != nil {
 		t.Fatal(err)
 	}
 	return db
