@@ -49,6 +49,7 @@ type MediaUseCase struct {
 	status     LibraryStatus
 	mu         sync.RWMutex
 	imports    map[string]*mediaImport
+	refreshID  uint64
 }
 
 type mediaImport struct {
@@ -81,9 +82,10 @@ func (m *MediaUseCase) StartImport(ctx context.Context, principal domain.Princip
 	entry := &mediaImport{job: ImportJob{ID: id, State: "queued"}, owner: principal.Subject, cancel: cancel}
 	m.imports[id] = entry
 	m.status = libraryStatus(LibraryScanning)
+	job := entry.job
 	m.mu.Unlock()
 	go m.runImport(jobCtx, entry)
-	return entry.job, nil
+	return job, nil
 }
 func (m *MediaUseCase) runImport(ctx context.Context, entry *mediaImport) {
 	m.mu.Lock()
@@ -99,9 +101,12 @@ func (m *MediaUseCase) runImport(ctx context.Context, entry *mediaImport) {
 	} else {
 		entry.job.State, entry.job.Progress = "succeeded", 1
 	}
+	// Read the retention setting while publishing the terminal state so polling
+	// observes completion before a test or configuration update changes it.
+	retention := mediaImportRetention
 	m.mu.Unlock()
 	// Keep terminal state available briefly so clients can observe it, then drop it.
-	time.AfterFunc(mediaImportRetention, func() {
+	time.AfterFunc(retention, func() {
 		m.mu.Lock()
 		if current, ok := m.imports[entry.job.ID]; ok && current == entry && current.job.State != "running" && current.job.State != "queued" {
 			delete(m.imports, entry.job.ID)
@@ -141,51 +146,57 @@ func (m *MediaUseCase) RefreshMedia(ctx context.Context) error {
 	}
 	m.mu.Lock()
 	previous := m.status
+	m.refreshID++
+	refreshID := m.refreshID
 	m.status = libraryStatus(LibraryScanning)
 	m.mu.Unlock()
 	if err := m.Catalog.Refresh(ctx); err != nil {
 		if errors.Is(ctx.Err(), context.Canceled) {
-			m.restoreAfterCancellation(previous)
+			m.restoreAfterCancellation(previous, refreshID)
 		} else {
-			m.setStatus(LibraryFailed)
+			m.setStatusForRefresh(refreshID, LibraryFailed)
 		}
 		return err
 	}
 	page, err := m.Catalog.List(ctx, "", 1)
 	if err != nil {
 		if errors.Is(ctx.Err(), context.Canceled) {
-			m.restoreAfterCancellation(previous)
+			m.restoreAfterCancellation(previous, refreshID)
 		} else {
-			m.setStatus(LibraryFailed)
+			m.setStatusForRefresh(refreshID, LibraryFailed)
 		}
 		return err
 	}
 	if len(page.Items) == 0 {
-		m.setStatus(LibraryReadyEmpty)
+		m.setStatusForRefresh(refreshID, LibraryReadyEmpty)
 	} else {
-		m.setStatus(LibraryReadyWithMedia)
+		m.setStatusForRefresh(refreshID, LibraryReadyWithMedia)
 	}
 	return nil
 }
 
-func (m *MediaUseCase) restoreAfterCancellation(previous LibraryStatus) {
+const mediaStatusRecoveryTimeout = time.Second
+
+func (m *MediaUseCase) restoreAfterCancellation(previous LibraryStatus, refreshID uint64) {
 	if previous.State == LibraryReadyEmpty || previous.State == LibraryReadyWithMedia {
-		m.setStatus(previous.State)
+		m.setStatusForRefresh(refreshID, previous.State)
 		return
 	}
-	page, err := m.Catalog.List(context.Background(), "", 1)
+	ctx, cancel := context.WithTimeout(context.Background(), mediaStatusRecoveryTimeout)
+	defer cancel()
+	page, err := m.Catalog.List(ctx, "", 1)
 	if err == nil {
 		if len(page.Items) == 0 {
-			m.setStatus(LibraryReadyEmpty)
+			m.setStatusForRefresh(refreshID, LibraryReadyEmpty)
 		} else {
-			m.setStatus(LibraryReadyWithMedia)
+			m.setStatusForRefresh(refreshID, LibraryReadyWithMedia)
 		}
 		return
 	}
 	if previous.State != "" && previous.State != LibraryScanning {
-		m.setStatus(previous.State)
+		m.setStatusForRefresh(refreshID, previous.State)
 	} else {
-		m.setStatus(LibraryReadyEmpty)
+		m.setStatusForRefresh(refreshID, LibraryReadyEmpty)
 	}
 }
 func (m *MediaUseCase) Status() LibraryStatus {
@@ -199,10 +210,12 @@ func (m *MediaUseCase) Status() LibraryStatus {
 	}
 	return m.status
 }
-func (m *MediaUseCase) setStatus(state LibraryState) {
+func (m *MediaUseCase) setStatusForRefresh(refreshID uint64, state LibraryState) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.status = libraryStatus(state)
+	if m.refreshID == refreshID {
+		m.status = libraryStatus(state)
+	}
 }
 func libraryStatus(state LibraryState) LibraryStatus {
 	messages := map[LibraryState]string{
