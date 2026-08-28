@@ -52,7 +52,7 @@ func TestMediaTreeUsesProductionMediaUseCaseWiring(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server, err := New(Config{Authenticator: authenticator, Media: media, Preview: routeTestPreview{}, Projects: routeTestProjects{}, Exports: routeTestExports{}, Jobs: routeTestJobs{}})
+	server, err := New(Config{Authenticator: authenticator, Media: media, Preview: routeTestPreview{}, Projects: routeTestProjects{}, Exports: routeTestExports{}, Jobs: &routeTestJobs{}})
 	if err != nil {
 		t.Fatal(err)
 	}

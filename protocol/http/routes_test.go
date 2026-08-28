@@ -101,7 +101,7 @@ func TestBrowseMediaDispatchesOpaqueQueryToProductionService(t *testing.T) {
 		t.Fatal(err)
 	}
 	media := &routeTestMedia{}
-	server, err := New(Config{Authenticator: authenticator, Media: media, Preview: routeTestPreview{}, Projects: routeTestProjects{}, Exports: routeTestExports{}, Jobs: routeTestJobs{}})
+	server, err := New(Config{Authenticator: authenticator, Media: media, Preview: routeTestPreview{}, Projects: routeTestProjects{}, Exports: routeTestExports{}, Jobs: &routeTestJobs{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,10 +153,13 @@ func (routeTestExports) Create(context.Context, domain.Principal, string, Projec
 	return Job{}, nil
 }
 
-type routeTestJobs struct{}
+type routeTestJobs struct{ cancels int }
 
 func (routeTestJobs) Get(context.Context, domain.Principal, string) (Job, error) { return Job{}, nil }
-func (routeTestJobs) Cancel(context.Context, domain.Principal, string) error     { return nil }
+func (j *routeTestJobs) Cancel(context.Context, domain.Principal, string) error {
+	j.cancels++
+	return nil
+}
 
 type routeTestDetection struct{ gets, cancels int }
 
@@ -182,7 +185,8 @@ func TestDetectionJobsDispatchThroughDetectionService(t *testing.T) {
 		t.Fatal(err)
 	}
 	detection := &routeTestDetection{}
-	server, err := New(Config{Authenticator: authenticator, Media: &routeTestMedia{}, Preview: routeTestPreview{}, Projects: routeTestProjects{}, Exports: routeTestExports{}, Detection: detection, Jobs: routeTestJobs{}})
+	jobs := &routeTestJobs{}
+	server, err := New(Config{Authenticator: authenticator, Media: &routeTestMedia{}, Preview: routeTestPreview{}, Projects: routeTestProjects{}, Exports: routeTestExports{}, Detection: detection, Jobs: jobs})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,8 +226,8 @@ func TestDetectionJobsDispatchThroughDetectionService(t *testing.T) {
 			}
 		}
 	}
-	if detection.gets != 2 || detection.cancels != 1 {
-		t.Fatalf("detection dispatch gets=%d cancels=%d", detection.gets, detection.cancels)
+	if detection.gets != 1 || detection.cancels != 0 || jobs.cancels != 1 {
+		t.Fatalf("detection dispatch gets=%d cancels=%d; unified cancels=%d", detection.gets, detection.cancels, jobs.cancels)
 	}
 }
 
@@ -231,7 +235,7 @@ func TestAssetHeadersArePrivateAndInputsBounded(t *testing.T) {
 	authenticator, _ := NewAuthenticator(AuthConfig{Mode: "none"})
 	id := "m_" + strings.Repeat("a", 43)
 	media := &assetTestMedia{id: id}
-	server, err := New(Config{Authenticator: authenticator, Media: media, Assets: routeTestAssets{}, Preview: routeTestPreview{}, Projects: routeTestProjects{}, Exports: routeTestExports{}, Jobs: routeTestJobs{}})
+	server, err := New(Config{Authenticator: authenticator, Media: media, Assets: routeTestAssets{}, Preview: routeTestPreview{}, Projects: routeTestProjects{}, Exports: routeTestExports{}, Jobs: &routeTestJobs{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -284,7 +288,7 @@ func TestServerRejectsEncodedSlashInMediaID(t *testing.T) {
 		Preview:       routeTestPreview{},
 		Projects:      routeTestProjects{},
 		Exports:       routeTestExports{},
-		Jobs:          routeTestJobs{},
+		Jobs:          &routeTestJobs{},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -307,7 +311,7 @@ func TestAutomationRequiresBearerLoopbackAndNoOrigin(t *testing.T) {
 		t.Fatal(err)
 	}
 	newServer := func(address string) *Server {
-		server, err := New(Config{Authenticator: authenticator, Media: &routeTestMedia{}, Preview: routeTestPreview{}, Projects: routeTestProjects{}, Exports: routeTestExports{}, Jobs: routeTestJobs{}, ListenerAddress: address, RequireAutomationAuth: true})
+		server, err := New(Config{Authenticator: authenticator, Media: &routeTestMedia{}, Preview: routeTestPreview{}, Projects: routeTestProjects{}, Exports: routeTestExports{}, Jobs: &routeTestJobs{}, ListenerAddress: address, RequireAutomationAuth: true})
 		if err != nil {
 			t.Fatal(err)
 		}

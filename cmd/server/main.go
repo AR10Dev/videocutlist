@@ -67,7 +67,7 @@ func run(ctx context.Context) error {
 		return err
 	}
 	mediaStore, _ := store.NewMediaStore(db)
-	if _, err := jobStore.Recover(ctx); err != nil {
+	if _, err := unifiedJobs.Recover(ctx); err != nil {
 		return err
 	}
 

@@ -1098,16 +1098,6 @@ func (s *Server) cancelJob(writer http.ResponseWriter, request *http.Request, pr
 	if !s.allowed(writer, principal, "job_cancel", job, id) {
 		return
 	}
-	if s.config.Detection != nil {
-		if _, err := s.config.Detection.Get(request.Context(), principal, job); err == nil {
-			if err := s.config.Detection.Cancel(request.Context(), principal, job); err != nil {
-				notFound(writer, id)
-				return
-			}
-			writer.WriteHeader(http.StatusNoContent)
-			return
-		}
-	}
 	if s.config.Jobs == nil {
 		notFound(writer, id)
 		return

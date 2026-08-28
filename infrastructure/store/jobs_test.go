@@ -56,8 +56,13 @@ func TestUnifiedJobsCancellationFailureAndRestartRecovery(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	for _, id := range []string{"j_queued", "j_failed", "j_restarted"} {
-		if _, err := jobs.Create(ctx, store.Job{ID: id, BatchID: "b_" + id, Kind: store.JobScan, RequestJSON: `{}`}); err != nil {
+	for _, job := range []store.Job{
+		{ID: "j_queued", BatchID: "b_queued", Kind: store.JobScan, RequestJSON: `{}`},
+		{ID: "j_failed", BatchID: "b_failed", Kind: store.JobScan, RequestJSON: `{}`},
+		{ID: "j_restarted_export", BatchID: "b_export", Kind: store.JobExport, ProjectID: "p", ProjectItemID: "i", RequestJSON: `{}`},
+		{ID: "j_restarted_detect", BatchID: "b_detect", Kind: store.JobDetect, ProjectID: "p", ProjectItemID: "i", RequestJSON: `{}`},
+	} {
+		if _, err := jobs.Create(ctx, job); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -70,14 +75,18 @@ func TestUnifiedJobsCancellationFailureAndRestartRecovery(t *testing.T) {
 	if job, err := jobs.Fail(ctx, "j_failed", "failed"); err != nil || job.State != store.JobFailed || !job.ErrorCode.Valid || job.ErrorCode.String != "failed" {
 		t.Fatalf("running failure = %#v, %v", job, err)
 	}
-	if _, err := jobs.Start(ctx, "j_restarted"); err != nil {
-		t.Fatal(err)
+	for _, id := range []string{"j_restarted_export", "j_restarted_detect"} {
+		if _, err := jobs.Start(ctx, id); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if recovered, err := jobs.Recover(ctx); err != nil || recovered != 1 {
+	if recovered, err := jobs.Recover(ctx); err != nil || recovered != 2 {
 		t.Fatalf("recovery = %d, %v", recovered, err)
 	}
-	if job, err := jobs.Get(ctx, "j_restarted"); err != nil || job.State != store.JobFailed || !job.ErrorCode.Valid || job.ErrorCode.String != "interrupted_by_restart" {
-		t.Fatalf("recovered job = %#v, %v", job, err)
+	for _, id := range []string{"j_restarted_export", "j_restarted_detect"} {
+		if job, err := jobs.Get(ctx, id); err != nil || job.State != store.JobFailed || !job.ErrorCode.Valid || job.ErrorCode.String != "interrupted_by_restart" {
+			t.Fatalf("recovered job = %#v, %v", job, err)
+		}
 	}
 }
 
