@@ -153,9 +153,15 @@ func (routeTestExports) Create(context.Context, domain.Principal, string, Projec
 	return Job{}, nil
 }
 
-type routeTestJobs struct{ cancels int }
+type routeTestJobs struct {
+	gets, cancels int
+	job           Job
+}
 
-func (routeTestJobs) Get(context.Context, domain.Principal, string) (Job, error) { return Job{}, nil }
+func (j *routeTestJobs) Get(context.Context, domain.Principal, string) (Job, error) {
+	j.gets++
+	return j.job, nil
+}
 func (j *routeTestJobs) Cancel(context.Context, domain.Principal, string) error {
 	j.cancels++
 	return nil
@@ -185,7 +191,10 @@ func TestDetectionJobsDispatchThroughDetectionService(t *testing.T) {
 		t.Fatal(err)
 	}
 	detection := &routeTestDetection{}
-	jobs := &routeTestJobs{}
+	jobs := &routeTestJobs{job: Job{
+		ID: "j_detection", Type: "detection", State: "succeeded", MediaID: "m_media", ProjectID: "p_project", ProjectRevision: 7, Kind: domain.DetectSilence,
+		Candidates: []domain.Candidate{{ID: "c_candidate", MediaID: "m_media", ProjectID: "p_project", ProjectRevision: 7, StartMS: 100, EndMS: 200, Source: domain.DetectSilence, Confidence: 0.9}},
+	}}
 	server, err := New(Config{Authenticator: authenticator, Media: &routeTestMedia{}, Preview: routeTestPreview{}, Projects: routeTestProjects{}, Exports: routeTestExports{}, Detection: detection, Jobs: jobs})
 	if err != nil {
 		t.Fatal(err)
@@ -226,8 +235,8 @@ func TestDetectionJobsDispatchThroughDetectionService(t *testing.T) {
 			}
 		}
 	}
-	if detection.gets != 1 || detection.cancels != 0 || jobs.cancels != 1 {
-		t.Fatalf("detection dispatch gets=%d cancels=%d; unified cancels=%d", detection.gets, detection.cancels, jobs.cancels)
+	if detection.gets != 0 || detection.cancels != 0 || jobs.gets != 1 || jobs.cancels != 1 {
+		t.Fatalf("detection dispatch gets=%d cancels=%d; unified gets=%d cancels=%d", detection.gets, detection.cancels, jobs.gets, jobs.cancels)
 	}
 }
 

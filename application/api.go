@@ -84,22 +84,27 @@ type ExportInput struct {
 	FilenameTemplate string `json:"filenameTemplate,omitempty"`
 }
 type Job struct {
-	ID              string          `json:"id"`
-	Type            string          `json:"type"`
-	State           string          `json:"state"`
-	Progress        float64         `json:"progress"`
-	Result          *JobResult      `json:"result,omitempty"`
-	Warnings        []string        `json:"warnings,omitempty"`
-	WarningDetails  []ExportFinding `json:"warningDetails,omitempty"`
-	Strategy        string          `json:"strategy,omitempty"`
-	AppliedStrategy string          `json:"appliedStrategy,omitempty"`
-	Mode            string          `json:"mode,omitempty"`
-	Selection       string          `json:"selection,omitempty"`
-	SelectedStreams []int           `json:"selectedStreams,omitempty"`
-	Verified        bool            `json:"verified,omitempty"`
-	ErrorCode       *string         `json:"errorCode,omitempty"`
-	CreatedAt       time.Time       `json:"createdAt"`
-	UpdatedAt       time.Time       `json:"updatedAt"`
+	ID              string               `json:"id"`
+	Type            string               `json:"type"`
+	State           string               `json:"state"`
+	Progress        float64              `json:"progress"`
+	Result          *JobResult           `json:"result,omitempty"`
+	Warnings        []string             `json:"warnings,omitempty"`
+	WarningDetails  []ExportFinding      `json:"warningDetails,omitempty"`
+	Strategy        string               `json:"strategy,omitempty"`
+	AppliedStrategy string               `json:"appliedStrategy,omitempty"`
+	Mode            string               `json:"mode,omitempty"`
+	Selection       string               `json:"selection,omitempty"`
+	SelectedStreams []int                `json:"selectedStreams,omitempty"`
+	Verified        bool                 `json:"verified,omitempty"`
+	ErrorCode       *string              `json:"errorCode,omitempty"`
+	CreatedAt       time.Time            `json:"createdAt"`
+	UpdatedAt       time.Time            `json:"updatedAt"`
+	MediaID         string               `json:"mediaId,omitempty"`
+	ProjectID       string               `json:"projectId,omitempty"`
+	ProjectRevision int64                `json:"projectRevision,omitempty"`
+	Kind            domain.DetectionKind `json:"kind,omitempty"`
+	Candidates      []domain.Candidate   `json:"candidates,omitempty"`
 }
 type AppliedStrategy struct {
 	Segment    int    `json:"segment"`

@@ -51,7 +51,11 @@ func (s *DetectionJobStore) Create(ctx context.Context, j DetectionJob) (Detecti
 	if err != nil {
 		return DetectionJob{}, err
 	}
-	request, err := json.Marshal(map[string]string{"mediaId": j.MediaID, "kind": j.Kind})
+	request, err := json.Marshal(struct {
+		MediaID         string `json:"mediaId"`
+		ProjectRevision int64  `json:"projectRevision"`
+		Kind            string `json:"kind"`
+	}{MediaID: j.MediaID, ProjectRevision: j.ProjectRevision, Kind: j.Kind})
 	if err != nil {
 		return DetectionJob{}, err
 	}

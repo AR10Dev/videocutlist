@@ -489,13 +489,14 @@ func unifiedJobResult(value store.Job) Job {
 
 func storeDetectionJobResult(value store.Job) (DetectionJob, error) {
 	var request struct {
-		MediaID string `json:"mediaId"`
-		Kind    string `json:"kind"`
+		MediaID         string `json:"mediaId"`
+		ProjectRevision int64  `json:"projectRevision"`
+		Kind            string `json:"kind"`
 	}
 	if err := json.Unmarshal([]byte(value.RequestJSON), &request); err != nil {
 		return DetectionJob{}, err
 	}
-	result := DetectionJob{ID: value.ID, Type: string(value.Kind), State: string(value.State), MediaID: request.MediaID, ProjectID: value.ProjectID, Kind: domain.DetectionKind(request.Kind)}
+	result := DetectionJob{ID: value.ID, Type: string(value.Kind), State: string(value.State), MediaID: request.MediaID, ProjectID: value.ProjectID, ProjectRevision: request.ProjectRevision, Kind: domain.DetectionKind(request.Kind)}
 	if value.ResultJSON.Valid {
 		_ = json.Unmarshal([]byte(value.ResultJSON.String), &result.Candidates)
 	}
@@ -507,11 +508,7 @@ func storeDetectionJobResult(value store.Job) (DetectionJob, error) {
 }
 
 func detectionJobAsJob(value DetectionJob) Job {
-	job := Job{ID: value.ID, Type: value.Type, State: value.State}
-	if value.ErrorCode != nil {
-		job.ErrorCode = value.ErrorCode
-	}
-	return job
+	return Job{ID: value.ID, Type: value.Type, State: value.State, MediaID: value.MediaID, ProjectID: value.ProjectID, ProjectRevision: value.ProjectRevision, Kind: value.Kind, Candidates: value.Candidates, ErrorCode: value.ErrorCode}
 }
 
 func jobResult(record store.ExportJob) Job {

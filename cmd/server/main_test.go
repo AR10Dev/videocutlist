@@ -1,14 +1,69 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"net"
 	"net/http"
+	"strconv"
 	"testing"
 	"time"
 
 	"videocutlist/infrastructure/config"
+	"videocutlist/infrastructure/store"
 )
+
+func TestRunRecoversUnifiedJobsOnStartup(t *testing.T) {
+	databasePath := t.TempDir() + "/videocutlist.db"
+	db, err := store.OpenDatabase(context.Background(), databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	jobs, err := store.NewJobsStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := jobs.Create(context.Background(), store.Job{ID: "j_restart", BatchID: "b_restart", Kind: store.JobScan, RequestJSON: `{}`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := jobs.Start(context.Background(), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := strconv.Itoa(listener.Addr().(*net.TCPAddr).Port)
+	listener.Close()
+	directory := t.TempDir()
+	t.Setenv("VIDEOCUTLIST_DATABASE_PATH", databasePath)
+	t.Setenv("VIDEOCUTLIST_CACHE_DIR", directory+"/cache")
+	t.Setenv("VIDEOCUTLIST_EXPORT_DIR", directory+"/exports")
+	t.Setenv("VIDEOCUTLIST_MEDIA_ROOTS_JSON", `{}`)
+	t.Setenv("VIDEOCUTLIST_LISTEN_ADDRESS", "127.0.0.1")
+	t.Setenv("VIDEOCUTLIST_PORT", port)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- run(ctx) }()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		value, err := jobs.Get(context.Background(), job.ID)
+		if err == nil && value.State == store.JobFailed && value.ErrorCode.Valid && value.ErrorCode.String == "interrupted_by_restart" {
+			cancel()
+			if err := <-done; err != nil {
+				t.Fatalf("run = %v", err)
+			}
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	<-done
+	t.Fatal("startup did not recover a running unified job")
+}
 
 func TestNewHTTPServerUsesConfiguredAddressAndTimeouts(t *testing.T) {
 	cfg := config.Config{

@@ -1077,12 +1077,6 @@ func (s *Server) getJob(writer http.ResponseWriter, request *http.Request, princ
 	if !s.allowed(writer, principal, "job_read", job, id) {
 		return
 	}
-	if s.config.Detection != nil {
-		if value, err := s.config.Detection.Get(request.Context(), principal, job); err == nil {
-			httpx.WriteJSON(writer, 200, value)
-			return
-		}
-	}
 	if s.config.Jobs == nil {
 		notFound(writer, id)
 		return
