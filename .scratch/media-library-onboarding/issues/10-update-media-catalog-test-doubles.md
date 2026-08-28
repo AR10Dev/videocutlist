@@ -5,11 +5,13 @@
 **Blocked by:** 02, 04
 
 **Category:** bug
-**Status:** ready-for-agent
+**Status:** complete
 
-- [ ] Every `MediaCatalog` test double implements `Browse` with safe empty behavior.
-- [ ] `go test -race ./application` passes.
+- [x] Every `MediaCatalog` test double implements `Browse` with safe empty behavior.
+- [x] `go test -race ./application` passes.
 
 ## Comments
 
 Opened during post-merge validation: ticket 04 added `Browse` to `application.MediaCatalog`, while ticket 02's test doubles do not implement it.
+
+Implemented safe empty `Browse` methods on the cancellable and bounded-recovery catalog test doubles. Evidence: `gofmt -w application/services_test.go`, `go test -race ./application` (18 tests passed), and `git diff --check` passed.
