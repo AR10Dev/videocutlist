@@ -459,6 +459,7 @@ export function App() {
     const controller = new AbortController();
     refreshRequest = controller;
     const request = ++refreshRequestVersion;
+    folderRequestVersion++;
     setRefreshing(true);
     setActiveFolder(undefined);
     setNextCursor(undefined);
