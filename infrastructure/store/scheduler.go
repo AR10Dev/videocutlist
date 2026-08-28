@@ -233,13 +233,14 @@ func (s *Scheduler) worker() {
 		} else {
 			err = s.runner(ctx, job)
 		}
+		cancelled := ctx.Err() != nil
 		cancel()
 		s.mu.Lock()
 		delete(s.running, job.ID)
 		s.mu.Unlock()
 		if err == nil {
 			_, _ = s.jobs.Succeed(context.Background(), job.ID, `{}`)
-		} else if ctx.Err() != nil {
+		} else if cancelled {
 			_, _ = s.jobs.Cancel(context.Background(), job.ID)
 		} else {
 			code := "job_failed"

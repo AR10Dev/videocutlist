@@ -126,6 +126,63 @@ func TestBatchExportRunnerRejectsChangedSource(t *testing.T) {
 	}
 }
 
+func TestBatchExportSchedulerPersistsSourceChangedFailure(t *testing.T) {
+	db, err := store.OpenDatabase(context.Background(), t.TempDir()+"/jobs.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	jobs, err := store.NewJobsStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := "m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	payload, err := json.Marshal(ExportSnapshot{Source: SourceSnapshot{MediaID: id, ETag: "original", SizeBytes: 1, DurationMS: 10}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	called := false
+	uc := BatchExportUseCase{
+		Media: batchCatalog{media: map[string]Media{id: {ID: id, ETag: "changed", SizeBytes: 1, DurationMS: 10}}},
+		RunSnapshot: func(context.Context, ExportSnapshot) error {
+			called = true
+			return nil
+		},
+	}
+	scheduler, err := store.NewScheduler(jobs, store.SchedulerConfig{QueueCapacity: 1, WorkerLimit: 1}, uc.RunQueuedSnapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scheduler.Submit(context.Background(), []store.Job{{
+		ID:            "j_000000000081",
+		BatchID:       "b_000000000081",
+		Kind:          store.JobExport,
+		ProjectID:     "p_aaaaaaaaaaaa",
+		ProjectItemID: "i_aaaaaaaaaaaaaaaaaaaaaaaa",
+		RequestJSON:   string(payload),
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	scheduler.Start()
+	defer scheduler.Shutdown(context.Background())
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		job, getErr := jobs.Get(context.Background(), "j_000000000081")
+		if getErr == nil && job.State == store.JobFailed {
+			if job.ErrorCode.String != "source_changed" {
+				t.Fatalf("job error code = %q; want source_changed", job.ErrorCode.String)
+			}
+			if called {
+				t.Fatal("export runner called for changed source")
+			}
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	job, getErr := jobs.Get(context.Background(), "j_000000000081")
+	t.Fatalf("job = %#v, err = %v; want failed source_changed", job, getErr)
+}
+
 func TestBatchExportRunningCancellationPropagatesContext(t *testing.T) {
 	db, err := store.OpenDatabase(context.Background(), t.TempDir()+"/jobs.db")
 	if err != nil {
