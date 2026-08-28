@@ -144,6 +144,7 @@ type AssetResult struct {
 
 type MediaService interface {
 	List(context.Context, string, int) (MediaPage, error)
+	Browse(context.Context, string, string, int) (FolderPage, error)
 	Get(context.Context, string) (Media, error)
 	RefreshMedia(context.Context) error
 	Status() LibraryStatus

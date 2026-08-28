@@ -29,6 +29,9 @@ type mediaStub struct {
 func (m *mediaStub) List(context.Context, string, int) (api.MediaPage, error) {
 	return api.MediaPage{}, nil
 }
+func (m *mediaStub) Browse(context.Context, string, string, int) (api.FolderPage, error) {
+	return api.FolderPage{}, nil
+}
 func (m *mediaStub) Get(context.Context, string) (api.Media, error) {
 	m.calls++
 	return api.Media{ID: validMedia, Name: "clip.mp4", DurationMS: 10_000, SizeBytes: 1, Container: "mp4", Streams: map[string]any{}, ETag: "e"}, nil

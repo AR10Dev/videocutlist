@@ -18,13 +18,26 @@ import (
 type catalogStub struct {
 	refreshes  int
 	refreshErr error
+	browse     FolderPage
 }
 
 func (c *catalogStub) List(context.Context, string, int) (MediaPage, error) { return MediaPage{}, nil }
-func (c *catalogStub) Get(context.Context, string) (Media, error)           { return Media{}, nil }
-func (c *catalogStub) Refresh(context.Context) error                        { c.refreshes++; return c.refreshErr }
+func (c *catalogStub) Browse(context.Context, string, string, int) (FolderPage, error) {
+	return c.browse, nil
+}
+func (c *catalogStub) Get(context.Context, string) (Media, error) { return Media{}, nil }
+func (c *catalogStub) Refresh(context.Context) error              { c.refreshes++; return c.refreshErr }
 func (c *catalogStub) Preview(context.Context, PreviewSpec) (domain.PreviewSpec, error) {
 	return domain.PreviewSpec{}, nil
+}
+
+func TestMediaBrowseForwardsToCatalog(t *testing.T) {
+	want := FolderPage{Folders: []FolderNode{{ID: "f_opaque", Label: "clips"}}}
+	useCase := &MediaUseCase{Catalog: &catalogStub{browse: want}, Configured: true}
+	got, err := useCase.Browse(context.Background(), "f_parent", "m_cursor", 25)
+	if err != nil || len(got.Folders) != 1 || got.Folders[0].ID != want.Folders[0].ID {
+		t.Fatalf("browse = %#v, err = %v", got, err)
+	}
 }
 
 func TestMediaRefreshIsSynchronous(t *testing.T) {

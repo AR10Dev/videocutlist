@@ -74,6 +74,9 @@ type routeTestMedia struct{ gets int }
 func (m *routeTestMedia) List(context.Context, string, int) (MediaPage, error) {
 	return MediaPage{}, nil
 }
+func (m *routeTestMedia) Browse(context.Context, string, string, int) (FolderPage, error) {
+	return FolderPage{}, nil
+}
 func (m *routeTestMedia) Get(context.Context, string) (Media, error) {
 	m.gets++
 	return Media{}, nil
@@ -221,6 +224,9 @@ type assetTestMedia struct{ id string }
 
 func (m *assetTestMedia) List(context.Context, string, int) (MediaPage, error) {
 	return MediaPage{}, nil
+}
+func (m *assetTestMedia) Browse(context.Context, string, string, int) (FolderPage, error) {
+	return FolderPage{}, nil
 }
 func (m *assetTestMedia) Get(context.Context, string) (Media, error) {
 	return Media{ID: m.id, DurationMS: 1000, Streams: map[string]any{"audio": map[string]any{}}}, nil

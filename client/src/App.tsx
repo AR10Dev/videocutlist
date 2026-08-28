@@ -207,6 +207,7 @@ export function App() {
   let projectRequestVersion = 0;
   let refreshRequest: AbortController | undefined;
   let refreshRequestVersion = 0;
+  let folderRequestVersion = 0;
   let saveRequest: AbortController | undefined;
   let saveVersion = 0;
   let editorVersion = 0;
@@ -354,12 +355,13 @@ export function App() {
     markDirty();
   };
   const loadFolder = async (folderId?: string, cursor?: string) => {
+    const request = ++folderRequestVersion;
     const params = new URLSearchParams();
     if (folderId) params.set("folderId", folderId);
     if (cursor) params.set("cursor", cursor);
     const query = params.toString() ? `?${params}` : "";
     const response = await api.request(`media/tree${query}`);
-    if (!response.ok) return;
+    if (request !== folderRequestVersion || !response.ok) return;
     const page = (await response.json()) as FolderPage;
     setFolders(page.folders);
     setMedia(cursor ? [...media(), ...page.items] : page.items);
@@ -446,6 +448,9 @@ export function App() {
     refreshRequest = controller;
     const request = ++refreshRequestVersion;
     setRefreshing(true);
+    setActiveFolder(undefined);
+    setNextCursor(undefined);
+    setFolders([]);
     try {
       const response = await api.request("media/refresh", {
         method: "POST",
@@ -456,7 +461,7 @@ export function App() {
       else if (response.status === 429)
         setStatus("Media refresh is already in progress. Try again shortly.");
       else if (!response.ok) setStatus("Media refresh failed. Try again.");
-      else await loadMedia(undefined, true);
+      else await loadFolder();
     } catch {
       if (!controller.signal.aborted && request === refreshRequestVersion)
         setStatus("Media refresh failed. Try again.");
@@ -540,7 +545,6 @@ export function App() {
       });
   };
   onSettled(() => {
-    void loadMedia();
     void loadFolder();
   });
   createEffect(
@@ -1301,7 +1305,7 @@ export function App() {
                 </section>
               </Show>
               <nav class="file-tree" aria-label="Media folders">
-                <button class="folder" aria-current="page">
+                <button class="folder" aria-current="page" onClick={() => void loadFolder()}>
                   ⌄ Server media library
                 </button>
                 <div class="folder-contents">
@@ -1343,11 +1347,7 @@ export function App() {
               <Show when={nextCursor()}>
                 <button
                   disabled={loadingMore()}
-                  onClick={() =>
-                    void (activeFolder()
-                      ? loadFolder(activeFolder(), nextCursor())
-                      : loadMedia(nextCursor()))
-                  }
+                  onClick={() => void loadFolder(activeFolder(), nextCursor())}
                 >
                   {loadingMore() ? "Loading more…" : "Load more"}
                 </button>
