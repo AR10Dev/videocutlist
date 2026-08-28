@@ -114,11 +114,15 @@ func TestBatchExportRunnerRejectsChangedSource(t *testing.T) {
 	snapshot := ExportSnapshot{Source: SourceSnapshot{MediaID: id, ETag: "original", SizeBytes: 1, DurationMS: 10}}
 	payload, _ := json.Marshal(snapshot)
 	err := uc.RunQueuedSnapshot(context.Background(), store.Job{RequestJSON: string(payload)})
-	if err == nil || err.Error() != "source_changed" {
+	if err == nil || !errors.Is(err, store.ErrSourceChanged) || err.Error() != "source_changed" {
 		t.Fatalf("runner error = %v", err)
 	}
 	if called {
 		t.Fatal("export runner called for changed source")
+	}
+	missing := BatchExportUseCase{Media: batchCatalog{media: map[string]Media{}}, RunSnapshot: uc.RunSnapshot}
+	if err := missing.RunQueuedSnapshot(context.Background(), store.Job{RequestJSON: string(payload)}); !errors.Is(err, store.ErrSourceChanged) {
+		t.Fatalf("missing source error = %v", err)
 	}
 }
 

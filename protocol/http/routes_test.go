@@ -12,6 +12,7 @@ import (
 
 	"videocutlist/application"
 	"videocutlist/domain"
+	"videocutlist/infrastructure/store"
 )
 
 func TestParseRoute(t *testing.T) {
@@ -98,6 +99,40 @@ func (m *routeTestMedia) Status() LibraryStatus {
 	return LibraryStatus{State: LibraryReadyEmpty, Message: "No supported media was found."}
 }
 
+func TestBatchExportEndpointsUseInjectedService(t *testing.T) {
+	authenticator, err := NewAuthenticator(AuthConfig{Mode: "none"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	batch := &routeTestBatchExports{}
+	server, err := New(Config{Authenticator: authenticator, Media: &routeTestMedia{}, Preview: routeTestPreview{}, Projects: routeTestProjects{}, Exports: routeTestExports{}, BatchExports: batch, Jobs: &routeTestJobs{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	project := "p_" + strings.Repeat("a", 12)
+	batchID := "b_" + strings.Repeat("a", 12)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/projects/"+project+"/exports", strings.NewReader(`{"itemIds":["i_aaaaaaaaaaaaaaaaaaaaaaaa"]}`))
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusAccepted || batch.submits != 1 {
+		t.Fatalf("submit status=%d submits=%d body=%s", recorder.Code, batch.submits, recorder.Body.String())
+	}
+	for _, method := range []string{http.MethodGet, http.MethodDelete} {
+		recorder = httptest.NewRecorder()
+		server.ServeHTTP(recorder, httptest.NewRequest(method, "/api/v1/batches/"+batchID, nil))
+		want := http.StatusOK
+		if method == http.MethodDelete {
+			want = http.StatusNoContent
+		}
+		if recorder.Code != want {
+			t.Fatalf("%s status=%d want=%d body=%s", method, recorder.Code, want, recorder.Body.String())
+		}
+	}
+	if batch.progress != 1 || batch.cancels != 1 {
+		t.Fatalf("batch calls progress=%d cancels=%d", batch.progress, batch.cancels)
+	}
+}
+
 func TestBrowseMediaDispatchesOpaqueQueryToProductionService(t *testing.T) {
 	authenticator, err := NewAuthenticator(AuthConfig{Mode: "none"})
 	if err != nil {
@@ -154,6 +189,25 @@ type routeTestExports struct{}
 
 func (routeTestExports) Create(context.Context, domain.Principal, string, Project, ExportInput) (Job, error) {
 	return Job{}, nil
+}
+
+type routeTestBatchExports struct {
+	submits  int
+	progress int
+	cancels  int
+}
+
+func (b *routeTestBatchExports) Submit(context.Context, application.BatchExportRequest) (string, []application.Job, error) {
+	b.submits++
+	return "b_aaaaaaaaaaaa", []application.Job{{ID: "j_aaaaaaaaaaaa", State: "queued"}}, nil
+}
+func (b *routeTestBatchExports) Progress(context.Context, string) (store.JobState, float64, error) {
+	b.progress++
+	return store.JobRunning, 0.5, nil
+}
+func (b *routeTestBatchExports) Cancel(context.Context, string) error {
+	b.cancels++
+	return nil
 }
 
 type routeTestJobs struct {

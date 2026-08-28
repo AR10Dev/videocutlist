@@ -125,7 +125,7 @@ func (b BatchExportUseCase) RunQueuedSnapshot(ctx context.Context, job store.Job
 	}
 	media, err := b.Media.Get(ctx, snapshot.Source.MediaID)
 	if err != nil {
-		return errors.New("source_changed")
+		return fmt.Errorf("%w: media unavailable", store.ErrSourceChanged)
 	}
 	if err := ValidateSnapshot(snapshot, media); err != nil {
 		return err

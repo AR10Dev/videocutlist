@@ -173,7 +173,7 @@ func run(ctx context.Context) error {
 	}
 	apiServer, err := httpapi.New(httpapi.Config{
 		Authenticator: authenticator, Media: mediaService, Preview: previewService, Assets: assetService,
-		Projects: projectService, Exports: exportService, Preflight: exportExecutor, Jobs: jobService, Detection: detectionService, Download: exportExecutor, MediaImport: mediaService,
+		Projects: projectService, Exports: exportService, BatchExports: batchExports, Preflight: exportExecutor, Jobs: jobService, Detection: detectionService, Download: exportExecutor, MediaImport: mediaService,
 		Settings: runtimeSettingsStore, RuntimeSettings: runtimeState, ApplyRuntimeSettings: applyRuntime,
 		Destinations: destinationMetadata(cfg.Destinations),
 		Authorize: httpapi.AuthorizerFunc(func(principal domain.Principal, action, resource string) bool {
