@@ -28,7 +28,7 @@ func TestSchedulerCancelBeforeStartSkipsRunner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	scheduler.beforeStart = func() {
+	scheduler.beforeInvoke = func() {
 		close(entered)
 		<-release
 	}
@@ -85,7 +85,7 @@ func TestSchedulerConcurrentSubmitClaimAndCancel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	scheduler.beforeStart = func() {
+	scheduler.beforeInvoke = func() {
 		once.Do(func() {
 			close(entered)
 			<-release
