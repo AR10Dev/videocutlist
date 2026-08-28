@@ -5,7 +5,7 @@
 **Blocked by:** 01, 02, 03
 
 **Category:** enhancement
-**Status:** proposed
+**Status:** wontfix
 
 - [ ] `GET /api/v1/settings` returns the authorized administrator’s effective server runtime settings, revision, root health, and whether paths are constrained by deployment allowlists.
 - [ ] `PUT /api/v1/settings` accepts a complete typed document and required revision, returns 409 on a stale revision, and never partially applies a change.
@@ -15,5 +15,7 @@
 - [ ] OpenAPI/runtime documentation and handler tests cover routing, authorization, validation, stale updates, and no-path-leak error responses.
 
 ## Comments
+
+Superseded by `.scratch/single-user-batch-rewrite/`. The replacement settings response exposes safe aliases and limits without administrator identities or paths.
 
 Keep ordinary media endpoints unchanged: IDs, folder labels, and records must remain path-free.

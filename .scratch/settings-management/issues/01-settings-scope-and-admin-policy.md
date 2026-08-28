@@ -5,7 +5,7 @@
 **Blocked by:** None
 
 **Category:** enhancement
-**Status:** proposed
+**Status:** wontfix
 
 - [ ] Deployment-only values remain environment-loaded: database path, listener and port, authentication/secrets, trusted proxy/CORS policy, FFmpeg/FFprobe paths, and container mounts.
 - [ ] Server runtime values have an explicit typed contract: media roots, export defaults/destinations, preview limits, cache policy, and scan limits.
@@ -15,5 +15,7 @@
 - [ ] The frozen runtime contract and deployment documentation describe these scopes and the authorization action.
 
 ## Comments
+
+Superseded by `.scratch/single-user-batch-rewrite/`. The approved single-user design removes capabilities and keeps filesystem paths deployment-only.
 
 Research basis: LosslessCut and Shotcut separate application preferences from generated data; Kdenlive separates global and project settings. Jellyfin’s setup/networking guidance distinguishes administrator controls from normal user access.

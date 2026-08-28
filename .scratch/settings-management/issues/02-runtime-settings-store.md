@@ -5,7 +5,7 @@
 **Blocked by:** 01
 
 **Category:** enhancement
-**Status:** proposed
+**Status:** wontfix
 
 - [ ] A database migration creates durable settings storage with a schema version/update timestamp and no secrets.
 - [ ] Reads return one complete effective settings document, including a revision used for optimistic concurrency.
@@ -15,5 +15,7 @@
 - [ ] Unit tests cover first-run seeding, restart persistence, validation, atomic rejection, and revision conflicts.
 
 ## Comments
+
+Superseded by `.scratch/single-user-batch-rewrite/`. Only safe runtime limits remain browser-manageable in the replacement contract.
 
 Do not use a generic untyped key/value blob as the application API. A typed document keeps validation and future migrations explicit while retaining a small implementation.

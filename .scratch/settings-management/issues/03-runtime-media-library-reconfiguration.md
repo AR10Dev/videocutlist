@@ -5,7 +5,7 @@
 **Blocked by:** 01, 02
 
 **Category:** enhancement
-**Status:** proposed
+**Status:** wontfix
 
 - [ ] A media root has a unique non-empty alias and an absolute directory path; aliases are stable inputs to existing opaque media IDs.
 - [ ] Before save, the server resolves symlinks, verifies the directory is readable, and rejects invalid paths.
@@ -17,5 +17,7 @@
 - [ ] Tests cover duplicate aliases, relative/missing/unreadable paths, symlink escape, allowlist escape, concurrent read/update, removal, and rescan behavior.
 
 ## Comments
+
+Superseded by `.scratch/single-user-batch-rewrite/`. Media roots become deployment-only and scans move to the durable local queue.
 
 The current scanner is constructed once at server startup and is shared by indexing, preview, assets, exports, and detection. Reconfiguration must update that shared resolution boundary rather than patching only the refresh endpoint.

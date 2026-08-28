@@ -5,7 +5,7 @@
 **Blocked by:** 04, 05
 
 **Category:** enhancement
-**Status:** proposed
+**Status:** wontfix
 
 - [ ] The screen lists each root’s alias, administrator-visible configured path, health, last scan state, and media count where available.
 - [ ] An administrator can add, rename, change, and remove roots in a draft; Save submits one atomic update and reports field-level validation errors.
@@ -16,5 +16,7 @@
 - [ ] Playwright coverage manages multiple roots, handles rejected paths, verifies a rescan, and confirms that configured paths do not appear in the normal File explorer.
 
 ## Comments
+
+Superseded by `.scratch/single-user-batch-rewrite/`. The browser will show safe root aliases and health but will not manage or render server paths.
 
 Media is read-only by design. Root aliases are useful user-facing labels and also participate in opaque media identity, so alias changes need an explicit warning that prior project media IDs will no longer resolve.

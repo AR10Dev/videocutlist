@@ -1,5 +1,9 @@
 # Settings management
 
+**Status:** wontfix
+
+Superseded by `.scratch/single-user-batch-rewrite/`, which makes filesystem paths deployment-only and removes multi-user administrator authorization.
+
 ## Goal
 
 Provide an administrator Settings destination in the browser UI for server runtime settings, including media libraries, while supporting both native server paths and container-visible paths. Preserve the existing media-ID/path privacy contract.
