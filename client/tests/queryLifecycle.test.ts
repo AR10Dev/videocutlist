@@ -100,6 +100,35 @@ describe("Solid Query lifecycle contracts", () => {
     expect(abortAndClear()).toBeUndefined();
   });
 
+  it("aborts pending production cancellation and rejects late stale writes", async () => {
+    const controller = new AbortController();
+    let resolveDelete!: (response: Response) => void;
+    let receivedSignal: AbortSignal | undefined;
+    let stateWrites = 0;
+    const pending = cancelJobLifecycle({
+      jobId: "job-1",
+      signal: controller.signal,
+      cancel: async (_id, signal) => {
+        receivedSignal = signal;
+        return new Promise<Response>((resolve) => {
+          resolveDelete = resolve;
+        });
+      },
+      cancelQueries: async () => undefined,
+      invalidateQueries: async () => undefined,
+      jobQueryKey: ["job", "export", "job-1"],
+      projectQueryKey: ["project", "p-1"],
+    });
+
+    abortAndClear(controller);
+    resolveDelete(new Response(null, { status: 204 }));
+    await pending;
+
+    expect(receivedSignal?.aborted).toBe(true);
+    if (cancellationIsCurrent(controller, controller)) stateWrites++;
+    expect(stateWrites).toBe(0);
+  });
+
   it("rejects completion from a discarded cancellation context", () => {
     const previous = new AbortController();
     const current = new AbortController();
