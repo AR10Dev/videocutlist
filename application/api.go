@@ -58,12 +58,13 @@ type LibraryStatus struct {
 }
 
 type ImportJob struct {
-	ID               string   `json:"id"`
-	State            string   `json:"state"`
-	Progress         float64  `json:"progress"`
-	Indexed          int      `json:"indexed"`
-	ErrorCode        string   `json:"errorCode,omitempty"`
-	ValidationErrors []string `json:"validationErrors,omitempty"`
+	ID               string                       `json:"id"`
+	State            string                       `json:"state"`
+	Progress         float64                      `json:"progress"`
+	Indexed          int                          `json:"indexed"`
+	RootResults      map[string]RootLibraryStatus `json:"rootResults,omitempty"`
+	ErrorCode        string                       `json:"errorCode,omitempty"`
+	ValidationErrors []string                     `json:"validationErrors,omitempty"`
 }
 
 type MediaImportService interface {

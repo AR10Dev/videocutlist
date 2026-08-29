@@ -97,6 +97,7 @@ func run(ctx context.Context) error {
 	mediaCatalog := adapters.MediaCatalog{Scanner: scanner, Store: mediaStore}
 	mediaService := &application.MediaUseCase{Catalog: mediaCatalog, Configured: len(cfg.MediaRoots) > 0}
 	detectionService := application.NewDetectionUseCase(nil, detection.Service{Scanner: scanner, Catalog: mediaStore, FFmpegPath: cfg.FFmpegPath}, cfg.ExportLimit)
+	detectionService.Catalog = mediaCatalog
 	_ = mediaService.RefreshMedia(ctx)
 	previewRunner := adapters.PreviewRunner{Scanner: scanner, Media: mediaStore, FFmpeg: ffmpeg.Runner{Path: cfg.FFmpegPath}}
 	previewManager, err := application.NewPreviewManager(adapters.PreviewCache{Store: cacheStore}, previewRunner, application.Validator(validator), limiter)
@@ -140,11 +141,26 @@ func run(ctx context.Context) error {
 			artifacts.ClearManifest(job.ID)
 			return nil
 		case store.JobScan:
-			return mediaService.RefreshMedia(ctx)
+			if err := mediaService.RefreshMedia(ctx); err != nil {
+				return err
+			}
+			result, err := json.Marshal(scanner.RootStatuses())
+			if err != nil {
+				return err
+			}
+			_, err = unifiedJobs.Succeed(ctx, job.ID, string(result))
+			return err
 		case store.JobDetect:
 			var request application.DetectionRequest
 			if err := json.Unmarshal([]byte(job.RequestJSON), &request); err != nil {
 				return err
+			}
+			media, err := mediaCatalog.Get(ctx, request.MediaID)
+			if err != nil {
+				return err
+			}
+			if request.SourceFingerprint == "" || media.ETag != request.SourceFingerprint {
+				return store.ErrSourceChanged
 			}
 			request.ProjectID = job.ProjectID
 			candidates, err := detectionService.Detector.Detect(ctx, request)

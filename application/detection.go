@@ -11,10 +11,14 @@ import (
 )
 
 type DetectionRequest struct {
-	MediaID         string               `json:"mediaId"`
-	ProjectID       string               `json:"-"`
-	ProjectRevision int64                `json:"projectRevision"`
-	Kind            domain.DetectionKind `json:"kind"`
+	MediaID           string               `json:"mediaId"`
+	ProjectID         string               `json:"-"`
+	ProjectRevision   int64                `json:"projectRevision"`
+	Kind              domain.DetectionKind `json:"kind"`
+	SourceFingerprint string               `json:"sourceFingerprint"`
+	NoiseDB           float64              `json:"noiseDb,omitempty"`
+	MinDurationMS     int64                `json:"minDurationMs,omitempty"`
+	SceneThreshold    float64              `json:"sceneThreshold,omitempty"`
 }
 type DetectionJob struct {
 	ID              string               `json:"id"`
@@ -39,7 +43,8 @@ type DetectionJobs interface {
 	Cancel(context.Context, string, string) (store.DetectionJob, error)
 }
 type DetectionUseCase struct {
-	Jobs DetectionJobs
+	Jobs    DetectionJobs
+	Catalog MediaCatalog
 	// UnifiedJobs and Scheduler are the durable production path. Jobs is retained
 	// only for compatibility with older callers while they migrate.
 	UnifiedJobs *store.JobsStore
@@ -61,10 +66,20 @@ func NewDetectionUseCase(j DetectionJobs, d Detector, limit int) *DetectionUseCa
 
 func (e *DetectionUseCase) SetLimitProvider(provider func() int) { e.limit = provider }
 func (e *DetectionUseCase) Create(ctx context.Context, p domain.Principal, projectID string, request DetectionRequest) (DetectionJob, error) {
-	if request.ProjectRevision < 1 || request.MediaID == "" || !request.Kind.Valid() {
+	if request.ProjectRevision < 1 || request.MediaID == "" || !request.Kind.Valid() || (request.NoiseDB != 0 && (request.NoiseDB < -100 || request.NoiseDB > 0)) || request.MinDurationMS < 0 || request.MinDurationMS > 24*60*60*1000 || (request.SceneThreshold != 0 && (request.SceneThreshold < 0 || request.SceneThreshold > 1)) {
 		return DetectionJob{}, errors.New("invalid detection request")
 	}
 	if e.Scheduler != nil && e.UnifiedJobs != nil {
+		if request.SourceFingerprint == "" && e.Catalog != nil {
+			media, err := e.Catalog.Get(ctx, request.MediaID)
+			if err != nil {
+				return DetectionJob{}, err
+			}
+			request.SourceFingerprint = media.ETag
+		}
+		if request.SourceFingerprint == "" {
+			return DetectionJob{}, errors.New("source fingerprint is required")
+		}
 		request.ProjectID = projectID
 		data, err := json.Marshal(request)
 		if err != nil {
@@ -181,7 +196,11 @@ func (e *DetectionUseCase) Cancel(ctx context.Context, p domain.Principal, id st
 func detectionJobResult(j store.Job) DetectionJob {
 	var request DetectionRequest
 	_ = json.Unmarshal([]byte(j.RequestJSON), &request)
-	out := DetectionJob{ID: j.ID, Type: "detection", State: string(j.State), MediaID: request.MediaID, ProjectID: request.ProjectID, ProjectRevision: request.ProjectRevision, Kind: request.Kind}
+	projectID := request.ProjectID
+	if projectID == "" {
+		projectID = j.ProjectID
+	}
+	out := DetectionJob{ID: j.ID, Type: "detection", State: string(j.State), MediaID: request.MediaID, ProjectID: projectID, ProjectRevision: request.ProjectRevision, Kind: request.Kind}
 	if j.State == store.JobSucceeded && j.ResultJSON.Valid {
 		_ = json.Unmarshal([]byte(j.ResultJSON.String), &out.Candidates)
 	}
