@@ -51,7 +51,6 @@ type Config struct {
 	MediaRoots          map[string]string
 	AuthMode            string
 	BearerToken         string
-	BearerSubject       string
 	TrustedProxyCIDRs   []string
 	FFmpegPath          string
 	FFprobePath         string
@@ -74,14 +73,13 @@ func Load() (Config, error) {
 
 func load(lookup func(string) (string, bool)) (Config, error) {
 	c := Config{
-		DatabasePath:  required(lookup, "VIDEOCUTLIST_DATABASE_PATH"),
-		CacheDir:      required(lookup, "VIDEOCUTLIST_CACHE_DIR"),
-		ExportDir:     required(lookup, "VIDEOCUTLIST_EXPORT_DIR"),
-		AuthMode:      value(lookup, "VIDEOCUTLIST_AUTH_MODE", "none"),
-		BearerToken:   value(lookup, "VIDEOCUTLIST_BEARER_TOKEN", ""),
-		BearerSubject: value(lookup, "VIDEOCUTLIST_BEARER_SUBJECT", "static-bearer"),
-		FFmpegPath:    value(lookup, "VIDEOCUTLIST_FFMPEG_PATH", defaultFFmpegPath),
-		FFprobePath:   value(lookup, "VIDEOCUTLIST_FFPROBE_PATH", defaultFFprobePath),
+		DatabasePath: required(lookup, "VIDEOCUTLIST_DATABASE_PATH"),
+		CacheDir:     required(lookup, "VIDEOCUTLIST_CACHE_DIR"),
+		ExportDir:    required(lookup, "VIDEOCUTLIST_EXPORT_DIR"),
+		AuthMode:     value(lookup, "VIDEOCUTLIST_AUTH_MODE", "none"),
+		BearerToken:  value(lookup, "VIDEOCUTLIST_BEARER_TOKEN", ""),
+		FFmpegPath:   value(lookup, "VIDEOCUTLIST_FFMPEG_PATH", defaultFFmpegPath),
+		FFprobePath:  value(lookup, "VIDEOCUTLIST_FFPROBE_PATH", defaultFFprobePath),
 	}
 	if err := loadListener(&c, lookup); err != nil {
 		return Config{}, err
@@ -134,9 +132,6 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 	if c.AuthMode == "bearer" {
 		if c.BearerToken == "" || containsControl(c.BearerToken) {
 			return Config{}, fmt.Errorf("VIDEOCUTLIST_BEARER_TOKEN must be non-empty and control-free in bearer mode")
-		}
-		if c.BearerSubject == "" || c.BearerSubject != strings.TrimSpace(c.BearerSubject) || len(c.BearerSubject) > 320 || containsControl(c.BearerSubject) {
-			return Config{}, fmt.Errorf("VIDEOCUTLIST_BEARER_SUBJECT must be a trimmed, non-empty, control-free subject of at most 320 bytes")
 		}
 	}
 	trusted := value(lookup, "VIDEOCUTLIST_TRUSTED_PROXY_CIDRS", defaultTrustedProxies)

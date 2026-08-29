@@ -15,16 +15,11 @@ VideoCutlist has three settings scopes:
   such as mute, cut strategy, and filename template. They are stored in browser
   local storage and are never sent to the server settings store.
 
-The Settings API is an administrator operation. Its HTTP handlers must call the
-shared authorizer with the named `settings:manage` capability before parsing a
-request or loading settings. A missing capability returns `403 forbidden` without
-revealing configuration or filesystem paths. The local `auth=none` mode is an
-intentional single-user administrator mode and should remain loopback-only. A
-non-loopback deployment must configure authentication (`bearer` or
-`trusted_proxy`) before an administrator can manage settings; every authenticated
-built-in principal is an administrator in the current provider-neutral policy.
+The Settings API is a shared single-user operation. Its HTTP handlers run only
+after the deployment access gate. The local `auth=none` mode is loopback-only; a
+non-loopback deployment must configure `bearer` or `trusted_proxy` access.
 
-## Identity and media
+## Access gate and media
 
 - Go module: `videocutlist`.
 - A media ID is `m_` plus unpadded base64url SHA-256 of
@@ -56,9 +51,8 @@ Incomplete files end in `.partial`; only atomic rename publishes a hit.
 
 ## Projects and jobs
 
-- Projects are owned by opaque `Principal.Subject`. Cross-owner access returns
-  404. Revision zero creates; successful PUT increments revision; stale
-  revisions return 409.
+- Projects are single-user resources. Revision zero creates; successful PUT
+  increments revision; stale revisions return 409.
 - Segment bounds are non-negative, ordered, non-overlapping, within the media
   duration, and `startMs < endMs`.
 - Job states: `queued`, `running`, `succeeded`, `failed`, `cancelled`.
@@ -72,39 +66,11 @@ Incomplete files end in `.partial`; only atomic rename publishes a hit.
 
 ## Authentication
 
-Authentication is provider-neutral:
-
-```go
-type Principal struct {
-    Subject      string
-    DisplayName  string
-    Roles        []string
-    Capabilities []string
-}
-
-type Authenticator interface {
-    Authenticate(*http.Request) (Principal, error)
-}
-```
-
-Modes are `none`, `bearer`, and `trusted_proxy`.
-
-- `none` ignores credentials and returns subject `anonymous`.
-- `bearer` requires exactly one `Authorization: Bearer <token>` value and uses
-  constant-time comparison with `VIDEOCUTLIST_BEARER_TOKEN`. The principal subject
-  is `VIDEOCUTLIST_BEARER_SUBJECT`, default `static-bearer`.
-- `trusted_proxy` consumes only the validated `X-Forwarded-User` value already
-  placed in request context by the trusted-proxy middleware. It never reads a
-  raw identity header.
-- Built-in authenticated principals receive role `editor` and capability `*`.
-  A capability allows an action when it equals `*`, the action, or
-  `<action>:<resource>`.
-- The interface is an adapter boundary; it adds no OIDC dependency or
-  speculative implementation.
-
-Subjects are opaque, case-sensitive, trimmed, non-empty, at most 320 bytes, and
-contain no control characters. Failed authentication and authorization return
-before preview, refresh, project, job, or export application services run.
+Authentication is a deployment access gate, not an application identity system.
+Modes are `none`, `bearer`, and `trusted_proxy`; the gate returns only success or
+failure. `none` is restricted to loopback listeners. Bearer tokens use constant-
+time comparison, and trusted proxy mode consumes only validated proxy context.
+Failed authentication returns before application services run.
 
 ## Cancellation and streaming
 
@@ -135,7 +101,6 @@ VIDEOCUTLIST_EXPORT_DIR
 VIDEOCUTLIST_MEDIA_ROOTS_JSON
 VIDEOCUTLIST_AUTH_MODE=none|bearer|trusted_proxy
 VIDEOCUTLIST_BEARER_TOKEN
-VIDEOCUTLIST_BEARER_SUBJECT=static-bearer
 VIDEOCUTLIST_TRUSTED_PROXY_CIDRS
 VIDEOCUTLIST_FFMPEG_PATH
 VIDEOCUTLIST_FFPROBE_PATH
@@ -211,7 +176,7 @@ environment variables.
 
 ## Logging and metrics
 
-Structured JSON fields are: `request_id`, `principal_subject`, `media_id`,
+Structured JSON fields are: `request_id`, `media_id`,
 `project_id`, `job_id`, `cache_key`, `cache_status`, `preview_start_ms`,
 `preview_duration_ms`, `encoder_profile`, `ffmpeg_pid`, `queue_wait_ms`,
 `spawn_to_first_byte_ms`, `total_job_ms`, `bytes_streamed`, `cancel_reason`,

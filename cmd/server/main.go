@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"videocutlist/application"
-	"videocutlist/domain"
 	"videocutlist/infrastructure/adapters"
 	"videocutlist/infrastructure/assets"
 	"videocutlist/infrastructure/cache"
@@ -196,7 +195,7 @@ func run(ctx context.Context) error {
 	exportService.SetLimitProvider(func() int { return runtimeState.Snapshot().ExportLimit })
 	jobService := application.JobUseCase{Jobs: unifiedJobs}
 	authenticator, err := httpapi.NewAuthenticator(httpapi.AuthConfig{
-		Mode: cfg.AuthMode, BearerToken: cfg.BearerToken, BearerSubject: cfg.BearerSubject, ListenAddress: cfg.ListenAddress,
+		Mode: cfg.AuthMode, BearerToken: cfg.BearerToken, ListenAddress: cfg.ListenAddress,
 	})
 	if err != nil {
 		return err
@@ -232,10 +231,7 @@ func run(ctx context.Context) error {
 		Projects: projectService, Exports: exportService, BatchExports: batchExports, Preflight: exportExecutor, Jobs: jobService, Detection: detectionService, Download: exportExecutor, MediaImport: mediaService,
 		Settings: runtimeSettingsStore, RuntimeSettings: runtimeState, ApplyRuntimeSettings: applyRuntime,
 		Destinations: destinationMetadata(cfg.Destinations),
-		Authorize: httpapi.AuthorizerFunc(func(principal domain.Principal, action, resource string) bool {
-			return principal.Allows(action, resource)
-		}),
-		Ready: db.PingContext, Logger: logger, Metrics: httpapi.NewMetrics(),
+		Ready:        db.PingContext, Logger: logger, Metrics: httpapi.NewMetrics(),
 		BeforeMS: int64(cfg.PreviewBeforeMS), AfterMS: int64(cfg.PreviewAfterMS),
 		MaxPreviewMS: int64(cfg.PreviewMaxMS), GridMS: int64(cfg.PreviewGridMS), ListenerAddress: cfg.ListenAddress, RequireAutomationAuth: cfg.AuthMode != "none",
 	})

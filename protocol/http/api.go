@@ -118,15 +118,6 @@ type DestinationMetadata struct {
 	Kind        string `json:"kind"`
 	Retention   string `json:"retention,omitempty"`
 }
-type Authorizer interface {
-	Allow(domain.Principal, string, string) bool
-}
-type AuthorizerFunc func(domain.Principal, string, string) bool
-
-func (f AuthorizerFunc) Allow(principal domain.Principal, action, resource string) bool {
-	return f(principal, action, resource)
-}
-
 type BatchExportService interface {
 	Submit(context.Context, application.BatchExportRequest) (string, []application.Job, error)
 	Progress(context.Context, string) (store.JobState, float64, error)
@@ -151,7 +142,6 @@ type Config struct {
 	ApplyRuntimeSettings func(store.RuntimeSettings) error
 	SettingsAllowlist    []string
 	Destinations         []DestinationMetadata
-	Authorize            Authorizer
 	Ready                func(context.Context) error
 	Logger               *log.Logger
 	Metrics              *Metrics
@@ -200,10 +190,10 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	id := RequestID()
 	writer.Header().Set("X-Request-ID", id)
 	status := &statusWriter{ResponseWriter: writer, status: http.StatusOK}
-	route, subject := s.dispatch(status, request, id)
+	route, _ := s.dispatch(status, request, id)
 	s.metrics.HTTP(route, request.Method, strconv.Itoa(status.status/100)+"xx", time.Since(started).Seconds())
 	if s.config.Logger != nil {
-		data, _ := json.Marshal(map[string]any{"request_id": id, "principal_subject": subject, "method": request.Method, "route": route, "status": status.status})
+		data, _ := json.Marshal(map[string]any{"request_id": id, "method": request.Method, "route": route, "status": status.status})
 		s.config.Logger.Print(string(data))
 	}
 }
@@ -226,131 +216,113 @@ func (s *Server) dispatch(writer http.ResponseWriter, request *http.Request, id 
 		}
 		return "/api/v1/ready", ""
 	}
-	principal, ok := s.identity(writer, request, id)
-	if !ok {
+	if err := s.config.Authenticator.Authenticate(request); err != nil {
+		Error(writer, http.StatusUnauthorized, "unauthenticated", "Authentication is required.", id)
 		return routeFor(request.URL.Path), ""
 	}
 	r := parseRoute(request.Method, request.URL.EscapedPath())
 	switch r.kind {
 	case routeListDestinations:
 		httpx.WriteJSON(writer, http.StatusOK, map[string]any{"destinations": s.config.Destinations})
-		return "/api/v1/destinations", principal.Subject
+		return "/api/v1/destinations", ""
 	case routeGetSettings:
-		if !s.allowed(writer, principal, domain.SettingsManageCapability, "*", id) {
-			return "/api/v1/settings", principal.Subject
-		}
 		s.getSettings(writer, request, id)
-		return "/api/v1/settings", principal.Subject
+		return "/api/v1/settings", ""
 	case routePutSettings:
-		if !s.allowed(writer, principal, domain.SettingsManageCapability, "*", id) {
-			return "/api/v1/settings", principal.Subject
-		}
 		s.putSettings(writer, request, id)
-		return "/api/v1/settings", principal.Subject
+		return "/api/v1/settings", ""
 	case routeRefreshSettings:
-		if !s.allowed(writer, principal, domain.SettingsManageCapability, "*", id) {
-			return "/api/v1/settings/media/refresh", principal.Subject
-		}
-		s.refreshSettings(writer, request, principal, id)
-		return "/api/v1/settings/media/refresh", principal.Subject
+		s.refreshSettings(writer, request, id)
+		return "/api/v1/settings/media/refresh", ""
 	case routeListMedia:
 		s.listMedia(writer, request, id)
-		return "/api/v1/media", principal.Subject
+		return "/api/v1/media", ""
 	case routeBrowseMedia:
 		s.browseMedia(writer, request, id)
-		return "/api/v1/media/tree", principal.Subject
+		return "/api/v1/media/tree", ""
 	case routeMediaStatus:
 		httpx.WriteJSON(writer, http.StatusOK, s.config.Media.Status())
-		return "/api/v1/media/status", principal.Subject
+		return "/api/v1/media/status", ""
 	case routeRefreshMedia:
-		s.refreshMedia(writer, request, principal, id)
-		return "/api/v1/media/refresh", principal.Subject
+		s.refreshMedia(writer, request, id)
+		return "/api/v1/media/refresh", ""
 	case routeStartMediaImport:
-		if !s.allowed(writer, principal, "media_import", "*", id) {
-			return "/api/v1/media/import", principal.Subject
-		}
 		job, err := s.config.MediaImport.StartImport(request.Context())
 		if err != nil {
 			httpx.Error(writer, http.StatusConflict, "import_unavailable", "Import could not be started.", id)
-			return "/api/v1/media/import", principal.Subject
+			return "/api/v1/media/import", ""
 		}
 		httpx.WriteJSON(writer, http.StatusAccepted, job)
-		return "/api/v1/media/import", principal.Subject
+		return "/api/v1/media/import", ""
 	case routeGetMediaImport:
-		if !s.allowed(writer, principal, "media_import", r.id, id) {
-			return "/api/v1/media/import/{jobId}", principal.Subject
-		}
 		job, err := s.config.MediaImport.ImportStatus(request.Context(), r.id)
 		if err != nil {
 			notFound(writer, id)
-			return "/api/v1/media/import/{jobId}", principal.Subject
+			return "/api/v1/media/import/{jobId}", ""
 		}
 		httpx.WriteJSON(writer, http.StatusOK, job)
-		return "/api/v1/media/import/{jobId}", principal.Subject
+		return "/api/v1/media/import/{jobId}", ""
 	case routeCancelMediaImport:
-		if !s.allowed(writer, principal, "media_import", r.id, id) {
-			return "/api/v1/media/import/{jobId}", principal.Subject
-		}
 		if err := s.config.MediaImport.CancelImport(request.Context(), r.id); err != nil {
 			notFound(writer, id)
-			return "/api/v1/media/import/{jobId}", principal.Subject
+			return "/api/v1/media/import/{jobId}", ""
 		}
 		writer.WriteHeader(http.StatusNoContent)
-		return "/api/v1/media/import/{jobId}", principal.Subject
+		return "/api/v1/media/import/{jobId}", ""
 	case routeGetMedia:
 		s.getMedia(writer, request, r.id, id)
-		return "/api/v1/media/{mediaId}", principal.Subject
+		return "/api/v1/media/{mediaId}", ""
 	case routePreview:
-		s.preview(writer, request, principal, r.id, id)
-		return "/api/v1/media/{mediaId}/preview", principal.Subject
+		s.preview(writer, request, r.id, id)
+		return "/api/v1/media/{mediaId}/preview", ""
 	case routeThumbnails:
-		s.thumbnails(writer, request, principal, r.id, id)
-		return "/api/v1/media/{mediaId}/thumbnails", principal.Subject
+		s.thumbnails(writer, request, r.id, id)
+		return "/api/v1/media/{mediaId}/thumbnails", ""
 	case routeWaveform:
-		s.waveform(writer, request, principal, r.id, id)
-		return "/api/v1/media/{mediaId}/waveform", principal.Subject
+		s.waveform(writer, request, r.id, id)
+		return "/api/v1/media/{mediaId}/waveform", ""
 	case routeGetProject:
-		s.getProject(writer, request, principal, r.id, id)
-		return "/api/v1/projects/{projectId}", principal.Subject
+		s.getProject(writer, request, r.id, id)
+		return "/api/v1/projects/{projectId}", ""
 	case routePutProject:
-		s.putProject(writer, request, principal, r.id, id)
-		return "/api/v1/projects/{projectId}", principal.Subject
+		s.putProject(writer, request, r.id, id)
+		return "/api/v1/projects/{projectId}", ""
 	case routeCreateExport:
-		s.createExport(writer, request, principal, r.id, id)
-		return "/api/v1/projects/{projectId}/exports", principal.Subject
+		s.createExport(writer, request, r.id, id)
+		return "/api/v1/projects/{projectId}/exports", ""
 	case routeGetBatch:
-		s.getBatch(writer, request, principal, r.id, id)
-		return "/api/v1/batches/{batchId}", principal.Subject
+		s.getBatch(writer, request, r.id, id)
+		return "/api/v1/batches/{batchId}", ""
 	case routeCancelBatch:
-		s.cancelBatch(writer, request, principal, r.id, id)
-		return "/api/v1/batches/{batchId}", principal.Subject
+		s.cancelBatch(writer, request, r.id, id)
+		return "/api/v1/batches/{batchId}", ""
 	case routePreflightExport:
-		s.preflightExport(writer, request, principal, r.id, id)
-		return "/api/v1/projects/{projectId}/exports/preflight", principal.Subject
+		s.preflightExport(writer, request, r.id, id)
+		return "/api/v1/projects/{projectId}/exports/preflight", ""
 	case routeImportInterchange:
-		s.importInterchange(writer, request, principal, r.id, id)
-		return "/api/v1/projects/{projectId}/interchange/{format}", principal.Subject
+		s.importInterchange(writer, request, r.id, id)
+		return "/api/v1/projects/{projectId}/interchange/{format}", ""
 	case routeExportInterchange:
-		s.exportInterchange(writer, request, principal, r.id, id)
-		return "/api/v1/projects/{projectId}/interchange/{format}", principal.Subject
+		s.exportInterchange(writer, request, r.id, id)
+		return "/api/v1/projects/{projectId}/interchange/{format}", ""
 	case routeCreateDetection:
-		s.createDetection(writer, request, principal, r.id, id)
-		return "/api/v1/projects/{projectId}/detections", principal.Subject
+		s.createDetection(writer, request, r.id, id)
+		return "/api/v1/projects/{projectId}/detections", ""
 	case routeGetJob:
-		s.getJob(writer, request, principal, r.id, id)
-		return "/api/v1/jobs/{jobId}", principal.Subject
+		s.getJob(writer, request, r.id, id)
+		return "/api/v1/jobs/{jobId}", ""
 	case routeDownloadOutput:
-		s.downloadOutput(writer, request, principal, r.id, id)
-		return "/api/v1/jobs/{jobId}/outputs/{position}", principal.Subject
+		s.downloadOutput(writer, request, r.id, id)
+		return "/api/v1/jobs/{jobId}/outputs/{position}", ""
 	case routeCancelJob:
-		s.cancelJob(writer, request, principal, r.id, id)
-		return "/api/v1/jobs/{jobId}", principal.Subject
+		s.cancelJob(writer, request, r.id, id)
+		return "/api/v1/jobs/{jobId}", ""
 	case routeAutomation:
-		s.automation(writer, request, principal, id)
-		return "/api/v1/automation", principal.Subject
+		s.automation(writer, request, id)
+		return "/api/v1/automation", ""
 	}
 	httpx.Error(writer, http.StatusNotFound, "not_found", "Resource not found.", id)
-	return routeFor(request.URL.Path), principal.Subject
+	return routeFor(request.URL.Path), ""
 }
 
 type settingsUpdateRequest struct {
@@ -501,7 +473,7 @@ func destinationsMatch(raw json.RawMessage, previous []store.RuntimeDestination)
 	return true
 }
 
-func (s *Server) refreshSettings(w http.ResponseWriter, r *http.Request, _ domain.Principal, id string) {
+func (s *Server) refreshSettings(w http.ResponseWriter, r *http.Request, id string) {
 	if err := s.config.Media.RefreshMedia(r.Context()); err != nil {
 		httpx.Error(w, http.StatusConflict, "refresh_unavailable", "The media library could not be refreshed. Check the deployment mount or directory permissions.", id)
 		return
@@ -509,16 +481,13 @@ func (s *Server) refreshSettings(w http.ResponseWriter, r *http.Request, _ domai
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Server) downloadOutput(w http.ResponseWriter, r *http.Request, p domain.Principal, encoded, id string) {
+func (s *Server) downloadOutput(w http.ResponseWriter, r *http.Request, encoded, id string) {
 	if s.config.Download == nil {
 		return
 	}
 	parts := strings.Split(encoded, ":")
 	if len(parts) != 2 || !validJobID(parts[0]) {
 		notFound(w, id)
-		return
-	}
-	if !s.allowed(w, p, "job_read", parts[0], id) {
 		return
 	}
 	position, err := strconv.Atoi(parts[1])
@@ -547,22 +516,6 @@ func safeOutputName(name string) bool {
 		return false
 	}
 	return filepath.Base(name) == name
-}
-
-func (s *Server) identity(writer http.ResponseWriter, request *http.Request, id string) (domain.Principal, bool) {
-	principal, err := s.config.Authenticator.Authenticate(request)
-	if err != nil {
-		Error(writer, http.StatusUnauthorized, "unauthenticated", "Authentication is required.", id)
-		return domain.Principal{}, false
-	}
-	return principal, true
-}
-func (s *Server) allowed(writer http.ResponseWriter, principal domain.Principal, action, resource, id string) bool {
-	if (s.config.Authorize == nil && principal.Allows(action, resource)) || s.config.Authorize != nil && s.config.Authorize.Allow(principal, action, resource) {
-		return true
-	}
-	Error(writer, http.StatusForbidden, "forbidden", "Permission denied.", id)
-	return false
 }
 
 func (s *Server) browseMedia(writer http.ResponseWriter, request *http.Request, id string) {
@@ -620,10 +573,7 @@ func (s *Server) listMedia(writer http.ResponseWriter, request *http.Request, id
 	httpx.WriteJSON(writer, 200, page)
 }
 
-func (s *Server) refreshMedia(writer http.ResponseWriter, request *http.Request, principal domain.Principal, id string) {
-	if !s.allowed(writer, principal, "media_refresh", "*", id) {
-		return
-	}
+func (s *Server) refreshMedia(writer http.ResponseWriter, request *http.Request, id string) {
 	if err := s.config.Media.RefreshMedia(request.Context()); err != nil {
 		internalError(writer, id)
 		return
@@ -639,10 +589,7 @@ func (s *Server) getMedia(writer http.ResponseWriter, request *http.Request, med
 	httpx.WriteJSON(writer, 200, result)
 }
 
-func (s *Server) preview(writer http.ResponseWriter, request *http.Request, principal domain.Principal, media string, id string) {
-	if !s.allowed(writer, principal, "preview", media, id) {
-		return
-	}
+func (s *Server) preview(writer http.ResponseWriter, request *http.Request, media string, id string) {
 	item, err := s.config.Media.Get(request.Context(), media)
 	if err != nil {
 		notFound(writer, id)
@@ -742,8 +689,8 @@ func (s *Server) assetSpec(request *http.Request, item Media, waveform bool) (As
 	return spec, nil
 }
 
-func (s *Server) thumbnails(w http.ResponseWriter, r *http.Request, p domain.Principal, media, id string) {
-	if s.config.Assets == nil || !s.allowed(w, p, "media_assets", media, id) {
+func (s *Server) thumbnails(w http.ResponseWriter, r *http.Request, media, id string) {
+	if s.config.Assets == nil {
 		if s.config.Assets == nil {
 			internalError(w, id)
 		}
@@ -773,8 +720,8 @@ func (s *Server) thumbnails(w http.ResponseWriter, r *http.Request, p domain.Pri
 	_, _ = io.Copy(w, result.Reader)
 }
 
-func (s *Server) waveform(w http.ResponseWriter, r *http.Request, p domain.Principal, media, id string) {
-	if s.config.Assets == nil || !s.allowed(w, p, "media_assets", media, id) {
+func (s *Server) waveform(w http.ResponseWriter, r *http.Request, media, id string) {
+	if s.config.Assets == nil {
 		if s.config.Assets == nil {
 			internalError(w, id)
 		}
@@ -847,10 +794,7 @@ func (s *Server) previewSpec(request *http.Request, item Media) (PreviewSpec, er
 	return application.NormalizePreview(item.ID, item.DurationMS, center, mute, domain.WindowConfig{BeforeMS: before, AfterMS: after, MaxMS: maxPreview, GridMS: grid})
 }
 
-func (s *Server) getProject(writer http.ResponseWriter, request *http.Request, principal domain.Principal, project string, id string) {
-	if !s.allowed(writer, principal, "project_read", project, id) {
-		return
-	}
+func (s *Server) getProject(writer http.ResponseWriter, request *http.Request, project string, id string) {
 	value, err := s.config.Projects.Get(request.Context(), project)
 	if err != nil {
 		notFound(writer, id)
@@ -858,10 +802,7 @@ func (s *Server) getProject(writer http.ResponseWriter, request *http.Request, p
 	}
 	httpx.WriteJSON(writer, 200, value)
 }
-func (s *Server) putProject(writer http.ResponseWriter, request *http.Request, principal domain.Principal, project string, id string) {
-	if !s.allowed(writer, principal, "project_save", project, id) {
-		return
-	}
+func (s *Server) putProject(writer http.ResponseWriter, request *http.Request, project string, id string) {
 	var input ProjectInput
 	if httpx.ReadJSON(request, &input) != nil {
 		httpx.Error(writer, 422, "invalid_project", "Project is invalid.", id)
@@ -880,8 +821,8 @@ func (s *Server) putProject(writer http.ResponseWriter, request *http.Request, p
 	}
 	httpx.WriteJSON(writer, 200, saved)
 }
-func (s *Server) getBatch(writer http.ResponseWriter, request *http.Request, principal domain.Principal, batchID string, id string) {
-	if s.config.BatchExports == nil || !s.allowed(writer, principal, "export", batchID, id) {
+func (s *Server) getBatch(writer http.ResponseWriter, request *http.Request, batchID string, id string) {
+	if s.config.BatchExports == nil {
 		if s.config.BatchExports == nil {
 			internalError(writer, id)
 		}
@@ -895,8 +836,8 @@ func (s *Server) getBatch(writer http.ResponseWriter, request *http.Request, pri
 	httpx.WriteJSON(writer, http.StatusOK, map[string]any{"batchId": batchID, "state": state, "progress": progress})
 }
 
-func (s *Server) cancelBatch(writer http.ResponseWriter, request *http.Request, principal domain.Principal, batchID string, id string) {
-	if s.config.BatchExports == nil || !s.allowed(writer, principal, "export", batchID, id) {
+func (s *Server) cancelBatch(writer http.ResponseWriter, request *http.Request, batchID string, id string) {
+	if s.config.BatchExports == nil {
 		if s.config.BatchExports == nil {
 			internalError(writer, id)
 		}
@@ -909,8 +850,8 @@ func (s *Server) cancelBatch(writer http.ResponseWriter, request *http.Request, 
 	writer.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Server) preflightExport(writer http.ResponseWriter, request *http.Request, principal domain.Principal, project string, id string) {
-	if s.config.Preflight == nil || !s.allowed(writer, principal, "export", project, id) {
+func (s *Server) preflightExport(writer http.ResponseWriter, request *http.Request, project string, id string) {
+	if s.config.Preflight == nil {
 		if s.config.Preflight == nil {
 			internalError(writer, id)
 		}
@@ -937,10 +878,7 @@ func (s *Server) preflightExport(writer http.ResponseWriter, request *http.Reque
 	}
 	httpx.WriteJSON(writer, 200, result)
 }
-func (s *Server) createExport(writer http.ResponseWriter, request *http.Request, principal domain.Principal, project string, id string) {
-	if !s.allowed(writer, principal, "export", project, id) {
-		return
-	}
+func (s *Server) createExport(writer http.ResponseWriter, request *http.Request, project string, id string) {
 	if s.config.BatchExports != nil {
 		var input ExportInput
 		if httpx.ReadJSON(request, &input) != nil {
@@ -985,11 +923,9 @@ func (s *Server) createExport(writer http.ResponseWriter, request *http.Request,
 	s.metrics.Add("export_jobs_total", 1)
 	httpx.WriteJSON(writer, http.StatusAccepted, job)
 }
-func (s *Server) createDetection(writer http.ResponseWriter, request *http.Request, principal domain.Principal, project string, id string) {
-	if s.config.Detection == nil || !s.allowed(writer, principal, "detect", project, id) {
-		if s.config.Detection == nil {
-			internalError(writer, id)
-		}
+func (s *Server) createDetection(writer http.ResponseWriter, request *http.Request, project string, id string) {
+	if s.config.Detection == nil {
+		internalError(writer, id)
 		return
 	}
 	owned, err := s.config.Projects.Get(request.Context(), project)
@@ -1026,8 +962,8 @@ type automationCommand struct {
 	Input     string `json:"input,omitempty"`
 }
 
-func (s *Server) automation(w http.ResponseWriter, r *http.Request, p domain.Principal, id string) {
-	if r.Header.Get("Origin") != "" || !listenerLoopback(s.config.ListenerAddress) || !s.config.RequireAutomationAuth || p.Subject == "" || p.Subject == "anonymous" {
+func (s *Server) automation(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Header.Get("Origin") != "" || !listenerLoopback(s.config.ListenerAddress) || !s.config.RequireAutomationAuth {
 		httpx.Error(w, http.StatusForbidden, "automation_forbidden", "Automation is unavailable.", id)
 		return
 	}
@@ -1054,7 +990,7 @@ func (s *Server) automation(w http.ResponseWriter, r *http.Request, p domain.Pri
 	}
 	switch command.Action {
 	case "project.import":
-		if !validProjectID(command.ProjectID) || (command.Format != "csv" && command.Format != "chapters") || command.Input == "" || !s.allowed(w, p, "project_import", command.ProjectID, id) {
+		if !validProjectID(command.ProjectID) || (command.Format != "csv" && command.Format != "chapters") || command.Input == "" {
 			return
 		}
 		// Reuse the canonical HTTP interchange path and return only its opaque project ID.
@@ -1094,7 +1030,7 @@ func (s *Server) automation(w http.ResponseWriter, r *http.Request, p domain.Pri
 		}
 		httpx.WriteJSON(w, http.StatusOK, map[string]string{"projectId": saved.ID})
 	case "project.export":
-		if !validProjectID(command.ProjectID) || (command.Format != "csv" && command.Format != "chapters") || !s.allowed(w, p, "project_export", command.ProjectID, id) {
+		if !validProjectID(command.ProjectID) || (command.Format != "csv" && command.Format != "chapters") {
 			return
 		}
 		project, err := s.config.Projects.Get(r.Context(), command.ProjectID)
@@ -1118,7 +1054,7 @@ func (s *Server) automation(w http.ResponseWriter, r *http.Request, p domain.Pri
 		}
 		httpx.WriteJSON(w, http.StatusOK, map[string]string{"filename": "cutlist." + command.Format, "content": string(data)})
 	case "job.status":
-		if !validJobID(command.JobID) || !s.allowed(w, p, "job_read", command.JobID, id) {
+		if !validJobID(command.JobID) {
 			return
 		}
 		job, err := s.config.Jobs.Get(r.Context(), command.JobID)
@@ -1137,9 +1073,9 @@ func listenerLoopback(address string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
-func (s *Server) importInterchange(w http.ResponseWriter, r *http.Request, p domain.Principal, routeID, id string) {
+func (s *Server) importInterchange(w http.ResponseWriter, r *http.Request, routeID, id string) {
 	parts := strings.SplitN(routeID, ":", 2)
-	if len(parts) != 2 || !s.allowed(w, p, "project_import", parts[0], id) {
+	if len(parts) != 2 {
 		return
 	}
 	project, err := s.config.Projects.Get(r.Context(), parts[0])
@@ -1183,9 +1119,9 @@ func (s *Server) importInterchange(w http.ResponseWriter, r *http.Request, p dom
 	}
 	httpx.WriteJSON(w, 200, saved)
 }
-func (s *Server) exportInterchange(w http.ResponseWriter, r *http.Request, p domain.Principal, routeID, id string) {
+func (s *Server) exportInterchange(w http.ResponseWriter, r *http.Request, routeID, id string) {
 	parts := strings.SplitN(routeID, ":", 2)
-	if len(parts) != 2 || !s.allowed(w, p, "project_export", parts[0], id) {
+	if len(parts) != 2 {
 		return
 	}
 	project, err := s.config.Projects.Get(r.Context(), parts[0])
@@ -1217,10 +1153,7 @@ func (s *Server) exportInterchange(w http.ResponseWriter, r *http.Request, p dom
 	_, _ = w.Write(data)
 }
 
-func (s *Server) getJob(writer http.ResponseWriter, request *http.Request, principal domain.Principal, job string, id string) {
-	if !s.allowed(writer, principal, "job_read", job, id) {
-		return
-	}
+func (s *Server) getJob(writer http.ResponseWriter, request *http.Request, job string, id string) {
 	if s.config.Jobs == nil {
 		notFound(writer, id)
 		return
@@ -1232,10 +1165,7 @@ func (s *Server) getJob(writer http.ResponseWriter, request *http.Request, princ
 	}
 	httpx.WriteJSON(writer, 200, value)
 }
-func (s *Server) cancelJob(writer http.ResponseWriter, request *http.Request, principal domain.Principal, job string, id string) {
-	if !s.allowed(writer, principal, "job_cancel", job, id) {
-		return
-	}
+func (s *Server) cancelJob(writer http.ResponseWriter, request *http.Request, job string, id string) {
 	if s.config.Jobs == nil {
 		notFound(writer, id)
 		return

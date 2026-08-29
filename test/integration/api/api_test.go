@@ -95,9 +95,7 @@ func (d *downloadStub) Download(ctx context.Context, job string, position int) (
 
 type headerAuthenticator struct{}
 
-func (headerAuthenticator) Authenticate(request *http.Request) (auth.Principal, error) {
-	return auth.Principal{Subject: request.Header.Get("X-Test-User"), Capabilities: []string{"job_read"}}, nil
-}
+func (headerAuthenticator) Authenticate(*http.Request) error { return nil }
 
 func (j *jobsStub) Get(ctx context.Context, id string) (api.Job, error) {
 	j.getCalls++
@@ -111,13 +109,13 @@ func (j *jobsStub) Cancel(context.Context, string) error {
 	return errors.New("missing")
 }
 
-func server(t *testing.T, authenticator api.Authenticator, media *mediaStub, preview api.PreviewService, exports *exportStub, authorize api.Authorizer) *api.Server {
-	return serverWith(t, authenticator, media, preview, &projectStub{get: api.Project{ID: validProject}}, exports, &jobsStub{}, nil, authorize)
+func server(t *testing.T, authenticator api.Authenticator, media *mediaStub, preview api.PreviewService, exports *exportStub) *api.Server {
+	return serverWith(t, authenticator, media, preview, &projectStub{get: api.Project{ID: validProject}}, exports, &jobsStub{}, nil)
 }
 
-func serverWith(t *testing.T, authenticator api.Authenticator, media *mediaStub, preview api.PreviewService, projects api.ProjectService, exports *exportStub, jobs api.JobService, download application.ExportDownloadService, authorize api.Authorizer) *api.Server {
+func serverWith(t *testing.T, authenticator api.Authenticator, media *mediaStub, preview api.PreviewService, projects api.ProjectService, exports *exportStub, jobs api.JobService, download application.ExportDownloadService) *api.Server {
 	t.Helper()
-	result, err := api.New(api.Config{Authenticator: authenticator, Media: media, Preview: preview, Projects: projects, Exports: exports, Jobs: jobs, Download: download, Authorize: authorize})
+	result, err := api.New(api.Config{Authenticator: authenticator, Media: media, Preview: preview, Projects: projects, Exports: exports, Jobs: jobs, Download: download})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +137,7 @@ func TestUntrustedForwardedUserIsRejectedBeforeMedia(t *testing.T) {
 		t.Fatal(err)
 	}
 	media, exports := &mediaStub{}, &exportStub{}
-	service := server(t, authenticator, media, &previewStub{start: func(context.Context) (api.PreviewResult, error) { return api.PreviewResult{}, nil }}, exports, nil)
+	service := server(t, authenticator, media, &previewStub{start: func(context.Context) (api.PreviewResult, error) { return api.PreviewResult{}, nil }}, exports)
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/media/"+validMedia, nil)
 	request.RemoteAddr = "10.0.0.4:1234"
 	request.Header.Set("X-Forwarded-User", "spoof@example.com")
@@ -175,7 +173,7 @@ func TestAPIAuthenticationModesRejectBeforeServices(t *testing.T) {
 				t.Fatal(err)
 			}
 			media, exports := &mediaStub{}, &exportStub{}
-			service := server(t, authenticator, media, &previewStub{start: func(context.Context) (api.PreviewResult, error) { return api.PreviewResult{}, nil }}, exports, nil)
+			service := server(t, authenticator, media, &previewStub{start: func(context.Context) (api.PreviewResult, error) { return api.PreviewResult{}, nil }}, exports)
 			request := localRequest(http.MethodGet, "/api/v1/media/"+validMedia, nil)
 			if test.name == "multiple bearer" {
 				request.Header.Add("Authorization", "Bearer secret")
@@ -192,7 +190,7 @@ func TestAPIAuthenticationModesRejectBeforeServices(t *testing.T) {
 	}
 }
 
-func TestTrustedProxyPrincipalReachesPreview(t *testing.T) {
+func TestTrustedProxyAccessGateReachesPreview(t *testing.T) {
 	authenticator, err := api.NewAuthenticator(api.AuthConfig{Mode: "trusted_proxy"})
 	if err != nil {
 		t.Fatal(err)
@@ -201,7 +199,7 @@ func TestTrustedProxyPrincipalReachesPreview(t *testing.T) {
 	preview := &previewStub{start: func(context.Context) (api.PreviewResult, error) {
 		return api.PreviewResult{Reader: io.NopCloser(strings.NewReader("preview")), CacheStatus: "hit", DurationMS: 8_000}, nil
 	}}
-	service := server(t, authenticator, media, preview, exports, nil)
+	service := server(t, authenticator, media, preview, exports)
 	handler, err := api.TrustedProxy([]string{"127.0.0.0/8"}, service)
 	if err != nil {
 		t.Fatal(err)
@@ -217,7 +215,7 @@ func TestTrustedProxyPrincipalReachesPreview(t *testing.T) {
 
 func TestInvalidIDsAndOversizeBodiesDoNotReachServices(t *testing.T) {
 	media, exports := &mediaStub{}, &exportStub{}
-	service := server(t, noneAuth(t), media, &previewStub{start: func(context.Context) (api.PreviewResult, error) { return api.PreviewResult{}, nil }}, exports, nil)
+	service := server(t, noneAuth(t), media, &previewStub{start: func(context.Context) (api.PreviewResult, error) { return api.PreviewResult{}, nil }}, exports)
 	for _, target := range []string{"/api/v1/media/../../etc/passwd", "/api/v1/media/m_not-an-id", "/api/v1/media/" + strings.Repeat("a", 1000)} {
 		recorder := httptest.NewRecorder()
 		service.ServeHTTP(recorder, localRequest(http.MethodGet, target, nil))
@@ -238,18 +236,6 @@ func TestInvalidIDsAndOversizeBodiesDoNotReachServices(t *testing.T) {
 	service.ServeHTTP(recorder, request)
 	if recorder.Code != 422 || media.calls != 0 {
 		t.Fatalf("missing field status=%d media calls=%d", recorder.Code, media.calls)
-	}
-}
-
-func TestUnauthorizedExportNeverQueuesWork(t *testing.T) {
-	media, exports := &mediaStub{}, &exportStub{}
-	service := server(t, noneAuth(t), media, &previewStub{start: func(context.Context) (api.PreviewResult, error) { return api.PreviewResult{}, nil }}, exports, api.AuthorizerFunc(func(auth.Principal, string, string) bool { return false }))
-	request := localRequest(http.MethodPost, "/api/v1/projects/"+validProject+"/exports", strings.NewReader(`{"mode":"merge","cutStrategy":"stream_copy_preferred","container":"mkv"}`))
-	request.Header.Set("Content-Type", "application/json")
-	recorder := httptest.NewRecorder()
-	service.ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusForbidden || exports.calls != 0 {
-		t.Fatalf("status=%d export calls=%d", recorder.Code, exports.calls)
 	}
 }
 
@@ -275,40 +261,35 @@ func TestDownloadOutputLifecycle(t *testing.T) {
 			return nil, "", errors.New("missing")
 		}
 	}}
-	service := serverWith(t, headerAuthenticator{}, &mediaStub{}, &previewStub{start: func(context.Context) (api.PreviewResult, error) { return api.PreviewResult{}, nil }}, &projectStub{get: api.Project{ID: validProject}}, &exportStub{}, &jobsStub{}, stub, api.AuthorizerFunc(func(principal auth.Principal, _, _ string) bool {
-		return principal.Subject == "owner"
-	}))
+	service := serverWith(t, headerAuthenticator{}, &mediaStub{}, &previewStub{start: func(context.Context) (api.PreviewResult, error) { return api.PreviewResult{}, nil }}, &projectStub{get: api.Project{ID: validProject}}, &exportStub{}, &jobsStub{}, stub)
 
-	request := func(user, position string) *http.Request {
-		r := localRequest(http.MethodGet, "/api/v1/jobs/"+job+"/outputs/"+position, nil)
-		r.Header.Set("X-Test-User", user)
-		return r
+	request := func(position string) *http.Request {
+		return localRequest(http.MethodGet, "/api/v1/jobs/"+job+"/outputs/"+position, nil)
 	}
 
 	response := httptest.NewRecorder()
-	service.ServeHTTP(response, request("owner", "0"))
+	service.ServeHTTP(response, request("0"))
 	if response.Code != http.StatusOK || response.Body.String() != "video bytes" || response.Header().Get("Content-Type") != "video/x-matroska" || response.Header().Get("Content-Disposition") != `attachment; filename="export.mkv"` {
 		t.Fatalf("successful download status=%d headers=%v body=%q", response.Code, response.Header(), response.Body.String())
 	}
 
 	for _, test := range []struct {
-		name, user, position string
-		status               int
+		name, position string
+		status         int
 	}{
-		{"another principal", "other", "0", http.StatusForbidden},
-		{"unknown output", "owner", "9", http.StatusNotFound},
-		{"negative output", "owner", "-1", http.StatusNotFound},
-		{"out of range output", "owner", "100", http.StatusNotFound},
-		{"non-numeric output", "owner", "nope", http.StatusNotFound},
-		{"traversal-shaped output", "owner", "%2e%2e", http.StatusNotFound},
-		{"expired export", "owner", "1", http.StatusNotFound},
-		{"cancelled export", "owner", "2", http.StatusNotFound},
-		{"non-download destination", "owner", "3", http.StatusNotFound},
-		{"unsafe returned name", "owner", "4", http.StatusNotFound},
+		{"unknown output", "9", http.StatusNotFound},
+		{"negative output", "-1", http.StatusNotFound},
+		{"out of range output", "100", http.StatusNotFound},
+		{"non-numeric output", "nope", http.StatusNotFound},
+		{"traversal-shaped output", "%2e%2e", http.StatusNotFound},
+		{"expired export", "1", http.StatusNotFound},
+		{"cancelled export", "2", http.StatusNotFound},
+		{"non-download destination", "3", http.StatusNotFound},
+		{"unsafe returned name", "4", http.StatusNotFound},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			response := httptest.NewRecorder()
-			service.ServeHTTP(response, request(test.user, test.position))
+			service.ServeHTTP(response, request(test.position))
 			if response.Code != test.status || strings.Contains(response.Body.String(), internalPath) || response.Header().Get("Content-Disposition") != "" {
 				t.Fatalf("status=%d headers=%v body=%q", response.Code, response.Header(), response.Body.String())
 			}
@@ -324,7 +305,7 @@ func TestLibraryStatusContractIsSafe(t *testing.T) {
 		{State: api.LibraryReadyWithMedia, Message: "Media library is ready."},
 		{State: api.LibraryFailed, Message: "Media library scan failed. Try refreshing it."},
 	} {
-		service := server(t, noneAuth(t), &mediaStub{status: want}, &previewStub{start: func(context.Context) (api.PreviewResult, error) { return api.PreviewResult{}, nil }}, &exportStub{}, nil)
+		service := server(t, noneAuth(t), &mediaStub{status: want}, &previewStub{start: func(context.Context) (api.PreviewResult, error) { return api.PreviewResult{}, nil }}, &exportStub{})
 		response := httptest.NewRecorder()
 		service.ServeHTTP(response, localRequest(http.MethodGet, "/api/v1/media/status", nil))
 		if response.Code != http.StatusOK || strings.Contains(response.Body.String(), "/private/media") {
@@ -339,7 +320,7 @@ func TestLibraryStatusContractIsSafe(t *testing.T) {
 
 func TestRefreshReturnsNoContentAndPropagatesFailure(t *testing.T) {
 	media := &mediaStub{}
-	service := server(t, noneAuth(t), media, &previewStub{start: func(context.Context) (api.PreviewResult, error) { return api.PreviewResult{}, nil }}, &exportStub{}, nil)
+	service := server(t, noneAuth(t), media, &previewStub{start: func(context.Context) (api.PreviewResult, error) { return api.PreviewResult{}, nil }}, &exportStub{})
 	response := httptest.NewRecorder()
 	service.ServeHTTP(response, localRequest(http.MethodPost, "/api/v1/media/refresh", nil))
 	if response.Code != http.StatusNoContent || media.refreshCalls != 1 || response.Body.Len() != 0 {
@@ -353,42 +334,15 @@ func TestRefreshReturnsNoContentAndPropagatesFailure(t *testing.T) {
 	}
 }
 
-func TestForbiddenRequestsDoNotInvokePrincipalBoundServices(t *testing.T) {
-	media, exports, projects, jobs := &mediaStub{}, &exportStub{}, &projectStub{get: api.Project{ID: validProject}}, &jobsStub{}
-	preview := &previewStub{start: func(context.Context) (api.PreviewResult, error) { return api.PreviewResult{}, nil }}
-	service := serverWith(t, noneAuth(t), media, preview, projects, exports, jobs, nil, api.AuthorizerFunc(func(auth.Principal, string, string) bool { return false }))
-	for name, request := range map[string]*http.Request{
-		"refresh":      localRequest(http.MethodPost, "/api/v1/media/refresh", nil),
-		"preview":      localRequest(http.MethodGet, "/api/v1/media/"+validMedia+"/preview?centerMs=100", nil),
-		"project read": localRequest(http.MethodGet, "/api/v1/projects/"+validProject, nil),
-		"project save": localRequest(http.MethodPut, "/api/v1/projects/"+validProject, strings.NewReader(`{"mediaId":"`+validMedia+`","revision":0,"segments":[],"uiState":{"playheadMs":0,"zoom":1,"muted":false}}`)),
-		"export":       localRequest(http.MethodPost, "/api/v1/projects/"+validProject+"/exports", strings.NewReader(`{"mode":"merge","cutStrategy":"stream_copy_preferred","container":"mkv"}`)),
-		"job read":     localRequest(http.MethodGet, "/api/v1/jobs/j_aaaaaaaaaaaa", nil),
-		"job cancel":   localRequest(http.MethodDelete, "/api/v1/jobs/j_aaaaaaaaaaaa", nil),
-	} {
-		t.Run(name, func(t *testing.T) {
-			response := httptest.NewRecorder()
-			service.ServeHTTP(response, request)
-			if response.Code != http.StatusForbidden {
-				t.Fatalf("status=%d", response.Code)
-			}
-		})
-	}
-	if media.refreshCalls != 0 || preview.calls != 0 || projects.getCalls != 0 || projects.saveCalls != 0 || exports.calls != 0 || jobs.getCalls != 0 || jobs.cancelCalls != 0 {
-		t.Fatalf("service calls: media=%d preview=%d projects=(%d,%d) exports=%d jobs=(%d,%d)", media.refreshCalls, preview.calls, projects.getCalls, projects.saveCalls, exports.calls, jobs.getCalls, jobs.cancelCalls)
-	}
-}
-
 func TestJobResponsesExposeOnlySafeTerminalMetadata(t *testing.T) {
 	retainUntil := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
 	code := "media_unavailable"
 	jobs := &jobsStub{get: func(_ context.Context, _ string) (api.Job, error) {
 		return api.Job{ID: "j_aaaaaaaaaaaa", Type: "export", State: "succeeded", Progress: 1, Result: &application.JobResult{OutputName: "export.mkv", SizeBytes: 42, RetainUntil: retainUntil}, Warnings: []string{"Cut may start at an earlier keyframe."}}, nil
 	}}
-	service := serverWith(t, headerAuthenticator{}, &mediaStub{}, &previewStub{start: func(context.Context) (api.PreviewResult, error) { return api.PreviewResult{}, nil }}, &projectStub{get: api.Project{ID: validProject}}, &exportStub{}, jobs, nil, nil)
+	service := serverWith(t, headerAuthenticator{}, &mediaStub{}, &previewStub{start: func(context.Context) (api.PreviewResult, error) { return api.PreviewResult{}, nil }}, &projectStub{get: api.Project{ID: validProject}}, &exportStub{}, jobs, nil)
 	response := httptest.NewRecorder()
 	request := localRequest(http.MethodGet, "/api/v1/jobs/j_aaaaaaaaaaaa", nil)
-	request.Header.Set("X-Test-User", "owner")
 	service.ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
 		t.Fatalf("succeeded status=%d body=%s", response.Code, response.Body.String())
@@ -407,7 +361,6 @@ func TestJobResponsesExposeOnlySafeTerminalMetadata(t *testing.T) {
 	}
 	response = httptest.NewRecorder()
 	request = localRequest(http.MethodGet, "/api/v1/jobs/j_aaaaaaaaaaaa", nil)
-	request.Header.Set("X-Test-User", "owner")
 	service.ServeHTTP(response, request)
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"errorCode":"media_unavailable"`) || strings.Contains(response.Body.String(), `"result"`) || strings.Contains(response.Body.String(), `"warnings"`) {
 		t.Fatalf("failed response=%d %s", response.Code, response.Body.String())
@@ -433,7 +386,7 @@ func TestPreviewCancellationUsesRequestContextAndFailureIsSafe(t *testing.T) {
 		once.Do(func() { close(started) })
 		return api.PreviewResult{Reader: &contextReader{ctx: ctx}, CacheStatus: "miss", DurationMS: 8_000}, nil
 	}}
-	service := server(t, noneAuth(t), media, preview, exports, nil)
+	service := server(t, noneAuth(t), media, preview, exports)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	request := localRequest(http.MethodGet, "/api/v1/media/"+validMedia+"/preview?centerMs=100", nil).WithContext(ctx)
@@ -457,7 +410,7 @@ func TestPreviewCancellationUsesRequestContextAndFailureIsSafe(t *testing.T) {
 
 	failing := server(t, noneAuth(t), &mediaStub{}, &previewStub{start: func(context.Context) (api.PreviewResult, error) {
 		return api.PreviewResult{}, errors.New("ffmpeg stderr /originals/secret.mp4 /cache/preview.mp4 /exports/final.mkv provider=tailnet")
-	}}, &exportStub{}, nil)
+	}}, &exportStub{})
 	recorder = httptest.NewRecorder()
 	failing.ServeHTTP(recorder, localRequest(http.MethodGet, "/api/v1/media/"+validMedia+"/preview?centerMs=100", nil))
 	if recorder.Code != http.StatusTooManyRequests {
