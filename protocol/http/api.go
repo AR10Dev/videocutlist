@@ -107,9 +107,9 @@ type JobService = application.JobService
 type DetectionRequest = application.DetectionRequest
 type DetectionJob = application.DetectionJob
 type DetectionService interface {
-	Create(context.Context, domain.Principal, string, DetectionRequest) (DetectionJob, error)
-	Get(context.Context, domain.Principal, string) (DetectionJob, error)
-	Cancel(context.Context, domain.Principal, string) error
+	Create(context.Context, string, DetectionRequest) (DetectionJob, error)
+	Get(context.Context, string) (DetectionJob, error)
+	Cancel(context.Context, string) error
 }
 type DestinationMetadata struct {
 	ID          string `json:"id"`
@@ -269,7 +269,7 @@ func (s *Server) dispatch(writer http.ResponseWriter, request *http.Request, id 
 		if !s.allowed(writer, principal, "media_import", "*", id) {
 			return "/api/v1/media/import", principal.Subject
 		}
-		job, err := s.config.MediaImport.StartImport(request.Context(), principal)
+		job, err := s.config.MediaImport.StartImport(request.Context())
 		if err != nil {
 			httpx.Error(writer, http.StatusConflict, "import_unavailable", "Import could not be started.", id)
 			return "/api/v1/media/import", principal.Subject
@@ -280,7 +280,7 @@ func (s *Server) dispatch(writer http.ResponseWriter, request *http.Request, id 
 		if !s.allowed(writer, principal, "media_import", r.id, id) {
 			return "/api/v1/media/import/{jobId}", principal.Subject
 		}
-		job, err := s.config.MediaImport.ImportStatus(request.Context(), principal, r.id)
+		job, err := s.config.MediaImport.ImportStatus(request.Context(), r.id)
 		if err != nil {
 			notFound(writer, id)
 			return "/api/v1/media/import/{jobId}", principal.Subject
@@ -291,7 +291,7 @@ func (s *Server) dispatch(writer http.ResponseWriter, request *http.Request, id 
 		if !s.allowed(writer, principal, "media_import", r.id, id) {
 			return "/api/v1/media/import/{jobId}", principal.Subject
 		}
-		if err := s.config.MediaImport.CancelImport(request.Context(), principal, r.id); err != nil {
+		if err := s.config.MediaImport.CancelImport(request.Context(), r.id); err != nil {
 			notFound(writer, id)
 			return "/api/v1/media/import/{jobId}", principal.Subject
 		}
@@ -526,7 +526,7 @@ func (s *Server) downloadOutput(w http.ResponseWriter, r *http.Request, p domain
 		notFound(w, id)
 		return
 	}
-	file, name, err := s.config.Download.Download(r.Context(), p, parts[0], position)
+	file, name, err := s.config.Download.Download(r.Context(), parts[0], position)
 	if err != nil {
 		notFound(w, id)
 		return
@@ -667,7 +667,7 @@ func (s *Server) preview(writer http.ResponseWriter, request *http.Request, prin
 		writer.WriteHeader(http.StatusOK)
 		return
 	}
-	result, err := s.config.Preview.Start(request.Context(), principal, spec)
+	result, err := s.config.Preview.Start(request.Context(), spec)
 	if err != nil {
 		httpx.Error(writer, http.StatusTooManyRequests, "preview_unavailable", "Preview is unavailable.", id)
 		return
@@ -762,7 +762,7 @@ func (s *Server) thumbnails(w http.ResponseWriter, r *http.Request, p domain.Pri
 	if assetNotModified(w, r, item, "thumbnails") {
 		return
 	}
-	result, err := s.config.Assets.Thumbnails(r.Context(), p, spec)
+	result, err := s.config.Assets.Thumbnails(r.Context(), spec)
 	if err != nil {
 		internalError(w, id)
 		return
@@ -797,7 +797,7 @@ func (s *Server) waveform(w http.ResponseWriter, r *http.Request, p domain.Princ
 	if assetNotModified(w, r, item, "waveform") {
 		return
 	}
-	result, err := s.config.Assets.Waveform(r.Context(), p, spec)
+	result, err := s.config.Assets.Waveform(r.Context(), spec)
 	if errors.Is(err, application.ErrNoAudio) {
 		httpx.Error(w, 422, "no_audio", "Media has no audio stream.", id)
 		return
@@ -930,7 +930,7 @@ func (s *Server) preflightExport(writer http.ResponseWriter, request *http.Reque
 		httpx.Error(writer, 422, "invalid_export", "Export is invalid.", id)
 		return
 	}
-	result, err := s.config.Preflight.Preflight(request.Context(), principal, project, owned, input)
+	result, err := s.config.Preflight.Preflight(request.Context(), project, owned, input)
 	if err != nil {
 		httpx.Error(writer, 422, "preflight_failed", "Export preflight failed.", id)
 		return
@@ -973,7 +973,7 @@ func (s *Server) createExport(writer http.ResponseWriter, request *http.Request,
 		httpx.Error(writer, 422, "invalid_export", "Export is invalid.", id)
 		return
 	}
-	job, err := s.config.Exports.Create(request.Context(), principal, project, owned, input)
+	job, err := s.config.Exports.Create(request.Context(), project, owned, input)
 	if err != nil {
 		if errors.Is(err, application.ErrBusy) {
 			httpx.Error(writer, http.StatusTooManyRequests, "export_busy", "Export capacity is full.", id)
@@ -1006,7 +1006,7 @@ func (s *Server) createDetection(writer http.ResponseWriter, request *http.Reque
 		httpx.Error(writer, http.StatusConflict, "stale_project", "Detection request is stale.", id)
 		return
 	}
-	job, err := s.config.Detection.Create(request.Context(), principal, project, input)
+	job, err := s.config.Detection.Create(request.Context(), project, input)
 	if err != nil {
 		if errors.Is(err, application.ErrBusy) {
 			httpx.Error(writer, http.StatusTooManyRequests, "detection_busy", "Detection capacity is full.", id)
@@ -1121,7 +1121,7 @@ func (s *Server) automation(w http.ResponseWriter, r *http.Request, p domain.Pri
 		if !validJobID(command.JobID) || !s.allowed(w, p, "job_read", command.JobID, id) {
 			return
 		}
-		job, err := s.config.Jobs.Get(r.Context(), p, command.JobID)
+		job, err := s.config.Jobs.Get(r.Context(), command.JobID)
 		if err != nil {
 			notFound(w, id)
 			return
@@ -1225,7 +1225,7 @@ func (s *Server) getJob(writer http.ResponseWriter, request *http.Request, princ
 		notFound(writer, id)
 		return
 	}
-	value, err := s.config.Jobs.Get(request.Context(), principal, job)
+	value, err := s.config.Jobs.Get(request.Context(), job)
 	if err != nil {
 		notFound(writer, id)
 		return
@@ -1240,7 +1240,7 @@ func (s *Server) cancelJob(writer http.ResponseWriter, request *http.Request, pr
 		notFound(writer, id)
 		return
 	}
-	if err := s.config.Jobs.Cancel(request.Context(), principal, job); err != nil {
+	if err := s.config.Jobs.Cancel(request.Context(), job); err != nil {
 		notFound(writer, id)
 		return
 	}

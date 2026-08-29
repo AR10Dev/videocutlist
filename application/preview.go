@@ -62,12 +62,9 @@ func NewPreviewManager(store PreviewCache, runner PreviewRunner, validator Valid
 
 // Preview streams a cache hit directly. A miss starts exactly one FFmpeg
 // process for this request; cancellation or a closed reader discards output.
-func (m *PreviewManager) Preview(ctx context.Context, user string, spec domain.PreviewSpec) (io.ReadCloser, Result, error) {
-	if user == "" {
-		return nil, Result{}, errors.New("preview user is required")
-	}
+func (m *PreviewManager) Preview(ctx context.Context, spec domain.PreviewSpec) (io.ReadCloser, Result, error) {
 	key := domain.PreviewKey(spec)
-	releaseUser, err := m.limits.AcquireUser(user)
+	releaseUser, err := m.limits.AcquireUser("single-user")
 	if err != nil {
 		return nil, Result{}, err
 	}

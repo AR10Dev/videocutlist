@@ -53,7 +53,7 @@ func (r *blockingRunner) Start(ctx context.Context, _ domain.PreviewSpec) (*Runn
 func TestPreviewHitAndMissPublishAtomically(t *testing.T) {
 	manager, _ := newManager(t, bytesRunner("preview"), 2, 2)
 	spec := testSpec("m_hit_miss")
-	reader, result, err := manager.Preview(context.Background(), "a", spec)
+	reader, result, err := manager.Preview(context.Background(), spec)
 	if err != nil || result.Status != CacheMiss {
 		t.Fatalf("miss = %v, %+v", err, result)
 	}
@@ -62,7 +62,7 @@ func TestPreviewHitAndMissPublishAtomically(t *testing.T) {
 	if readErr != nil || string(body) != "preview" {
 		t.Fatalf("body = %q, %v", body, readErr)
 	}
-	hit, result, err := manager.Preview(context.Background(), "b", spec)
+	hit, result, err := manager.Preview(context.Background(), spec)
 	if err != nil || result.Status != CacheHit {
 		t.Fatalf("hit = %v, %+v", err, result)
 	}
@@ -73,7 +73,7 @@ func TestPreviewCancellationStopsProcessAndDiscardsPartial(t *testing.T) {
 	runner := &blockingRunner{}
 	manager, store := newManager(t, runner, 1, 1)
 	ctx, cancel := context.WithCancel(context.Background())
-	reader, result, err := manager.Preview(ctx, "a", testSpec("m_cancel"))
+	reader, result, err := manager.Preview(ctx, testSpec("m_cancel"))
 	if err != nil || result.Status != CacheMiss {
 		t.Fatalf("preview = %v, %+v", err, result)
 	}

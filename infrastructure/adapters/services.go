@@ -158,7 +158,7 @@ type ExportExecutor struct {
 func NewExportExecutor(jobs *store.JobStore, scanner *index.Scanner, media *store.MediaStore, service exporter.Service) ExportExecutor {
 	return ExportExecutor{Jobs: jobs, Scanner: scanner, Media: media, Coordinator: exporter.Coordinator{Jobs: jobs, Exporter: service}}
 }
-func (e ExportExecutor) Preflight(ctx context.Context, principal domain.Principal, projectID string, project application.Project, input application.ExportInput) (application.ExportPreflight, error) {
+func (e ExportExecutor) Preflight(ctx context.Context, projectID string, project application.Project, input application.ExportInput) (application.ExportPreflight, error) {
 	source, _, err := e.Scanner.Open(ctx, e.Media, project.MediaID)
 	if err != nil {
 		return application.ExportPreflight{}, err
@@ -183,8 +183,8 @@ func (e ExportExecutor) Preflight(ctx context.Context, principal domain.Principa
 	return application.ExportPreflight{Allowed: result.Allowed, Selection: result.Selection, Findings: findings}, nil
 }
 
-func (e ExportExecutor) Download(ctx context.Context, principal domain.Principal, jobID string, position int) (io.ReadCloser, string, error) {
-	job, err := e.Jobs.Get(ctx, principal.Subject, jobID)
+func (e ExportExecutor) Download(ctx context.Context, jobID string, position int) (io.ReadCloser, string, error) {
+	job, err := e.Jobs.Get(ctx, jobID)
 	if err != nil || job.State != store.JobSucceeded || e.Coordinator.Exporter.Artifacts == nil {
 		return nil, "", store.ErrJobNotFound
 	}
@@ -247,29 +247,29 @@ func (e ExportExecutor) ExecuteBatchSnapshot(ctx context.Context, id string, sna
 	return err
 }
 
-func (e ExportExecutor) Execute(ctx context.Context, owner, id string, document domain.Document) error {
+func (e ExportExecutor) Execute(ctx context.Context, id string, document domain.Document) error {
 	source, _, err := e.Scanner.Open(ctx, e.Media, document.MediaID)
 	if err != nil {
 		stateContext := context.Background()
-		_, _ = e.Jobs.Start(stateContext, owner, id)
+		_, _ = e.Jobs.Start(stateContext, id)
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
-			_, _ = e.Jobs.Cancel(stateContext, owner, id)
+			_, _ = e.Jobs.Cancel(stateContext, id)
 		} else {
-			_, _ = e.Jobs.Fail(stateContext, owner, id, "media_unavailable")
+			_, _ = e.Jobs.Fail(stateContext, id, "media_unavailable")
 		}
 		return err
 	}
 	defer source.Close()
 	file, ok := source.(*os.File)
 	if !ok {
-		_, _ = e.Jobs.Start(context.Background(), owner, id)
-		_, _ = e.Jobs.Fail(context.Background(), owner, id, "media_unavailable")
+		_, _ = e.Jobs.Start(context.Background(), id)
+		_, _ = e.Jobs.Fail(context.Background(), id, "media_unavailable")
 		return errors.New("media source is not a file")
 	}
 	coordinator := e.Coordinator
 	if e.Settings != nil {
 		settings := e.Settings.Snapshot()
-		if job, getErr := e.Jobs.Get(ctx, owner, id); getErr == nil {
+		if job, getErr := e.Jobs.Get(ctx, id); getErr == nil {
 			var request struct {
 				Settings *store.RuntimeSettings `json:"runtimeSettings"`
 			}
@@ -279,7 +279,7 @@ func (e ExportExecutor) Execute(ctx context.Context, owner, id string, document 
 		}
 		applyRuntimeSettings(&coordinator.Exporter, settings)
 	}
-	_, err = coordinator.Execute(ctx, owner, id, file, document)
+	_, err = coordinator.Execute(ctx, id, file, document)
 	return err
 }
 

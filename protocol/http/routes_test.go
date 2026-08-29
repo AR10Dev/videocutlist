@@ -161,16 +161,16 @@ func TestBrowseMediaDispatchesOpaqueQueryToProductionService(t *testing.T) {
 
 type routeTestAssets struct{}
 
-func (routeTestAssets) Thumbnails(context.Context, domain.Principal, AssetSpec) (AssetResult, error) {
+func (routeTestAssets) Thumbnails(context.Context, AssetSpec) (AssetResult, error) {
 	return AssetResult{Reader: io.NopCloser(bytes.NewReader([]byte("png")))}, nil
 }
-func (routeTestAssets) Waveform(context.Context, domain.Principal, AssetSpec) (AssetResult, error) {
+func (routeTestAssets) Waveform(context.Context, AssetSpec) (AssetResult, error) {
 	return AssetResult{StartMS: 0, DurationMS: 1000, Peaks: []float64{0.5}}, nil
 }
 
 type routeTestPreview struct{}
 
-func (routeTestPreview) Start(context.Context, domain.Principal, PreviewSpec) (PreviewResult, error) {
+func (routeTestPreview) Start(context.Context, PreviewSpec) (PreviewResult, error) {
 	return PreviewResult{}, nil
 }
 func (routeTestPreview) Cached(context.Context, PreviewSpec) (bool, error) { return false, nil }
@@ -187,7 +187,7 @@ func (routeTestProjects) Save(context.Context, string, application.ProjectInput)
 
 type routeTestExports struct{}
 
-func (routeTestExports) Create(context.Context, domain.Principal, string, Project, ExportInput) (Job, error) {
+func (routeTestExports) Create(context.Context, string, Project, ExportInput) (Job, error) {
 	return Job{}, nil
 }
 
@@ -215,21 +215,21 @@ type routeTestJobs struct {
 	job           Job
 }
 
-func (j *routeTestJobs) Get(context.Context, domain.Principal, string) (Job, error) {
+func (j *routeTestJobs) Get(context.Context, string) (Job, error) {
 	j.gets++
 	return j.job, nil
 }
-func (j *routeTestJobs) Cancel(context.Context, domain.Principal, string) error {
+func (j *routeTestJobs) Cancel(context.Context, string) error {
 	j.cancels++
 	return nil
 }
 
 type routeTestDetection struct{ gets, cancels int }
 
-func (d *routeTestDetection) Create(context.Context, domain.Principal, string, DetectionRequest) (DetectionJob, error) {
+func (d *routeTestDetection) Create(context.Context, string, DetectionRequest) (DetectionJob, error) {
 	return DetectionJob{}, nil
 }
-func (d *routeTestDetection) Get(context.Context, domain.Principal, string) (DetectionJob, error) {
+func (d *routeTestDetection) Get(context.Context, string) (DetectionJob, error) {
 	d.gets++
 	return DetectionJob{
 		ID: "j_detection", Type: "detection", State: "succeeded",
@@ -237,7 +237,7 @@ func (d *routeTestDetection) Get(context.Context, domain.Principal, string) (Det
 		Candidates: []domain.Candidate{{ID: "c_candidate", MediaID: "m_media", ProjectID: "p_project", ProjectRevision: 7, StartMS: 100, EndMS: 200, Source: domain.DetectSilence, Confidence: 0.9}},
 	}, nil
 }
-func (d *routeTestDetection) Cancel(context.Context, domain.Principal, string) error {
+func (d *routeTestDetection) Cancel(context.Context, string) error {
 	d.cancels++
 	return nil
 }

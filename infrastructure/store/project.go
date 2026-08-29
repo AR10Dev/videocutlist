@@ -49,7 +49,7 @@ func (s *ProjectStore) Get(ctx context.Context, id string) (ProjectRecord, error
 FROM projects WHERE id = ?`, id)
 	record, err := scanProject(row)
 	if errors.Is(err, sql.ErrNoRows) {
-		return ProjectRecord{}, ErrProjectNotFound // Do not reveal a different owner's project.
+		return ProjectRecord{}, ErrProjectNotFound
 	}
 	return record, err
 }
@@ -66,10 +66,10 @@ func (s *ProjectStore) Save(ctx context.Context, id string, expectedRevision int
 		if err == nil {
 			return s.Get(ctx, id)
 		}
-		if _, ownerErr := s.Get(ctx, id); ownerErr == nil {
+		if _, existingErr := s.Get(ctx, id); existingErr == nil {
 			return ProjectRecord{}, ErrRevisionConflict
-		} else if !errors.Is(ownerErr, ErrProjectNotFound) {
-			return ProjectRecord{}, ownerErr
+		} else if !errors.Is(existingErr, ErrProjectNotFound) {
+			return ProjectRecord{}, existingErr
 		}
 		if exists, existsErr := s.idExists(ctx, id); existsErr != nil {
 			return ProjectRecord{}, existsErr
@@ -90,10 +90,10 @@ WHERE id = ? AND revision = ?`, documentJSON, now, id, expectedRevision)
 	if affected == 1 {
 		return s.Get(ctx, id)
 	}
-	if _, ownerErr := s.Get(ctx, id); ownerErr == nil {
+	if _, existingErr := s.Get(ctx, id); existingErr == nil {
 		return ProjectRecord{}, ErrRevisionConflict
-	} else if !errors.Is(ownerErr, ErrProjectNotFound) {
-		return ProjectRecord{}, ownerErr
+	} else if !errors.Is(existingErr, ErrProjectNotFound) {
+		return ProjectRecord{}, existingErr
 	}
 	return ProjectRecord{}, ErrProjectNotFound
 }
