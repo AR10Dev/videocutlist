@@ -1,8 +1,10 @@
 package export
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -10,6 +12,24 @@ import (
 	"videocutlist/domain"
 	"videocutlist/infrastructure/media/probe"
 )
+
+type rejectingLimiter struct{}
+
+func (rejectingLimiter) AcquireProcess() (func(), error) {
+	return nil, errors.New("capacity exhausted")
+}
+
+func TestExportHonorsSharedFFmpegCapacity(t *testing.T) {
+	file, err := os.CreateTemp(t.TempDir(), "source")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	_, err = (Service{Capacity: rejectingLimiter{}}).Run(context.Background(), file, domain.Document{}, Request{})
+	if err == nil || err.Error() != "capacity exhausted" {
+		t.Fatalf("error = %v", err)
+	}
+}
 
 func TestSelectedSegmentsReturnsTimelineGaps(t *testing.T) {
 	got := selectedSegments([]domain.Segment{{StartMS: 600, EndMS: 800}, {StartMS: 100, EndMS: 300}}, "gaps", 1_000)

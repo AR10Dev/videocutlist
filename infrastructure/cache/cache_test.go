@@ -31,6 +31,46 @@ func TestKeyAndPathAreFrozen(t *testing.T) {
 	}
 }
 
+func TestConcurrentCommitsKeepOneCompleteWinner(t *testing.T) {
+	store, err := New(t.TempDir(), 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := stringsOf('a')
+	first, err := store.Begin(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.Begin(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = first.Write([]byte("first"))
+	_, _ = second.Write([]byte("second"))
+	errs := make(chan error, 2)
+	go func() { errs <- first.Commit(context.Background(), accept) }()
+	go func() { errs <- second.Commit(context.Background(), accept) }()
+	if err := <-errs; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-errs; err != nil {
+		t.Fatal(err)
+	}
+	reader, err := store.Open(context.Background(), key, accept)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	body, _ := io.ReadAll(reader)
+	if string(body) != "first" && string(body) != "second" {
+		t.Fatalf("winner = %q", body)
+	}
+	matches, err := filepath.Glob(filepath.Join(store.root, "previews", "aa", "aa", "*.partial"))
+	if err != nil || len(matches) != 0 {
+		t.Fatalf("partial files = %v, %v", matches, err)
+	}
+}
+
 func TestCommitOpenAndEvict(t *testing.T) {
 	store, err := New(t.TempDir(), 3)
 	if err != nil {

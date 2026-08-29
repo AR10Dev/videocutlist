@@ -250,10 +250,26 @@ func (p *Partial) Commit(ctx context.Context, validator Validator) error {
 		defer pathMu.Unlock()
 		p.store.mu.Lock()
 		defer p.store.mu.Unlock()
-		if err := os.Rename(p.path, final); err != nil {
+		// Never rename over another writer's complete entry. Linking first
+		// makes publication atomic without allowing a late writer to replace it.
+		if _, err := os.Stat(final); err == nil {
+			_ = os.Remove(p.path)
+			return
+		} else if !errors.Is(err, fs.ErrNotExist) {
 			result = err
+			_ = os.Remove(p.path)
 			return
 		}
+		if err := os.Link(p.path, final); err != nil {
+			if errors.Is(err, fs.ErrExist) {
+				_ = os.Remove(p.path)
+				return
+			}
+			result = err
+			_ = os.Remove(p.path)
+			return
+		}
+		_ = os.Remove(p.path)
 		if info, err := os.Stat(final); err != nil || info.Size() > p.store.max {
 			_ = os.Remove(final)
 			if err != nil {
