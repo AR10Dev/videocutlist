@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"videocutlist/application"
 	"videocutlist/domain"
 	"videocutlist/infrastructure/media/probe"
 )
@@ -87,7 +88,7 @@ func (s Service) Run(ctx context.Context, source *os.File, document domain.Docum
 		return Result{}, errors.New("export source is required")
 	}
 	if s.Capacity != nil {
-		release, err := s.Capacity.AcquireProcess()
+		release, err := application.AcquireProcess(ctx, s.Capacity)
 		if err != nil {
 			return Result{}, err
 		}

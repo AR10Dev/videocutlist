@@ -77,7 +77,7 @@ func (m *PreviewManager) Preview(ctx context.Context, user string, spec domain.P
 		releaseUser()
 		return nil, Result{}, err
 	}
-	releaseProcess, err := m.limits.AcquireProcess()
+	releaseProcess, err := m.limits.AcquireProcessContext(ctx)
 	if err != nil {
 		releaseUser()
 		return nil, Result{}, err

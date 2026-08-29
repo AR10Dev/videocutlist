@@ -22,6 +22,7 @@ type Service struct {
 	Scanner    *index.Scanner
 	Catalog    index.Catalog
 	FFmpegPath string
+	Capacity   application.ProcessLimiter
 }
 
 var silenceStart = regexp.MustCompile(`silence_start: ([0-9.]+)`)
@@ -71,6 +72,14 @@ func (s Service) Detect(ctx context.Context, request application.DetectionReques
 		args = append(args, "-vf", filter, "-an")
 	}
 	args = append(args, "-f", "null", "-")
+	var release func()
+	if s.Capacity != nil {
+		release, err = application.AcquireProcess(ctx, s.Capacity)
+		if err != nil {
+			return nil, err
+		}
+		defer release()
+	}
 	cmd := exec.CommandContext(ctx, s.FFmpegPath, args...)
 	stderr, err := cmd.StderrPipe()
 	if err != nil {

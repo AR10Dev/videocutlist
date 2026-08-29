@@ -1,8 +1,10 @@
 package application
 
 import (
+	"context"
 	"errors"
 	"sync"
+	"time"
 )
 
 var (
@@ -45,6 +47,28 @@ func (p *PreviewLimits) AcquireProcess() (func(), error) {
 	if p.active >= p.global {
 		return nil, ErrGlobalLimit
 	}
+	return p.reserveProcessLocked(), nil
+}
+
+// AcquireProcessContext waits for capacity while observing cancellation.
+func (p *PreviewLimits) AcquireProcessContext(ctx context.Context) (func(), error) {
+	for {
+		p.mu.Lock()
+		if p.active < p.global {
+			release := p.reserveProcessLocked()
+			p.mu.Unlock()
+			return release, nil
+		}
+		p.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+func (p *PreviewLimits) reserveProcessLocked() func() {
 	p.active++
 	var once sync.Once
 	return func() {
@@ -53,7 +77,7 @@ func (p *PreviewLimits) AcquireProcess() (func(), error) {
 			p.active--
 			p.mu.Unlock()
 		})
-	}, nil
+	}
 }
 
 // AcquireUser reserves one active foreground subscription for user.
