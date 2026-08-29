@@ -1,6 +1,7 @@
 import { createMutation, QueryClient, QueryClientProvider } from "@tanstack/solid-query";
 import { createComponent, createRoot } from "solid-js";
 import { describe, expect, it } from "vitest";
+import { abortAndClear } from "../src/cancellation";
 import { jobPollInterval } from "../src/jobPolling";
 
 describe("Solid Query lifecycle contracts", () => {
@@ -58,6 +59,13 @@ describe("Solid Query lifecycle contracts", () => {
     expect(client.getQueryState(["project", "p-1"])?.isInvalidated).toBe(false);
     await client.invalidateQueries({ queryKey: ["project", "p-1"] });
     expect(client.getQueryState(["project", "p-1"])?.isInvalidated).toBe(true);
+  });
+
+  it("aborts and clears cancellation controllers when context changes", () => {
+    const controller = new AbortController();
+    expect(abortAndClear(controller)).toBeUndefined();
+    expect(controller.signal.aborted).toBe(true);
+    expect(abortAndClear()).toBeUndefined();
   });
 
   it("stops polling terminal jobs and avoids stale replacement", () => {

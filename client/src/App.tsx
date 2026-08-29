@@ -1,5 +1,6 @@
 import { For, Show, createEffect, createSignal, onCleanup } from "solid-js";
 import { createMutation, useQuery, useQueryClient } from "@tanstack/solid-query";
+import { abortAndClear } from "./cancellation";
 import {
   createTimelineHistory,
   editTimeline,
@@ -526,8 +527,8 @@ export function App() {
     editorVersion++;
   };
   const clearExportContext = () => {
-    exportController?.abort();
-    exportController = undefined;
+    exportController = abortAndClear(exportController);
+    exportCancellationController = abortAndClear(exportCancellationController);
     exportRequest++;
     if (exportTimer) window.clearTimeout(exportTimer);
     exportTimer = undefined;
@@ -535,8 +536,8 @@ export function App() {
     setExportStatus("");
   };
   const clearDetectionContext = () => {
-    detectionController?.abort();
-    detectionController = undefined;
+    detectionController = abortAndClear(detectionController);
+    detectionCancellationController = abortAndClear(detectionCancellationController);
     detectionRequest++;
     if (detectionTimer) window.clearTimeout(detectionTimer);
     detectionTimer = undefined;
