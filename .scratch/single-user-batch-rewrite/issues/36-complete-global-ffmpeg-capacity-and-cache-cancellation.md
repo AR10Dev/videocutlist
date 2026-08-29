@@ -5,7 +5,7 @@
 **Blocked by:** None
 
 **Category:** bug
-**Status:** ready-for-agent
+**Status:** blocked
 
 - [ ] Detection, preview, export, and asset FFmpeg execution acquire the same configured global capacity.
 - [ ] Cancellation at any point before publication prevents a cache hit.
@@ -14,3 +14,4 @@
 ## Comments
 
 - Opened from post-merge review of tickets 09 and 33. Detection bypasses the shared limiter, and cancellation can occur after the final context check but before cache publication.
+- Merged. Shared capacity now covers the known FFmpeg callers, but ticket 39 covers the detection descriptor defect and remaining cancellation publication races.

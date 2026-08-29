@@ -5,7 +5,7 @@
 **Blocked by:** None
 
 **Category:** bug
-**Status:** ready-for-agent
+**Status:** blocked
 
 - [ ] Unified library-scan job retrieval includes persisted safe per-root results.
 - [ ] Production code has no in-memory import map or fallback scan execution path.
@@ -14,3 +14,4 @@
 ## Comments
 
 - Opened from post-merge review of tickets 32 and 35. Root results are not mapped from unified job results, and the in-memory import compatibility path remains reachable.
+- Merged. The in-memory import fallback was removed, but ticket 41 covers unified result mapping and remaining direct refresh triggers.

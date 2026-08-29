@@ -5,7 +5,7 @@
 **Blocked by:** None
 
 **Category:** bug
-**Status:** ready-for-agent
+**Status:** blocked
 
 - [ ] Application interfaces accept no principal, owner, role, or capability values.
 - [ ] Project and job persistence no longer carries ownership fields.
@@ -14,3 +14,4 @@
 ## Comments
 
 - Opened from post-merge review of tickets 10 and 34. Remote access and settings paths are now protected, but application and store contracts still carry principal and owner fields.
+- Merged. Project and job storage no longer carries ownership fields, but ticket 40 covers remaining principal and authorization plumbing.
