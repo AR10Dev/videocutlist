@@ -105,7 +105,6 @@ VIDEOCUTLIST_TRUSTED_PROXY_CIDRS
 VIDEOCUTLIST_FFMPEG_PATH
 VIDEOCUTLIST_FFPROBE_PATH
 VIDEOCUTLIST_PREVIEW_GLOBAL_LIMIT
-VIDEOCUTLIST_PREVIEW_PER_USER_LIMIT
 VIDEOCUTLIST_EXPORT_LIMIT
 VIDEOCUTLIST_CACHE_MAX_BYTES
 VIDEOCUTLIST_PREVIEW_BEFORE_MS
@@ -138,18 +137,18 @@ cross-origin requests return 403 before application services run.
 
 ## Trusted reverse proxies
 
-`X-Forwarded-For`, `X-Forwarded-Host`, `X-Forwarded-Proto`, and
-`X-Forwarded-User` are consumed only when the immediate transport peer belongs
-to `VIDEOCUTLIST_TRUSTED_PROXY_CIDRS`. The middleware strips these headers before
-calling application code and exposes validated values through request context.
-Untrusted peers retain their transport address, request host, and transport
-scheme; their forwarded values and identity are ignored.
+`X-Forwarded-For`, `X-Forwarded-Host`, and `X-Forwarded-Proto` are consumed only
+when the immediate transport peer belongs to `VIDEOCUTLIST_TRUSTED_PROXY_CIDRS`.
+The middleware strips these headers before calling application code and exposes
+validated values through request context. Legacy identity headers are stripped
+without being interpreted. Untrusted peers retain their transport address,
+request host, and transport scheme; forwarded values are ignored.
 
 For trusted peers, client address is selected right-to-left from
 `X-Forwarded-For`, skipping configured trusted proxy hops and stopping at the
 first untrusted address. Every hop must be an IP literal. Forwarded protocol is
-`http` or `https`; forwarded host and optional identity are single, bounded,
-control-character-free values. Malformed trusted forwarded data returns 400.
+`http` or `https`; forwarded host is a single, bounded,
+control-character-free value. Malformed trusted forwarded data returns 400.
 The preserved transport peer address is never replaced by forwarded data.
 
 Server middleware order is CORS, then trusted-proxy parsing, then the API/static

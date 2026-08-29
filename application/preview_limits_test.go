@@ -8,18 +8,7 @@ import (
 )
 
 func TestPreviewLimits(t *testing.T) {
-	p, err := NewPreviewLimits(2, 1)
-	if err != nil {
-		t.Fatal(err)
-	}
-	releaseA, err := p.AcquireUser("a")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := p.AcquireUser("a"); !errors.Is(err, ErrUserLimit) {
-		t.Fatalf("same user error = %v", err)
-	}
-	releaseB, err := p.AcquireUser("b")
+	p, err := NewPreviewLimits(2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,9 +23,6 @@ func TestPreviewLimits(t *testing.T) {
 	if _, err := p.AcquireProcess(); !errors.Is(err, ErrGlobalLimit) {
 		t.Fatalf("global error = %v", err)
 	}
-	releaseA()
-	releaseA()
-	releaseB()
 	processA()
 	processB()
 	if got := p.Active(); got != 0 {
@@ -45,7 +31,7 @@ func TestPreviewLimits(t *testing.T) {
 }
 
 func TestAcquireProcessContextCancellation(t *testing.T) {
-	p, err := NewPreviewLimits(1, 1)
+	p, err := NewPreviewLimits(1)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -86,7 +86,7 @@ func run(ctx context.Context) error {
 	if err := cacheStore.CleanupPartials(); err != nil {
 		return err
 	}
-	limiter, err := application.NewPreviewLimits(cfg.PreviewGlobalLimit, cfg.PreviewPerUserLimit)
+	limiter, err := application.NewPreviewLimits(cfg.PreviewGlobalLimit)
 	if err != nil {
 		return err
 	}
@@ -219,7 +219,7 @@ func run(ctx context.Context) error {
 				return scanner.ReconfigureLimits(index.ScanLimits{MaxFiles: value.MediaMaxFiles, MaxDepth: value.MediaMaxDepth})
 			},
 			func(value store.RuntimeSettings) error {
-				return limiter.SetLimits(value.PreviewGlobalLimit, value.PreviewPerUserLimit)
+				return limiter.SetLimits(value.PreviewGlobalLimit)
 			},
 			func(value store.RuntimeSettings) error {
 				return cacheStore.SetMaxBytes(value.CacheMaxBytes)

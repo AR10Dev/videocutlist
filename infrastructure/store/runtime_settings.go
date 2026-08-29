@@ -27,18 +27,17 @@ type RuntimeDestination struct {
 // RuntimeSettings is the typed, persisted server runtime configuration. It
 // deliberately excludes deployment bootstrap values and credentials.
 type RuntimeSettings struct {
-	MediaRoots          map[string]string    `json:"mediaRoots"`
-	Destinations        []RuntimeDestination `json:"destinations"`
-	ExportLimit         int                  `json:"exportLimit"`
-	CacheMaxBytes       int64                `json:"cacheMaxBytes"`
-	PreviewGlobalLimit  int                  `json:"previewGlobalLimit"`
-	PreviewPerUserLimit int                  `json:"previewPerUserLimit"`
-	PreviewBeforeMS     int                  `json:"previewBeforeMs"`
-	PreviewAfterMS      int                  `json:"previewAfterMs"`
-	PreviewMaxMS        int                  `json:"previewMaxMs"`
-	PreviewGridMS       int                  `json:"previewGridMs"`
-	MediaMaxFiles       int                  `json:"mediaMaxFiles"`
-	MediaMaxDepth       int                  `json:"mediaMaxDepth"`
+	MediaRoots         map[string]string    `json:"mediaRoots"`
+	Destinations       []RuntimeDestination `json:"destinations"`
+	ExportLimit        int                  `json:"exportLimit"`
+	CacheMaxBytes      int64                `json:"cacheMaxBytes"`
+	PreviewGlobalLimit int                  `json:"previewGlobalLimit"`
+	PreviewBeforeMS    int                  `json:"previewBeforeMs"`
+	PreviewAfterMS     int                  `json:"previewAfterMs"`
+	PreviewMaxMS       int                  `json:"previewMaxMs"`
+	PreviewGridMS      int                  `json:"previewGridMs"`
+	MediaMaxFiles      int                  `json:"mediaMaxFiles"`
+	MediaMaxDepth      int                  `json:"mediaMaxDepth"`
 }
 
 type RuntimeSettingsRecord struct {
@@ -190,7 +189,7 @@ func ValidateRuntimeSettings(settings RuntimeSettings) error {
 			return errors.New("media roots contain an empty alias or path")
 		}
 	}
-	if settings.ExportLimit < 1 || settings.CacheMaxBytes < 1 || settings.PreviewGlobalLimit < 1 || settings.PreviewPerUserLimit < 1 || settings.PreviewBeforeMS < 1 || settings.PreviewAfterMS < 1 || settings.PreviewMaxMS < 1 || settings.PreviewGridMS < 1 || settings.MediaMaxFiles < 1 || settings.MediaMaxDepth < 1 {
+	if settings.ExportLimit < 1 || settings.CacheMaxBytes < 1 || settings.PreviewGlobalLimit < 1 || settings.PreviewBeforeMS < 1 || settings.PreviewAfterMS < 1 || settings.PreviewMaxMS < 1 || settings.PreviewGridMS < 1 || settings.MediaMaxFiles < 1 || settings.MediaMaxDepth < 1 {
 		return errors.New("runtime limits must be positive")
 	}
 	if settings.PreviewBeforeMS+settings.PreviewAfterMS > settings.PreviewMaxMS {

@@ -22,7 +22,6 @@ const (
 	defaultFFmpegPath      = "ffmpeg"
 	defaultFFprobePath     = "ffprobe"
 	defaultPreviewGlobal   = 2
-	defaultPreviewPerUser  = 1
 	defaultExportLimit     = 1
 	defaultMediaMaxFiles   = 10000
 	defaultMediaMaxDepth   = 32
@@ -36,34 +35,33 @@ const (
 // Config contains process settings only; filesystem access and service setup
 // belong to their respective packages.
 type Config struct {
-	ListenAddress       string
-	Port                int
-	ListenAddr          string
-	PublicBaseURL       string
-	AllowedOrigins      []string
-	ReadTimeout         time.Duration
-	WriteTimeout        time.Duration
-	IdleTimeout         time.Duration
-	DatabasePath        string
-	CacheDir            string
-	ExportDir           string
-	Destinations        []exporter.Destination
-	MediaRoots          map[string]string
-	AuthMode            string
-	BearerToken         string
-	TrustedProxyCIDRs   []string
-	FFmpegPath          string
-	FFprobePath         string
-	PreviewGlobalLimit  int
-	PreviewPerUserLimit int
-	ExportLimit         int
-	MediaMaxFiles       int
-	MediaMaxDepth       int
-	CacheMaxBytes       int64
-	PreviewBeforeMS     int
-	PreviewAfterMS      int
-	PreviewMaxMS        int
-	PreviewGridMS       int
+	ListenAddress      string
+	Port               int
+	ListenAddr         string
+	PublicBaseURL      string
+	AllowedOrigins     []string
+	ReadTimeout        time.Duration
+	WriteTimeout       time.Duration
+	IdleTimeout        time.Duration
+	DatabasePath       string
+	CacheDir           string
+	ExportDir          string
+	Destinations       []exporter.Destination
+	MediaRoots         map[string]string
+	AuthMode           string
+	BearerToken        string
+	TrustedProxyCIDRs  []string
+	FFmpegPath         string
+	FFprobePath        string
+	PreviewGlobalLimit int
+	ExportLimit        int
+	MediaMaxFiles      int
+	MediaMaxDepth      int
+	CacheMaxBytes      int64
+	PreviewBeforeMS    int
+	PreviewAfterMS     int
+	PreviewMaxMS       int
+	PreviewGridMS      int
 }
 
 // Load reads and validates VIDEOCUTLIST_* environment variables.
@@ -146,9 +144,6 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 		c.TrustedProxyCIDRs = append(c.TrustedProxyCIDRs, cidr)
 	}
 	if c.PreviewGlobalLimit, err = positiveInt(lookup, "VIDEOCUTLIST_PREVIEW_GLOBAL_LIMIT", defaultPreviewGlobal); err != nil {
-		return Config{}, err
-	}
-	if c.PreviewPerUserLimit, err = positiveInt(lookup, "VIDEOCUTLIST_PREVIEW_PER_USER_LIMIT", defaultPreviewPerUser); err != nil {
 		return Config{}, err
 	}
 	if c.ExportLimit, err = positiveInt(lookup, "VIDEOCUTLIST_EXPORT_LIMIT", defaultExportLimit); err != nil {

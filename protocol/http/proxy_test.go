@@ -12,7 +12,7 @@ func TestTrustedProxyStripsUntrustedForwardedHeaders(t *testing.T) {
 	handler, err := TrustedProxy([]string{"127.0.0.0/8"}, http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
 		called = true
 		info := GetForwardedInfo(request.Context())
-		if !info.ClientIP.Equal(net.ParseIP("203.0.113.9")) || !info.PeerIP.Equal(net.ParseIP("203.0.113.9")) || info.Host != "transport.test" || info.Proto != "http" || info.User != "" {
+		if !info.ClientIP.Equal(net.ParseIP("203.0.113.9")) || !info.PeerIP.Equal(net.ParseIP("203.0.113.9")) || info.Host != "transport.test" || info.Proto != "http" {
 			t.Fatalf("ForwardedInfo = %#v", info)
 		}
 		for _, header := range []string{"X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto", "X-Forwarded-User"} {
@@ -42,7 +42,7 @@ func TestTrustedProxySelectsClientAcrossTrustedChain(t *testing.T) {
 		if !info.ClientIP.Equal(net.ParseIP("203.0.113.7")) || !info.PeerIP.Equal(net.ParseIP("10.0.0.3")) {
 			t.Fatalf("IP selection = %#v", info)
 		}
-		if info.Host != "editor.example.test" || info.Proto != "https" || info.User != "" || !info.Trusted {
+		if info.Host != "editor.example.test" || info.Proto != "https" || !info.Trusted {
 			t.Fatalf("forwarded values = %#v", info)
 		}
 	}))

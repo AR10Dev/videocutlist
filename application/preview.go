@@ -64,25 +64,18 @@ func NewPreviewManager(store PreviewCache, runner PreviewRunner, validator Valid
 // process for this request; cancellation or a closed reader discards output.
 func (m *PreviewManager) Preview(ctx context.Context, spec domain.PreviewSpec) (io.ReadCloser, Result, error) {
 	key := domain.PreviewKey(spec)
-	releaseUser, err := m.limits.AcquireUser("single-user")
-	if err != nil {
-		return nil, Result{}, err
-	}
 	if hit, err := m.cache.Open(ctx, key, m.validator); err == nil {
-		return &limitedReader{ReadCloser: hit, release: releaseUser}, Result{Key: key, Status: CacheHit}, nil
+		return hit, Result{Key: key, Status: CacheHit}, nil
 	} else if !errors.Is(err, ErrCacheMiss) {
-		releaseUser()
 		return nil, Result{}, err
 	}
 	releaseProcess, err := m.limits.AcquireProcessContext(ctx)
 	if err != nil {
-		releaseUser()
 		return nil, Result{}, err
 	}
 	partial, err := m.cache.Begin(key)
 	if err != nil {
 		releaseProcess()
-		releaseUser()
 		return nil, Result{}, err
 	}
 	reader, writer := io.Pipe()
@@ -92,17 +85,15 @@ func (m *PreviewManager) Preview(ctx context.Context, spec domain.PreviewSpec) (
 		cancel()
 		_ = partial.Discard()
 		releaseProcess()
-		releaseUser()
 		_ = reader.Close()
 		return nil, Result{}, err
 	}
-	go streamPreview(runCtx, cancel, running, partial, writer, m.validator, releaseProcess, releaseUser)
+	go streamPreview(runCtx, cancel, running, partial, writer, m.validator, releaseProcess)
 	return &previewReader{ReadCloser: reader, cancel: cancel}, Result{Key: key, Status: CacheMiss}, nil
 }
 
-func streamPreview(ctx context.Context, cancel context.CancelFunc, running *RunningPreview, partial PreviewPartial, writer *io.PipeWriter, validator Validator, releaseProcess, releaseUser func()) {
+func streamPreview(ctx context.Context, cancel context.CancelFunc, running *RunningPreview, partial PreviewPartial, writer *io.PipeWriter, validator Validator, releaseProcess func()) {
 	defer releaseProcess()
-	defer releaseUser()
 	defer running.Stdout.Close()
 	defer cancel()
 	go func() {
@@ -150,16 +141,4 @@ type previewReader struct {
 func (r *previewReader) Close() error {
 	r.once.Do(r.cancel)
 	return r.ReadCloser.Close()
-}
-
-type limitedReader struct {
-	io.ReadCloser
-	once    sync.Once
-	release func()
-}
-
-func (r *limitedReader) Close() error {
-	err := r.ReadCloser.Close()
-	r.once.Do(r.release)
-	return err
 }

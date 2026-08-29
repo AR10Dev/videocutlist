@@ -12,7 +12,6 @@ const (
 	maxForwardedChain = 32
 	maxForwardedBytes = 4 << 10
 	maxForwardedHost  = 255
-	maxForwardedUser  = 320
 )
 
 type forwardedInfoKey struct{}
@@ -26,8 +25,6 @@ type ForwardedInfo struct {
 	Proto    string
 	// Trusted reports whether the transport peer matched configured proxies.
 	Trusted bool
-	// User is retained for compatibility but is never populated from headers.
-	User string
 }
 
 // GetForwardedInfo returns the values attached by TrustedProxy. It returns the
@@ -72,7 +69,6 @@ type forwardedHeaders struct {
 	forValues   []string
 	hostValues  []string
 	protoValues []string
-	userValues  []string
 }
 
 func takeForwardedHeaders(headers http.Header) forwardedHeaders {
@@ -86,7 +82,7 @@ func takeForwardedHeaders(headers http.Header) forwardedHeaders {
 		case strings.EqualFold(key, "X-Forwarded-Proto"):
 			values.protoValues = append(values.protoValues, value...)
 		case strings.EqualFold(key, "X-Forwarded-User"):
-			values.userValues = append(values.userValues, value...)
+			// Strip legacy identity headers without exposing an application identity.
 		default:
 			continue
 		}
@@ -108,7 +104,7 @@ func parseTrustedCIDRs(values []string) ([]*net.IPNet, error) {
 }
 
 func parseForwardedInfo(info ForwardedInfo, headers forwardedHeaders, trusted []*net.IPNet) (ForwardedInfo, error) {
-	if len(headers.hostValues) > 1 || len(headers.protoValues) > 1 || len(headers.userValues) > 1 {
+	if len(headers.hostValues) > 1 || len(headers.protoValues) > 1 {
 		return ForwardedInfo{}, errors.New("multiple forwarded values")
 	}
 	if len(headers.forValues) > 0 {
@@ -132,8 +128,6 @@ func parseForwardedInfo(info ForwardedInfo, headers forwardedHeaders, trusted []
 		}
 		info.Proto = proto
 	}
-	// X-Forwarded-User is deliberately ignored: proxy mode conveys access,
-	// not an application identity.
 	return info, nil
 }
 
