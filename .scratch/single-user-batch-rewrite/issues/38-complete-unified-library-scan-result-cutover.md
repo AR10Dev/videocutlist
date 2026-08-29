@@ -5,7 +5,7 @@
 **Blocked by:** None
 
 **Category:** bug
-**Status:** blocked
+**Status:** completed
 
 - [ ] Unified library-scan job retrieval includes persisted safe per-root results.
 - [ ] Production code has no in-memory import map or fallback scan execution path.

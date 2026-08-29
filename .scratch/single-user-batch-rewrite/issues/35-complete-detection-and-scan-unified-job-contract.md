@@ -5,7 +5,7 @@
 **Blocked by:** 32
 
 **Category:** bug
-**Status:** blocked
+**Status:** completed
 
 - [ ] Detection jobs persist a source fingerprint and bounded detector parameters, then reject a changed source at execution.
 - [ ] Scan jobs persist safe results for every scanned root and expose them through unified job retrieval.

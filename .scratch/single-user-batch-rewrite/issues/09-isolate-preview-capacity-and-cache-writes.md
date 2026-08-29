@@ -5,7 +5,7 @@
 **Blocked by:** 04
 
 **Category:** bug
-**Status:** blocked
+**Status:** completed
 
 - [ ] Preview requests use a separate interactive limit and never become durable background jobs.
 - [ ] A global process budget prevents previews and background FFmpeg work from exceeding configured machine capacity.

@@ -5,7 +5,7 @@
 **Blocked by:** None
 
 **Category:** bug
-**Status:** blocked
+**Status:** completed
 
 - [ ] Detection, preview, export, and asset FFmpeg execution acquire the same configured global capacity.
 - [ ] Cancellation at any point before publication prevents a cache hit.

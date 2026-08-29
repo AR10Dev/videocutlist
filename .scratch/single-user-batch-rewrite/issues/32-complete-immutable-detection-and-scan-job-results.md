@@ -5,7 +5,7 @@
 **Blocked by:** 08
 
 **Category:** bug
-**Status:** blocked
+**Status:** completed
 
 - [ ] Detection job requests include a media source fingerprint and bounded detector parameters; execution rejects changed sources.
 - [ ] Scan jobs retain safe per-root scan results for unified job retrieval.

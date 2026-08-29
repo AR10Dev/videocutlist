@@ -5,7 +5,7 @@
 **Blocked by:** 01
 
 **Category:** enhancement
-**Status:** blocked
+**Status:** completed
 
 - [ ] Application interfaces and HTTP handlers accept no principal, owner, role, or capability values.
 - [ ] Loopback-only mode may run without authentication.

@@ -5,7 +5,7 @@
 **Blocked by:** None
 
 **Category:** bug
-**Status:** ready-for-agent
+**Status:** completed
 
 - [ ] Unified job retrieval maps persisted safe per-root scan results into its public response.
 - [ ] HTTP and server scan triggers submit unified jobs rather than calling refresh directly.
@@ -14,3 +14,4 @@
 ## Comments
 
 - Opened from post-merge review of ticket 38. Unified job responses omit root results, while server and HTTP paths still invoke refresh directly.
+- Completed with follow-up tickets 44 and 46.

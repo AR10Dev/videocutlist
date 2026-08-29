@@ -5,7 +5,7 @@
 **Blocked by:** 09
 
 **Category:** bug
-**Status:** blocked
+**Status:** completed
 
 - [ ] Preview and background FFmpeg work share one configured process budget.
 - [ ] Cancellation before cache publication prevents the artifact from becoming a cache hit and removes its temporary file.

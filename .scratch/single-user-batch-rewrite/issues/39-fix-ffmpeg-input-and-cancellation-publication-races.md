@@ -5,7 +5,7 @@
 **Blocked by:** None
 
 **Category:** bug
-**Status:** ready-for-agent
+**Status:** completed
 
 - [ ] Detection passes an inherited media descriptor to FFmpeg through `ExtraFiles` and a valid child descriptor path.
 - [ ] Cancellation cannot publish a preview or asset cache artifact, including while publication waits for synchronization.
@@ -14,3 +14,4 @@
 ## Comments
 
 - Opened from post-merge review of ticket 36. Detection builds a `/proc/self/fd` path without inheriting the descriptor, and preview/asset publication can win a cancellation race.
+- Completed; asset publication follow-up completed by ticket 45.

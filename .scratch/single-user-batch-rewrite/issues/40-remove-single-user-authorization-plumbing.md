@@ -5,7 +5,7 @@
 **Blocked by:** None
 
 **Category:** bug
-**Status:** ready-for-agent
+**Status:** completed
 
 - [ ] Production application and HTTP interfaces carry no principal, role, capability, or authorizer values.
 - [ ] The deployment access gate authenticates requests without exposing application identities.
@@ -14,3 +14,4 @@
 ## Comments
 
 - Opened from post-merge review of ticket 37. Persistence fields were removed, but principal authorization types and HTTP authorization plumbing remain in production.
+- Completed with follow-up tickets 43, 47, and 48.

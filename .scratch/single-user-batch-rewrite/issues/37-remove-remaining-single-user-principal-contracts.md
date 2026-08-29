@@ -5,7 +5,7 @@
 **Blocked by:** None
 
 **Category:** bug
-**Status:** blocked
+**Status:** completed
 
 - [ ] Application interfaces accept no principal, owner, role, or capability values.
 - [ ] Project and job persistence no longer carries ownership fields.
