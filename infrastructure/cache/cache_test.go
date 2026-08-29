@@ -20,6 +20,35 @@ var accept = ValidatorFunc(func(_ context.Context, path string) error {
 	return nil
 })
 
+func TestCommitDoesNotPublishWhenCancelledAfterValidation(t *testing.T) {
+	store, err := New(t.TempDir(), 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := "9fd5a59c541b3e2faab0b0c8a72daf70b258cfbfc6adfe6b2ae65024fece9f5f"
+	partial, err := store.Begin(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := partial.Write([]byte("complete")); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	validator := func(context.Context, string) error {
+		cancel()
+		return nil
+	}
+	if err := partial.Commit(ctx, validator); !errors.Is(err, context.Canceled) {
+		t.Fatalf("commit error = %v, want cancellation", err)
+	}
+	if hit, err := store.Open(context.Background(), key, accept); !errors.Is(err, ErrMiss) {
+		if hit != nil {
+			_ = hit.Close()
+		}
+		t.Fatalf("cancelled cache = %v, want miss", err)
+	}
+}
+
 func TestKeyAndPathAreFrozen(t *testing.T) {
 	spec := domain.PreviewSpec{MediaID: "m_test", SizeBytes: 3, MtimeNS: 4, StartMS: 5, DurationMS: 6, Width: 1280, Height: 720, FPS: 30, Audio: true, Encoder: "software-h264-v1"}
 	if got, want := Key(spec), "9fd5a59c541b3e2faab0b0c8a72daf70b258cfbfc6adfe6b2ae65024fece9f5f"; got != want {
@@ -28,6 +57,46 @@ func TestKeyAndPathAreFrozen(t *testing.T) {
 	path, err := RelativePath(Key(spec))
 	if err != nil || path != filepath.Join("previews", "9f", "d5", Key(spec)+".mp4") {
 		t.Fatalf("path = %q, %v", path, err)
+	}
+}
+
+func TestConcurrentCommitsKeepOneCompleteWinner(t *testing.T) {
+	store, err := New(t.TempDir(), 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := stringsOf('a')
+	first, err := store.Begin(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := store.Begin(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = first.Write([]byte("first"))
+	_, _ = second.Write([]byte("second"))
+	errs := make(chan error, 2)
+	go func() { errs <- first.Commit(context.Background(), accept) }()
+	go func() { errs <- second.Commit(context.Background(), accept) }()
+	if err := <-errs; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-errs; err != nil {
+		t.Fatal(err)
+	}
+	reader, err := store.Open(context.Background(), key, accept)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	body, _ := io.ReadAll(reader)
+	if string(body) != "first" && string(body) != "second" {
+		t.Fatalf("winner = %q", body)
+	}
+	matches, err := filepath.Glob(filepath.Join(store.root, "previews", "aa", "aa", "*.partial"))
+	if err != nil || len(matches) != 0 {
+		t.Fatalf("partial files = %v, %v", matches, err)
 	}
 }
 

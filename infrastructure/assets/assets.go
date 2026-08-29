@@ -25,12 +25,17 @@ import (
 
 const maxWaveformSamples = 4096
 
+type ProcessLimiter interface {
+	AcquireProcess() (func(), error)
+}
+
 type Service struct {
 	Scanner    *index.Scanner
 	Media      *store.MediaStore
 	FFmpegPath string
 	CacheDir   string
 	MaxBytes   int64
+	Capacity   ProcessLimiter
 	mu         sync.Mutex
 }
 
@@ -60,7 +65,7 @@ func (s *Service) Thumbnails(ctx context.Context, _ domain.Principal, spec appli
 	}
 	fps := float64(spec.Count) / (float64(spec.DurationMS) / 1000)
 	args := []string{"-nostdin", "-hide_banner", "-loglevel", "error", "-ss", ms(spec.StartMS), "-i", "/proc/self/fd/3", "-t", ms(spec.DurationMS), "-vf", fmt.Sprintf("fps=%g,scale=%d:-2,tile=%dx1", fps, spec.Width, spec.Count), "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "pipe:1"}
-	data, err = run(ctx, s.FFmpegPath, file, args, 8<<20)
+	data, err = s.run(ctx, file, args, 8<<20)
 	if err != nil {
 		return application.AssetResult{}, err
 	}
@@ -98,7 +103,7 @@ func (s *Service) Waveform(ctx context.Context, _ domain.Principal, spec applica
 		return application.AssetResult{}, errors.New("media source is not a file")
 	}
 	args := []string{"-nostdin", "-hide_banner", "-loglevel", "error", "-ss", ms(spec.StartMS), "-i", "/proc/self/fd/3", "-t", ms(spec.DurationMS), "-map", "0:a:0", "-ac", "1", "-ar", fmt.Sprint(min(spec.Samples*2, 48000)), "-f", "f32le", "pipe:1"}
-	raw, err := run(ctx, s.FFmpegPath, file, args, 16<<20)
+	raw, err := s.run(ctx, file, args, 16<<20)
 	if err != nil {
 		return application.AssetResult{}, err
 	}
@@ -211,6 +216,17 @@ func (b *boundedBuffer) Write(p []byte) (int, error) {
 	}
 	return len(p), nil
 }
+func (s *Service) run(ctx context.Context, file *os.File, args []string, max int) ([]byte, error) {
+	if s.Capacity != nil {
+		release, err := s.Capacity.AcquireProcess()
+		if err != nil {
+			return nil, err
+		}
+		defer release()
+	}
+	return run(ctx, s.FFmpegPath, file, args, max)
+}
+
 func run(ctx context.Context, path string, file *os.File, args []string, max int) ([]byte, error) {
 	if path == "" {
 		path = "ffmpeg"

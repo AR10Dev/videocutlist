@@ -67,6 +67,10 @@ type Result struct {
 	Verified          bool              `json:"verified"`
 }
 
+type ProcessLimiter interface {
+	AcquireProcess() (func(), error)
+}
+
 type Service struct {
 	FFmpegPath   string
 	FFprobePath  string
@@ -75,11 +79,19 @@ type Service struct {
 	Artifacts    *ArtifactStore
 	Retention    time.Duration
 	Now          func() time.Time
+	Capacity     ProcessLimiter
 }
 
 func (s Service) Run(ctx context.Context, source *os.File, document domain.Document, request Request) (Result, error) {
 	if source == nil {
 		return Result{}, errors.New("export source is required")
+	}
+	if s.Capacity != nil {
+		release, err := s.Capacity.AcquireProcess()
+		if err != nil {
+			return Result{}, err
+		}
+		defer release()
 	}
 	if (request.Mode != "merge" && request.Mode != "separate") || (request.CutStrategy != "stream_copy_preferred" && request.CutStrategy != "precise_reencode" && request.CutStrategy != "hybrid_smart_cut") || request.Container != "mkv" || (request.Selection != "" && request.Selection != "segments" && request.Selection != "gaps") {
 		return Result{}, fmt.Errorf("%w: unsupported export options", ErrInvalidRequest)
