@@ -72,6 +72,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/media/tree": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Browse indexed media folders and items */
+        get: operations["browseMediaTree"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/media/status": {
         parameters: {
             query?: never;
@@ -164,6 +181,25 @@ export interface paths {
         /** Save an owned project */
         put: operations["putProject"];
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/projects/{projectId}/detections": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Start media detection */
+        post: operations["createDetection"];
         delete?: never;
         options?: never;
         head?: never;
@@ -330,10 +366,33 @@ export interface components {
                 [key: string]: unknown;
             };
         };
-        SettingsResponse: {
-            settings: {
-                [key: string]: unknown;
+        RuntimeDestination: {
+            id: string;
+            label: string;
+            description?: string;
+            /** @enum {string} */
+            kind: "download" | "archive" | "source_adjacent";
+            root?: string;
+            mediaRoot?: string;
+            retention?: string;
+        };
+        RuntimeSettings: {
+            mediaRoots?: {
+                [key: string]: string;
             };
+            destinations?: components["schemas"]["RuntimeDestination"][];
+            exportLimit?: number;
+            cacheMaxBytes?: number;
+            previewGlobalLimit?: number;
+            previewBeforeMs?: number;
+            previewAfterMs?: number;
+            previewMaxMs?: number;
+            previewGridMs?: number;
+            mediaMaxFiles?: number;
+            mediaMaxDepth?: number;
+        };
+        SettingsResponse: {
+            settings: components["schemas"]["RuntimeSettings"];
             revision: number;
             schemaVersion: number;
             /** Format: date-time */
@@ -365,6 +424,15 @@ export interface components {
             };
             etag: string;
         };
+        FolderNode: {
+            id: string;
+            label: string;
+        };
+        FolderPage: {
+            folders: components["schemas"]["FolderNode"][];
+            items: components["schemas"]["Media"][];
+            nextCursor?: string | null;
+        };
         MediaPage: {
             items: components["schemas"]["Media"][];
             nextCursor?: string | null;
@@ -394,6 +462,41 @@ export interface components {
             playheadMs: number;
             zoom: number;
             muted: boolean;
+        };
+        DetectionInput: {
+            mediaId: string;
+            projectRevision: number;
+            /** @enum {string} */
+            kind: "silence" | "black" | "scene";
+            sourceFingerprint?: string;
+            noiseDb?: number;
+            minDurationMs?: number;
+            sceneThreshold?: number;
+        };
+        DetectionCandidate: {
+            id: string;
+            mediaId: string;
+            projectId: string;
+            projectRevision: number;
+            startMs: number;
+            endMs: number;
+            /** @enum {string} */
+            source: "silence" | "black" | "scene";
+            confidence: number;
+        };
+        DetectionJob: {
+            id: string;
+            /** @enum {string} */
+            type: "detection";
+            /** @enum {string} */
+            state: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+            mediaId: string;
+            projectId: string;
+            projectRevision: number;
+            /** @enum {string} */
+            kind: "silence" | "black" | "scene";
+            candidates?: components["schemas"]["DetectionCandidate"][];
+            errorCode?: string;
         };
         ExportInput: {
             /** @enum {string} */
@@ -594,6 +697,31 @@ export interface operations {
             };
         };
     };
+    browseMediaTree: {
+        parameters: {
+            query?: {
+                folderId?: string;
+                cursor?: string;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Media folder page */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["FolderPage"];
+                };
+            };
+            400: components["responses"]["Error"];
+            404: components["responses"]["Error"];
+        };
+    };
     mediaLibraryStatus: {
         parameters: {
             query?: never;
@@ -771,6 +899,35 @@ export interface operations {
                     "application/json": components["schemas"]["Project"];
                 };
             };
+            409: components["responses"]["Error"];
+            422: components["responses"]["Error"];
+        };
+    };
+    createDetection: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                projectId: components["parameters"]["ProjectId"];
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["DetectionInput"];
+            };
+        };
+        responses: {
+            /** @description Detection queued */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DetectionJob"];
+                };
+            };
+            404: components["responses"]["Error"];
             409: components["responses"]["Error"];
             422: components["responses"]["Error"];
         };

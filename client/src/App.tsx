@@ -44,11 +44,7 @@ import {
 } from "./projectLifecycle";
 import { defaultSettings, settingsKey, storedSettings, type AppSettings } from "./settings";
 type Media = components["schemas"]["Media"];
-type FolderPage = {
-  folders: { id: string; label: string }[];
-  items: Media[];
-  nextCursor?: string | null;
-};
+type FolderPage = components["schemas"]["FolderPage"];
 type LibraryStatus = components["schemas"]["LibraryStatus"];
 type LibraryRoot = {
   alias: string;
@@ -56,42 +52,15 @@ type LibraryRoot = {
   state?: "ready" | "unavailable";
   message?: string;
 };
-type RuntimeDestination = {
-  id: string;
-  label: string;
-  description?: string;
-  kind: string;
-  root?: string;
-  mediaRoot?: string;
-  retention?: string;
-};
+type RuntimeDestination = components["schemas"]["RuntimeDestination"];
 
-type ServerRuntimeSettings = {
-  mediaRoots?: Record<string, string>;
-  destinations?: RuntimeDestination[];
-  exportLimit: number;
-  cacheMaxBytes: number;
-  previewGlobalLimit: number;
-  previewBeforeMs: number;
-  previewAfterMs: number;
-  previewMaxMs: number;
-  previewGridMs: number;
-  mediaMaxFiles: number;
-  mediaMaxDepth: number;
-};
+type ServerRuntimeSettings = components["schemas"]["RuntimeSettings"];
 
-type ServerSettings = components["schemas"]["SettingsResponse"] & {
-  settings: ServerRuntimeSettings;
-};
+type ServerSettings = components["schemas"]["SettingsResponse"];
 type Destination = components["schemas"]["Destination"];
 type Project = components["schemas"]["Project"];
 type ExportJob = components["schemas"]["Job"];
-type DetectionJob = {
-  id: string;
-  state: "queued" | "running" | "succeeded" | "failed" | "cancelled";
-  candidates?: Candidate[];
-  errorCode?: string;
-};
+type DetectionJob = components["schemas"]["DetectionJob"];
 const api = createApiClient(resolveBrowserConfiguration());
 const durationOf = (media?: Media) => media?.durationMs ?? 0;
 
@@ -906,8 +875,10 @@ export function App() {
     if (thumbnailObjectURL) URL.revokeObjectURL(thumbnailObjectURL);
     clearExportContext();
     clearDetectionContext();
-    [exportCancellationController, detectionCancellationController] =
-      abortCancellationControllers(exportCancellationController, detectionCancellationController);
+    [exportCancellationController, detectionCancellationController] = abortCancellationControllers(
+      exportCancellationController,
+      detectionCancellationController,
+    );
     projectRequestVersion++;
     saveVersion++;
     exportController?.abort();

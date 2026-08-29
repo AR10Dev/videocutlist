@@ -23,4 +23,3 @@
 - Existing revision, selection, and editor-version guards remain as defense against stale writes; query polling tests cover terminal shutdown.
 - Validation: `make check` passes (65 client tests); no staged files remain.
 
-Ticket 11 currently retains imperative request/controller lifecycle code because the installed Solid Query release cannot bundle with the selected Solid runtime. Begin this migration only after ticket 49 establishes a buildable dependency matrix.
