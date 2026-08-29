@@ -100,7 +100,8 @@ test("gates interchange exports until the project is persisted", async ({ page }
   });
   await page.route("http://127.0.0.1:8787/api/v1/**", async (route) => {
     const url = new URL(route.request().url());
-    if (url.pathname === "/api/v1/media") return route.fulfill({ json: { items: [media] } });
+    if (url.pathname === "/api/v1/media" || url.pathname === "/api/v1/media/tree")
+      return route.fulfill({ json: { folders: [], items: [media] } });
     if (url.pathname === `/api/v1/media/${media.id}`) return route.fulfill({ json: media });
     if (url.pathname === "/api/v1/media/status")
       return route.fulfill({ json: { state: "ready_empty", message: "Ready" } });
@@ -111,6 +112,7 @@ test("gates interchange exports until the project is persisted", async ({ page }
 
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await page.getByText("Project administration and interchange").click();
   await expect(page.getByRole("button", { name: "Export CSV" })).toBeDisabled();
   await expect(page.getByRole("button", { name: "Export chapters" })).toBeDisabled();
   await expect(
@@ -131,7 +133,8 @@ test("separates media selection from cut-list imports", async ({ page }) => {
   });
   await page.route("http://127.0.0.1:8787/api/v1/**", async (route) => {
     const url = new URL(route.request().url());
-    if (url.pathname === "/api/v1/media") return route.fulfill({ json: { items: [media] } });
+    if (url.pathname === "/api/v1/media" || url.pathname === "/api/v1/media/tree")
+      return route.fulfill({ json: { folders: [], items: [media] } });
     if (url.pathname === `/api/v1/media/${media.id}`) return route.fulfill({ json: media });
     if (url.pathname === "/api/v1/media/status")
       return route.fulfill({ json: { state: "ready_empty", message: "Ready" } });
@@ -144,6 +147,7 @@ test("separates media selection from cut-list imports", async ({ page }) => {
   await expect(page.getByLabel("Import CSV or chapters")).toHaveCount(0);
 
   await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await page.getByText("Project administration and interchange").click();
   await expect(page.getByRole("heading", { name: "Timeline" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Export" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Auto detection" })).toBeVisible();
