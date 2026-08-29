@@ -80,10 +80,8 @@ type ServerRuntimeSettings = {
   mediaMaxDepth: number;
 };
 
-type ServerSettings = {
+type ServerSettings = components["schemas"]["SettingsResponse"] & {
   settings: ServerRuntimeSettings;
-  revision: number;
-  roots?: Record<string, { state: "ready" | "unavailable"; message: string }>;
 };
 type Destination = components["schemas"]["Destination"];
 type Project = components["schemas"]["Project"];

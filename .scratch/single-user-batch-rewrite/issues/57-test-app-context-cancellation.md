@@ -7,13 +7,13 @@
 **Category:** bug
 **Status:** completed
 
-- [ ] App-level test triggers a pending export cancellation, invokes the App media-selection/context cleanup path, and observes the DELETE AbortSignal abort.
-- [ ] After the deferred cancellation settles, the App test proves old export job/status state is not written into the new context.
-- [ ] Unmount aborts and clears export and detection cancellation controllers.
-- [ ] Replace static-ID stale-response coverage with an application/query lifecycle assertion.
-- [ ] Reconcile tickets 50–56 statuses and checklists only with verified criteria.
-- [ ] `make check` passes.
+- [x] App-level test triggers a pending export cancellation, invokes the App media-selection/context cleanup path, and observes the DELETE AbortSignal abort.
+- [x] After the deferred cancellation settles, the App test proves old export job/status state is not written into the new context.
+- [x] Unmount aborts and clears export and detection cancellation controllers.
+- [x] Replace static-ID stale-response coverage with an application/query lifecycle assertion.
+- [x] Reconcile tickets 50–56 statuses and checklists only with verified criteria.
+- [x] `make check` passes.
 
 ## Comments
 
-Opened from ticket 56 review. Application unmount now routes through shared cancellation cleanup, aborting and clearing both export and detection controllers. The mounted-App deferred DELETE coverage is provided by tickets 58 and 59. Validation: `make check` passes.
+Opened from ticket 56 review. Application unmount now routes through shared cancellation cleanup, aborting and clearing both export and detection controllers. The mounted-App deferred DELETE and delayed metadata coverage is provided by tickets 58, 59, and 61. Validation: `make check` passes.

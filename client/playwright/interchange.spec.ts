@@ -17,6 +17,8 @@ test("export cancellation is isolated from a changed media context", async ({ pa
   let releaseDelete!: () => void;
   const deleteResponse = new Promise<void>((resolve) => (releaseDelete = resolve));
   let deleteAborted = false;
+  let releaseOldMetadata!: () => void;
+  const oldMetadata = new Promise<void>((resolve) => (releaseOldMetadata = resolve));
   page.on("requestfailed", (request) => {
     if (request.method() === "DELETE" && request.url().endsWith("/api/v1/jobs/job_test"))
       deleteAborted = true;
@@ -33,8 +35,12 @@ test("export cancellation is isolated from a changed media context", async ({ pa
     const url = new URL(request.url());
     if (url.pathname === "/api/v1/media" || url.pathname === "/api/v1/media/tree")
       return route.fulfill({ json: { folders: [], items: [media, secondMedia] } });
-    if (url.pathname === `/api/v1/media/${media.id}` || url.pathname === `/api/v1/media/${secondMedia.id}`)
-      return route.fulfill({ json: url.pathname.endsWith(secondMedia.id) ? secondMedia : media });
+    if (url.pathname === `/api/v1/media/${media.id}`) {
+      await oldMetadata;
+      return route.fulfill({ json: media });
+    }
+    if (url.pathname === `/api/v1/media/${secondMedia.id}`)
+      return route.fulfill({ json: secondMedia });
     if (url.pathname === "/api/v1/media/status")
       return route.fulfill({ json: { state: "ready_with_media", message: "Ready" } });
     if (request.method() === "PUT" && url.pathname.startsWith("/api/v1/projects/"))
@@ -73,7 +79,10 @@ test("export cancellation is isolated from a changed media context", async ({ pa
   await page.getByRole("button", { name: /second.mp4/ }).click();
   releaseDelete();
   await expect.poll(() => deleteAborted).toBe(true);
+  releaseOldMetadata();
   await expect(page.getByRole("button", { name: /second.mp4/ })).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByText("Export cancelled.")).not.toBeVisible();
+  await expect(page.getByRole("button", { name: "Cancel export" })).not.toBeVisible();
 });
 
 test("project interchange controls wait for media selection", async ({ page }) => {
