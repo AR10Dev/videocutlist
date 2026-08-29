@@ -15,6 +15,7 @@ import (
 	"videocutlist/application"
 	"videocutlist/domain"
 	"videocutlist/infrastructure/media/index"
+	"videocutlist/infrastructure/store"
 )
 
 type Service struct {
@@ -32,6 +33,9 @@ const maxDetectionCandidates = 1000
 const maxDetectionInput = 1 << 20
 
 func (s Service) Detect(ctx context.Context, request application.DetectionRequest) ([]domain.Candidate, error) {
+	if err := application.ValidateDetectionRequest(request); err != nil {
+		return nil, err
+	}
 	if s.Scanner == nil || s.Catalog == nil || s.FFmpegPath == "" {
 		return nil, fmt.Errorf("detection service is not configured")
 	}
@@ -40,14 +44,29 @@ func (s Service) Detect(ctx context.Context, request application.DetectionReques
 		return nil, err
 	}
 	defer file.Close()
+	if request.SourceFingerprint != "" && index.SourceFingerprint(media) != request.SourceFingerprint {
+		return nil, store.ErrSourceChanged
+	}
 	f, ok := file.(*os.File)
 	if !ok {
 		return nil, fmt.Errorf("media is not seekable")
 	}
-	filter := map[domain.DetectionKind]string{domain.DetectBlack: "blackdetect=d=0.5:pix_th=0.10", domain.DetectScene: "select='gt(scene,0.4)',showinfo"}[request.Kind]
+	noiseDB := request.NoiseDB
+	if noiseDB == 0 {
+		noiseDB = -30
+	}
+	minDuration := float64(request.MinDurationMS) / 1000
+	if minDuration == 0 {
+		minDuration = 0.5
+	}
+	sceneThreshold := request.SceneThreshold
+	if sceneThreshold == 0 {
+		sceneThreshold = 0.4
+	}
+	filter := map[domain.DetectionKind]string{domain.DetectBlack: fmt.Sprintf("blackdetect=d=%g:pix_th=0.10", minDuration), domain.DetectScene: fmt.Sprintf("select='gt(scene,%g)',showinfo", sceneThreshold)}[request.Kind]
 	args := []string{"-hide_banner", "-nostats", "-i", fmt.Sprintf("/proc/self/fd/%d", f.Fd())}
 	if request.Kind == domain.DetectSilence {
-		args = append(args, "-af", "silencedetect=noise=-30dB:d=0.5")
+		args = append(args, "-af", fmt.Sprintf("silencedetect=noise=%gdB:d=%g", noiseDB, minDuration))
 	} else {
 		args = append(args, "-vf", filter, "-an")
 	}

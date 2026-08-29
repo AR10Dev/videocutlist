@@ -281,6 +281,9 @@ func importJobResult(job store.Job) ImportJob {
 	if job.ErrorCode.Valid {
 		out.ErrorCode = job.ErrorCode.String
 	}
+	if job.ResultJSON.Valid {
+		_ = json.Unmarshal([]byte(job.ResultJSON.String), &out.RootResults)
+	}
 	return out
 }
 

@@ -45,6 +45,34 @@ func TestUnifiedJobsTransitionsAndDerivedBatch(t *testing.T) {
 	}
 }
 
+func TestUnifiedJobsPersistPerRootScanResults(t *testing.T) {
+	db, err := store.OpenDatabase(context.Background(), t.TempDir()+"/scan.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	jobs, err := store.NewJobsStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	created, err := jobs.Create(ctx, store.Job{ID: "j_scanresults01", BatchID: "b_scanresults01", Kind: store.JobScan, RequestJSON: `{}`})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = jobs.Start(ctx, created.ID); err != nil {
+		t.Fatal(err)
+	}
+	result := `{"camera":{"state":"ready_with_media"},"archive":{"state":"failed","errorCode":"scan_limit"}}`
+	if _, err = jobs.Succeed(ctx, created.ID, result); err != nil {
+		t.Fatal(err)
+	}
+	got, err := jobs.Get(ctx, created.ID)
+	if err != nil || !got.ResultJSON.Valid || got.ResultJSON.String != result {
+		t.Fatalf("scan result = %#v, %v", got.ResultJSON, err)
+	}
+}
+
 func TestUnifiedJobsCreateValidatesOpaqueIDs(t *testing.T) {
 	db, err := store.OpenDatabase(context.Background(), t.TempDir()+"/jobs.db")
 	if err != nil {
