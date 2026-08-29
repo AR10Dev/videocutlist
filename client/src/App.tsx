@@ -72,7 +72,6 @@ type ServerRuntimeSettings = {
   exportLimit: number;
   cacheMaxBytes: number;
   previewGlobalLimit: number;
-  previewPerUserLimit: number;
   previewBeforeMs: number;
   previewAfterMs: number;
   previewMaxMs: number;
@@ -2370,20 +2369,6 @@ export function App() {
                 onChange={(event) =>
                   void saveRuntimeSettings(
                     { previewGlobalLimit: event.currentTarget.valueAsNumber },
-                    "Performance settings saved.",
-                  )
-                }
-              />
-            </label>
-            <label>
-              Preview per-user concurrency{" "}
-              <input
-                type="number"
-                min="1"
-                value={runtimeSettings()?.previewPerUserLimit ?? ""}
-                onChange={(event) =>
-                  void saveRuntimeSettings(
-                    { previewPerUserLimit: event.currentTarget.valueAsNumber },
                     "Performance settings saved.",
                   )
                 }

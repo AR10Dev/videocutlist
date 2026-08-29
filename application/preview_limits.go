@@ -9,33 +9,29 @@ import (
 
 var (
 	ErrGlobalLimit = errors.New("preview global limit reached")
-	ErrUserLimit   = errors.New("preview per-user limit reached")
 )
 
-// Preview keeps the two different resources separate: processes consume global
-// capacity while each foreground subscription consumes its user's capacity.
+// PreviewLimits bounds concurrent preview processes globally.
 type PreviewLimits struct {
-	mu      sync.Mutex
-	global  int
-	perUser int
-	active  int
-	users   map[string]int
+	mu     sync.Mutex
+	global int
+	active int
 }
 
-func NewPreviewLimits(global, perUser int) (*PreviewLimits, error) {
-	if global < 1 || perUser < 1 {
+func NewPreviewLimits(global int) (*PreviewLimits, error) {
+	if global < 1 {
 		return nil, errors.New("preview limits must be positive")
 	}
-	return &PreviewLimits{global: global, perUser: perUser, users: make(map[string]int)}, nil
+	return &PreviewLimits{global: global}, nil
 }
 
 // SetLimits applies limits to previews admitted after this call.
-func (p *PreviewLimits) SetLimits(global, perUser int) error {
-	if global < 1 || perUser < 1 {
+func (p *PreviewLimits) SetLimits(global int) error {
+	if global < 1 {
 		return errors.New("preview limits must be positive")
 	}
 	p.mu.Lock()
-	p.global, p.perUser = global, perUser
+	p.global = global
 	p.mu.Unlock()
 	return nil
 }
@@ -78,31 +74,6 @@ func (p *PreviewLimits) reserveProcessLocked() func() {
 			p.mu.Unlock()
 		})
 	}
-}
-
-// AcquireUser reserves one active foreground subscription for user.
-func (p *PreviewLimits) AcquireUser(user string) (func(), error) {
-	if user == "" {
-		return nil, errors.New("preview user is required")
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.users[user] >= p.perUser {
-		return nil, ErrUserLimit
-	}
-	p.users[user]++
-	var once sync.Once
-	return func() {
-		once.Do(func() {
-			p.mu.Lock()
-			defer p.mu.Unlock()
-			if p.users[user] == 1 {
-				delete(p.users, user)
-			} else {
-				p.users[user]--
-			}
-		})
-	}, nil
 }
 
 func (p *PreviewLimits) Active() int {

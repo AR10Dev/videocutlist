@@ -15,7 +15,7 @@ func (c Config) RuntimeSettings() store.RuntimeSettings {
 	for i, destination := range c.Destinations {
 		destinations[i] = store.RuntimeDestination{ID: destination.ID, Label: destination.Label, Description: destination.Description, Kind: destination.Kind, Root: destination.Root, Retention: destination.RetentionText, MediaRoot: destination.MediaRoot}
 	}
-	return store.RuntimeSettings{MediaRoots: c.MediaRoots, Destinations: destinations, ExportLimit: c.ExportLimit, CacheMaxBytes: c.CacheMaxBytes, PreviewGlobalLimit: c.PreviewGlobalLimit, PreviewPerUserLimit: c.PreviewPerUserLimit, PreviewBeforeMS: c.PreviewBeforeMS, PreviewAfterMS: c.PreviewAfterMS, PreviewMaxMS: c.PreviewMaxMS, PreviewGridMS: c.PreviewGridMS, MediaMaxFiles: c.MediaMaxFiles, MediaMaxDepth: c.MediaMaxDepth}
+	return store.RuntimeSettings{MediaRoots: c.MediaRoots, Destinations: destinations, ExportLimit: c.ExportLimit, CacheMaxBytes: c.CacheMaxBytes, PreviewGlobalLimit: c.PreviewGlobalLimit, PreviewBeforeMS: c.PreviewBeforeMS, PreviewAfterMS: c.PreviewAfterMS, PreviewMaxMS: c.PreviewMaxMS, PreviewGridMS: c.PreviewGridMS, MediaMaxFiles: c.MediaMaxFiles, MediaMaxDepth: c.MediaMaxDepth}
 }
 
 // ApplyRuntimeSettings replaces the mutable runtime portion of Config.
@@ -37,7 +37,7 @@ func (c *Config) ApplyRuntimeSettings(settings store.RuntimeSettings) error {
 	}
 	c.MediaRoots, c.Destinations = settings.MediaRoots, destinations
 	c.ExportLimit, c.CacheMaxBytes = settings.ExportLimit, settings.CacheMaxBytes
-	c.PreviewGlobalLimit, c.PreviewPerUserLimit = settings.PreviewGlobalLimit, settings.PreviewPerUserLimit
+	c.PreviewGlobalLimit = settings.PreviewGlobalLimit
 	c.PreviewBeforeMS, c.PreviewAfterMS, c.PreviewMaxMS, c.PreviewGridMS = settings.PreviewBeforeMS, settings.PreviewAfterMS, settings.PreviewMaxMS, settings.PreviewGridMS
 	c.MediaMaxFiles, c.MediaMaxDepth = settings.MediaMaxFiles, settings.MediaMaxDepth
 	return nil

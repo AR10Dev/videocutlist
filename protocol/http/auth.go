@@ -7,35 +7,27 @@ import (
 	"net/http"
 	"strings"
 	"unicode"
-
-	"videocutlist/domain"
 )
 
 var ErrUnauthenticated = errors.New("unauthenticated")
 
-// Authenticator remains HTTP-shaped so OIDC can be added behind this seam.
+// Authenticator is the deployment access gate; it never creates an application identity.
 type Authenticator interface {
-	Authenticate(*http.Request) (domain.Principal, error)
+	Authenticate(*http.Request) error
 }
 type AuthConfig struct {
-	Mode, BearerToken, BearerSubject string
-	// ListenAddress is used to prevent unauthenticated non-loopback servers.
-	ListenAddress string
+	Mode, BearerToken string
+	ListenAddress     string
 }
 type authenticator struct {
-	mode      string
-	token     []byte
-	principal domain.Principal
+	mode  string
+	token []byte
 }
 
 func NewAuthenticator(config AuthConfig) (Authenticator, error) {
 	mode := config.Mode
 	if mode == "" {
 		mode = "none"
-	}
-	subject := config.BearerSubject
-	if subject == "" {
-		subject = "static-bearer"
 	}
 	if mode != "none" && mode != "bearer" && mode != "trusted_proxy" {
 		return nil, errors.New("unsupported authentication mode")
@@ -46,40 +38,33 @@ func NewAuthenticator(config AuthConfig) (Authenticator, error) {
 			return nil, errors.New("authentication is required for non-loopback listeners")
 		}
 	}
-	if mode == "bearer" && (!validToken(config.BearerToken) || !validSubject(subject)) {
+	if mode == "bearer" && !validToken(config.BearerToken) {
 		return nil, errors.New("invalid bearer configuration")
 	}
-	return &authenticator{mode: mode, token: []byte(config.BearerToken), principal: builtInPrincipal(subject)}, nil
+	return &authenticator{mode: mode, token: []byte(config.BearerToken)}, nil
 }
-func (a *authenticator) Authenticate(r *http.Request) (domain.Principal, error) {
+func (a *authenticator) Authenticate(r *http.Request) error {
 	switch a.mode {
 	case "none":
-		return builtInPrincipal("anonymous"), nil
+		return nil
 	case "trusted_proxy":
-		info := GetForwardedInfo(r.Context())
-		if !info.Trusted {
-			return domain.Principal{}, ErrUnauthenticated
+		if !GetForwardedInfo(r.Context()).Trusted {
+			return ErrUnauthenticated
 		}
-		return builtInPrincipal("trusted-proxy"), nil
 	case "bearer":
 		values := r.Header.Values("Authorization")
 		if len(values) != 1 {
-			return domain.Principal{}, ErrUnauthenticated
+			return ErrUnauthenticated
 		}
 		const prefix = "Bearer "
 		value := values[0]
 		if len(value) <= len(prefix) || !strings.EqualFold(value[:len(prefix)-1], prefix[:len(prefix)-1]) || value[len(prefix)-1] != ' ' || subtle.ConstantTimeCompare([]byte(value[len(prefix):]), a.token) != 1 {
-			return domain.Principal{}, ErrUnauthenticated
+			return ErrUnauthenticated
 		}
-		return a.principal, nil
+	default:
+		return ErrUnauthenticated
 	}
-	return domain.Principal{}, ErrUnauthenticated
+	return nil
 }
-func builtInPrincipal(subject string) domain.Principal {
-	return domain.Principal{Subject: subject, Roles: []string{"editor"}, Capabilities: []string{"*"}}
-}
-func validToken(value string) bool { return value != "" && !containsControl(value) }
-func validSubject(value string) bool {
-	return value != "" && value == strings.TrimSpace(value) && len(value) <= 320 && !containsControl(value)
-}
+func validToken(value string) bool      { return value != "" && !containsControl(value) }
 func containsControl(value string) bool { return strings.IndexFunc(value, unicode.IsControl) >= 0 }

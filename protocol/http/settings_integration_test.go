@@ -171,7 +171,7 @@ func testRuntimeSettings() store.RuntimeSettings {
 	return store.RuntimeSettings{
 		MediaRoots:   map[string]string{"camera": "/media/camera"},
 		Destinations: []store.RuntimeDestination{{ID: "download", Label: "Downloads", Kind: "download", Root: "/exports", Retention: "24h"}},
-		ExportLimit:  1, CacheMaxBytes: 1024, PreviewGlobalLimit: 2, PreviewPerUserLimit: 1,
+		ExportLimit:  1, CacheMaxBytes: 1024, PreviewGlobalLimit: 2,
 		PreviewBeforeMS: 2000, PreviewAfterMS: 6000, PreviewMaxMS: 15000, PreviewGridMS: 500,
 		MediaMaxFiles: 100, MediaMaxDepth: 5,
 	}

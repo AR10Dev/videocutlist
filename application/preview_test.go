@@ -51,7 +51,7 @@ func (r *blockingRunner) Start(ctx context.Context, _ domain.PreviewSpec) (*Runn
 }
 
 func TestPreviewHitAndMissPublishAtomically(t *testing.T) {
-	manager, _ := newManager(t, bytesRunner("preview"), 2, 2)
+	manager, _ := newManager(t, bytesRunner("preview"), 2)
 	spec := testSpec("m_hit_miss")
 	reader, result, err := manager.Preview(context.Background(), spec)
 	if err != nil || result.Status != CacheMiss {
@@ -71,7 +71,7 @@ func TestPreviewHitAndMissPublishAtomically(t *testing.T) {
 
 func TestPreviewCancellationStopsProcessAndDiscardsPartial(t *testing.T) {
 	runner := &blockingRunner{}
-	manager, store := newManager(t, runner, 1, 1)
+	manager, store := newManager(t, runner, 1)
 	ctx, cancel := context.WithCancel(context.Background())
 	reader, result, err := manager.Preview(ctx, testSpec("m_cancel"))
 	if err != nil || result.Status != CacheMiss {
@@ -104,13 +104,13 @@ func TestPreviewCancellationStopsProcessAndDiscardsPartial(t *testing.T) {
 	}
 }
 
-func newManager(t *testing.T, runner PreviewRunner, global, perUser int) (*PreviewManager, *cache.Store) {
+func newManager(t *testing.T, runner PreviewRunner, global int) (*PreviewManager, *cache.Store) {
 	t.Helper()
 	store, err := cache.New(t.TempDir(), 1<<20)
 	if err != nil {
 		t.Fatal(err)
 	}
-	limiter, err := NewPreviewLimits(global, perUser)
+	limiter, err := NewPreviewLimits(global)
 	if err != nil {
 		t.Fatal(err)
 	}

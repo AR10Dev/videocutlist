@@ -62,9 +62,9 @@ func OpenDatabase(ctx context.Context, path string) (*sql.DB, error) {
 			return nil, fmt.Errorf("migrate database: %w", err)
 		}
 	}
-	if err := migrateSingleUserBatch(ctx, db); err != nil {
+	if err := migrateLegacyIdentityColumns(ctx, db); err != nil {
 		_ = db.Close()
-		return nil, fmt.Errorf("migrate single-user batch schema: %w", err)
+		return nil, fmt.Errorf("migrate legacy identity columns: %w", err)
 	}
 	if err := migrateUnifiedJobs(ctx, db); err != nil {
 		_ = db.Close()
@@ -171,84 +171,31 @@ func migrateUnifiedJobs(ctx context.Context, db *sql.DB) error {
 	return tx.Commit()
 }
 
-// legacyUnifiedJobID keeps independent legacy ID namespaces distinct without
-// carrying legacy IDs or filesystem data into the shared job namespace.
-func legacyUnifiedJobID(kind JobKind, id string) string {
-	sum := sha256.Sum256([]byte(string(kind) + "\x00" + id))
-	return "j_" + base64.RawURLEncoding.EncodeToString(sum[:])
-}
-
-func migrateSingleUserBatch(ctx context.Context, db *sql.DB) error {
-	var ownerColumn int
-	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('projects') WHERE name = 'owner_login'`).Scan(&ownerColumn); err != nil {
-		return err
-	}
-	if ownerColumn == 0 {
-		return nil
-	}
-	rows, err := db.QueryContext(ctx, `SELECT id, document_json, revision, created_at, updated_at FROM projects`)
-	if err != nil {
-		return err
-	}
-	type projectRow struct {
-		id, document, created, updated string
-		revision                       int64
-	}
-	var projects []projectRow
-	for rows.Next() {
-		var row projectRow
-		if err := rows.Scan(&row.id, &row.document, &row.revision, &row.created, &row.updated); err != nil {
-			rows.Close()
-			return err
-		}
-		projects = append(projects, row)
-	}
-	if err := rows.Close(); err != nil {
-		return err
-	}
+func migrateLegacyIdentityColumns(ctx context.Context, db *sql.DB) error {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if _, err = tx.ExecContext(ctx, `CREATE TABLE projects_batch (id TEXT PRIMARY KEY, revision INTEGER NOT NULL CHECK (revision > 0), document_json TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`); err != nil {
-		return err
-	}
-	for _, row := range projects {
-		var legacy legacyProjectDocument
-		if err := json.Unmarshal([]byte(row.document), &legacy); err != nil {
-			return fmt.Errorf("decode legacy project %q: %w", row.id, err)
-		}
-		document, err := json.Marshal(domain.Document{SchemaVersion: domain.ProjectSchemaVersion, Name: "Untitled project", Items: []domain.ProjectItem{{ID: domain.StableProjectItemID(row.id), MediaID: legacy.MediaID, Segments: legacy.Segments, EditorState: &legacy.UIState}}})
-		if err != nil {
-			return err
-		}
-		if _, err = tx.ExecContext(ctx, `INSERT INTO projects_batch (id, revision, document_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?)`, row.id, row.revision, document, row.created, row.updated); err != nil {
-			return err
+	for _, table := range []string{"media", "projects", "export_jobs", "detection_jobs", "jobs", "cache_entries", "runtime_settings"} {
+		for _, column := range []string{"owner_login", "principal", "role", "capability"} {
+			var present int
+			if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?`, table, column).Scan(&present); err != nil {
+				return err
+			}
+			if present == 1 {
+				if _, err := tx.ExecContext(ctx, `ALTER TABLE `+table+` DROP COLUMN `+column); err != nil {
+					return fmt.Errorf("drop %s.%s: %w", table, column, err)
+				}
+			}
 		}
 	}
-	for _, statement := range []string{
-		`CREATE TABLE export_jobs_batch (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, project_revision INTEGER NOT NULL CHECK (project_revision > 0), state TEXT NOT NULL CHECK (state IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')), request_json TEXT NOT NULL, result_json TEXT, error_code TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
-		`INSERT INTO export_jobs_batch SELECT id, project_id, project_revision, state, request_json, result_json, error_code, created_at, updated_at FROM export_jobs`,
-		`CREATE TABLE detection_jobs_batch (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, media_id TEXT NOT NULL, project_revision INTEGER NOT NULL CHECK (project_revision > 0), kind TEXT NOT NULL CHECK (kind IN ('silence', 'black', 'scene')), state TEXT NOT NULL CHECK (state IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')), result_json TEXT, error_code TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
-		`INSERT INTO detection_jobs_batch SELECT id, project_id, media_id, project_revision, kind, state, result_json, error_code, created_at, updated_at FROM detection_jobs`,
-		`DROP TABLE export_jobs`,
-		`DROP TABLE detection_jobs`,
-		`DROP TABLE projects`,
-		`ALTER TABLE projects_batch RENAME TO projects`,
-		`CREATE TABLE export_jobs (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, project_revision INTEGER NOT NULL CHECK (project_revision > 0), state TEXT NOT NULL CHECK (state IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')), request_json TEXT NOT NULL, result_json TEXT, error_code TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, FOREIGN KEY (project_id) REFERENCES projects(id))`,
-		`INSERT INTO export_jobs SELECT * FROM export_jobs_batch`,
-		`DROP TABLE export_jobs_batch`,
-		`CREATE INDEX export_jobs_state_updated ON export_jobs (state, updated_at)`,
-		`ALTER TABLE detection_jobs_batch RENAME TO detection_jobs`,
-		`CREATE INDEX detection_jobs_state_updated ON detection_jobs (state, updated_at)`,
-	} {
-		if _, err = tx.ExecContext(ctx, statement); err != nil {
-			return err
-		}
-	}
-	if err = tx.Commit(); err != nil {
-		return err
-	}
-	return nil
+	return tx.Commit()
+}
+
+// legacyUnifiedJobID keeps independent legacy ID namespaces distinct without
+// carrying legacy IDs or filesystem data into the shared job namespace.
+func legacyUnifiedJobID(kind JobKind, id string) string {
+	sum := sha256.Sum256([]byte(string(kind) + "\x00" + id))
+	return "j_" + base64.RawURLEncoding.EncodeToString(sum[:])
 }
