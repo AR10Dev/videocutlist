@@ -192,6 +192,11 @@ export function App() {
         body: JSON.stringify(body),
       }),
   }));
+  const cancelJobMutation = createMutation(() => ({
+    mutationFn: ({ id, signal }: { id: string; signal: AbortSignal }) =>
+      api.request(`jobs/${encodeURIComponent(id)}`, { method: "DELETE", signal }),
+  }));
+  const invalidatedTerminalJobs = new Set<string>();
   const exportStatusQuery = useQuery(() => ({
     queryKey: ["job", "export", exportJob()?.id ?? null],
     enabled: Boolean(exportJob()?.id),
@@ -233,6 +238,12 @@ export function App() {
               ? "Export cancelled."
               : exportFailureMessage(next.errorCode),
     );
+    if (["succeeded", "failed", "cancelled"].includes(next.state) && !invalidatedTerminalJobs.has(next.id)) {
+      invalidatedTerminalJobs.add(next.id);
+      void queryClient.invalidateQueries({ queryKey: ["job", "export", next.id] });
+      void queryClient.invalidateQueries({ queryKey: ["project", projectId()] });
+      void queryClient.invalidateQueries({ queryKey: ["media"] });
+    }
   });
   createEffect(() => {
     const next = detectionStatusQuery.data;
@@ -245,6 +256,12 @@ export function App() {
       setDetectionStatus(next.state === "queued" ? "Detection queued." : "Detection running.");
     } else {
       setDetectionStatus(next.state === "cancelled" ? "Detection cancelled." : `Detection failed${next.errorCode ? `: ${next.errorCode}.` : "."}`);
+    }
+    if (["succeeded", "failed", "cancelled"].includes(next.state) && !invalidatedTerminalJobs.has(next.id)) {
+      invalidatedTerminalJobs.add(next.id);
+      void queryClient.invalidateQueries({ queryKey: ["job", "detection", next.id] });
+      void queryClient.invalidateQueries({ queryKey: ["project", projectId()] });
+      void queryClient.invalidateQueries({ queryKey: ["media"] });
     }
   });
   let video: HTMLVideoElement | undefined;
@@ -1116,8 +1133,9 @@ export function App() {
     const job = exportJob();
     if (!job || (job.state !== "queued" && job.state !== "running")) return;
     try {
-      const response = await api.request(`jobs/${encodeURIComponent(job.id)}`, {
-        method: "DELETE",
+      const response = await cancelJobMutation.mutateAsync({
+        id: job.id,
+        signal: new AbortController().signal,
       });
       if (!response.ok) throw new Error("Export could not be cancelled. Try again.");
       await queryClient.cancelQueries({ queryKey: ["job", "export", job.id] });
@@ -1179,6 +1197,8 @@ export function App() {
         `${job.candidates?.length ?? 0} candidates found. Review each before accepting.`,
       );
     } else if (job.state === "cancelled") setDetectionStatus("Detection cancelled.");
+    else if (job.state === "queued" || job.state === "running")
+      setDetectionStatus(job.state === "queued" ? "Detection queued." : "Detection running.");
     else setDetectionStatus(`Detection failed${job.errorCode ? `: ${job.errorCode}.` : "."}`);
   };
   const cancelDetection = async () => {
@@ -1188,8 +1208,9 @@ export function App() {
     detectionController?.abort();
     if (detectionTimer) clearTimeout(detectionTimer);
     try {
-      const response = await api.request(`jobs/${encodeURIComponent(job.id)}`, {
-        method: "DELETE",
+      const response = await cancelJobMutation.mutateAsync({
+        id: job.id,
+        signal: new AbortController().signal,
       });
       if (request !== detectionRequest) return;
       if (!response.ok) throw new Error("Detection could not be cancelled. Try again.");
