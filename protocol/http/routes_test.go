@@ -99,6 +99,34 @@ func (m *routeTestMedia) Status() LibraryStatus {
 	return LibraryStatus{State: LibraryReadyEmpty, Message: "No supported media was found."}
 }
 
+type routeTestMediaImport struct{ starts int }
+
+func (m *routeTestMediaImport) StartImport(context.Context) (application.ImportJob, error) {
+	m.starts++
+	return application.ImportJob{ID: "j_scanresult1234", State: "queued"}, nil
+}
+func (m *routeTestMediaImport) ImportStatus(context.Context, string) (application.ImportJob, error) {
+	return application.ImportJob{}, nil
+}
+func (m *routeTestMediaImport) CancelImport(context.Context, string) error { return nil }
+
+func TestRefreshMediaSubmitsUnifiedScanJob(t *testing.T) {
+	authenticator, err := NewAuthenticator(AuthConfig{Mode: "none"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	imports := &routeTestMediaImport{}
+	server, err := New(Config{Authenticator: authenticator, Media: &routeTestMedia{}, MediaImport: imports, Preview: routeTestPreview{}, Projects: routeTestProjects{}, Exports: routeTestExports{}, Jobs: &routeTestJobs{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	server.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/v1/media/refresh", nil))
+	if recorder.Code != http.StatusAccepted || imports.starts != 1 {
+		t.Fatalf("refresh status=%d starts=%d body=%s", recorder.Code, imports.starts, recorder.Body.String())
+	}
+}
+
 func TestBatchExportEndpointsUseInjectedService(t *testing.T) {
 	authenticator, err := NewAuthenticator(AuthConfig{Mode: "none"})
 	if err != nil {

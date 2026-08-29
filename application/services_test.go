@@ -31,6 +31,17 @@ func (c *catalogStub) Preview(context.Context, PreviewSpec) (domain.PreviewSpec,
 	return domain.PreviewSpec{}, nil
 }
 
+func TestImportJobResultMapsPersistedRootStatuses(t *testing.T) {
+	job := store.Job{
+		ID: "j_scanresult1234", State: store.JobSucceeded,
+		ResultJSON: sql.NullString{Valid: true, String: `{"library":{"state":"ready_with_media"},"empty":{"state":"ready_empty","errorCode":"scan_limit"}}`},
+	}
+	got := importJobResult(job)
+	if got.Progress != 1 || got.RootResults["library"].State != LibraryReadyWithMedia || got.RootResults["empty"].ErrorCode != "scan_limit" {
+		t.Fatalf("import result = %#v", got)
+	}
+}
+
 func TestMediaBrowseForwardsToCatalog(t *testing.T) {
 	want := FolderPage{Folders: []FolderNode{{ID: "f_opaque", Label: "clips"}}}
 	useCase := &MediaUseCase{Catalog: &catalogStub{browse: want}, Configured: true}

@@ -90,6 +90,9 @@ func (m *MediaUseCase) StartImport(ctx context.Context) (ImportJob, error) {
 }
 
 func (m *MediaUseCase) ImportStatus(ctx context.Context, id string) (ImportJob, error) {
+	if m.UnifiedJobs == nil {
+		return ImportJob{}, store.ErrJobNotFound
+	}
 	job, err := m.UnifiedJobs.Get(ctx, id)
 	if err != nil || job.Kind != store.JobScan {
 		return ImportJob{}, store.ErrJobNotFound
@@ -98,6 +101,9 @@ func (m *MediaUseCase) ImportStatus(ctx context.Context, id string) (ImportJob, 
 }
 
 func (m *MediaUseCase) CancelImport(ctx context.Context, id string) error {
+	if m.UnifiedJobs == nil || m.Scheduler == nil {
+		return store.ErrJobNotFound
+	}
 	job, err := m.UnifiedJobs.Get(ctx, id)
 	if err != nil || job.Kind != store.JobScan {
 		return store.ErrJobNotFound

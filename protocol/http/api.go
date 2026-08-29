@@ -502,11 +502,12 @@ func destinationsMatch(raw json.RawMessage, previous []store.RuntimeDestination)
 }
 
 func (s *Server) refreshSettings(w http.ResponseWriter, r *http.Request, _ domain.Principal, id string) {
-	if err := s.config.Media.RefreshMedia(r.Context()); err != nil {
+	job, err := s.startMediaScan(r.Context())
+	if err != nil {
 		httpx.Error(w, http.StatusConflict, "refresh_unavailable", "The media library could not be refreshed. Check the deployment mount or directory permissions.", id)
 		return
 	}
-	w.WriteHeader(http.StatusNoContent)
+	httpx.WriteJSON(w, http.StatusAccepted, job)
 }
 
 func (s *Server) downloadOutput(w http.ResponseWriter, r *http.Request, p domain.Principal, encoded, id string) {
@@ -624,11 +625,19 @@ func (s *Server) refreshMedia(writer http.ResponseWriter, request *http.Request,
 	if !s.allowed(writer, principal, "media_refresh", "*", id) {
 		return
 	}
-	if err := s.config.Media.RefreshMedia(request.Context()); err != nil {
+	job, err := s.startMediaScan(request.Context())
+	if err != nil {
 		internalError(writer, id)
 		return
 	}
-	writer.WriteHeader(http.StatusNoContent)
+	httpx.WriteJSON(writer, http.StatusAccepted, job)
+}
+
+func (s *Server) startMediaScan(ctx context.Context) (application.ImportJob, error) {
+	if s.config.MediaImport == nil {
+		return application.ImportJob{}, errors.New("unified media scan is not configured")
+	}
+	return s.config.MediaImport.StartImport(ctx)
 }
 func (s *Server) getMedia(writer http.ResponseWriter, request *http.Request, media string, id string) {
 	result, err := s.config.Media.Get(request.Context(), media)

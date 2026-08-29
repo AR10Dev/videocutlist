@@ -98,7 +98,6 @@ func run(ctx context.Context) error {
 	mediaService := &application.MediaUseCase{Catalog: mediaCatalog, Configured: len(cfg.MediaRoots) > 0}
 	detectionService := application.NewDetectionUseCase(detection.Service{Scanner: scanner, Catalog: mediaStore, FFmpegPath: cfg.FFmpegPath, Capacity: limiter})
 	detectionService.Catalog = mediaCatalog
-	_ = mediaService.RefreshMedia(ctx)
 	previewRunner := adapters.PreviewRunner{Scanner: scanner, Media: mediaStore, FFmpeg: ffmpeg.Runner{Path: cfg.FFmpegPath}}
 	previewManager, err := application.NewPreviewManager(adapters.PreviewCache{Store: cacheStore}, previewRunner, application.Validator(validator), limiter)
 	if err != nil {
@@ -186,6 +185,11 @@ func run(ctx context.Context) error {
 	batchExports.Scheduler = scheduler
 	mediaService.Scheduler, mediaService.UnifiedJobs = scheduler, unifiedJobs
 	detectionService.Scheduler, detectionService.UnifiedJobs = scheduler, unifiedJobs
+	if mediaService.Configured {
+		if _, err := mediaService.StartImport(ctx); err != nil {
+			return fmt.Errorf("start initial media scan: %w", err)
+		}
+	}
 	batchExports.RunSnapshot = func(ctx context.Context, snapshot application.ExportSnapshot) error {
 		return exportExecutor.ExecuteBatchSnapshot(ctx, snapshot.Item.ID, snapshot)
 	}
