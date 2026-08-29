@@ -38,6 +38,8 @@ type Service struct {
 	mu         sync.Mutex
 }
 
+var renameAsset = os.Rename
+
 func (s *Service) Thumbnails(ctx context.Context, spec application.AssetSpec) (application.AssetResult, error) {
 	if err := validate(spec, false); err != nil {
 		return application.AssetResult{}, err
@@ -203,7 +205,17 @@ func (s *Service) publish(ctx context.Context, key, ext string, b []byte) error 
 	if err != nil {
 		return err
 	}
-	return os.Rename(name, filepath.Join(dir, key+ext))
+	final := filepath.Join(dir, key+ext)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := renameAsset(name, final); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return errors.Join(err, os.Remove(final))
+	}
+	return nil
 }
 
 type boundedBuffer struct {

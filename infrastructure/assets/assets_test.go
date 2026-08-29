@@ -46,6 +46,26 @@ func TestPublishDoesNotPublishAfterCancellationWhileLocked(t *testing.T) {
 	}
 }
 
+func TestPublishRemovesAssetWhenCancelledDuringRename(t *testing.T) {
+	dir := t.TempDir()
+	s := &Service{CacheDir: dir, MaxBytes: 1024}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	originalRename := renameAsset
+	renameAsset = func(old, new string) error {
+		cancel()
+		return os.Rename(old, new)
+	}
+	defer func() { renameAsset = originalRename }()
+
+	if err := s.publish(ctx, "key", ".png", []byte("png")); !errors.Is(err, context.Canceled) {
+		t.Fatalf("publish error = %v, want cancellation", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "assets", "key.png")); !os.IsNotExist(err) {
+		t.Fatalf("cancelled publish created cache artifact: %v", err)
+	}
+}
+
 func TestValidateRejectsExcessiveWaveformSamples(t *testing.T) {
 	if err := validate(application.AssetSpec{DurationMS: 1, Samples: maxWaveformSamples + 1}, true); err == nil {
 		t.Fatal("validate accepted excessive waveform samples")
