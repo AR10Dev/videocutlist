@@ -153,10 +153,27 @@ describe("Solid Query lifecycle contracts", () => {
     expect(cancellationIsCurrent(current, current)).toBe(false);
   });
 
-  it("stops polling terminal jobs and avoids stale replacement", () => {
+  it("keeps delayed query results isolated from a newer selection", async () => {
+    const client = new QueryClient();
+    let releaseOld!: () => void;
+    const oldResult = client.fetchQuery({
+      queryKey: ["media", "old-media"],
+      queryFn: () =>
+        new Promise<{ id: string }>((resolve) => {
+          releaseOld = () => resolve({ id: "old-media" });
+        }),
+    });
+    const newResult = await client.fetchQuery({
+      queryKey: ["media", "new-media"],
+      queryFn: () => Promise.resolve({ id: "new-media" }),
+    });
+    expect(newResult.id).toBe("new-media");
+    expect(client.getQueryData(["media", "new-media"])).toEqual({ id: "new-media" });
+    releaseOld();
+    await oldResult;
+  });
+
+  it("stops polling terminal jobs", () => {
     expect(jobPollInterval({ state: "succeeded" }, 1000)).toBe(false);
-    const selected = "new-media";
-    const response = { id: "old-media" };
-    expect(response.id === selected).toBe(false);
   });
 });
