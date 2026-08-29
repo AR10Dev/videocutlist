@@ -120,6 +120,11 @@ func (s *JobsStore) Fail(ctx context.Context, id, code string) (Job, error) {
 	return s.transition(ctx, id, JobRunning, JobFailed, sql.NullString{}, sql.NullString{String: code, Valid: code != ""})
 }
 
+// FailWithResult records partial results before publishing a failed job.
+func (s *JobsStore) FailWithResult(ctx context.Context, id, result, code string) (Job, error) {
+	return s.transition(ctx, id, JobRunning, JobFailed, sql.NullString{String: result, Valid: result != ""}, sql.NullString{String: code, Valid: code != ""})
+}
+
 func (s *JobsStore) transition(ctx context.Context, id string, from, to JobState, resultJSON, errorCode sql.NullString) (Job, error) {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	r, err := s.db.ExecContext(ctx, `UPDATE jobs SET state=?,result_json=?,error_code=?,updated_at=? WHERE id=? AND state=?`, to, resultJSON, errorCode, now, id, from)

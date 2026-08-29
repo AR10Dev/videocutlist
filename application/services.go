@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"regexp"
 	"sync"
 	"time"
 
@@ -90,6 +91,9 @@ func (m *MediaUseCase) StartImport(ctx context.Context) (ImportJob, error) {
 }
 
 func (m *MediaUseCase) ImportStatus(ctx context.Context, id string) (ImportJob, error) {
+	if m.UnifiedJobs == nil {
+		return ImportJob{}, store.ErrJobNotFound
+	}
 	job, err := m.UnifiedJobs.Get(ctx, id)
 	if err != nil || job.Kind != store.JobScan {
 		return ImportJob{}, store.ErrJobNotFound
@@ -98,6 +102,9 @@ func (m *MediaUseCase) ImportStatus(ctx context.Context, id string) (ImportJob, 
 }
 
 func (m *MediaUseCase) CancelImport(ctx context.Context, id string) error {
+	if m.UnifiedJobs == nil || m.Scheduler == nil {
+		return store.ErrJobNotFound
+	}
 	job, err := m.UnifiedJobs.Get(ctx, id)
 	if err != nil || job.Kind != store.JobScan {
 		return store.ErrJobNotFound
@@ -199,16 +206,60 @@ func (m *MediaUseCase) setStatusForRefresh(refreshID uint64, state LibraryState)
 		m.status = libraryStatus(state)
 	}
 }
+
+var safeRootAlias = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$`)
+
+func safeRootResults(raw string) map[string]RootLibraryStatus {
+	var stored map[string]RootLibraryStatus
+	if json.Unmarshal([]byte(raw), &stored) != nil {
+		return nil
+	}
+	result := make(map[string]RootLibraryStatus, len(stored))
+	for alias, status := range stored {
+		if !safeRootAlias.MatchString(alias) || !validRootState(status.State) {
+			continue
+		}
+		if status.ErrorCode != "" && !validRootError(status.ErrorCode) {
+			continue
+		}
+		result[alias] = status
+	}
+	if len(result) == 0 {
+		return nil
+	}
+	return result
+}
+
+func validRootState(state LibraryState) bool {
+	switch state {
+	case LibraryScanning, LibraryReadyEmpty, LibraryReadyWithMedia, LibraryFailed:
+		return true
+	default:
+		return false
+	}
+}
+func validRootError(code string) bool {
+	switch code {
+	case "scan_limit", "cancelled", "scan_failed":
+		return true
+	default:
+		return false
+	}
+}
+func validScanJobError(code string) bool {
+	return validRootError(code) || code == "job_failed" || code == "interrupted_by_restart"
+}
+
 func importJobResult(job store.Job) ImportJob {
 	out := ImportJob{ID: job.ID, State: string(job.State), Progress: 0}
 	if job.State == store.JobSucceeded {
 		out.Progress = 1
 	}
-	if job.ErrorCode.Valid {
+	if job.ErrorCode.Valid && validScanJobError(job.ErrorCode.String) {
 		out.ErrorCode = job.ErrorCode.String
 	}
 	if job.ResultJSON.Valid {
-		_ = json.Unmarshal([]byte(job.ResultJSON.String), &out.RootResults)
+		out.RootResults = safeRootResults(job.ResultJSON.String)
 	}
 	return out
 }
@@ -449,6 +500,13 @@ func (j JobUseCase) Cancel(ctx context.Context, id string) error {
 	return err
 }
 
+func stringPointer(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
+}
+
 func unifiedJobResult(value store.Job) Job {
 	switch value.Kind {
 	case store.JobExport:
@@ -458,6 +516,9 @@ func unifiedJobResult(value store.Job) Job {
 		if err == nil {
 			return detectionJobAsJob(result)
 		}
+	case store.JobScan:
+		job := importJobResult(value)
+		return Job{ID: job.ID, Type: string(value.Kind), State: job.State, Progress: job.Progress, RootResults: job.RootResults, ErrorCode: stringPointer(job.ErrorCode), CreatedAt: value.CreatedAt, UpdatedAt: value.UpdatedAt}
 	}
 	job := Job{ID: value.ID, Type: string(value.Kind), State: string(value.State), CreatedAt: value.CreatedAt, UpdatedAt: value.UpdatedAt}
 	if value.State == store.JobRunning {
