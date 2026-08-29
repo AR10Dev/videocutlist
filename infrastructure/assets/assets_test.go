@@ -3,10 +3,11 @@ package assets
 import (
 	"context"
 	"errors"
-
 	"os"
 	"os/exec"
+	"path/filepath"
 	"testing"
+
 	"videocutlist/application"
 )
 
@@ -25,6 +26,23 @@ func TestServiceRunUsesSharedProcessCapacity(t *testing.T) {
 	_, err = (&Service{Capacity: rejectingProcessLimiter{}}).run(context.Background(), source, nil, 1)
 	if err == nil || err.Error() != "capacity exhausted" {
 		t.Fatalf("run error = %v", err)
+	}
+}
+
+func TestPublishDoesNotPublishAfterCancellationWhileLocked(t *testing.T) {
+	dir := t.TempDir()
+	s := &Service{CacheDir: dir, MaxBytes: 1024}
+	ctx, cancel := context.WithCancel(context.Background())
+	s.mu.Lock()
+	done := make(chan error, 1)
+	go func() { done <- s.publish(ctx, "key", ".png", []byte("png")) }()
+	cancel()
+	s.mu.Unlock()
+	if err := <-done; !errors.Is(err, context.Canceled) {
+		t.Fatalf("publish error = %v, want cancellation", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "assets", "key.png")); !os.IsNotExist(err) {
+		t.Fatalf("cancelled publish created cache artifact: %v", err)
 	}
 }
 

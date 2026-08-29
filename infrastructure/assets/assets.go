@@ -68,7 +68,7 @@ func (s *Service) Thumbnails(ctx context.Context, spec application.AssetSpec) (a
 	if err != nil {
 		return application.AssetResult{}, err
 	}
-	if err := s.publish(key, ".png", data); err != nil {
+	if err := s.publish(ctx, key, ".png", data); err != nil {
 		return application.AssetResult{}, err
 	}
 	return result(data, "image/png", false, spec), nil
@@ -123,7 +123,7 @@ func (s *Service) Waveform(ctx context.Context, spec application.AssetSpec) (app
 		peaks[i] = minFloat(max, 1)
 	}
 	data, _ = json.Marshal(map[string]any{"startMs": spec.StartMS, "durationMs": spec.DurationMS, "peaks": peaks})
-	if err := s.publish(key, ".json", data); err != nil {
+	if err := s.publish(ctx, key, ".json", data); err != nil {
 		return application.AssetResult{}, err
 	}
 	return waveformResult(data, false, spec)
@@ -172,12 +172,18 @@ func (s *Service) cached(key, ext string) ([]byte, bool, error) {
 	}
 	return b, true, nil
 }
-func (s *Service) publish(key, ext string, b []byte) error {
+func (s *Service) publish(ctx context.Context, key, ext string, b []byte) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if int64(len(b)) > s.MaxBytes {
 		return errors.New("asset exceeds cache limit")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	dir := filepath.Join(s.CacheDir, "assets")
 	if err := os.MkdirAll(dir, 0750); err != nil {
 		return err
