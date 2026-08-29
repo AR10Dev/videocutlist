@@ -33,6 +33,9 @@ const maxDetectionCandidates = 1000
 const maxDetectionInput = 1 << 20
 
 func (s Service) Detect(ctx context.Context, request application.DetectionRequest) ([]domain.Candidate, error) {
+	if err := application.ValidateDetectionRequest(request); err != nil {
+		return nil, err
+	}
 	if s.Scanner == nil || s.Catalog == nil || s.FFmpegPath == "" {
 		return nil, fmt.Errorf("detection service is not configured")
 	}

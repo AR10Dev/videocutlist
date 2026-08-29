@@ -96,7 +96,7 @@ func run(ctx context.Context) error {
 	})
 	mediaCatalog := adapters.MediaCatalog{Scanner: scanner, Store: mediaStore}
 	mediaService := &application.MediaUseCase{Catalog: mediaCatalog, Configured: len(cfg.MediaRoots) > 0}
-	detectionService := application.NewDetectionUseCase(nil, detection.Service{Scanner: scanner, Catalog: mediaStore, FFmpegPath: cfg.FFmpegPath}, cfg.ExportLimit)
+	detectionService := application.NewDetectionUseCase(detection.Service{Scanner: scanner, Catalog: mediaStore, FFmpegPath: cfg.FFmpegPath})
 	detectionService.Catalog = mediaCatalog
 	_ = mediaService.RefreshMedia(ctx)
 	previewRunner := adapters.PreviewRunner{Scanner: scanner, Media: mediaStore, FFmpeg: ffmpeg.Runner{Path: cfg.FFmpegPath}}
@@ -155,6 +155,9 @@ func run(ctx context.Context) error {
 			if err := json.Unmarshal([]byte(job.RequestJSON), &request); err != nil {
 				return err
 			}
+			if err := application.ValidateDetectionRequest(request); err != nil {
+				return err
+			}
 			media, err := mediaCatalog.Get(ctx, request.MediaID)
 			if err != nil {
 				return err
@@ -190,7 +193,6 @@ func run(ctx context.Context) error {
 	defer scheduler.Shutdown(context.Background())
 	exportService := application.NewExportUseCase(jobStore, exportExecutor, cfg.ExportLimit)
 	exportService.Settings = runtimeState
-	detectionService.SetLimitProvider(func() int { return runtimeState.Snapshot().ExportLimit })
 	exportService.SetLimitProvider(func() int { return runtimeState.Snapshot().ExportLimit })
 	jobService := application.JobUseCase{Jobs: unifiedJobs}
 	authenticator, err := httpapi.NewAuthenticator(httpapi.AuthConfig{
