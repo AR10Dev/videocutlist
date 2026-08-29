@@ -104,7 +104,7 @@ func run(ctx context.Context) error {
 		return err
 	}
 	previewService := application.PreviewUseCase{Catalog: mediaCatalog, Manager: previewManager}
-	assetService := &assets.Service{Scanner: scanner, Media: mediaStore, FFmpegPath: cfg.FFmpegPath, CacheDir: cfg.CacheDir, MaxBytes: cfg.CacheMaxBytes}
+	assetService := &assets.Service{Scanner: scanner, Media: mediaStore, FFmpegPath: cfg.FFmpegPath, CacheDir: cfg.CacheDir, MaxBytes: cfg.CacheMaxBytes, Capacity: limiter}
 	projectService := application.ProjectUseCase{Repository: adapters.ProjectRepository{Store: projectStore}, Media: mediaCatalog}
 	artifacts := exporter.NewArtifactStore()
 	if err := artifacts.Reconcile(ctx, unifiedJobs, cfg.FFprobePath, cfg.Destinations); err != nil {

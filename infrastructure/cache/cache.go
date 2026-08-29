@@ -239,6 +239,13 @@ func (p *Partial) Commit(ctx context.Context, validator Validator) error {
 			_ = os.Remove(p.path)
 			return
 		}
+		// Validators may not observe cancellation (for example, a completed
+		// ffprobe); never publish after the request has been cancelled.
+		if err := ctx.Err(); err != nil {
+			result = err
+			_ = os.Remove(p.path)
+			return
+		}
 		final, err := p.store.path(p.key)
 		if err != nil {
 			result = err

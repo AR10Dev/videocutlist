@@ -2,12 +2,31 @@ package assets
 
 import (
 	"context"
+	"errors"
 
 	"os"
 	"os/exec"
 	"testing"
 	"videocutlist/application"
 )
+
+type rejectingProcessLimiter struct{}
+
+func (rejectingProcessLimiter) AcquireProcess() (func(), error) {
+	return nil, errors.New("capacity exhausted")
+}
+
+func TestServiceRunUsesSharedProcessCapacity(t *testing.T) {
+	source, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	_, err = (&Service{Capacity: rejectingProcessLimiter{}}).run(context.Background(), source, nil, 1)
+	if err == nil || err.Error() != "capacity exhausted" {
+		t.Fatalf("run error = %v", err)
+	}
+}
 
 func TestValidateRejectsExcessiveWaveformSamples(t *testing.T) {
 	if err := validate(application.AssetSpec{DurationMS: 1, Samples: maxWaveformSamples + 1}, true); err == nil {
