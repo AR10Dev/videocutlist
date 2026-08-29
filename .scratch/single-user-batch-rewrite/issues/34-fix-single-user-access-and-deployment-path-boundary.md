@@ -5,7 +5,7 @@
 **Blocked by:** 10
 
 **Category:** bug
-**Status:** ready-for-agent
+**Status:** completed
 
 - [ ] A non-loopback listener cannot use unauthenticated application access.
 - [ ] Browser settings responses redact all deployment filesystem paths.
@@ -15,3 +15,4 @@
 ## Comments
 
 - Opened from review of ticket 10. `AUTH_MODE=none` remains valid on non-loopback listeners, and settings GET/PUT still expose and mutate deployment paths.
+- Merged. Non-loopback unauthenticated access is rejected, settings responses redact deployment paths, and browser mutations cannot change deployment paths.

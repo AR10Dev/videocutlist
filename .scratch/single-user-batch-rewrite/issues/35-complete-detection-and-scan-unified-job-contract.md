@@ -5,7 +5,7 @@
 **Blocked by:** 32
 
 **Category:** bug
-**Status:** ready-for-agent
+**Status:** blocked
 
 - [ ] Detection jobs persist a source fingerprint and bounded detector parameters, then reject a changed source at execution.
 - [ ] Scan jobs persist safe results for every scanned root and expose them through unified job retrieval.
@@ -15,3 +15,4 @@
 ## Comments
 
 - Opened from review of ticket 32. Detection requests omit immutable fingerprint and bounded parameters, scan jobs persist `{}`, and legacy production paths remain.
+- Merged with ticket 32. Ticket 38 covers unified scan result retrieval and the remaining in-memory import fallback.

@@ -5,7 +5,7 @@
 **Blocked by:** 08
 
 **Category:** bug
-**Status:** ready-for-agent
+**Status:** blocked
 
 - [ ] Detection job requests include a media source fingerprint and bounded detector parameters; execution rejects changed sources.
 - [ ] Scan jobs retain safe per-root scan results for unified job retrieval.
@@ -15,3 +15,4 @@
 ## Comments
 
 - Opened from post-merge review of ticket 08. Detection requests retain only media ID/revision/kind; scans submit/store `{}` without root results; obsolete in-memory import and detection compatibility implementations remain.
+- Implemented and merged with ticket 35. Post-merge review found unified job retrieval omits persisted root results and the in-memory import fallback remains. Follow-up: ticket 38.

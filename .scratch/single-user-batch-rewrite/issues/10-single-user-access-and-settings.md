@@ -5,7 +5,7 @@
 **Blocked by:** 01
 
 **Category:** enhancement
-**Status:** ready-for-agent
+**Status:** blocked
 
 - [ ] Application interfaces and HTTP handlers accept no principal, owner, role, or capability values.
 - [ ] Loopback-only mode may run without authentication.
@@ -18,3 +18,5 @@
 - [ ] Security, API, and configuration tests cover loopback, remote access, proxy trust, token comparison, origin rejection, and path redaction.
 
 ## Comments
+
+- Implemented and merged with ticket 34. Post-merge review confirmed deployment access and settings boundaries, but application and persistence still expose principal and owner contracts. Follow-up: ticket 37.

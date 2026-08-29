@@ -5,7 +5,7 @@
 **Blocked by:** 04
 
 **Category:** bug
-**Status:** ready-for-agent
+**Status:** blocked
 
 - [ ] Preview requests use a separate interactive limit and never become durable background jobs.
 - [ ] A global process budget prevents previews and background FFmpeg work from exceeding configured machine capacity.
@@ -17,3 +17,5 @@
 - [ ] Tests cover cache races, cancellation, background saturation, cache hits, and validation failure.
 
 ## Comments
+
+- Implemented and merged with ticket 33. Post-merge review found detection bypasses the global FFmpeg budget and a final cache-publication cancellation race. Follow-up: ticket 36.
