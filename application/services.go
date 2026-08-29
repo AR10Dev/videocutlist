@@ -64,120 +64,44 @@ type MediaUseCase struct {
 	UnifiedJobs *store.JobsStore
 	status      LibraryStatus
 	mu          sync.RWMutex
-	imports     map[string]*mediaImport
 	refreshID   uint64
 }
-
-type mediaImport struct {
-	job    ImportJob
-	owner  string
-	cancel context.CancelFunc
-}
-
-// mediaImportRetention bounds how long terminal jobs remain available for polling.
-var mediaImportRetention = time.Minute
 
 func (m *MediaUseCase) StartImport(ctx context.Context, principal domain.Principal) (ImportJob, error) {
 	if !m.Configured {
 		return ImportJob{}, errors.New("media library is not configured")
 	}
-	if m.Scheduler != nil && m.UnifiedJobs != nil {
-		id, err := newID("j_")
-		if err != nil {
-			return ImportJob{}, err
-		}
-		batchID, err := newID("b_")
-		if err != nil {
-			return ImportJob{}, err
-		}
-		jobs, err := m.Scheduler.Submit(ctx, []store.Job{{ID: id, BatchID: batchID, Kind: store.JobScan, RequestJSON: `{}`}})
-		if err != nil {
-			return ImportJob{}, err
-		}
-		return importJobResult(jobs[0]), nil
+	if m.Scheduler == nil || m.UnifiedJobs == nil {
+		return ImportJob{}, errors.New("unified job scheduler is not configured")
 	}
 	id, err := newID("j_")
 	if err != nil {
 		return ImportJob{}, err
 	}
-	jobCtx, cancel := context.WithCancel(context.Background())
-	m.mu.Lock()
-	if m.imports == nil {
-		m.imports = make(map[string]*mediaImport)
+	batchID, err := newID("b_")
+	if err != nil {
+		return ImportJob{}, err
 	}
-	if m.status.State == LibraryScanning {
-		m.mu.Unlock()
-		cancel()
-		return ImportJob{}, ErrBusy
+	jobs, err := m.Scheduler.Submit(ctx, []store.Job{{ID: id, BatchID: batchID, Kind: store.JobScan, RequestJSON: `{}`}})
+	if err != nil {
+		return ImportJob{}, err
 	}
-	entry := &mediaImport{job: ImportJob{ID: id, State: "queued"}, owner: principal.Subject, cancel: cancel}
-	m.imports[id] = entry
-	m.status = libraryStatus(LibraryScanning)
-	job := entry.job
-	m.mu.Unlock()
-	go m.runImport(jobCtx, entry)
-	return job, nil
-}
-func (m *MediaUseCase) runImport(ctx context.Context, entry *mediaImport) {
-	m.mu.Lock()
-	entry.job.State = "running"
-	m.mu.Unlock()
-	err := m.RefreshMedia(ctx)
-	m.mu.Lock()
-	if errors.Is(ctx.Err(), context.Canceled) {
-		entry.job.State = "cancelled"
-	} else if err != nil {
-		entry.job.State = "failed"
-		entry.job.ErrorCode = "import_failed"
-	} else {
-		entry.job.State, entry.job.Progress = "succeeded", 1
-	}
-	// Read the retention setting while publishing the terminal state so polling
-	// observes completion before a test or configuration update changes it.
-	retention := mediaImportRetention
-	m.mu.Unlock()
-	// Keep terminal state available briefly so clients can observe it, then drop it.
-	time.AfterFunc(retention, func() {
-		m.mu.Lock()
-		if current, ok := m.imports[entry.job.ID]; ok && current == entry && current.job.State != "running" && current.job.State != "queued" {
-			delete(m.imports, entry.job.ID)
-		}
-		m.mu.Unlock()
-	})
+	return importJobResult(jobs[0]), nil
 }
 func (m *MediaUseCase) ImportStatus(ctx context.Context, principal domain.Principal, id string) (ImportJob, error) {
-	if m.Scheduler != nil && m.UnifiedJobs != nil {
-		job, err := m.UnifiedJobs.Get(ctx, id)
-		if err != nil || job.Kind != store.JobScan {
-			return ImportJob{}, store.ErrJobNotFound
-		}
-		return importJobResult(job), nil
+	job, err := m.UnifiedJobs.Get(ctx, id)
+	if err != nil || job.Kind != store.JobScan {
+		return ImportJob{}, store.ErrJobNotFound
 	}
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	entry, ok := m.imports[id]
-	if !ok || entry.owner != principal.Subject {
-		return ImportJob{}, errors.New("import job not found")
-	}
-	return entry.job, nil
+	return importJobResult(job), nil
 }
 func (m *MediaUseCase) CancelImport(ctx context.Context, principal domain.Principal, id string) error {
-	if m.Scheduler != nil && m.UnifiedJobs != nil {
-		job, err := m.UnifiedJobs.Get(ctx, id)
-		if err != nil || job.Kind != store.JobScan {
-			return store.ErrJobNotFound
-		}
-		_, err = m.Scheduler.Cancel(ctx, id)
-		return err
+	job, err := m.UnifiedJobs.Get(ctx, id)
+	if err != nil || job.Kind != store.JobScan {
+		return store.ErrJobNotFound
 	}
-	m.mu.RLock()
-	entry, ok := m.imports[id]
-	m.mu.RUnlock()
-	if !ok || entry.owner != principal.Subject {
-		return errors.New("import job not found")
-	}
-	entry.cancel()
-	return nil
+	_, err = m.Scheduler.Cancel(ctx, id)
+	return err
 }
 
 func (m *MediaUseCase) List(ctx context.Context, cursor string, limit int) (MediaPage, error) {

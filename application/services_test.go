@@ -106,31 +106,6 @@ func (c *boundedRecoveryCatalog) Preview(context.Context, PreviewSpec) (domain.P
 	return domain.PreviewSpec{}, nil
 }
 
-func TestMediaImportCancellationBoundsStatusRecovery(t *testing.T) {
-	catalog := &boundedRecoveryCatalog{recoveryStarted: make(chan struct{}), releaseRecovery: make(chan struct{})}
-	useCase := &MediaUseCase{Catalog: catalog, Configured: true}
-	job, err := useCase.StartImport(context.Background(), domain.Principal{Subject: "owner"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := useCase.CancelImport(context.Background(), domain.Principal{Subject: "owner"}, job.ID); err != nil {
-		t.Fatal(err)
-	}
-	<-catalog.recoveryStarted
-	deadline := time.Now().Add(mediaStatusRecoveryTimeout + time.Second)
-	for time.Now().Before(deadline) {
-		status, statusErr := useCase.ImportStatus(context.Background(), domain.Principal{Subject: "owner"}, job.ID)
-		if statusErr == nil && status.State == "cancelled" {
-			// Let runImport schedule its retention timer before the next test mutates the test knob.
-			timer := time.NewTimer(10 * time.Millisecond)
-			<-timer.C
-			return
-		}
-		time.Sleep(time.Millisecond)
-	}
-	t.Fatal("cancelled import remained running past bounded recovery")
-}
-
 func TestCancelledRefreshCannotOverwriteNewerFailure(t *testing.T) {
 	catalog := &boundedRecoveryCatalog{recoveryStarted: make(chan struct{}), releaseRecovery: make(chan struct{})}
 	useCase := &MediaUseCase{Catalog: catalog, Configured: true}
@@ -149,56 +124,39 @@ func TestCancelledRefreshCannotOverwriteNewerFailure(t *testing.T) {
 	}
 }
 
-func TestMediaImportCancellationRestoresUsableLibraryStatus(t *testing.T) {
-	catalog := &cancellableCatalog{started: make(chan struct{}), items: []Media{{ID: "m_test"}}}
-	useCase := &MediaUseCase{Catalog: catalog, Configured: true}
-	job, err := useCase.StartImport(context.Background(), domain.Principal{Subject: "owner"})
+func TestUnifiedLibraryScanRetrievalMapsPersistedRootResults(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.OpenDatabase(ctx, t.TempDir()+"/scan.db")
 	if err != nil {
 		t.Fatal(err)
 	}
-	<-catalog.started
-	if err := useCase.CancelImport(context.Background(), domain.Principal{Subject: "owner"}, job.ID); err != nil {
-		t.Fatal(err)
-	}
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		status, statusErr := useCase.ImportStatus(context.Background(), domain.Principal{Subject: "owner"}, job.ID)
-		if statusErr == nil && status.State == "cancelled" {
-			if got := useCase.Status(); got.State != LibraryReadyWithMedia {
-				t.Fatalf("status after cancellation = %#v", got)
-			}
-			timer := time.NewTimer(10 * time.Millisecond)
-			<-timer.C
-			return
-		}
-		time.Sleep(time.Millisecond)
-	}
-	t.Fatal("cancelled import was not observable")
-}
-
-func TestMediaImportTerminalJobsExpireAfterRetention(t *testing.T) {
-	previousRetention := mediaImportRetention
-	mediaImportRetention = 10 * time.Millisecond
-	defer func() { mediaImportRetention = previousRetention }()
-
-	useCase := &MediaUseCase{Catalog: &catalogStub{}, Configured: true}
-	job, err := useCase.StartImport(context.Background(), domain.Principal{Subject: "owner"})
+	defer db.Close()
+	jobs, err := store.NewJobsStore(db)
 	if err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		if status, statusErr := useCase.ImportStatus(context.Background(), domain.Principal{Subject: "owner"}, job.ID); statusErr == nil && status.State == "succeeded" {
-			break
-		}
-		time.Sleep(time.Millisecond)
+	scheduler, err := store.NewScheduler(jobs, store.SchedulerConfig{QueueCapacity: 1, WorkerLimit: 1}, func(context.Context, store.Job) error { return nil })
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := useCase.ImportStatus(context.Background(), domain.Principal{Subject: "owner"}, job.ID); err != nil {
-		t.Fatal("terminal job was not queryable: ", err)
+	useCase := &MediaUseCase{Configured: true, Scheduler: scheduler, UnifiedJobs: jobs}
+	created, err := useCase.StartImport(ctx, domain.Principal{Subject: "owner"})
+	if err != nil {
+		t.Fatal(err)
 	}
-	time.Sleep(25 * time.Millisecond)
-	if _, err := useCase.ImportStatus(context.Background(), domain.Principal{Subject: "owner"}, job.ID); err == nil {
-		t.Fatal("expired terminal job remained queryable")
+	if _, err := jobs.Start(ctx, created.ID); err != nil {
+		t.Fatal(err)
+	}
+	result := `{"camera":{"state":"ready_with_media"},"archive":{"state":"failed","errorCode":"scan_limit"}}`
+	if _, err := jobs.Succeed(ctx, created.ID, result); err != nil {
+		t.Fatal(err)
+	}
+	got, err := useCase.ImportStatus(ctx, domain.Principal{Subject: "owner"}, created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RootResults["camera"].State != LibraryReadyWithMedia || got.RootResults["archive"].ErrorCode != "scan_limit" {
+		t.Fatalf("root results = %#v", got.RootResults)
 	}
 }
 

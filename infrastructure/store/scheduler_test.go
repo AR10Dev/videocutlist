@@ -16,6 +16,44 @@ func schedulerJob(n string) store.Job {
 	return store.Job{ID: "j_0000000000" + n, BatchID: "b_0000000000" + n, Kind: store.JobScan, RequestJSON: `{}`}
 }
 
+func TestSchedulerPreservesRunnerResult(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.OpenDatabase(ctx, t.TempDir()+"/jobs.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	jobs, err := store.NewJobsStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := `{"camera":{"state":"ready_with_media"}}`
+	s, err := store.NewScheduler(jobs, store.SchedulerConfig{QueueCapacity: 1, WorkerLimit: 1}, func(ctx context.Context, job store.Job) error {
+		_, err := jobs.Succeed(ctx, job.ID, result)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Submit(ctx, []store.Job{schedulerJob("00")}); err != nil {
+		t.Fatal(err)
+	}
+	s.Start()
+	defer s.Shutdown(ctx)
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		job, err := jobs.Get(ctx, "j_000000000000")
+		if err == nil && job.State == store.JobSucceeded {
+			if !job.ResultJSON.Valid || job.ResultJSON.String != result {
+				t.Fatalf("result = %#v", job.ResultJSON)
+			}
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("scheduled job did not complete")
+}
+
 func TestSchedulerAdmissionIsAtomicAndBounded(t *testing.T) {
 	db, err := store.OpenDatabase(context.Background(), t.TempDir()+"/jobs.db")
 	if err != nil {
