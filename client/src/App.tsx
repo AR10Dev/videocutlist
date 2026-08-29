@@ -25,6 +25,7 @@ import {
 } from "./preview";
 import { TimelineCanvas } from "./TimelineCanvas";
 import { exportFailureMessage } from "./jobUi";
+import { cancelJobLifecycle } from "./queryLifecycle";
 import { jobPollInterval } from "./jobPolling";
 import type { components } from "./generated/api";
 import { saveIsCurrent } from "./saveGuards";
@@ -175,15 +176,7 @@ export function App() {
       },
     });
   const saveMutation = createMutation(() => ({
-    mutationFn: ({
-      id,
-      body,
-      signal,
-    }: {
-      id: string;
-      body: unknown;
-      signal: AbortSignal;
-    }) =>
+    mutationFn: ({ id, body, signal }: { id: string; body: unknown; signal: AbortSignal }) =>
       api.request(`projects/${encodeURIComponent(id)}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
@@ -214,7 +207,11 @@ export function App() {
     const item = selectedMediaQuery.data;
     if (item && item.id === selected()?.id) setSelected(item);
     if (selectedMediaQuery.error && selected()?.id)
-      setStatus(selectedMediaQuery.error instanceof Error ? selectedMediaQuery.error.message : "Metadata request failed.");
+      setStatus(
+        selectedMediaQuery.error instanceof Error
+          ? selectedMediaQuery.error.message
+          : "Metadata request failed.",
+      );
   });
   const invalidatedTerminalJobs = new Set<string>();
   const exportStatusQuery = useQuery(() => ({
@@ -258,7 +255,10 @@ export function App() {
               ? "Export cancelled."
               : exportFailureMessage(next.errorCode),
     );
-    if (["succeeded", "failed", "cancelled"].includes(next.state) && !invalidatedTerminalJobs.has(next.id)) {
+    if (
+      ["succeeded", "failed", "cancelled"].includes(next.state) &&
+      !invalidatedTerminalJobs.has(next.id)
+    ) {
       invalidatedTerminalJobs.add(next.id);
       void queryClient.invalidateQueries({ queryKey: ["job", "export", next.id] });
       void queryClient.invalidateQueries({ queryKey: ["project", projectId()] });
@@ -271,13 +271,22 @@ export function App() {
     setDetectionJob(next);
     if (next.state === "succeeded") {
       setDetectionCandidates(next.candidates ?? []);
-      setDetectionStatus(`${next.candidates?.length ?? 0} candidates found. Review each before accepting.`);
+      setDetectionStatus(
+        `${next.candidates?.length ?? 0} candidates found. Review each before accepting.`,
+      );
     } else if (next.state === "queued" || next.state === "running") {
       setDetectionStatus(next.state === "queued" ? "Detection queued." : "Detection running.");
     } else {
-      setDetectionStatus(next.state === "cancelled" ? "Detection cancelled." : `Detection failed${next.errorCode ? `: ${next.errorCode}.` : "."}`);
+      setDetectionStatus(
+        next.state === "cancelled"
+          ? "Detection cancelled."
+          : `Detection failed${next.errorCode ? `: ${next.errorCode}.` : "."}`,
+      );
     }
-    if (["succeeded", "failed", "cancelled"].includes(next.state) && !invalidatedTerminalJobs.has(next.id)) {
+    if (
+      ["succeeded", "failed", "cancelled"].includes(next.state) &&
+      !invalidatedTerminalJobs.has(next.id)
+    ) {
       invalidatedTerminalJobs.add(next.id);
       void queryClient.invalidateQueries({ queryKey: ["job", "detection", next.id] });
       void queryClient.invalidateQueries({ queryKey: ["project", projectId()] });
@@ -564,7 +573,6 @@ export function App() {
     setDiagnostics();
     setDirty(true);
     setStatus(`Selected ${item.name}.`);
-
   };
   // Media root loading is owned by Solid Query; folder navigation remains explicit.
   createEffect(() => {
@@ -834,8 +842,7 @@ export function App() {
           const mediaResponse = await api.request(`media/${encodeURIComponent(project.mediaId)}`, {
             signal: controller.signal ?? signal,
           });
-          if (!mediaResponse.ok)
-            throw new Error(`Media request failed (${mediaResponse.status}).`);
+          if (!mediaResponse.ok) throw new Error(`Media request failed (${mediaResponse.status}).`);
           return (await mediaResponse.json()) as Media;
         },
       });
@@ -1052,15 +1059,15 @@ export function App() {
     const cancellationController = new AbortController();
     exportCancellationController = cancellationController;
     try {
-      const response = await cancelJobMutation.mutateAsync({
-        id: job.id,
+      await cancelJobLifecycle({
+        jobId: job.id,
         signal: cancellationController.signal,
+        cancel: (id, signal) => cancelJobMutation.mutateAsync({ id, signal }),
+        cancelQueries: (options) => queryClient.cancelQueries(options),
+        invalidateQueries: (options) => queryClient.invalidateQueries(options),
+        jobQueryKey: ["job", "export", job.id],
+        projectQueryKey: ["project", projectId()],
       });
-      if (!response.ok) throw new Error("Export could not be cancelled. Try again.");
-      await queryClient.cancelQueries({ queryKey: ["job", "export", job.id] });
-      await queryClient.invalidateQueries({ queryKey: ["job", "export", job.id] });
-      await queryClient.invalidateQueries({ queryKey: ["project", projectId()] });
-      await queryClient.invalidateQueries({ queryKey: ["media"] });
       exportController?.abort();
       exportController = undefined;
       if (exportTimer) clearTimeout(exportTimer);
@@ -1136,16 +1143,16 @@ export function App() {
     const cancellationController = new AbortController();
     detectionCancellationController = cancellationController;
     try {
-      const response = await cancelJobMutation.mutateAsync({
-        id: job.id,
+      await cancelJobLifecycle({
+        jobId: job.id,
         signal: cancellationController.signal,
+        cancel: (id, signal) => cancelJobMutation.mutateAsync({ id, signal }),
+        cancelQueries: (options) => queryClient.cancelQueries(options),
+        invalidateQueries: (options) => queryClient.invalidateQueries(options),
+        jobQueryKey: ["job", "detection", job.id],
+        projectQueryKey: ["project", projectId()],
       });
       if (request !== detectionRequest) return;
-      if (!response.ok) throw new Error("Detection could not be cancelled. Try again.");
-      await queryClient.cancelQueries({ queryKey: ["job", "detection", job.id] });
-      await queryClient.invalidateQueries({ queryKey: ["job", "detection", job.id] });
-      await queryClient.invalidateQueries({ queryKey: ["project", projectId()] });
-      await queryClient.invalidateQueries({ queryKey: ["media"] });
       setDetectionJob({ ...job, state: "cancelled" });
       setDetectionStatus("Detection cancelled.");
     } catch (error) {

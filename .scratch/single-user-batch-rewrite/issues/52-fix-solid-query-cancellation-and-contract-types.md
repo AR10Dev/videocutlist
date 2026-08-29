@@ -5,15 +5,15 @@
 **Blocked by:** 51
 
 **Category:** bug
-**Status:** ready-for-agent
+**Status:** completed
 
-- [ ] Each export and detection cancellation mutation retains an AbortController and aborts it on context change or unmount.
-- [ ] A successful export or detection cancellation immediately invalidates its job plus related project and media queries.
-- [ ] Tests invoke the production lifecycle helpers or handlers and assert cancellation plus job/project/media invalidation, terminal polling shutdown, and stale-response protection.
-- [ ] The dead `_loadMedia` controller/version lifecycle is removed.
-- [ ] `preview.ts` uses generated OpenAPI Media and Segment schemas rather than handwritten duplicates.
-- [ ] `make check` passes.
+- [x] Each export and detection cancellation mutation retains an AbortController and aborts it on context change or unmount.
+- [x] A successful export or detection cancellation immediately invalidates its job plus related project and media queries.
+- [x] Tests invoke the production lifecycle helpers or handlers and assert cancellation plus job/project/media invalidation, terminal polling shutdown, and stale-response protection.
+- [x] The dead `_loadMedia` controller/version lifecycle is removed.
+- [x] `preview.ts` uses generated OpenAPI Media and Segment schemas rather than handwritten duplicates.
+- [x] `make check` passes.
 
 ## Comments
 
-Opened from ticket 51 review findings. Ticket 51 remains unmerged until this fix is reviewed with it.
+Opened from ticket 51 review findings. Completed in combination with tickets 53 and 54: cancellation context cleanup and generated contract types are in place, and production lifecycle behavior is covered by focused tests. Validation: `make check` passes.

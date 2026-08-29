@@ -3,6 +3,7 @@ import { createComponent, createRoot } from "solid-js";
 import { describe, expect, it } from "vitest";
 import { abortAndClear } from "../src/cancellation";
 import { jobPollInterval } from "../src/jobPolling";
+import { cancelJobLifecycle } from "../src/queryLifecycle";
 
 describe("Solid Query lifecycle contracts", () => {
   it("cancels an in-flight query through QueryClient", async () => {
@@ -59,6 +60,36 @@ describe("Solid Query lifecycle contracts", () => {
     expect(client.getQueryState(["project", "p-1"])?.isInvalidated).toBe(false);
     await client.invalidateQueries({ queryKey: ["project", "p-1"] });
     expect(client.getQueryState(["project", "p-1"])?.isInvalidated).toBe(true);
+  });
+
+  it("runs production cancellation with abort and related invalidation", async () => {
+    const controller = new AbortController();
+    const calls: string[][] = [];
+    let receivedSignal: AbortSignal | undefined;
+    await cancelJobLifecycle({
+      jobId: "job-1",
+      signal: controller.signal,
+      cancel: async (id, signal) => {
+        receivedSignal = signal;
+        calls.push(["delete", id]);
+        return new Response(null, { status: 204 });
+      },
+      cancelQueries: async ({ queryKey }) => calls.push(["cancel", ...queryKey.map(String)]),
+      invalidateQueries: async ({ queryKey }) =>
+        calls.push(["invalidate", ...queryKey.map(String)]),
+      jobQueryKey: ["job", "export", "job-1"],
+      projectQueryKey: ["project", "p-1"],
+    });
+    expect(receivedSignal).toBe(controller.signal);
+    expect(calls).toEqual([
+      ["delete", "job-1"],
+      ["cancel", "job", "export", "job-1"],
+      ["invalidate", "job", "export", "job-1"],
+      ["invalidate", "project", "p-1"],
+      ["invalidate", "media"],
+    ]);
+    controller.abort();
+    expect(controller.signal.aborted).toBe(true);
   });
 
   it("aborts and clears cancellation controllers when context changes", () => {
