@@ -42,7 +42,7 @@ func TestTrustedProxySelectsClientAcrossTrustedChain(t *testing.T) {
 		if !info.ClientIP.Equal(net.ParseIP("203.0.113.7")) || !info.PeerIP.Equal(net.ParseIP("10.0.0.3")) {
 			t.Fatalf("IP selection = %#v", info)
 		}
-		if info.Host != "editor.example.test" || info.Proto != "https" || info.User != "editor@example.test" {
+		if info.Host != "editor.example.test" || info.Proto != "https" || info.User != "" || !info.Trusted {
 			t.Fatalf("forwarded values = %#v", info)
 		}
 	}))
@@ -76,10 +76,9 @@ func TestTrustedProxySupportsIPv6(t *testing.T) {
 
 func TestTrustedProxyRejectsMalformedTrustedValues(t *testing.T) {
 	for name, setHeader := range map[string]func(http.Header){
-		"bad IP":         func(h http.Header) { h.Set("X-Forwarded-For", "client.test") },
-		"bad host":       func(h http.Header) { h.Set("X-Forwarded-Host", "one.test,two.test") },
-		"bad proto":      func(h http.Header) { h.Set("X-Forwarded-Proto", "ftp") },
-		"duplicate user": func(h http.Header) { h.Add("X-Forwarded-User", "one"); h.Add("X-Forwarded-User", "two") },
+		"bad IP":    func(h http.Header) { h.Set("X-Forwarded-For", "client.test") },
+		"bad host":  func(h http.Header) { h.Set("X-Forwarded-Host", "one.test,two.test") },
+		"bad proto": func(h http.Header) { h.Set("X-Forwarded-Proto", "ftp") },
 	} {
 		t.Run(name, func(t *testing.T) {
 			called := false

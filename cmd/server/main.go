@@ -178,7 +178,7 @@ func run(ctx context.Context) error {
 	exportService.SetLimitProvider(func() int { return runtimeState.Snapshot().ExportLimit })
 	jobService := application.JobUseCase{Jobs: unifiedJobs}
 	authenticator, err := httpapi.NewAuthenticator(httpapi.AuthConfig{
-		Mode: cfg.AuthMode, BearerToken: cfg.BearerToken, BearerSubject: cfg.BearerSubject,
+		Mode: cfg.AuthMode, BearerToken: cfg.BearerToken, BearerSubject: cfg.BearerSubject, ListenAddress: cfg.ListenAddress,
 	})
 	if err != nil {
 		return err

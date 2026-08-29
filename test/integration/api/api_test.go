@@ -212,7 +212,7 @@ func TestTrustedProxyPrincipalReachesPreview(t *testing.T) {
 	request.Header.Set("X-Forwarded-User", "proxy-editor")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
-	if response.Code != http.StatusOK || preview.calls != 1 || preview.principal.Subject != "proxy-editor" {
+	if response.Code != http.StatusOK || preview.calls != 1 || preview.principal.Subject != "trusted-proxy" {
 		t.Fatalf("status=%d preview calls=%d principal=%#v", response.Code, preview.calls, preview.principal)
 	}
 }
