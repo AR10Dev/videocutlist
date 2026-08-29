@@ -109,17 +109,17 @@ func (c *boundedRecoveryCatalog) Preview(context.Context, PreviewSpec) (domain.P
 func TestMediaImportCancellationBoundsStatusRecovery(t *testing.T) {
 	catalog := &boundedRecoveryCatalog{recoveryStarted: make(chan struct{}), releaseRecovery: make(chan struct{})}
 	useCase := &MediaUseCase{Catalog: catalog, Configured: true}
-	job, err := useCase.StartImport(context.Background(), domain.Principal{Subject: "owner"})
+	job, err := useCase.StartImport(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := useCase.CancelImport(context.Background(), domain.Principal{Subject: "owner"}, job.ID); err != nil {
+	if err := useCase.CancelImport(context.Background(), job.ID); err != nil {
 		t.Fatal(err)
 	}
 	<-catalog.recoveryStarted
 	deadline := time.Now().Add(mediaStatusRecoveryTimeout + time.Second)
 	for time.Now().Before(deadline) {
-		status, statusErr := useCase.ImportStatus(context.Background(), domain.Principal{Subject: "owner"}, job.ID)
+		status, statusErr := useCase.ImportStatus(context.Background(), job.ID)
 		if statusErr == nil && status.State == "cancelled" {
 			// Let runImport schedule its retention timer before the next test mutates the test knob.
 			timer := time.NewTimer(10 * time.Millisecond)
@@ -152,17 +152,17 @@ func TestCancelledRefreshCannotOverwriteNewerFailure(t *testing.T) {
 func TestMediaImportCancellationRestoresUsableLibraryStatus(t *testing.T) {
 	catalog := &cancellableCatalog{started: make(chan struct{}), items: []Media{{ID: "m_test"}}}
 	useCase := &MediaUseCase{Catalog: catalog, Configured: true}
-	job, err := useCase.StartImport(context.Background(), domain.Principal{Subject: "owner"})
+	job, err := useCase.StartImport(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	<-catalog.started
-	if err := useCase.CancelImport(context.Background(), domain.Principal{Subject: "owner"}, job.ID); err != nil {
+	if err := useCase.CancelImport(context.Background(), job.ID); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
-		status, statusErr := useCase.ImportStatus(context.Background(), domain.Principal{Subject: "owner"}, job.ID)
+		status, statusErr := useCase.ImportStatus(context.Background(), job.ID)
 		if statusErr == nil && status.State == "cancelled" {
 			if got := useCase.Status(); got.State != LibraryReadyWithMedia {
 				t.Fatalf("status after cancellation = %#v", got)
@@ -182,22 +182,22 @@ func TestMediaImportTerminalJobsExpireAfterRetention(t *testing.T) {
 	defer func() { mediaImportRetention = previousRetention }()
 
 	useCase := &MediaUseCase{Catalog: &catalogStub{}, Configured: true}
-	job, err := useCase.StartImport(context.Background(), domain.Principal{Subject: "owner"})
+	job, err := useCase.StartImport(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
-		if status, statusErr := useCase.ImportStatus(context.Background(), domain.Principal{Subject: "owner"}, job.ID); statusErr == nil && status.State == "succeeded" {
+		if status, statusErr := useCase.ImportStatus(context.Background(), job.ID); statusErr == nil && status.State == "succeeded" {
 			break
 		}
 		time.Sleep(time.Millisecond)
 	}
-	if _, err := useCase.ImportStatus(context.Background(), domain.Principal{Subject: "owner"}, job.ID); err != nil {
+	if _, err := useCase.ImportStatus(context.Background(), job.ID); err != nil {
 		t.Fatal("terminal job was not queryable: ", err)
 	}
 	time.Sleep(25 * time.Millisecond)
-	if _, err := useCase.ImportStatus(context.Background(), domain.Principal{Subject: "owner"}, job.ID); err == nil {
+	if _, err := useCase.ImportStatus(context.Background(), job.ID); err == nil {
 		t.Fatal("expired terminal job remained queryable")
 	}
 }
@@ -327,12 +327,12 @@ func (j *jobsStub) Create(_ context.Context, job store.ExportJob) (store.ExportJ
 	j.job = job
 	return job, nil
 }
-func (j *jobsStub) Get(context.Context, string, string) (store.ExportJob, error) {
+func (j *jobsStub) Get(context.Context, string) (store.ExportJob, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	return j.job, nil
 }
-func (j *jobsStub) Cancel(context.Context, string, string) (store.ExportJob, error) {
+func (j *jobsStub) Cancel(context.Context, string) (store.ExportJob, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	j.cancels++
@@ -346,11 +346,11 @@ type executorStub struct {
 	once      sync.Once
 }
 
-func (e *executorStub) Preflight(context.Context, domain.Principal, string, Project, ExportInput) (ExportPreflight, error) {
+func (e *executorStub) Preflight(context.Context, string, Project, ExportInput) (ExportPreflight, error) {
 	return ExportPreflight{Allowed: true}, nil
 }
 
-func (e *executorStub) Execute(ctx context.Context, _ string, _ string, _ domain.Document) error {
+func (e *executorStub) Execute(ctx context.Context, _ string, _ domain.Document) error {
 	e.once.Do(func() { close(e.started) })
 	<-ctx.Done()
 	close(e.cancelled)
@@ -370,7 +370,7 @@ func TestExportDurableRequestPreservesDestinationAndTemplate(t *testing.T) {
 	request := input()
 	request.DestinationID = "archive"
 	request.FilenameTemplate = "{source}-{segment}.{ext}"
-	if _, err := useCase.Create(context.Background(), domain.Principal{Subject: "editor"}, "p_aaaaaaaaaaaa", project(), request); err != nil {
+	if _, err := useCase.Create(context.Background(), "p_aaaaaaaaaaaa", project(), request); err != nil {
 		t.Fatal(err)
 	}
 	jobs.mu.Lock()
@@ -383,7 +383,7 @@ func TestExportDurableRequestPreservesDestinationAndTemplate(t *testing.T) {
 	if durable.DestinationID != request.DestinationID || durable.FilenameTemplate != request.FilenameTemplate {
 		t.Fatalf("durable request = %#v", durable)
 	}
-	if err := useCase.Cancel(context.Background(), "editor", jobs.job.ID); err != nil {
+	if err := useCase.Cancel(context.Background(), jobs.job.ID); err != nil {
 		t.Fatal(err)
 	}
 	<-executor.cancelled
@@ -394,7 +394,7 @@ func TestExportCapturesSettingsForNextJob(t *testing.T) {
 	settings := store.NewRuntimeSettingsState(store.RuntimeSettings{ExportLimit: 1})
 	useCase := NewExportUseCase(jobs, executor, 1)
 	useCase.Settings = settings
-	if _, err := useCase.Create(context.Background(), domain.Principal{Subject: "editor"}, "p_aaaaaaaaaaaa", project(), input()); err != nil {
+	if _, err := useCase.Create(context.Background(), "p_aaaaaaaaaaaa", project(), input()); err != nil {
 		t.Fatal(err)
 	}
 	settings.Replace(store.RuntimeSettings{ExportLimit: 9})
@@ -407,7 +407,7 @@ func TestExportCapturesSettingsForNextJob(t *testing.T) {
 	if request.Settings.ExportLimit != 1 {
 		t.Fatalf("captured export limit = %d, want 1", request.Settings.ExportLimit)
 	}
-	if err := useCase.Cancel(context.Background(), "editor", jobs.job.ID); err != nil {
+	if err := useCase.Cancel(context.Background(), jobs.job.ID); err != nil {
 		t.Fatal(err)
 	}
 	<-executor.cancelled
@@ -416,11 +416,11 @@ func TestExportCapturesSettingsForNextJob(t *testing.T) {
 func TestExportAdmissionPrecedesDurableCreation(t *testing.T) {
 	jobs, executor := &jobsStub{}, &executorStub{started: make(chan struct{}), cancelled: make(chan struct{})}
 	useCase := NewExportUseCase(jobs, executor, 1)
-	if _, err := useCase.Create(context.Background(), domain.Principal{Subject: "editor"}, "p_aaaaaaaaaaaa", project(), input()); err != nil {
+	if _, err := useCase.Create(context.Background(), "p_aaaaaaaaaaaa", project(), input()); err != nil {
 		t.Fatal(err)
 	}
 	<-executor.started
-	if _, err := useCase.Create(context.Background(), domain.Principal{Subject: "editor"}, "p_aaaaaaaaaaaa", project(), input()); !errors.Is(err, ErrBusy) {
+	if _, err := useCase.Create(context.Background(), "p_aaaaaaaaaaaa", project(), input()); !errors.Is(err, ErrBusy) {
 		t.Fatalf("second create = %v", err)
 	}
 	jobs.mu.Lock()
@@ -430,7 +430,7 @@ func TestExportAdmissionPrecedesDurableCreation(t *testing.T) {
 	if creates != 1 {
 		t.Fatalf("durable creates = %d", creates)
 	}
-	if err := useCase.Cancel(context.Background(), "editor", id); err != nil {
+	if err := useCase.Cancel(context.Background(), id); err != nil {
 		t.Fatal(err)
 	}
 	<-executor.cancelled
@@ -449,7 +449,7 @@ func TestJobUseCaseCancelsThroughUnifiedStore(t *testing.T) {
 	if _, err := jobs.Create(context.Background(), store.Job{ID: "j_aaaaaaaaaaaa", BatchID: "b_aaaaaaaaaaaa", Kind: store.JobScan, RequestJSON: `{}`}); err != nil {
 		t.Fatal(err)
 	}
-	if err := (JobUseCase{Jobs: jobs}).Cancel(context.Background(), domain.Principal{Subject: "editor"}, "j_aaaaaaaaaaaa"); err != nil {
+	if err := (JobUseCase{Jobs: jobs}).Cancel(context.Background(), "j_aaaaaaaaaaaa"); err != nil {
 		t.Fatal(err)
 	}
 	job, err := jobs.Get(context.Background(), "j_aaaaaaaaaaaa")

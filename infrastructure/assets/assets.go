@@ -18,7 +18,6 @@ import (
 	"sync"
 
 	"videocutlist/application"
-	"videocutlist/domain"
 	"videocutlist/infrastructure/media/index"
 	"videocutlist/infrastructure/store"
 )
@@ -39,7 +38,7 @@ type Service struct {
 	mu         sync.Mutex
 }
 
-func (s *Service) Thumbnails(ctx context.Context, _ domain.Principal, spec application.AssetSpec) (application.AssetResult, error) {
+func (s *Service) Thumbnails(ctx context.Context, spec application.AssetSpec) (application.AssetResult, error) {
 	if err := validate(spec, false); err != nil {
 		return application.AssetResult{}, err
 	}
@@ -75,7 +74,7 @@ func (s *Service) Thumbnails(ctx context.Context, _ domain.Principal, spec appli
 	return result(data, "image/png", false, spec), nil
 }
 
-func (s *Service) Waveform(ctx context.Context, _ domain.Principal, spec application.AssetSpec) (application.AssetResult, error) {
+func (s *Service) Waveform(ctx context.Context, spec application.AssetSpec) (application.AssetResult, error) {
 	if err := validate(spec, true); err != nil {
 		return application.AssetResult{}, err
 	}

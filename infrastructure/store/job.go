@@ -32,7 +32,6 @@ var jobsMigration string
 // ExportJob is a compatibility view while export execution moves to JobsStore.
 type ExportJob struct {
 	ID              string
-	OwnerLogin      string
 	ProjectID       string
 	ProjectRevision int64
 	State           JobState
@@ -75,9 +74,9 @@ func (s *JobStore) Create(ctx context.Context, job ExportJob) (ExportJob, error)
 	if err != nil {
 		return ExportJob{}, err
 	}
-	return s.Get(ctx, "", job.ID)
+	return s.Get(ctx, job.ID)
 }
-func (s *JobStore) Get(ctx context.Context, _, id string) (ExportJob, error) {
+func (s *JobStore) Get(ctx context.Context, id string) (ExportJob, error) {
 	job, err := s.jobs.Get(ctx, id)
 	if err != nil {
 		return ExportJob{}, err
@@ -87,28 +86,28 @@ func (s *JobStore) Get(ctx context.Context, _, id string) (ExportJob, error) {
 	}
 	return exportView(job), nil
 }
-func (s *JobStore) Start(ctx context.Context, _, id string) (ExportJob, error) {
+func (s *JobStore) Start(ctx context.Context, id string) (ExportJob, error) {
 	job, err := s.jobs.Start(ctx, id)
 	if err != nil {
 		return ExportJob{}, err
 	}
 	return exportView(job), nil
 }
-func (s *JobStore) Succeed(ctx context.Context, _, id, result string) (ExportJob, error) {
+func (s *JobStore) Succeed(ctx context.Context, id, result string) (ExportJob, error) {
 	job, err := s.jobs.Succeed(ctx, id, result)
 	if err != nil {
 		return ExportJob{}, err
 	}
 	return exportView(job), nil
 }
-func (s *JobStore) Fail(ctx context.Context, _, id, code string) (ExportJob, error) {
+func (s *JobStore) Fail(ctx context.Context, id, code string) (ExportJob, error) {
 	job, err := s.jobs.Fail(ctx, id, code)
 	if err != nil {
 		return ExportJob{}, err
 	}
 	return exportView(job), nil
 }
-func (s *JobStore) Cancel(ctx context.Context, _, id string) (ExportJob, error) {
+func (s *JobStore) Cancel(ctx context.Context, id string) (ExportJob, error) {
 	job, err := s.jobs.Cancel(ctx, id)
 	if err != nil {
 		return ExportJob{}, err

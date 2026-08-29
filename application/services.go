@@ -48,12 +48,12 @@ func (e *ProjectItemError) Error() string { return "project item " + e.ItemID + 
 
 type ExportJobs interface {
 	Create(context.Context, store.ExportJob) (store.ExportJob, error)
-	Get(context.Context, string, string) (store.ExportJob, error)
-	Cancel(context.Context, string, string) (store.ExportJob, error)
+	Get(context.Context, string) (store.ExportJob, error)
+	Cancel(context.Context, string) (store.ExportJob, error)
 }
 type ExportExecutor interface {
-	Execute(context.Context, string, string, domain.Document) error
-	Preflight(context.Context, domain.Principal, string, Project, ExportInput) (ExportPreflight, error)
+	Execute(context.Context, string, domain.Document) error
+	Preflight(context.Context, string, Project, ExportInput) (ExportPreflight, error)
 }
 
 type MediaUseCase struct {
@@ -70,14 +70,13 @@ type MediaUseCase struct {
 
 type mediaImport struct {
 	job    ImportJob
-	owner  string
 	cancel context.CancelFunc
 }
 
 // mediaImportRetention bounds how long terminal jobs remain available for polling.
 var mediaImportRetention = time.Minute
 
-func (m *MediaUseCase) StartImport(ctx context.Context, principal domain.Principal) (ImportJob, error) {
+func (m *MediaUseCase) StartImport(ctx context.Context) (ImportJob, error) {
 	if !m.Configured {
 		return ImportJob{}, errors.New("media library is not configured")
 	}
@@ -110,7 +109,7 @@ func (m *MediaUseCase) StartImport(ctx context.Context, principal domain.Princip
 		cancel()
 		return ImportJob{}, ErrBusy
 	}
-	entry := &mediaImport{job: ImportJob{ID: id, State: "queued"}, owner: principal.Subject, cancel: cancel}
+	entry := &mediaImport{job: ImportJob{ID: id, State: "queued"}, cancel: cancel}
 	m.imports[id] = entry
 	m.status = libraryStatus(LibraryScanning)
 	job := entry.job
@@ -145,7 +144,7 @@ func (m *MediaUseCase) runImport(ctx context.Context, entry *mediaImport) {
 		m.mu.Unlock()
 	})
 }
-func (m *MediaUseCase) ImportStatus(ctx context.Context, principal domain.Principal, id string) (ImportJob, error) {
+func (m *MediaUseCase) ImportStatus(ctx context.Context, id string) (ImportJob, error) {
 	if m.Scheduler != nil && m.UnifiedJobs != nil {
 		job, err := m.UnifiedJobs.Get(ctx, id)
 		if err != nil || job.Kind != store.JobScan {
@@ -156,12 +155,12 @@ func (m *MediaUseCase) ImportStatus(ctx context.Context, principal domain.Princi
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	entry, ok := m.imports[id]
-	if !ok || entry.owner != principal.Subject {
+	if !ok {
 		return ImportJob{}, errors.New("import job not found")
 	}
 	return entry.job, nil
 }
-func (m *MediaUseCase) CancelImport(ctx context.Context, principal domain.Principal, id string) error {
+func (m *MediaUseCase) CancelImport(ctx context.Context, id string) error {
 	if m.Scheduler != nil && m.UnifiedJobs != nil {
 		job, err := m.UnifiedJobs.Get(ctx, id)
 		if err != nil || job.Kind != store.JobScan {
@@ -173,7 +172,7 @@ func (m *MediaUseCase) CancelImport(ctx context.Context, principal domain.Princi
 	m.mu.RLock()
 	entry, ok := m.imports[id]
 	m.mu.RUnlock()
-	if !ok || entry.owner != principal.Subject {
+	if !ok {
 		return errors.New("import job not found")
 	}
 	entry.cancel()
@@ -303,12 +302,12 @@ type PreviewUseCase struct {
 	Manager *PreviewManager
 }
 
-func (p PreviewUseCase) Start(ctx context.Context, principal domain.Principal, request PreviewSpec) (PreviewResult, error) {
+func (p PreviewUseCase) Start(ctx context.Context, request PreviewSpec) (PreviewResult, error) {
 	spec, err := p.Catalog.Preview(ctx, request)
 	if err != nil {
 		return PreviewResult{}, err
 	}
-	reader, result, err := p.Manager.Preview(ctx, principal.Subject, spec)
+	reader, result, err := p.Manager.Preview(ctx, spec)
 	if err != nil {
 		return PreviewResult{}, err
 	}
@@ -396,8 +395,8 @@ func NewExportUseCase(jobs ExportJobs, executor ExportExecutor, limit int) *Expo
 }
 
 func (e *ExportUseCase) SetLimitProvider(provider func() int) { e.limit = provider }
-func (e *ExportUseCase) Create(ctx context.Context, principal domain.Principal, projectID string, project Project, input ExportInput) (Job, error) {
-	preflight, err := e.Executor.Preflight(ctx, principal, projectID, project, input)
+func (e *ExportUseCase) Create(ctx context.Context, projectID string, project Project, input ExportInput) (Job, error) {
+	preflight, err := e.Executor.Preflight(ctx, projectID, project, input)
 	if err != nil {
 		return Job{}, err
 	}
@@ -442,7 +441,7 @@ func (e *ExportUseCase) Create(ctx context.Context, principal domain.Principal, 
 	if err != nil {
 		return Job{}, err
 	}
-	record, err := e.Jobs.Create(ctx, store.ExportJob{ID: id, OwnerLogin: principal.Subject, ProjectID: projectID, ProjectRevision: project.Revision, RequestJSON: string(data)})
+	record, err := e.Jobs.Create(ctx, store.ExportJob{ID: id, ProjectID: projectID, ProjectRevision: project.Revision, RequestJSON: string(data)})
 	if err != nil {
 		return Job{}, err
 	}
@@ -451,7 +450,7 @@ func (e *ExportUseCase) Create(ctx context.Context, principal domain.Principal, 
 	e.cancel[id] = cancel
 	e.mu.Unlock()
 	admitted = true
-	go e.run(jobCtx, principal.Subject, id, project.Document)
+	go e.run(jobCtx, id, project.Document)
 	return jobResult(record), nil
 }
 func runtimeSettings(state *store.RuntimeSettingsState) *store.RuntimeSettings {
@@ -462,20 +461,20 @@ func runtimeSettings(state *store.RuntimeSettingsState) *store.RuntimeSettings {
 	return &settings
 }
 
-func (e *ExportUseCase) run(ctx context.Context, owner, id string, document domain.Document) {
+func (e *ExportUseCase) run(ctx context.Context, id string, document domain.Document) {
 	defer func() { e.mu.Lock(); e.active--; e.mu.Unlock() }()
 	defer func() { e.mu.Lock(); delete(e.cancel, id); e.mu.Unlock() }()
-	_ = e.Executor.Execute(ctx, owner, id, document)
+	_ = e.Executor.Execute(ctx, id, document)
 }
-func (e *ExportUseCase) Get(ctx context.Context, owner, id string) (Job, error) {
-	record, err := e.Jobs.Get(ctx, owner, id)
+func (e *ExportUseCase) Get(ctx context.Context, id string) (Job, error) {
+	record, err := e.Jobs.Get(ctx, id)
 	if err != nil {
 		return Job{}, err
 	}
 	return jobResult(record), nil
 }
-func (e *ExportUseCase) Cancel(ctx context.Context, owner, id string) error {
-	record, err := e.Jobs.Get(ctx, owner, id)
+func (e *ExportUseCase) Cancel(ctx context.Context, id string) error {
+	record, err := e.Jobs.Get(ctx, id)
 	if err != nil {
 		return err
 	}
@@ -488,7 +487,7 @@ func (e *ExportUseCase) Cancel(ctx context.Context, owner, id string) error {
 	if cancel != nil {
 		cancel()
 	}
-	_, err = e.Jobs.Cancel(ctx, owner, id)
+	_, err = e.Jobs.Cancel(ctx, id)
 	if errors.Is(err, store.ErrJobState) {
 		return nil
 	}
@@ -502,7 +501,7 @@ type UnifiedJobs interface {
 
 type JobUseCase struct{ Jobs UnifiedJobs }
 
-func (j JobUseCase) Get(ctx context.Context, _ domain.Principal, id string) (Job, error) {
+func (j JobUseCase) Get(ctx context.Context, id string) (Job, error) {
 	if j.Jobs == nil {
 		return Job{}, store.ErrJobNotFound
 	}
@@ -512,7 +511,7 @@ func (j JobUseCase) Get(ctx context.Context, _ domain.Principal, id string) (Job
 	}
 	return unifiedJobResult(value), nil
 }
-func (j JobUseCase) Cancel(ctx context.Context, _ domain.Principal, id string) error {
+func (j JobUseCase) Cancel(ctx context.Context, id string) error {
 	if j.Jobs == nil {
 		return store.ErrJobNotFound
 	}

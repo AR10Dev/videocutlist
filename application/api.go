@@ -68,9 +68,9 @@ type ImportJob struct {
 }
 
 type MediaImportService interface {
-	StartImport(context.Context, domain.Principal) (ImportJob, error)
-	ImportStatus(context.Context, domain.Principal, string) (ImportJob, error)
-	CancelImport(context.Context, domain.Principal, string) error
+	StartImport(context.Context) (ImportJob, error)
+	ImportStatus(context.Context, string) (ImportJob, error)
+	CancelImport(context.Context, string) error
 }
 type Segment = domain.Segment
 type UIState = domain.UIState
@@ -164,12 +164,12 @@ type MediaService interface {
 	Status() LibraryStatus
 }
 type PreviewService interface {
-	Start(context.Context, domain.Principal, PreviewSpec) (PreviewResult, error)
+	Start(context.Context, PreviewSpec) (PreviewResult, error)
 	Cached(context.Context, PreviewSpec) (bool, error)
 }
 type AssetService interface {
-	Thumbnails(context.Context, domain.Principal, AssetSpec) (AssetResult, error)
-	Waveform(context.Context, domain.Principal, AssetSpec) (AssetResult, error)
+	Thumbnails(context.Context, AssetSpec) (AssetResult, error)
+	Waveform(context.Context, AssetSpec) (AssetResult, error)
 }
 type ProjectService interface {
 	Create(context.Context, string, ProjectInput) (Project, error)
@@ -177,10 +177,10 @@ type ProjectService interface {
 	Save(context.Context, string, ProjectInput) (Project, error)
 }
 type ExportService interface {
-	Create(context.Context, domain.Principal, string, Project, ExportInput) (Job, error)
+	Create(context.Context, string, Project, ExportInput) (Job, error)
 }
 type ExportPreflightService interface {
-	Preflight(context.Context, domain.Principal, string, Project, ExportInput) (ExportPreflight, error)
+	Preflight(context.Context, string, Project, ExportInput) (ExportPreflight, error)
 }
 type ExportFinding struct {
 	Severity    string `json:"severity"`
@@ -194,11 +194,11 @@ type ExportPreflight struct {
 	Findings  []ExportFinding `json:"findings"`
 }
 type JobService interface {
-	Get(context.Context, domain.Principal, string) (Job, error)
-	Cancel(context.Context, domain.Principal, string) error
+	Get(context.Context, string) (Job, error)
+	Cancel(context.Context, string) error
 }
 type ExportDownloadService interface {
-	Download(context.Context, domain.Principal, string, int) (io.ReadCloser, string, error)
+	Download(context.Context, string, int) (io.ReadCloser, string, error)
 }
 
 // NormalizePreview is the one frozen preview-window implementation used by all transports.

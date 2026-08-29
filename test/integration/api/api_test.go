@@ -43,14 +43,12 @@ func (m *mediaStub) RefreshMedia(_ context.Context) error {
 func (m *mediaStub) Status() api.LibraryStatus { return m.status }
 
 type previewStub struct {
-	start     func(context.Context) (api.PreviewResult, error)
-	calls     int
-	principal auth.Principal
+	start func(context.Context) (api.PreviewResult, error)
+	calls int
 }
 
-func (p *previewStub) Start(ctx context.Context, principal auth.Principal, _ api.PreviewSpec) (api.PreviewResult, error) {
+func (p *previewStub) Start(ctx context.Context, _ api.PreviewSpec) (api.PreviewResult, error) {
 	p.calls++
-	p.principal = principal
 	return p.start(ctx)
 }
 func (p *previewStub) Cached(context.Context, api.PreviewSpec) (bool, error) { return false, nil }
@@ -75,24 +73,24 @@ func (p *projectStub) Save(_ context.Context, id string, input auth.Document) (a
 
 type exportStub struct{ calls int }
 
-func (e *exportStub) Create(context.Context, auth.Principal, string, api.Project, api.ExportInput) (api.Job, error) {
+func (e *exportStub) Create(context.Context, string, api.Project, api.ExportInput) (api.Job, error) {
 	e.calls++
 	return api.Job{ID: "j_aaaaaaaaaaaa", Type: "export", State: "queued"}, nil
 }
 
 type jobsStub struct {
 	getCalls, cancelCalls int
-	get                   func(context.Context, auth.Principal, string) (api.Job, error)
+	get                   func(context.Context, string) (api.Job, error)
 }
 
 type downloadStub struct {
 	calls    int
-	download func(context.Context, auth.Principal, string, int) (io.ReadCloser, string, error)
+	download func(context.Context, string, int) (io.ReadCloser, string, error)
 }
 
-func (d *downloadStub) Download(ctx context.Context, principal auth.Principal, job string, position int) (io.ReadCloser, string, error) {
+func (d *downloadStub) Download(ctx context.Context, job string, position int) (io.ReadCloser, string, error) {
 	d.calls++
-	return d.download(ctx, principal, job, position)
+	return d.download(ctx, job, position)
 }
 
 type headerAuthenticator struct{}
@@ -101,14 +99,14 @@ func (headerAuthenticator) Authenticate(request *http.Request) (auth.Principal, 
 	return auth.Principal{Subject: request.Header.Get("X-Test-User"), Capabilities: []string{"job_read"}}, nil
 }
 
-func (j *jobsStub) Get(ctx context.Context, principal auth.Principal, id string) (api.Job, error) {
+func (j *jobsStub) Get(ctx context.Context, id string) (api.Job, error) {
 	j.getCalls++
 	if j.get != nil {
-		return j.get(ctx, principal, id)
+		return j.get(ctx, id)
 	}
 	return api.Job{}, errors.New("missing")
 }
-func (j *jobsStub) Cancel(context.Context, auth.Principal, string) error {
+func (j *jobsStub) Cancel(context.Context, string) error {
 	j.cancelCalls++
 	return errors.New("missing")
 }
@@ -212,8 +210,8 @@ func TestTrustedProxyPrincipalReachesPreview(t *testing.T) {
 	request.Header.Set("X-Forwarded-User", "proxy-editor")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
-	if response.Code != http.StatusOK || preview.calls != 1 || preview.principal.Subject != "trusted-proxy" {
-		t.Fatalf("status=%d preview calls=%d principal=%#v", response.Code, preview.calls, preview.principal)
+	if response.Code != http.StatusOK || preview.calls != 1 {
+		t.Fatalf("status=%d preview calls=%d", response.Code, preview.calls)
 	}
 }
 
@@ -258,8 +256,8 @@ func TestUnauthorizedExportNeverQueuesWork(t *testing.T) {
 func TestDownloadOutputLifecycle(t *testing.T) {
 	const job = "j_aaaaaaaaaaaa"
 	const internalPath = "/var/lib/videocutlist/exports/secret.mkv"
-	stub := &downloadStub{download: func(_ context.Context, principal auth.Principal, gotJob string, position int) (io.ReadCloser, string, error) {
-		if principal.Subject != "owner" || gotJob != job {
+	stub := &downloadStub{download: func(_ context.Context, gotJob string, position int) (io.ReadCloser, string, error) {
+		if gotJob != job {
 			return nil, "", errors.New("missing")
 		}
 		switch position {
@@ -384,10 +382,7 @@ func TestForbiddenRequestsDoNotInvokePrincipalBoundServices(t *testing.T) {
 func TestJobResponsesExposeOnlySafeTerminalMetadata(t *testing.T) {
 	retainUntil := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
 	code := "media_unavailable"
-	jobs := &jobsStub{get: func(_ context.Context, principal auth.Principal, _ string) (api.Job, error) {
-		if principal.Subject == "other" {
-			return api.Job{}, errors.New("missing")
-		}
+	jobs := &jobsStub{get: func(_ context.Context, _ string) (api.Job, error) {
 		return api.Job{ID: "j_aaaaaaaaaaaa", Type: "export", State: "succeeded", Progress: 1, Result: &application.JobResult{OutputName: "export.mkv", SizeBytes: 42, RetainUntil: retainUntil}, Warnings: []string{"Cut may start at an earlier keyframe."}}, nil
 	}}
 	service := serverWith(t, headerAuthenticator{}, &mediaStub{}, &previewStub{start: func(context.Context) (api.PreviewResult, error) { return api.PreviewResult{}, nil }}, &projectStub{get: api.Project{ID: validProject}}, &exportStub{}, jobs, nil, nil)
@@ -407,7 +402,7 @@ func TestJobResponsesExposeOnlySafeTerminalMetadata(t *testing.T) {
 		t.Fatalf("missing safe result: %s", response.Body.String())
 	}
 
-	jobs.get = func(context.Context, auth.Principal, string) (api.Job, error) {
+	jobs.get = func(context.Context, string) (api.Job, error) {
 		return api.Job{ID: "j_aaaaaaaaaaaa", Type: "export", State: "failed", Progress: 1, ErrorCode: &code}, nil
 	}
 	response = httptest.NewRecorder()
@@ -418,18 +413,15 @@ func TestJobResponsesExposeOnlySafeTerminalMetadata(t *testing.T) {
 		t.Fatalf("failed response=%d %s", response.Code, response.Body.String())
 	}
 
-	jobs.get = func(_ context.Context, principal auth.Principal, _ string) (api.Job, error) {
-		if principal.Subject != "owner" {
-			return api.Job{}, errors.New("missing")
-		}
+	jobs.get = func(_ context.Context, _ string) (api.Job, error) {
 		return api.Job{ID: "j_aaaaaaaaaaaa", Type: "export", State: "queued"}, nil
 	}
 	request = localRequest(http.MethodGet, "/api/v1/jobs/j_aaaaaaaaaaaa", nil)
 	request.Header.Set("X-Test-User", "other")
 	response = httptest.NewRecorder()
 	service.ServeHTTP(response, request)
-	if response.Code != http.StatusNotFound {
-		t.Fatalf("cross-owner status=%d body=%s", response.Code, response.Body.String())
+	if response.Code != http.StatusOK {
+		t.Fatalf("job status=%d body=%s", response.Code, response.Body.String())
 	}
 }
 

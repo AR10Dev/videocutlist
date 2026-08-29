@@ -60,7 +60,7 @@ type DetectionUseCase struct {
 func NewDetectionUseCase(d Detector) *DetectionUseCase {
 	return &DetectionUseCase{Detector: d}
 }
-func (e *DetectionUseCase) Create(ctx context.Context, p domain.Principal, projectID string, request DetectionRequest) (DetectionJob, error) {
+func (e *DetectionUseCase) Create(ctx context.Context, projectID string, request DetectionRequest) (DetectionJob, error) {
 	if err := ValidateDetectionRequest(request); err != nil {
 		return DetectionJob{}, err
 	}
@@ -96,7 +96,7 @@ func (e *DetectionUseCase) Create(ctx context.Context, p domain.Principal, proje
 	}
 	return DetectionJob{}, errors.New("detection scheduler is not configured")
 }
-func (e *DetectionUseCase) Get(ctx context.Context, p domain.Principal, id string) (DetectionJob, error) {
+func (e *DetectionUseCase) Get(ctx context.Context, id string) (DetectionJob, error) {
 	if e.UnifiedJobs != nil {
 		j, err := e.UnifiedJobs.Get(ctx, id)
 		if err != nil {
@@ -109,7 +109,7 @@ func (e *DetectionUseCase) Get(ctx context.Context, p domain.Principal, id strin
 	}
 	return DetectionJob{}, store.ErrJobNotFound
 }
-func (e *DetectionUseCase) Cancel(ctx context.Context, p domain.Principal, id string) error {
+func (e *DetectionUseCase) Cancel(ctx context.Context, id string) error {
 	if e.UnifiedJobs == nil || e.Scheduler == nil {
 		return store.ErrJobNotFound
 	}

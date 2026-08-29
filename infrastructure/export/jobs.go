@@ -17,17 +17,17 @@ type Coordinator struct {
 	Exporter Service
 }
 
-func (c Coordinator) Execute(ctx context.Context, owner, jobID string, source *os.File, document domain.Document) (Result, error) {
+func (c Coordinator) Execute(ctx context.Context, jobID string, source *os.File, document domain.Document) (Result, error) {
 	if c.Jobs == nil {
 		return Result{}, errors.New("job store is required")
 	}
-	job, err := c.Jobs.Start(ctx, owner, jobID)
+	job, err := c.Jobs.Start(ctx, jobID)
 	if err != nil {
 		return Result{}, err
 	}
 	var request Request
 	if err := json.Unmarshal([]byte(job.RequestJSON), &request); err != nil {
-		_, _ = c.Jobs.Fail(context.Background(), owner, jobID, "invalid_export_request")
+		_, _ = c.Jobs.Fail(context.Background(), jobID, "invalid_export_request")
 		return Result{}, fmt.Errorf("decode export request: %w", err)
 	}
 	request.JobID = jobID
@@ -35,22 +35,22 @@ func (c Coordinator) Execute(ctx context.Context, owner, jobID string, source *o
 	if err != nil {
 		stateContext := context.Background() // Persist a terminal state even after request cancellation.
 		if errors.Is(err, ErrCancelled) {
-			_, _ = c.Jobs.Cancel(stateContext, owner, jobID)
+			_, _ = c.Jobs.Cancel(stateContext, jobID)
 		} else {
 			code := "export_failed"
 			if errors.Is(err, ErrHybridSmartCutUnsupportedMedia) {
 				code = "hybrid_smart_cut_unsupported_media"
 			}
-			_, _ = c.Jobs.Fail(stateContext, owner, jobID, code)
+			_, _ = c.Jobs.Fail(stateContext, jobID, code)
 		}
 		return Result{}, err
 	}
 	data, err := json.Marshal(result)
 	if err != nil {
-		_, _ = c.Jobs.Fail(context.Background(), owner, jobID, "result_encoding_failed")
+		_, _ = c.Jobs.Fail(context.Background(), jobID, "result_encoding_failed")
 		return Result{}, err
 	}
-	if _, err := c.Jobs.Succeed(context.Background(), owner, jobID, string(data)); err != nil {
+	if _, err := c.Jobs.Succeed(context.Background(), jobID, string(data)); err != nil {
 		if c.Exporter.Artifacts != nil {
 			c.Exporter.Artifacts.Remove(jobID)
 		}
