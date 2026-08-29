@@ -10,6 +10,72 @@ const media = {
   etag: "v1",
 };
 
+test("export cancellation is isolated from a changed media context", async ({ page }) => {
+  const secondMedia = { ...media, id: "m_0123456789012345678901234567890123456789013", name: "second.mp4" };
+  let deleteStarted!: () => void;
+  const deleteSeen = new Promise<void>((resolve) => (deleteStarted = resolve));
+  let releaseDelete!: () => void;
+  const deleteResponse = new Promise<void>((resolve) => (releaseDelete = resolve));
+  let deleteAborted = false;
+  page.on("requestfailed", (request) => {
+    if (request.method() === "DELETE" && request.url().endsWith("/api/v1/jobs/job_test"))
+      deleteAborted = true;
+  });
+
+  await page.addInitScript(() => {
+    window.VIDEOCUTLIST_CONFIG = {
+      serverBaseUrl: "http://127.0.0.1:8787",
+      authentication: { type: "none" },
+    };
+  });
+  await page.route("**/api/v1/**", async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (url.pathname === "/api/v1/media" || url.pathname === "/api/v1/media/tree")
+      return route.fulfill({ json: { folders: [], items: [media, secondMedia] } });
+    if (url.pathname === `/api/v1/media/${media.id}` || url.pathname === `/api/v1/media/${secondMedia.id}`)
+      return route.fulfill({ json: url.pathname.endsWith(secondMedia.id) ? secondMedia : media });
+    if (url.pathname === "/api/v1/media/status")
+      return route.fulfill({ json: { state: "ready_with_media", message: "Ready" } });
+    if (request.method() === "PUT" && url.pathname.startsWith("/api/v1/projects/"))
+      return route.fulfill({ json: { id: "p_test", mediaId: media.id, revision: 1, segments: [{ startMs: 0, endMs: 1000 }], uiState: { playheadMs: 0, zoom: 1, muted: false } } });
+    if (request.method() === "POST" && url.pathname.endsWith("/preflight"))
+      return route.fulfill({ json: { allowed: true, selection: [0], findings: [] } });
+    if (request.method() === "POST" && url.pathname.endsWith("/exports"))
+      return route.fulfill({ json: { id: "job_test", state: "queued", progress: 0 } });
+    if (request.method() === "DELETE" && url.pathname === "/api/v1/jobs/job_test") {
+      deleteStarted();
+      try {
+        await deleteResponse;
+        return route.fulfill({ status: 204 });
+      } catch {
+        deleteAborted = true;
+        throw new Error("request aborted");
+      }
+    }
+    return route.fulfill({ status: 404 });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await page.getByRole("button", { name: "Set In marker" }).click();
+  await page.getByRole("textbox", { name: "Timecode" }).fill("0:01");
+  await page.getByRole("button", { name: "Go to timecode" }).click();
+  await page.getByRole("button", { name: "Set Out marker" }).click();
+  await page.getByRole("button", { name: "Add In/Out segment" }).click();
+  await page.getByText("Project administration and interchange").click();
+  await page.getByRole("button", { name: "Save project" }).click();
+  await expect(page.getByRole("button", { name: "Start export" })).toBeEnabled();
+  await page.getByRole("button", { name: "Start export" }).click();
+  await expect(page.getByRole("button", { name: "Cancel export" })).toBeVisible();
+  await page.getByRole("button", { name: "Cancel export" }).click();
+  await deleteSeen;
+  await page.getByRole("button", { name: /second.mp4/ }).click();
+  releaseDelete();
+  await expect.poll(() => deleteAborted).toBe(true);
+  await expect(page.getByRole("button", { name: /second.mp4/ })).toHaveAttribute("aria-pressed", "true");
+});
+
 test("project interchange controls wait for media selection", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Choose a video to begin" })).toBeVisible();

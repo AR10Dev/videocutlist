@@ -494,6 +494,9 @@ export function App() {
       if (request === folderRequestVersion) setLoadingMore(false);
     }
   };
+  createEffect(() => {
+    void loadFolder();
+  });
   const libraryMessage = () => {
     const current = libraryStatus();
     if (!current) return "Checking the server media library… Refresh to check again.";
