@@ -41,7 +41,6 @@ import {
 } from "./projectLifecycle";
 import { defaultSettings, settingsKey, storedSettings, type AppSettings } from "./settings";
 type Media = components["schemas"]["Media"];
-type MediaPage = components["schemas"]["MediaPage"];
 type FolderPage = {
   folders: { id: string; label: string }[];
   items: Media[];
@@ -285,12 +284,10 @@ export function App() {
     }
   });
   let video: HTMLVideoElement | undefined;
-  let mediaRequest: AbortController | undefined;
   let assetRequest: AbortController | undefined;
   let previewRequest: AbortController | undefined;
   let cleanupPreview: (() => void) | undefined;
   let thumbnailObjectURL: string | undefined;
-  let requestVersion = 0;
   let projectRequest: AbortController | undefined;
   let projectRequestVersion = 0;
   let folderRequestVersion = 0;
@@ -304,6 +301,8 @@ export function App() {
   let detectionRequest = 0;
   let exportController: AbortController | undefined;
   let detectionController: AbortController | undefined;
+  let exportCancellationController: AbortController | undefined;
+  let detectionCancellationController: AbortController | undefined;
 
   const present = () => timeline().present;
   const markDirty = () => {
@@ -484,60 +483,6 @@ export function App() {
       if (request === folderRequestVersion) setLoadingMore(false);
     }
   };
-  const _loadMedia = async (cursor?: string, refreshed = false) => {
-    mediaRequest?.abort();
-    const controller = new AbortController();
-    mediaRequest = controller;
-    const request = ++requestVersion;
-    if (cursor) setLoadingMore(true);
-    else setStatus("Loading media…");
-    try {
-      const response = await api.request(
-        `media?limit=50${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`,
-        { signal: controller.signal },
-      );
-      if (!response.ok) throw new Error(`Media request failed (${response.status}).`);
-      if (!cursor) {
-        const libraryResponse = await api.request("media/status", { signal: controller.signal });
-        if (controller.signal.aborted || request !== requestVersion) return;
-        if (libraryResponse.ok) setLibraryStatus((await libraryResponse.json()) as LibraryStatus);
-      }
-      const page = (await response.json()) as MediaPage;
-      if (controller.signal.aborted || request !== requestVersion) return;
-      setMedia(cursor ? [...media(), ...page.items] : page.items);
-      setNextCursor(page.nextCursor ?? undefined);
-      setStatus(refreshed ? "Media refreshed. Choose media to begin." : "Choose media to begin.");
-      if (refreshed && !cursor) {
-        const current = selected();
-        if (current && !page.items.some((item) => item.id === current.id)) {
-          const metadata = await api.request(`media/${encodeURIComponent(current.id)}`, {
-            signal: controller.signal,
-          });
-          if (controller.signal.aborted || request !== requestVersion) return;
-          if (metadata.ok) {
-            const item = (await metadata.json()) as Media;
-            if (
-              controller.signal.aborted ||
-              request !== requestVersion ||
-              selected()?.id !== current.id
-            )
-              return;
-            setSelected(item);
-          } else if (metadata.status === 404) {
-            setStatus("Selected media is no longer indexed. Unsaved project changes were kept.");
-          }
-        } else if (current) {
-          const refreshedItem = page.items.find((item) => item.id === current.id);
-          if (refreshedItem) setSelected(refreshedItem);
-        }
-      }
-    } catch (error) {
-      if (!controller.signal.aborted && request === requestVersion)
-        setStatus(error instanceof Error ? error.message : "Media request failed.");
-    } finally {
-      if (request === requestVersion) setLoadingMore(false);
-    }
-  };
   const libraryMessage = () => {
     const current = libraryStatus();
     if (!current) return "Checking the server media library… Refresh to check again.";
@@ -555,8 +500,6 @@ export function App() {
   };
 
   const refreshMedia = async () => {
-    mediaRequest?.abort();
-    requestVersion++;
     folderRequestVersion++;
     setRefreshing(true);
     setActiveFolder(undefined);
@@ -945,7 +888,6 @@ export function App() {
     setStatus("New project ready.");
   };
   onCleanup(() => {
-    mediaRequest?.abort();
     saveRequest?.abort();
     assetRequest?.abort();
     previewRequest?.abort();
@@ -954,11 +896,14 @@ export function App() {
     if (thumbnailObjectURL) URL.revokeObjectURL(thumbnailObjectURL);
     if (exportTimer) window.clearTimeout(exportTimer);
     clearDetectionContext();
-    requestVersion++;
+    exportCancellationController?.abort();
+    detectionCancellationController?.abort();
     projectRequestVersion++;
     saveVersion++;
     exportRequest++;
     exportController?.abort();
+    exportCancellationController?.abort();
+    detectionCancellationController?.abort();
   });
   void api.request("destinations").then(async (response) => {
     if (!response.ok) return;
@@ -1102,14 +1047,19 @@ export function App() {
   const cancelExport = async () => {
     const job = exportJob();
     if (!job || (job.state !== "queued" && job.state !== "running")) return;
+    exportCancellationController?.abort();
+    const cancellationController = new AbortController();
+    exportCancellationController = cancellationController;
     try {
       const response = await cancelJobMutation.mutateAsync({
         id: job.id,
-        signal: new AbortController().signal,
+        signal: cancellationController.signal,
       });
       if (!response.ok) throw new Error("Export could not be cancelled. Try again.");
       await queryClient.cancelQueries({ queryKey: ["job", "export", job.id] });
       await queryClient.invalidateQueries({ queryKey: ["job", "export", job.id] });
+      await queryClient.invalidateQueries({ queryKey: ["project", projectId()] });
+      await queryClient.invalidateQueries({ queryKey: ["media"] });
       exportController?.abort();
       exportController = undefined;
       if (exportTimer) clearTimeout(exportTimer);
@@ -1117,9 +1067,13 @@ export function App() {
       setExportJob({ ...job, state: "cancelled" });
       setExportStatus("Export cancelled.");
     } catch (error) {
-      setExportStatus(
-        error instanceof Error ? error.message : "Export could not be cancelled. Try again.",
-      );
+      if (!cancellationController.signal.aborted)
+        setExportStatus(
+          error instanceof Error ? error.message : "Export could not be cancelled. Try again.",
+        );
+    } finally {
+      if (exportCancellationController === cancellationController)
+        exportCancellationController = undefined;
     }
   };
   const startDetection = async (kind: DetectionKind) => {
@@ -1177,22 +1131,30 @@ export function App() {
     const request = ++detectionRequest;
     detectionController?.abort();
     if (detectionTimer) clearTimeout(detectionTimer);
+    detectionCancellationController?.abort();
+    const cancellationController = new AbortController();
+    detectionCancellationController = cancellationController;
     try {
       const response = await cancelJobMutation.mutateAsync({
         id: job.id,
-        signal: new AbortController().signal,
+        signal: cancellationController.signal,
       });
       if (request !== detectionRequest) return;
       if (!response.ok) throw new Error("Detection could not be cancelled. Try again.");
       await queryClient.cancelQueries({ queryKey: ["job", "detection", job.id] });
       await queryClient.invalidateQueries({ queryKey: ["job", "detection", job.id] });
+      await queryClient.invalidateQueries({ queryKey: ["project", projectId()] });
+      await queryClient.invalidateQueries({ queryKey: ["media"] });
       setDetectionJob({ ...job, state: "cancelled" });
       setDetectionStatus("Detection cancelled.");
     } catch (error) {
-      if (request === detectionRequest)
+      if (request === detectionRequest && !cancellationController.signal.aborted)
         setDetectionStatus(
           error instanceof Error ? error.message : "Detection could not be cancelled. Try again.",
         );
+    } finally {
+      if (detectionCancellationController === cancellationController)
+        detectionCancellationController = undefined;
     }
   };
   const acceptDetection = (candidate: Candidate) => {

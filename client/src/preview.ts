@@ -1,12 +1,6 @@
-export type Media = {
-  id: string;
-  name: string;
-  durationMs: number;
-  sizeBytes: number;
-  container: string;
-  streams: Record<string, unknown>;
-  etag: string;
-};
+import type { components } from "./generated/api";
+
+export type Media = components["schemas"]["Media"];
 
 type VideoMetadata = {
   codec?: unknown;
@@ -42,7 +36,7 @@ export const hybridSmartCutKnownIneligible = (media?: Media) => {
   return average !== undefined && nominal !== undefined && average !== nominal;
 };
 
-export type Segment = { startMs: number; endMs: number; label?: string };
+export type Segment = components["schemas"]["Segment"];
 
 export const acceptsMediaMetadata = (
   aborted: boolean,
