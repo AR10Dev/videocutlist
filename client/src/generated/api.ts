@@ -372,14 +372,9 @@ export interface components {
             description?: string;
             /** @enum {string} */
             kind: "download" | "archive" | "source_adjacent";
-            root?: string;
-            mediaRoot?: string;
             retention?: string;
         };
         RuntimeSettings: {
-            mediaRoots?: {
-                [key: string]: string;
-            };
             destinations?: components["schemas"]["RuntimeDestination"][];
             exportLimit?: number;
             cacheMaxBytes?: number;

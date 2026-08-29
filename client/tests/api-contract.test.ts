@@ -27,4 +27,11 @@ describe("generated API contract", () => {
       expect(generated).toContain(`${schema}:`);
     }
   });
+
+  it("does not expose deployment filesystem paths in browser settings schemas", () => {
+    expect(generated).toContain("SettingsResponse");
+    expect(generated).not.toMatch(/RuntimeDestination:[\\s\\S]*?root\\?:/);
+    expect(generated).not.toMatch(/RuntimeSettings:[\\s\\S]*?mediaRoots/);
+    expect(contract).not.toMatch(/(^|\\n)\\s+(root|mediaRoot|mediaRoots):/);
+  });
 });

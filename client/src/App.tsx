@@ -48,7 +48,6 @@ type FolderPage = components["schemas"]["FolderPage"];
 type LibraryStatus = components["schemas"]["LibraryStatus"];
 type LibraryRoot = {
   alias: string;
-  path: string;
   state?: "ready" | "unavailable";
   message?: string;
 };
@@ -88,7 +87,6 @@ export function App() {
   const [runtimeSettings, setRuntimeSettings] = createSignal<ServerRuntimeSettings>();
   const [settingsPending, setSettingsPending] = createSignal(false);
   const [rescanPending, setRescanPending] = createSignal(false);
-  const [rootErrors, setRootErrors] = createSignal<Record<number, string>>({});
   const [muted, setMuted] = createSignal(settings().muted);
   const [diagnostics, setDiagnostics] = createSignal<PreviewDiagnostics>();
   const [projectId, setProjectId] = createSignal(newProjectId());
@@ -296,9 +294,8 @@ export function App() {
         throw new Error("Administrator settings are unavailable: your account is not authorized.");
       if (!response.ok) throw new Error("Administrator settings are unavailable on this server.");
       const value = (await response.json()) as ServerSettings;
-      const roots = value.settings.mediaRoots ?? {};
       setLibraryRoots(
-        Object.entries(roots).map(([alias, path]) => ({ alias, path, ...value.roots?.[alias] })),
+        Object.entries(value.roots ?? {}).map(([alias, root]) => ({ alias, ...root })),
       );
       setSettingsRevision(value.revision);
       setRuntimeSettings(value.settings);
@@ -315,19 +312,7 @@ export function App() {
     setSettingsOpen(true);
     await loadServerSettings();
   };
-  const validateRoots = () => {
-    const errors: Record<number, string> = {};
-    const aliases = new Set<string>();
-    libraryRoots().forEach((root, index) => {
-      if (!root.alias.trim()) errors[index] = "Alias is required.";
-      else if (aliases.has(root.alias.trim())) errors[index] = "Aliases must be unique.";
-      else aliases.add(root.alias.trim());
-      if (!root.path.trim() || !/^(?:\/|[A-Za-z]:[\\/])/.test(root.path.trim()))
-        errors[index] = `${errors[index] ? `${errors[index]} ` : ""}Enter an absolute server path.`;
-    });
-    setRootErrors(errors);
-    return Object.keys(errors).length === 0;
-  };
+
   const saveRuntimeSettings = async (
     changes: Partial<ServerRuntimeSettings>,
     successMessage: string,
@@ -366,13 +351,6 @@ export function App() {
     }
   };
 
-  const saveLibrarySettings = async () => {
-    if (!validateRoots()) return;
-    const mediaRoots = Object.fromEntries(
-      libraryRoots().map((root) => [root.alias.trim(), root.path.trim()]),
-    );
-    await saveRuntimeSettings({ mediaRoots }, "Library settings saved.");
-  };
 
   const updateDestination = (id: string, changes: Partial<RuntimeDestination>) => {
     const current = runtimeSettings();
@@ -2113,85 +2091,26 @@ export function App() {
           </p>
           <section aria-labelledby="library-settings-heading">
             <h3 id="library-settings-heading">Library</h3>
-            <p>
-              Media is indexed by the server. Type an absolute path below; this browser cannot
-              choose a host folder. The service account needs read access. In a container, mount the
-              host directory first and enter its container path.
-            </p>
+            <p>Media roots are deployment-managed. This browser only shows safe aliases and availability.</p>
             <Show when={libraryRoots().length > 0} fallback={<p>No media roots configured.</p>}>
               <div class="library-roots" aria-label="Media roots">
                 <For each={libraryRoots()}>
-                  {(root, index) => (
+                  {(root) => (
                     <div class="library-root">
-                      <label>
-                        Alias
-                        <input
-                          value={root.alias}
-                          aria-label={`Alias for media root ${index() + 1}`}
-                          onInput={(event) =>
-                            setLibraryRoots(
-                              libraryRoots().map((item, i) =>
-                                i === index()
-                                  ? { ...item, alias: event.currentTarget.value }
-                                  : item,
-                              ),
-                            )
-                          }
-                        />
-                      </label>
-                      <label>
-                        Server path
-                        <input
-                          value={root.path}
-                          aria-label={`Server path for media root ${index() + 1}`}
-                          onInput={(event) =>
-                            setLibraryRoots(
-                              libraryRoots().map((item, i) =>
-                                i === index() ? { ...item, path: event.currentTarget.value } : item,
-                              ),
-                            )
-                          }
-                        />
-                      </label>
+                      <span>
+                        Alias: <strong>{root.alias}</strong>
+                      </span>
                       <span role="status">
                         {root.state === "unavailable"
                           ? root.message
                           : (root.message ?? "Available")}
                       </span>
-                      <Show when={rootErrors()[index()] as string | undefined}>
-                        {(error) => (
-                          <p class="field-error" role="alert">
-                            {error()}
-                          </p>
-                        )}
-                      </Show>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setLibraryRoots(libraryRoots().filter((_, i) => i !== index()))
-                        }
-                      >
-                        Remove
-                      </button>
                     </div>
                   )}
                 </For>
               </div>
             </Show>
             <div class="settings-actions">
-              <button
-                type="button"
-                onClick={() => setLibraryRoots([...libraryRoots(), { alias: "", path: "" }])}
-              >
-                Add root
-              </button>
-              <button
-                type="button"
-                onClick={() => void saveLibrarySettings()}
-                disabled={settingsPending()}
-              >
-                {settingsPending() ? "Saving…" : "Save library settings"}
-              </button>
               <button
                 type="button"
                 onClick={() => void rescanLibrary()}

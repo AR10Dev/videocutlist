@@ -496,17 +496,11 @@ components:
         label: {type: string}
         description: {type: string}
         kind: {type: string, enum: [download, archive, source_adjacent]}
-        root: {type: string}
-        mediaRoot: {type: string}
         retention: {type: string}
     RuntimeSettings:
       type: object
       additionalProperties: false
       properties:
-        mediaRoots:
-          type: object
-          additionalProperties:
-            type: string
         destinations:
           type: array
           items:
