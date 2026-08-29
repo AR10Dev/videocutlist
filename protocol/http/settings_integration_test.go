@@ -56,6 +56,52 @@ func TestPutSettingsRuntimeFailureDoesNotPersist(t *testing.T) {
 	}
 }
 
+func TestPutSettingsRejectsDeploymentMutation(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.OpenDatabase(ctx, t.TempDir()+"/settings.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	settings, err := store.NewRuntimeSettingsStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous, err := settings.Seed(ctx, testRuntimeSettings())
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate := testRuntimeSettings()
+	candidate.MediaRoots["camera"] = "/attacker"
+	applied := false
+	authenticator, err := NewAuthenticator(AuthConfig{Mode: "none"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := New(Config{
+		Authenticator: authenticator, Media: &routeTestMedia{}, Preview: routeTestPreview{},
+		Projects: routeTestProjects{}, Exports: routeTestExports{}, Jobs: &routeTestJobs{}, Settings: settings,
+		ApplyRuntimeSettings: func(store.RuntimeSettings) error { applied = true; return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := putSettingsRequest(t, server, previous.Revision, candidate)
+	if response.Code != http.StatusUnprocessableEntity || applied {
+		t.Fatalf("status=%d applied=%v body=%s", response.Code, applied, response.Body.String())
+	}
+	got, err := settings.Get(ctx)
+	if err != nil || got.Settings.MediaRoots["camera"] != "/media/camera" {
+		t.Fatalf("deployment settings changed: got=%#v err=%v", got, err)
+	}
+	candidate = testRuntimeSettings()
+	candidate.Destinations[0].Root = "/attacker"
+	response = putSettingsRequest(t, server, previous.Revision, candidate)
+	if response.Code != http.StatusUnprocessableEntity || applied {
+		t.Fatalf("destination status=%d applied=%v body=%s", response.Code, applied, response.Body.String())
+	}
+}
+
 func TestPutSettingsPersistenceFailureRestoresRuntime(t *testing.T) {
 	ctx := context.Background()
 	db, err := store.OpenDatabase(ctx, t.TempDir()+"/settings.db")
