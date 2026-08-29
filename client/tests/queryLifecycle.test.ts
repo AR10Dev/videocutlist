@@ -1,4 +1,5 @@
-import { QueryClient } from "@tanstack/solid-query";
+import { createMutation, QueryClient, QueryClientProvider } from "@tanstack/solid-query";
+import { createComponent, createRoot } from "solid-js";
 import { describe, expect, it } from "vitest";
 import { jobPollInterval } from "../src/jobPolling";
 
@@ -16,6 +17,39 @@ describe("Solid Query lifecycle contracts", () => {
     await client.cancelQueries({ queryKey: ["job", "export", "job-1"] });
     await expect(pending).rejects.toThrow();
     expect(signal?.aborted).toBe(true);
+  });
+
+  it("passes an abort signal through a mutation", async () => {
+    await new Promise<void>((resolve, reject) =>
+      createRoot(async (dispose) => {
+        try {
+          let signal: AbortSignal | undefined;
+          let mutation!: {
+            mutateAsync: (variables: { signal: AbortSignal }) => Promise<string>;
+          };
+          const client = new QueryClient();
+          createComponent(QueryClientProvider, {
+            client,
+            get children() {
+              mutation = createMutation(() => ({
+                mutationFn: ({ signal: mutationSignal }: { signal: AbortSignal }) => {
+                  signal = mutationSignal;
+                  return Promise.resolve("cancelled");
+                },
+              }));
+              return null;
+            },
+          });
+          await mutation.mutateAsync({ signal: new AbortController().signal });
+          expect(signal).toBeInstanceOf(AbortSignal);
+          dispose();
+          resolve();
+        } catch (error) {
+          dispose();
+          reject(error);
+        }
+      }),
+    );
   });
 
   it("invalidates related cached queries after a terminal job", async () => {
