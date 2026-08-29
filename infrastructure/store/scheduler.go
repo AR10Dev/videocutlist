@@ -239,7 +239,12 @@ func (s *Scheduler) worker() {
 		delete(s.running, job.ID)
 		s.mu.Unlock()
 		if err == nil {
-			_, _ = s.jobs.Succeed(context.Background(), job.ID, `{}`)
+			// Runners that produce durable results transition the job themselves.
+			// Do not overwrite those results with the scheduler's empty default.
+			current, getErr := s.jobs.Get(context.Background(), job.ID)
+			if getErr == nil && current.State == JobRunning {
+				_, _ = s.jobs.Succeed(context.Background(), job.ID, `{}`)
+			}
 		} else if cancelled {
 			_, _ = s.jobs.Cancel(context.Background(), job.ID)
 		} else {
