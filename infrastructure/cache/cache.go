@@ -257,6 +257,13 @@ func (p *Partial) Commit(ctx context.Context, validator Validator) error {
 		defer pathMu.Unlock()
 		p.store.mu.Lock()
 		defer p.store.mu.Unlock()
+		// Re-check cancellation while holding both publication locks: cancellation
+		// during lock acquisition must not turn into a cache hit.
+		if err := ctx.Err(); err != nil {
+			result = err
+			_ = os.Remove(p.path)
+			return
+		}
 		// Never rename over another writer's complete entry. Linking first
 		// makes publication atomic without allowing a late writer to replace it.
 		if _, err := os.Stat(final); err == nil {

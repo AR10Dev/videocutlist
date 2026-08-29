@@ -218,7 +218,7 @@ func (b *boundedBuffer) Write(p []byte) (int, error) {
 }
 func (s *Service) run(ctx context.Context, file *os.File, args []string, max int) ([]byte, error) {
 	if s.Capacity != nil {
-		release, err := s.Capacity.AcquireProcess()
+		release, err := application.AcquireProcess(ctx, s.Capacity)
 		if err != nil {
 			return nil, err
 		}

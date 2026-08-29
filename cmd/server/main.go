@@ -96,7 +96,7 @@ func run(ctx context.Context) error {
 	})
 	mediaCatalog := adapters.MediaCatalog{Scanner: scanner, Store: mediaStore}
 	mediaService := &application.MediaUseCase{Catalog: mediaCatalog, Configured: len(cfg.MediaRoots) > 0}
-	detectionService := application.NewDetectionUseCase(detection.Service{Scanner: scanner, Catalog: mediaStore, FFmpegPath: cfg.FFmpegPath})
+	detectionService := application.NewDetectionUseCase(detection.Service{Scanner: scanner, Catalog: mediaStore, FFmpegPath: cfg.FFmpegPath, Capacity: limiter})
 	detectionService.Catalog = mediaCatalog
 	_ = mediaService.RefreshMedia(ctx)
 	previewRunner := adapters.PreviewRunner{Scanner: scanner, Media: mediaStore, FFmpeg: ffmpeg.Runner{Path: cfg.FFmpegPath}}
