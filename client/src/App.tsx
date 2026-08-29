@@ -84,38 +84,9 @@ type ServerSettings = {
   revision: number;
   roots?: Record<string, { state: "ready" | "unavailable"; message: string }>;
 };
-type Destination = {
-  id: string;
-  label: string;
-  description?: string;
-  kind: string;
-  retention?: string;
-};
+type Destination = components["schemas"]["Destination"];
 type Project = components["schemas"]["Project"];
 type ExportJob = components["schemas"]["Job"];
-/* ExportJob is retained as a domain alias for the editor. */
-type _LegacyExportJob = {
-  id: string;
-  state: "queued" | "running" | "succeeded" | "failed" | "cancelled";
-  progress: number;
-  result?: {
-    outputName?: string;
-    outputNames?: string[];
-    appliedStrategies?: { segment: number; outputName?: string; strategy: string }[];
-    destinationKind?: string;
-    sizeBytes: number;
-    retainUntil: string;
-  };
-  warnings?: string[];
-  warningDetails?: { severity: string; code: string; message: string; streamIndex?: number }[];
-  strategy?: string;
-  appliedStrategy?: string;
-  mode?: string;
-  selection?: string;
-  selectedStreams?: number[];
-  verified?: boolean;
-  errorCode?: string;
-};
 type DetectionJob = {
   id: string;
   state: "queued" | "running" | "succeeded" | "failed" | "cancelled";
@@ -221,28 +192,6 @@ export function App() {
         body: JSON.stringify(body),
       }),
   }));
-  const mediaQuery = useQuery(() => ({
-    queryKey: ["media", "tree", "root"],
-    queryFn: async ({ signal }) => {
-      const response = await api.request("media/tree", { signal });
-      if (!response.ok) throw new Error(`Media request failed (${response.status}).`);
-      const page = (await response.json()) as FolderPage;
-      const statusResponse = await api.request("media/status", { signal });
-      return {
-        page,
-        library: statusResponse.ok ? ((await statusResponse.json()) as LibraryStatus) : undefined,
-      };
-    },
-  }));
-  createEffect(() => {
-    const result = mediaQuery.data;
-    if (!result) return;
-    setFolders(result.page.folders);
-    setMedia(result.page.items);
-    setNextCursor(result.page.nextCursor ?? undefined);
-    setLibraryStatus(result.library);
-    setStatus("Choose media to begin.");
-  });
   const exportStatusQuery = useQuery(() => ({
     queryKey: ["job", "export", exportJob()?.id ?? null],
     enabled: Boolean(exportJob()?.id),
@@ -469,25 +418,38 @@ export function App() {
     if (folderId) params.set("folderId", folderId);
     if (cursor) params.set("cursor", cursor);
     const query = params.toString() ? `?${params}` : "";
-    if (!folderId && !cursor) setStatus("Loading media…");
-    const response = await api.request(`media/tree${query}`);
-    if (request !== folderRequestVersion || !response.ok) return;
-    const page = (await response.json()) as FolderPage;
-    if (request !== folderRequestVersion) return;
-    let library: LibraryStatus | undefined;
-    if (!folderId && !cursor) {
-      const libraryResponse = await api.request("media/status");
+    if (cursor) setLoadingMore(true);
+    else setStatus("Loading media…");
+    try {
+      const result = await queryClient.fetchQuery({
+        queryKey: ["media", "tree", folderId ?? null, cursor ?? null],
+        queryFn: async ({ signal }) => {
+          const response = await api.request(`media/tree${query}`, { signal });
+          if (!response.ok) throw new Error(`Media request failed (${response.status}).`);
+          const page = (await response.json()) as FolderPage;
+          if (folderId || cursor) return { page };
+          const libraryResponse = await api.request("media/status", { signal });
+          return {
+            page,
+            library: libraryResponse.ok
+              ? ((await libraryResponse.json()) as LibraryStatus)
+              : undefined,
+          };
+        },
+      });
       if (request !== folderRequestVersion) return;
-      if (libraryResponse.ok) library = (await libraryResponse.json()) as LibraryStatus;
-      if (request !== folderRequestVersion) return;
+      if (result.library) setLibraryStatus(result.library);
+      setFolders(result.page.folders);
+      setMedia(cursor ? [...media(), ...result.page.items] : result.page.items);
+      setNextCursor(result.page.nextCursor ?? undefined);
+      setActiveFolder(folderId);
+      if (!folderId && !cursor) setStatus("Choose media to begin.");
+    } catch (error) {
+      if (request === folderRequestVersion)
+        setStatus(error instanceof Error ? error.message : "Media request failed.");
+    } finally {
+      if (request === folderRequestVersion) setLoadingMore(false);
     }
-    if (request !== folderRequestVersion) return;
-    if (library) setLibraryStatus(library);
-    setFolders(page.folders);
-    setMedia(cursor ? [...media(), ...page.items] : page.items);
-    setNextCursor(page.nextCursor ?? undefined);
-    setActiveFolder(folderId);
-    if (!folderId && !cursor) setStatus("Choose media to begin.");
   };
   const _loadMedia = async (cursor?: string, refreshed = false) => {
     mediaRequest?.abort();
@@ -574,6 +536,7 @@ export function App() {
     setNextCursor(undefined);
     setFolders([]);
     try {
+      await queryClient.invalidateQueries({ queryKey: ["media"] });
       const response = await api.request("media/refresh", {
         method: "POST",
         signal: controller.signal,
@@ -1158,6 +1121,7 @@ export function App() {
       });
       if (!response.ok) throw new Error("Export could not be cancelled. Try again.");
       await queryClient.cancelQueries({ queryKey: ["job", "export", job.id] });
+      await queryClient.invalidateQueries({ queryKey: ["job", "export", job.id] });
       exportController?.abort();
       exportController = undefined;
       if (exportTimer) clearTimeout(exportTimer);
@@ -1230,6 +1194,7 @@ export function App() {
       if (request !== detectionRequest) return;
       if (!response.ok) throw new Error("Detection could not be cancelled. Try again.");
       await queryClient.cancelQueries({ queryKey: ["job", "detection", job.id] });
+      await queryClient.invalidateQueries({ queryKey: ["job", "detection", job.id] });
       setDetectionJob({ ...job, state: "cancelled" });
       setDetectionStatus("Detection cancelled.");
     } catch (error) {
