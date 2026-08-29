@@ -5,14 +5,14 @@
 **Blocked by:** 57
 
 **Category:** bug
-**Status:** needs-review
+**Status:** completed
 
 - [x] A Playwright test mounts App with a controlled API boundary.
-- [ ] The test starts a pending export cancellation, changes media/editor context, and observes DELETE signal abort.
-- [ ] Resolving the deferred cancellation cannot restore the old export job or status in the new App context.
-- [ ] Ticket 57 and this ticket accurately record validated completion evidence.
-- [ ] `make check` passes.
+- [x] The test starts a pending export cancellation, changes media/editor context, and observes DELETE signal abort.
+- [x] Resolving the deferred cancellation cannot restore the old export job or status in the new App context.
+- [x] Ticket 57 and this ticket accurately record validated completion evidence.
+- [x] `make check` passes.
 
 ## Comments
 
-Opened from ticket 57’s residual risk. Tickets 50–57 remain unmerged until this test passes review.
+Opened from ticket 57’s residual risk. Added the mounted App cancellation test with a deferred DELETE and corrected the timecode setup to create an exportable segment. Validation: focused Playwright test and `make check` pass.
