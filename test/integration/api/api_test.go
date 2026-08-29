@@ -21,9 +21,9 @@ const validMedia = "m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 const validProject = "p_aaaaaaaaaaaa"
 
 type mediaStub struct {
-	calls, refreshCalls int
-	refreshErr          error
-	status              api.LibraryStatus
+	calls, refreshCalls, importStarts int
+	refreshErr, importErr             error
+	status                            api.LibraryStatus
 }
 
 func (m *mediaStub) List(context.Context, string, int) (api.MediaPage, error) {
@@ -41,6 +41,17 @@ func (m *mediaStub) RefreshMedia(_ context.Context) error {
 	return m.refreshErr
 }
 func (m *mediaStub) Status() api.LibraryStatus { return m.status }
+func (m *mediaStub) StartImport(context.Context) (application.ImportJob, error) {
+	m.importStarts++
+	if m.importErr != nil {
+		return application.ImportJob{}, m.importErr
+	}
+	return application.ImportJob{ID: "j_scanresult1234", State: "queued"}, nil
+}
+func (m *mediaStub) ImportStatus(context.Context, string) (application.ImportJob, error) {
+	return application.ImportJob{}, nil
+}
+func (m *mediaStub) CancelImport(context.Context, string) error { return nil }
 
 type previewStub struct {
 	start func(context.Context) (api.PreviewResult, error)
@@ -117,7 +128,7 @@ func server(t *testing.T, authenticator api.Authenticator, media *mediaStub, pre
 
 func serverWith(t *testing.T, authenticator api.Authenticator, media *mediaStub, preview api.PreviewService, projects api.ProjectService, exports *exportStub, jobs api.JobService, download application.ExportDownloadService, authorize api.Authorizer) *api.Server {
 	t.Helper()
-	result, err := api.New(api.Config{Authenticator: authenticator, Media: media, Preview: preview, Projects: projects, Exports: exports, Jobs: jobs, Download: download, Authorize: authorize})
+	result, err := api.New(api.Config{Authenticator: authenticator, Media: media, MediaImport: media, Preview: preview, Projects: projects, Exports: exports, Jobs: jobs, Download: download, Authorize: authorize})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -337,19 +348,23 @@ func TestLibraryStatusContractIsSafe(t *testing.T) {
 	}
 }
 
-func TestRefreshReturnsNoContentAndPropagatesFailure(t *testing.T) {
+func TestRefreshReturnsAcceptedUnifiedJobAndPropagatesSubmissionFailure(t *testing.T) {
 	media := &mediaStub{}
 	service := server(t, noneAuth(t), media, &previewStub{start: func(context.Context) (api.PreviewResult, error) { return api.PreviewResult{}, nil }}, &exportStub{}, nil)
 	response := httptest.NewRecorder()
 	service.ServeHTTP(response, localRequest(http.MethodPost, "/api/v1/media/refresh", nil))
-	if response.Code != http.StatusNoContent || media.refreshCalls != 1 || response.Body.Len() != 0 {
-		t.Fatalf("status=%d calls=%d body=%s", response.Code, media.refreshCalls, response.Body.String())
+	var job application.ImportJob
+	if err := json.Unmarshal(response.Body.Bytes(), &job); err != nil {
+		t.Fatal(err)
 	}
-	media.refreshErr = errors.New("refresh failed")
+	if response.Code != http.StatusAccepted || media.importStarts != 1 || job.ID != "j_scanresult1234" || job.State != "queued" {
+		t.Fatalf("status=%d starts=%d job=%#v body=%s", response.Code, media.importStarts, job, response.Body.String())
+	}
+	media.importErr = errors.New("submission failed")
 	response = httptest.NewRecorder()
 	service.ServeHTTP(response, localRequest(http.MethodPost, "/api/v1/media/refresh", nil))
-	if response.Code != http.StatusInternalServerError || media.refreshCalls != 2 {
-		t.Fatalf("failure status=%d calls=%d", response.Code, media.refreshCalls)
+	if response.Code != http.StatusInternalServerError || media.importStarts != 2 {
+		t.Fatalf("failure status=%d starts=%d", response.Code, media.importStarts)
 	}
 }
 
