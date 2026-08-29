@@ -120,9 +120,9 @@ way for local use. Before any remote exposure:
    configure exact `VIDEOCUTLIST_ALLOWED_ORIGINS` values when the browser is on
    a different origin.
 3. With `trusted_proxy`, set `VIDEOCUTLIST_TRUSTED_PROXY_CIDRS` only to the
-   proxy's immediate source CIDR(s). The proxy must overwrite, not forward,
-   client-supplied `X-Forwarded-User`; do not use this mode without proxy
-   authentication.
+   proxy's immediate source CIDR(s). This is an identity-free access gate: the
+   application allows those proxy requests but does not establish an application
+   identity. Enforce user or network access in the proxy or surrounding network.
 4. Set `VIDEOCUTLIST_BIND_ADDRESS=0.0.0.0` only with the authentication,
    firewall, and TLS controls above. `auth=none` is for a trusted local
    single-user boundary, not a LAN or internet listener.

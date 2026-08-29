@@ -30,9 +30,9 @@ independently.
 Serve does not select VideoCutlist authentication. Use `none` only when tailnet
 access is the intended complete access boundary; use `bearer` when the app
 needs its own shared credential. Do not select `trusted_proxy` solely because
-Serve is present. That mode is reserved for a configured generic proxy that
-sets `X-Forwarded-User` and whose immediate peer CIDR is listed in
-`VIDEOCUTLIST_TRUSTED_PROXY_CIDRS`.
+Serve is present. That mode is an identity-free gate for a configured generic
+proxy whose immediate peer CIDR is listed in `VIDEOCUTLIST_TRUSTED_PROXY_CIDRS`;
+user or network access policy must be enforced outside VideoCutlist.
 
 Tailscale ACLs or grants remain responsible for tailnet network access.
 Network reachability is not application authorization; select a VideoCutlist
