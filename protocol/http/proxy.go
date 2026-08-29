@@ -24,7 +24,10 @@ type ForwardedInfo struct {
 	PeerIP   net.IP
 	Host     string
 	Proto    string
-	User     string
+	// Trusted reports whether the transport peer matched configured proxies.
+	Trusted bool
+	// User is retained for compatibility but is never populated from headers.
+	User string
 }
 
 // GetForwardedInfo returns the values attached by TrustedProxy. It returns the
@@ -55,6 +58,7 @@ func TrustedProxy(trustedCIDRs []string, next http.Handler) (http.Handler, error
 			Proto:    transportProto(r),
 		}
 		if containsIP(trusted, peer) {
+			info.Trusted = true
 			if info, err = parseForwardedInfo(info, forwarded, trusted); err != nil {
 				http.Error(w, "invalid forwarded headers", http.StatusBadRequest)
 				return
@@ -128,13 +132,8 @@ func parseForwardedInfo(info ForwardedInfo, headers forwardedHeaders, trusted []
 		}
 		info.Proto = proto
 	}
-	if len(headers.userValues) == 1 {
-		user, err := singleForwardedValue(headers.userValues[0], maxForwardedUser)
-		if err != nil {
-			return ForwardedInfo{}, err
-		}
-		info.User = user
-	}
+	// X-Forwarded-User is deliberately ignored: proxy mode conveys access,
+	// not an application identity.
 	return info, nil
 }
 

@@ -3,6 +3,7 @@ package httpapi
 import (
 	"crypto/subtle"
 	"errors"
+	"net"
 	"net/http"
 	"strings"
 	"unicode"
@@ -16,7 +17,11 @@ var ErrUnauthenticated = errors.New("unauthenticated")
 type Authenticator interface {
 	Authenticate(*http.Request) (domain.Principal, error)
 }
-type AuthConfig struct{ Mode, BearerToken, BearerSubject string }
+type AuthConfig struct {
+	Mode, BearerToken, BearerSubject string
+	// ListenAddress is used to prevent unauthenticated non-loopback servers.
+	ListenAddress string
+}
 type authenticator struct {
 	mode      string
 	token     []byte
@@ -35,6 +40,12 @@ func NewAuthenticator(config AuthConfig) (Authenticator, error) {
 	if mode != "none" && mode != "bearer" && mode != "trusted_proxy" {
 		return nil, errors.New("unsupported authentication mode")
 	}
+	if mode == "none" && config.ListenAddress != "" {
+		ip := net.ParseIP(config.ListenAddress)
+		if ip == nil || !ip.IsLoopback() {
+			return nil, errors.New("authentication is required for non-loopback listeners")
+		}
+	}
 	if mode == "bearer" && (!validToken(config.BearerToken) || !validSubject(subject)) {
 		return nil, errors.New("invalid bearer configuration")
 	}
@@ -45,11 +56,11 @@ func (a *authenticator) Authenticate(r *http.Request) (domain.Principal, error) 
 	case "none":
 		return builtInPrincipal("anonymous"), nil
 	case "trusted_proxy":
-		subject := GetForwardedInfo(r.Context()).User
-		if !validSubject(subject) {
+		info := GetForwardedInfo(r.Context())
+		if !info.Trusted {
 			return domain.Principal{}, ErrUnauthenticated
 		}
-		return builtInPrincipal(subject), nil
+		return builtInPrincipal("trusted-proxy"), nil
 	case "bearer":
 		values := r.Header.Values("Authorization")
 		if len(values) != 1 {

@@ -356,6 +356,21 @@ type settingsUpdateRequest struct {
 	Settings store.RuntimeSettings `json:"settings"`
 }
 
+// browserSettings is intentionally a projection: deployment paths are never
+// serialized into a browser response.
+func browserSettings(settings store.RuntimeSettings) map[string]any {
+	data := map[string]any{}
+	encoded, _ := json.Marshal(settings)
+	_ = json.Unmarshal(encoded, &data)
+	delete(data, "mediaRoots")
+	destinations := make([]DestinationMetadata, 0, len(settings.Destinations))
+	for _, destination := range settings.Destinations {
+		destinations = append(destinations, DestinationMetadata{ID: destination.ID, Label: destination.Label, Description: destination.Description, Kind: destination.Kind, Retention: destination.Retention})
+	}
+	data["destinations"] = destinations
+	return data
+}
+
 func (s *Server) getSettings(w http.ResponseWriter, r *http.Request, id string) {
 	if s.config.Settings == nil {
 		httpx.Error(w, http.StatusNotFound, "settings_unavailable", "Settings are not available.", id)
@@ -376,7 +391,7 @@ func (s *Server) getSettings(w http.ResponseWriter, r *http.Request, id string) 
 		roots[alias] = map[string]string{"state": state, "message": message}
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{
-		"settings": record.Settings, "revision": record.Revision, "schemaVersion": record.SchemaVersion,
+		"settings": browserSettings(record.Settings), "revision": record.Revision, "schemaVersion": record.SchemaVersion,
 		"updatedAt": record.UpdatedAt, "pathsConstrained": len(s.config.SettingsAllowlist) > 0, "roots": roots,
 	})
 }
@@ -433,7 +448,7 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, id string) 
 	if s.config.RuntimeSettings != nil {
 		s.config.RuntimeSettings.Replace(record.Settings)
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"settings": record.Settings, "revision": record.Revision, "schemaVersion": record.SchemaVersion, "updatedAt": record.UpdatedAt})
+	httpx.WriteJSON(w, http.StatusOK, map[string]any{"settings": browserSettings(record.Settings), "revision": record.Revision, "schemaVersion": record.SchemaVersion, "updatedAt": record.UpdatedAt})
 }
 
 func (s *Server) refreshSettings(w http.ResponseWriter, r *http.Request, _ domain.Principal, id string) {

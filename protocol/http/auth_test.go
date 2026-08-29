@@ -8,6 +8,15 @@ import (
 	"videocutlist/domain"
 )
 
+func TestNoneAuthRejectsNonLoopbackListener(t *testing.T) {
+	if _, err := NewAuthenticator(AuthConfig{Mode: "none", ListenAddress: "0.0.0.0"}); err == nil {
+		t.Fatal("non-loopback listener accepted unauthenticated mode")
+	}
+	if _, err := NewAuthenticator(AuthConfig{Mode: "none", ListenAddress: "127.0.0.1"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestPrincipalAllows(t *testing.T) {
 	principal := domain.Principal{Capabilities: []string{"preview", "export:p_allowed"}}
 	if !principal.Allows("preview", "m_any") || !principal.Allows("export", "p_allowed") {
@@ -84,7 +93,7 @@ func TestTrustedProxyAuthenticatorUsesOnlyContext(t *testing.T) {
 	request.RemoteAddr = "127.0.0.1:1234"
 	request.Header.Set("X-Forwarded-User", "proxy-editor")
 	handler.ServeHTTP(httptest.NewRecorder(), request)
-	if err != nil || principal.Subject != "proxy-editor" || !principal.Allows("preview", "m_any") {
+	if err != nil || principal.Subject != "trusted-proxy" || !principal.Allows("preview", "m_any") {
 		t.Fatalf("principal = %#v, err = %v", principal, err)
 	}
 }
