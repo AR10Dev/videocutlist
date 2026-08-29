@@ -1,4 +1,4 @@
-import { For, Show, createEffect, createSignal, onCleanup, onSettled } from "solid-js";
+import { For, Show, createEffect, createSignal, onCleanup } from "solid-js";
 import {
   createTimelineHistory,
   editTimeline,
@@ -39,7 +39,6 @@ import {
   type RecentProject,
 } from "./projectLifecycle";
 import { defaultSettings, settingsKey, storedSettings, type AppSettings } from "./settings";
-
 type MediaPage = { items: Media[]; nextCursor?: string | null };
 type FolderPage = {
   folders: { id: string; label: string }[];
@@ -146,7 +145,7 @@ export function App() {
   const [thumbnailURL, setThumbnailURL] = createSignal<string>();
   const [waveform, setWaveform] = createSignal<number[]>([]);
   const [previewCenterMs, setPreviewCenterMs] = createSignal(0);
-  const [settings, setSettings] = createSignal(() => storedSettings(localStorage));
+  const [settings, setSettings] = createSignal(storedSettings(localStorage));
   const [settingsOpen, setSettingsOpen] = createSignal(false);
   const [serverSettingsStatus, setServerSettingsStatus] = createSignal("");
   const [libraryRoots, setLibraryRoots] = createSignal<LibraryRoot[]>([]);
@@ -160,13 +159,15 @@ export function App() {
   const [projectId, setProjectId] = createSignal(newProjectId());
   const [revision, setRevision] = createSignal(0);
   const [dirty, setDirty] = createSignal(false);
-  const [recent, setRecent] = createSignal<RecentProject[]>(() => {
-    try {
-      return recentProjects(JSON.parse(localStorage.getItem(recentProjectsKey) ?? "[]"));
-    } catch {
-      return [];
-    }
-  });
+  const [recent, setRecent] = createSignal<RecentProject[]>(
+    (() => {
+      try {
+        return recentProjects(JSON.parse(localStorage.getItem(recentProjectsKey) ?? "[]"));
+      } catch {
+        return [];
+      }
+    })(),
+  );
   const [exportJob, setExportJob] = createSignal<ExportJob>();
   const [exportStatus, setExportStatus] = createSignal("");
   const [exportMode, setExportMode] = createSignal<"merge" | "separate">("merge");
@@ -563,109 +564,107 @@ export function App() {
           setStatus(error instanceof Error ? error.message : "Metadata request failed.");
       });
   };
-  onSettled(() => {
+  createEffect(() => {
     void loadFolder();
   });
-  createEffect(
-    () => selected(),
-    (item) => {
-      assetRequest?.abort();
-      if (thumbnailObjectURL) URL.revokeObjectURL(thumbnailObjectURL);
-      thumbnailObjectURL = undefined;
-      setThumbnailURL();
-      setWaveform([]);
-      setAssetStatus("");
-      if (!item) return;
-      const controller = new AbortController();
-      assetRequest = controller;
-      const durationMs = Math.max(1, Math.min(120000, item.durationMs));
-      void api
-        .assetRequest(
-          item.id,
-          "thumbnails",
-          { startMs: 0, durationMs, count: 16, width: 320 },
-          { signal: controller.signal },
-        )
-        .then((response) => {
-          if (!response.ok) throw new Error();
-          return response.blob();
-        })
-        .then((blob) => {
-          if (!controller.signal.aborted) {
-            thumbnailObjectURL = URL.createObjectURL(blob);
-            setThumbnailURL(thumbnailObjectURL);
+  createEffect(() => {
+    const item = selected();
+    assetRequest?.abort();
+    if (thumbnailObjectURL) URL.revokeObjectURL(thumbnailObjectURL);
+    thumbnailObjectURL = undefined;
+    setThumbnailURL();
+    setWaveform([]);
+    setAssetStatus("");
+    if (!item) return;
+    const controller = new AbortController();
+    assetRequest = controller;
+    const durationMs = Math.max(1, Math.min(120000, item.durationMs));
+    void api
+      .assetRequest(
+        item.id,
+        "thumbnails",
+        { startMs: 0, durationMs, count: 16, width: 320 },
+        { signal: controller.signal },
+      )
+      .then((response) => {
+        if (!response.ok) throw new Error();
+        return response.blob();
+      })
+      .then((blob) => {
+        if (!controller.signal.aborted) {
+          thumbnailObjectURL = URL.createObjectURL(blob);
+          setThumbnailURL(thumbnailObjectURL);
+        }
+      })
+      .catch(() => {
+        if (!controller.signal.aborted)
+          setAssetStatus("Thumbnails unavailable; editing remains available.");
+      });
+    void api
+      .assetRequest(
+        item.id,
+        "waveform",
+        { startMs: 0, durationMs, samples: 256 },
+        { signal: controller.signal },
+      )
+      .then(async (response) => {
+        const value = (await response.json()) as { peaks?: unknown };
+        if (!response.ok) throw new Error();
+        return normalizePeaks(value.peaks);
+      })
+      .then((peaks) => {
+        if (!controller.signal.aborted) setWaveform(peaks);
+      })
+      .catch(() => {
+        if (!controller.signal.aborted)
+          setAssetStatus("Waveform unavailable; editing remains available.");
+      });
+    onCleanup(() => controller.abort());
+  });
+  createEffect(() => {
+    const item = selected();
+    const position = previewCenterMs();
+    const isMuted = muted();
+    cleanupPreview?.();
+    cleanupPreview = undefined;
+    previewRequest?.abort();
+    setDiagnostics();
+    const player = video;
+    if (!item || !player || !canStreamPreview()) return;
+    const timer = window.setTimeout(() => {
+      const request = new AbortController();
+      previewRequest = request;
+      const params = new URLSearchParams({
+        centerMs: String(Math.round(position)),
+        beforeMs: "2000",
+        afterMs: "6000",
+        mute: String(isMuted),
+      });
+      setStatus("Loading preview…");
+      cleanupPreview = streamPreview(
+        player,
+        () =>
+          api.request(`media/${encodeURIComponent(item.id)}/preview?${params}`, {
+            signal: request.signal,
+          }),
+        (value) => {
+          if (!request.signal.aborted) {
+            setDiagnostics(value);
+            setStatus("Preview ready.");
           }
-        })
-        .catch(() => {
-          if (!controller.signal.aborted)
-            setAssetStatus("Thumbnails unavailable; editing remains available.");
-        });
-      void api
-        .assetRequest(
-          item.id,
-          "waveform",
-          { startMs: 0, durationMs, samples: 256 },
-          { signal: controller.signal },
-        )
-        .then(async (response) => {
-          const value = (await response.json()) as { peaks?: unknown };
-          if (!response.ok) throw new Error();
-          return normalizePeaks(value.peaks);
-        })
-        .then((peaks) => {
-          if (!controller.signal.aborted) setWaveform(peaks);
-        })
-        .catch(() => {
-          if (!controller.signal.aborted)
-            setAssetStatus("Waveform unavailable; editing remains available.");
-        });
-      return () => controller.abort();
-    },
-  );
-  createEffect(
-    () => [selected(), previewCenterMs(), muted()] as const,
-    ([item, position, isMuted]) => {
+        },
+        (error) => {
+          if (!request.signal.aborted) setStatus(error.message);
+        },
+      );
+    }, 200);
+    onCleanup(() => {
+      window.clearTimeout(timer);
+      previewRequest?.abort();
       cleanupPreview?.();
       cleanupPreview = undefined;
-      previewRequest?.abort();
-      setDiagnostics();
-      const player = video;
-      if (!item || !player || !canStreamPreview()) return;
-      const timer = window.setTimeout(() => {
-        const request = new AbortController();
-        previewRequest = request;
-        const params = new URLSearchParams({
-          centerMs: String(Math.round(position)),
-          beforeMs: "2000",
-          afterMs: "6000",
-          mute: String(isMuted),
-        });
-        setStatus("Loading preview…");
-        cleanupPreview = streamPreview(
-          player,
-          () =>
-            api.request(`media/${encodeURIComponent(item.id)}/preview?${params}`, {
-              signal: request.signal,
-            }),
-          (value) => {
-            if (!request.signal.aborted) {
-              setDiagnostics(value);
-              setStatus("Preview ready.");
-            }
-          },
-          (error) => {
-            if (!request.signal.aborted) setStatus(error.message);
-          },
-        );
-      }, 200);
-      return () => {
-        window.clearTimeout(timer);
-        previewRequest?.abort();
-        cleanupPreview?.();
-        cleanupPreview = undefined;
-      };
-    },
-  );
+    });
+  });
   const watchedPosition = () => playheadMs();
   const syncPreviewPosition = (currentTime: number) => {
     const item = selected();
@@ -715,18 +714,16 @@ export function App() {
         )
       : [];
   };
-  createEffect(
-    () => dirty(),
-    (isDirty) => {
-      if (!isDirty) return;
-      const handler = (event: BeforeUnloadEvent) => {
-        event.preventDefault();
-        event.returnValue = "";
-      };
-      window.addEventListener("beforeunload", handler);
-      return () => window.removeEventListener("beforeunload", handler);
-    },
-  );
+  createEffect(() => {
+    const isDirty = dirty();
+    if (!isDirty) return;
+    const handler = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", handler);
+    onCleanup(() => window.removeEventListener("beforeunload", handler));
+  });
   const removeSegment = (index: number) =>
     updateTimeline({ segments: removeSegments(present().segments, index) });
   const moveSegment = (index: number, direction: -1 | 1) =>
@@ -920,105 +917,89 @@ export function App() {
     if (items.length && !items.some((item) => item.id === destinationId()))
       setDestinationId(items[0].id);
   });
-  createEffect(
-    () =>
-      [
-        selected(),
-        projectId(),
-        exportMode(),
-        exportSelection(),
-        cutStrategy(),
-        streamIndexes(),
-        revision(),
-        tracks(),
-        destinationId(),
-        filenameTemplate(),
-      ] as const,
-    ([
-      item,
-      currentProjectID,
-      mode,
-      selection,
-      strategy,
-      indexes,
-      _revision,
-      _tracks,
-      destination,
-      template,
-    ]) => {
-      if (!item) {
-        setPreflight(undefined);
-        setPreflightPending(false);
-        return;
+  createEffect(() => {
+    const item = selected();
+    const currentProjectID = projectId();
+    const mode = exportMode();
+    const selection = exportSelection();
+    const strategy = cutStrategy();
+    const indexes = streamIndexes();
+    revision();
+    tracks();
+    const destination = destinationId();
+    const template = filenameTemplate();
+    if (!item) {
+      setPreflight(undefined);
+      setPreflightPending(false);
+      return;
+    }
+    if (exportTimer) window.clearTimeout(exportTimer);
+    if (dirty()) {
+      setPreflight({
+        allowed: false,
+        selection: [],
+        findings: [
+          {
+            severity: "blocked",
+            code: "project_not_persisted",
+            message: "Save the project before running export preflight.",
+          },
+        ],
+      });
+      setPreflightPending(false);
+      return;
+    }
+    setPreflightPending(true);
+    const version = ++preflightVersion;
+    exportTimer = window.setTimeout(async () => {
+      try {
+        const response = await api.request(
+          `projects/${encodeURIComponent(currentProjectID)}/exports/preflight`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              mode,
+              selection,
+              streamIndexes: indexes,
+              cutStrategy: strategy,
+              container: "mkv",
+              destinationId: destination,
+              filenameTemplate: template,
+            }),
+          },
+        );
+        if (version !== preflightVersion) return;
+        if (response.ok) setPreflight(await response.json());
+        else
+          setPreflight({
+            allowed: false,
+            selection: [],
+            findings: [
+              {
+                severity: "blocked",
+                code: "preflight_failed",
+                message: "Export preflight failed.",
+              },
+            ],
+          });
+      } catch {
+        if (version === preflightVersion)
+          setPreflight({
+            allowed: false,
+            selection: [],
+            findings: [
+              {
+                severity: "blocked",
+                code: "preflight_failed",
+                message: "Export preflight failed.",
+              },
+            ],
+          });
       }
-      if (exportTimer) window.clearTimeout(exportTimer);
-      if (dirty()) {
-        setPreflight({
-          allowed: false,
-          selection: [],
-          findings: [
-            {
-              severity: "blocked",
-              code: "project_not_persisted",
-              message: "Save the project before running export preflight.",
-            },
-          ],
-        });
-        setPreflightPending(false);
-        return;
-      }
-      setPreflightPending(true);
-      const version = ++preflightVersion;
-      exportTimer = window.setTimeout(async () => {
-        try {
-          const response = await api.request(
-            `projects/${encodeURIComponent(currentProjectID)}/exports/preflight`,
-            {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                mode,
-                selection,
-                streamIndexes: indexes,
-                cutStrategy: strategy,
-                container: "mkv",
-                destinationId: destination,
-                filenameTemplate: template,
-              }),
-            },
-          );
-          if (version !== preflightVersion) return;
-          if (response.ok) setPreflight(await response.json());
-          else
-            setPreflight({
-              allowed: false,
-              selection: [],
-              findings: [
-                {
-                  severity: "blocked",
-                  code: "preflight_failed",
-                  message: "Export preflight failed.",
-                },
-              ],
-            });
-        } catch {
-          if (version === preflightVersion)
-            setPreflight({
-              allowed: false,
-              selection: [],
-              findings: [
-                {
-                  severity: "blocked",
-                  code: "preflight_failed",
-                  message: "Export preflight failed.",
-                },
-              ],
-            });
-        }
-        if (version === preflightVersion) setPreflightPending(false);
-      }, 250);
-    },
-  );
+      if (version === preflightVersion) setPreflightPending(false);
+    }, 250);
+  });
   const exportProject = async () => {
     const activeJob = exportJob();
     if (activeJob?.state === "queued" || activeJob?.state === "running") {
@@ -1252,9 +1233,9 @@ export function App() {
     setDetectionCandidates((items) => items.filter((item) => item.id !== candidate.id));
     setDetectionStatus("Candidate accepted; save the project to persist it.");
   };
-  onSettled(() => {
+  createEffect(() => {
     window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
+    onCleanup(() => window.removeEventListener("keydown", handleKeyDown));
   });
   const handleKeyDown = (event: KeyboardEvent) => {
     const target = event.target as HTMLElement;
@@ -1608,16 +1589,27 @@ export function App() {
                       <For each={present().segments}>
                         {(segment, index) => (
                           <li>
-                            <strong>Segment {index() + 1}</strong> · {segment.label ?? "Unlabelled"}:{" "}
+                            <strong>Segment {index() + 1}</strong> · {segment.label ?? "Unlabelled"}
+                            :{" "}
                             <span>
                               {formatTime(segment.startMs, duration())} –{" "}
                               {formatTime(segment.endMs, duration())}
                             </span>{" "}
-                            <span class="segment-duration">({formatTime(segment.endMs - segment.startMs, duration())} duration)</span>{" "}
-                            <button aria-label={`Move segment ${index() + 1} up`} onClick={() => moveSegment(index(), -1)} disabled={index() === 0}>
+                            <span class="segment-duration">
+                              ({formatTime(segment.endMs - segment.startMs, duration())} duration)
+                            </span>{" "}
+                            <button
+                              aria-label={`Move segment ${index() + 1} up`}
+                              onClick={() => moveSegment(index(), -1)}
+                              disabled={index() === 0}
+                            >
                               Move up
                             </button>{" "}
-                            <button aria-label={`Move segment ${index() + 1} down`} onClick={() => moveSegment(index(), 1)} disabled={index() === present().segments.length - 1}>
+                            <button
+                              aria-label={`Move segment ${index() + 1} down`}
+                              onClick={() => moveSegment(index(), 1)}
+                              disabled={index() === present().segments.length - 1}
+                            >
                               Move down
                             </button>{" "}
                             <button onClick={() => removeSegment(index())}>Remove segment</button>
@@ -1647,194 +1639,197 @@ export function App() {
                 <h2 id="project-heading">Project</h2>
                 <details>
                   <summary>Project administration and interchange</summary>
-                <label>
-                  Project ID{" "}
-                  <input
-                    value={projectId()}
-                    onInput={(event) => {
-                      setProjectId(event.currentTarget.value);
-                      markDirty();
-                    }}
-                  />
-                </label>
-                <p>
-                  Revision {revision()} {dirty() ? "· unsaved changes" : "· saved"}
-                </p>
-                <p>
-                  Interchange files update cut lists; they do not upload or add a video. Videos are
-                  indexed from the server&apos;s media library; configure its media roots, then
-                  choose a video from File explorer.
-                </p>
-                <div class="controls">
-                  <button onClick={newProject}>New project</button>
-                  <button onClick={() => void loadProject()}>Load project</button>
-                  <button onClick={() => void saveProject()}>Save project</button>
-                  <button
-                    disabled={!selected()}
-                    onClick={() => {
-                      const blob = new Blob(
-                        [
-                          projectJson({
-                            version: 1,
-                            mediaId: selected()!.id,
-                            revision: revision(),
-                            segments: present().segments,
-                            uiState: {
-                              playheadMs: playheadMs(),
-                              zoom: present().zoom,
-                              muted: muted(),
-                            },
-                          }),
-                        ],
-                        { type: "application/json" },
-                      );
-                      const link = document.createElement("a");
-                      link.href = URL.createObjectURL(blob);
-                      link.download = `${projectId()}.videocutlist.json`;
-                      link.click();
-                      URL.revokeObjectURL(link.href);
-                    }}
-                  >
-                    Download cut list
-                  </button>
-                  <Show
-                    when={selected()}
-                    fallback={<p>Choose a video from File explorer to import a cut list.</p>}
-                  >
-                    <label>
-                      Import cut list{" "}
-                      <input
-                        type="file"
-                        accept="application/json,.json"
-                        onChange={(event) => {
-                          const file = event.currentTarget.files?.[0];
-                          if (!file) return;
-                          void file
-                            .text()
-                            .then((text) => {
-                              const imported = parseProjectJson(text);
-                              if (!selected() || imported.mediaId !== selected()!.id)
-                                throw new Error("Select the cut list's media before importing.");
-                              const segments = imported.segments as Segment[];
-                              const error = validateSegments(segments, selected()!.durationMs);
-                              if (error) throw new Error(error);
-                              updateTimeline({ segments });
-                              markDirty();
-                              setStatus("Cut list imported. Save the project to keep it.");
-                            })
-                            .catch((error) =>
-                              setStatus(
-                                error instanceof Error ? error.message : "Cut list import failed.",
-                              ),
-                            );
-                          event.currentTarget.value = "";
-                        }}
-                      />
-                    </label>
-                  </Show>
-                  <Show
-                    when={selected() && !dirty()}
-                    fallback={
-                      <p>
-                        Save or load the selected video&apos;s project before importing CSV or
-                        chapters.
-                      </p>
-                    }
-                  >
-                    <label>
-                      Import CSV or chapters{" "}
-                      <input
-                        type="file"
-                        accept=".csv,.txt,text/csv,text/plain"
-                        onChange={(event) => {
-                          const file = event.currentTarget.files?.[0];
-                          if (!file || !validInterchangeFileSize(file.size)) {
-                            setStatus("Interchange file exceeds the 1 MiB limit.");
-                            return;
-                          }
-                          const format = file.name.toLowerCase().endsWith(".csv")
-                            ? "csv"
-                            : "chapters";
-                          void file
-                            .arrayBuffer()
-                            .then((body) =>
-                              api.interchangeRequest(projectId(), format, {
-                                method: "POST",
-                                body,
-                                headers: {
-                                  "Content-Type": format === "csv" ? "text/csv" : "text/plain",
-                                },
-                              }),
-                            )
-                            .then(async (response) => {
-                              if (!response.ok) throw new Error();
-                              const value = (await response.json()) as {
-                                segments: Segment[];
-                                revision: number;
-                              };
-                              updateTimeline({ segments: value.segments });
-                              setRevision(value.revision);
-                              setDirty(false);
-                              setStatus("Interchange imported.");
-                            })
-                            .catch(() => setStatus("Interchange import failed."));
-                          event.currentTarget.value = "";
-                        }}
-                      />
-                    </label>
-                  </Show>
+                  <label>
+                    Project ID{" "}
+                    <input
+                      value={projectId()}
+                      onInput={(event) => {
+                        setProjectId(event.currentTarget.value);
+                        markDirty();
+                      }}
+                    />
+                  </label>
                   <p>
-                    Save or load the selected video&apos;s project before exporting CSV or chapters.
+                    Revision {revision()} {dirty() ? "· unsaved changes" : "· saved"}
                   </p>
-                  <button
-                    disabled={!selected() || dirty()}
-                    onClick={() =>
-                      void api
-                        .interchangeRequest(projectId(), "csv")
-                        .then((response) => (response.ok ? response.blob() : Promise.reject()))
-                        .then((blob) => {
-                          const link = document.createElement("a");
-                          link.href = URL.createObjectURL(blob);
-                          link.download = `${projectId()}.csv`;
-                          link.click();
-                          URL.revokeObjectURL(link.href);
-                        })
-                        .catch(() => setStatus("CSV export failed."))
-                    }
-                  >
-                    Export CSV
-                  </button>
-                  <button
-                    disabled={!selected() || dirty()}
-                    onClick={() =>
-                      void api
-                        .interchangeRequest(projectId(), "chapters")
-                        .then((response) => (response.ok ? response.blob() : Promise.reject()))
-                        .then((blob) => {
-                          const link = document.createElement("a");
-                          link.href = URL.createObjectURL(blob);
-                          link.download = `${projectId()}.chapters.txt`;
-                          link.click();
-                          URL.revokeObjectURL(link.href);
-                        })
-                        .catch(() => setStatus("Chapters export failed."))
-                    }
-                  >
-                    Export chapters
-                  </button>
-                </div>
-                <Show when={recent().length > 0}>
-                  <h3>Recent projects</h3>
-                  <ul>
-                    {recent().map((item) => (
-                      <li>
-                        <button onClick={() => void loadProject(item.id)}>
-                          {item.label} ({item.id})
-                        </button>
-                      </li>
-                    ))}
-                  </ul>
-                </Show>
+                  <p>
+                    Interchange files update cut lists; they do not upload or add a video. Videos
+                    are indexed from the server&apos;s media library; configure its media roots,
+                    then choose a video from File explorer.
+                  </p>
+                  <div class="controls">
+                    <button onClick={newProject}>New project</button>
+                    <button onClick={() => void loadProject()}>Load project</button>
+                    <button onClick={() => void saveProject()}>Save project</button>
+                    <button
+                      disabled={!selected()}
+                      onClick={() => {
+                        const blob = new Blob(
+                          [
+                            projectJson({
+                              version: 1,
+                              mediaId: selected()!.id,
+                              revision: revision(),
+                              segments: present().segments,
+                              uiState: {
+                                playheadMs: playheadMs(),
+                                zoom: present().zoom,
+                                muted: muted(),
+                              },
+                            }),
+                          ],
+                          { type: "application/json" },
+                        );
+                        const link = document.createElement("a");
+                        link.href = URL.createObjectURL(blob);
+                        link.download = `${projectId()}.videocutlist.json`;
+                        link.click();
+                        URL.revokeObjectURL(link.href);
+                      }}
+                    >
+                      Download cut list
+                    </button>
+                    <Show
+                      when={selected()}
+                      fallback={<p>Choose a video from File explorer to import a cut list.</p>}
+                    >
+                      <label>
+                        Import cut list{" "}
+                        <input
+                          type="file"
+                          accept="application/json,.json"
+                          onChange={(event) => {
+                            const file = event.currentTarget.files?.[0];
+                            if (!file) return;
+                            void file
+                              .text()
+                              .then((text) => {
+                                const imported = parseProjectJson(text);
+                                if (!selected() || imported.mediaId !== selected()!.id)
+                                  throw new Error("Select the cut list's media before importing.");
+                                const segments = imported.segments as Segment[];
+                                const error = validateSegments(segments, selected()!.durationMs);
+                                if (error) throw new Error(error);
+                                updateTimeline({ segments });
+                                markDirty();
+                                setStatus("Cut list imported. Save the project to keep it.");
+                              })
+                              .catch((error) =>
+                                setStatus(
+                                  error instanceof Error
+                                    ? error.message
+                                    : "Cut list import failed.",
+                                ),
+                              );
+                            event.currentTarget.value = "";
+                          }}
+                        />
+                      </label>
+                    </Show>
+                    <Show
+                      when={selected() && !dirty()}
+                      fallback={
+                        <p>
+                          Save or load the selected video&apos;s project before importing CSV or
+                          chapters.
+                        </p>
+                      }
+                    >
+                      <label>
+                        Import CSV or chapters{" "}
+                        <input
+                          type="file"
+                          accept=".csv,.txt,text/csv,text/plain"
+                          onChange={(event) => {
+                            const file = event.currentTarget.files?.[0];
+                            if (!file || !validInterchangeFileSize(file.size)) {
+                              setStatus("Interchange file exceeds the 1 MiB limit.");
+                              return;
+                            }
+                            const format = file.name.toLowerCase().endsWith(".csv")
+                              ? "csv"
+                              : "chapters";
+                            void file
+                              .arrayBuffer()
+                              .then((body) =>
+                                api.interchangeRequest(projectId(), format, {
+                                  method: "POST",
+                                  body,
+                                  headers: {
+                                    "Content-Type": format === "csv" ? "text/csv" : "text/plain",
+                                  },
+                                }),
+                              )
+                              .then(async (response) => {
+                                if (!response.ok) throw new Error();
+                                const value = (await response.json()) as {
+                                  segments: Segment[];
+                                  revision: number;
+                                };
+                                updateTimeline({ segments: value.segments });
+                                setRevision(value.revision);
+                                setDirty(false);
+                                setStatus("Interchange imported.");
+                              })
+                              .catch(() => setStatus("Interchange import failed."));
+                            event.currentTarget.value = "";
+                          }}
+                        />
+                      </label>
+                    </Show>
+                    <p>
+                      Save or load the selected video&apos;s project before exporting CSV or
+                      chapters.
+                    </p>
+                    <button
+                      disabled={!selected() || dirty()}
+                      onClick={() =>
+                        void api
+                          .interchangeRequest(projectId(), "csv")
+                          .then((response) => (response.ok ? response.blob() : Promise.reject()))
+                          .then((blob) => {
+                            const link = document.createElement("a");
+                            link.href = URL.createObjectURL(blob);
+                            link.download = `${projectId()}.csv`;
+                            link.click();
+                            URL.revokeObjectURL(link.href);
+                          })
+                          .catch(() => setStatus("CSV export failed."))
+                      }
+                    >
+                      Export CSV
+                    </button>
+                    <button
+                      disabled={!selected() || dirty()}
+                      onClick={() =>
+                        void api
+                          .interchangeRequest(projectId(), "chapters")
+                          .then((response) => (response.ok ? response.blob() : Promise.reject()))
+                          .then((blob) => {
+                            const link = document.createElement("a");
+                            link.href = URL.createObjectURL(blob);
+                            link.download = `${projectId()}.chapters.txt`;
+                            link.click();
+                            URL.revokeObjectURL(link.href);
+                          })
+                          .catch(() => setStatus("Chapters export failed."))
+                      }
+                    >
+                      Export chapters
+                    </button>
+                  </div>
+                  <Show when={recent().length > 0}>
+                    <h3>Recent projects</h3>
+                    <ul>
+                      {recent().map((item) => (
+                        <li>
+                          <button onClick={() => void loadProject(item.id)}>
+                            {item.label} ({item.id})
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </Show>
                 </details>
               </section>
             </Show>
@@ -1844,123 +1839,145 @@ export function App() {
                 <p role="status">{exportStatus() || "Export a saved project."}</p>
                 <details>
                   <summary>Advanced export options</summary>
-                <label>
-                  Mode{" "}
-                  <select
-                    value={exportMode()}
-                    onChange={(event) =>
-                      setExportMode(event.currentTarget.value as "merge" | "separate")
-                    }
-                  >
-                    <option value="merge">Merge</option>
-                    <option value="separate">Separate</option>
-                  </select>
-                </label>
-                <label>
-                  Selection{" "}
-                  <select
-                    value={exportSelection()}
-                    onChange={(event) =>
-                      setExportSelection(event.currentTarget.value as "segments" | "gaps")
-                    }
-                  >
-                    <option value="segments">Segments</option>
-                    <option value="gaps">Gaps</option>
-                  </select>
-                </label>
-                <fieldset>
-                  <legend>Streams</legend>
-                  <For each={tracks()}>
-                    {(track) => {
-                      const checked = () =>
-                        streamIndexes().length === 0 || streamIndexes().includes(track.index);
-                      return (
-                        <label>
-                          <input
-                            type="checkbox"
-                            checked={checked()}
-                            onChange={(event) => {
-                              const all = streamIndexes().length
-                                ? streamIndexes()
-                                : tracks().map((item) => item.index);
-                              setStreamIndexes(
-                                event.currentTarget.checked
-                                  ? [...new Set([...all, track.index])]
-                                  : all.filter((index) => index !== track.index),
-                              );
-                            }}
-                          />{" "}
-                          {track.type} {track.codec}
-                          {track.language ? ` · ${track.language}` : ""}
-                          {track.disposition?.length ? ` · ${track.disposition.join(", ")}` : ""} (#
-                          {track.index})
-                        </label>
-                      );
-                    }}
-                  </For>
-                </fieldset>
-                <label>
-                  Cut strategy{" "}
-                  <select
-                    value={cutStrategy()}
-                    onChange={(event) => {
-                      const value = event.currentTarget.value as AppSettings["cutStrategy"];
-                      setCutStrategy(value);
-                      saveSettings({ cutStrategy: value });
-                    }}
-                  >
-                    <option value="stream_copy_preferred">Stream copy preferred</option>
-                    <option value="precise_reencode">Precise re-encode</option>
-                    <option
-                      value="hybrid_smart_cut"
-                      disabled={hybridSmartCutKnownIneligible(selected())}
+                  <label>
+                    Mode{" "}
+                    <select
+                      value={exportMode()}
+                      onChange={(event) =>
+                        setExportMode(event.currentTarget.value as "merge" | "separate")
+                      }
                     >
-                      Hybrid smart cut
-                      {hybridSmartCutKnownIneligible(selected()) ? " (unavailable)" : ""}
-                    </option>
-                  </select>
-                </label>
-                <label>
-                  Destination{" "}
-                  <select
-                    value={destinationId()}
-                    onChange={(event) => setDestinationId(event.currentTarget.value)}
-                  >
-                    <For each={destinations()}>
-                      {(destination) => (
-                        <option value={destination.id}>
-                          {destination.label} ({destination.retention ?? "durable"})
-                        </option>
-                      )}
+                      <option value="merge">Merge</option>
+                      <option value="separate">Separate</option>
+                    </select>
+                  </label>
+                  <label>
+                    Selection{" "}
+                    <select
+                      value={exportSelection()}
+                      onChange={(event) =>
+                        setExportSelection(event.currentTarget.value as "segments" | "gaps")
+                      }
+                    >
+                      <option value="segments">Segments</option>
+                      <option value="gaps">Gaps</option>
+                    </select>
+                  </label>
+                  <fieldset>
+                    <legend>Streams</legend>
+                    <For each={tracks()}>
+                      {(track) => {
+                        const checked = () =>
+                          streamIndexes().length === 0 || streamIndexes().includes(track.index);
+                        return (
+                          <label>
+                            <input
+                              type="checkbox"
+                              checked={checked()}
+                              onChange={(event) => {
+                                const all = streamIndexes().length
+                                  ? streamIndexes()
+                                  : tracks().map((item) => item.index);
+                                setStreamIndexes(
+                                  event.currentTarget.checked
+                                    ? [...new Set([...all, track.index])]
+                                    : all.filter((index) => index !== track.index),
+                                );
+                              }}
+                            />{" "}
+                            {track.type} {track.codec}
+                            {track.language ? ` · ${track.language}` : ""}
+                            {track.disposition?.length
+                              ? ` · ${track.disposition.join(", ")}`
+                              : ""}{" "}
+                            (#
+                            {track.index})
+                          </label>
+                        );
+                      }}
                     </For>
-                  </select>
-                </label>
-                <label>
-                  Filename template{" "}
-                  <input
-                    value={filenameTemplate()}
-                    onInput={(event) => {
-                      const value = event.currentTarget.value;
-                      setFilenameTemplate(value);
-                      saveSettings({ filenameTemplate: value });
-                    }}
-                    aria-label="Filename template"
-                  />
-                </label>
-                <p role="status">
-                  Preview:{" "}
-                  {filenameTemplate()
-                    .replaceAll("{ext}", "mkv")
-                    .replaceAll("{segment}", "1")
-                    .replaceAll("{mode}", exportMode()) || "server default"}
-                </p>
+                  </fieldset>
+                  <label>
+                    Cut strategy{" "}
+                    <select
+                      value={cutStrategy()}
+                      onChange={(event) => {
+                        const value = event.currentTarget.value as AppSettings["cutStrategy"];
+                        setCutStrategy(value);
+                        saveSettings({ cutStrategy: value });
+                      }}
+                    >
+                      <option value="stream_copy_preferred">Stream copy preferred</option>
+                      <option value="precise_reencode">Precise re-encode</option>
+                      <option
+                        value="hybrid_smart_cut"
+                        disabled={hybridSmartCutKnownIneligible(selected())}
+                      >
+                        Hybrid smart cut
+                        {hybridSmartCutKnownIneligible(selected()) ? " (unavailable)" : ""}
+                      </option>
+                    </select>
+                  </label>
+                  <label>
+                    Destination{" "}
+                    <select
+                      value={destinationId()}
+                      onChange={(event) => setDestinationId(event.currentTarget.value)}
+                    >
+                      <For each={destinations()}>
+                        {(destination) => (
+                          <option value={destination.id}>
+                            {destination.label} ({destination.retention ?? "durable"})
+                          </option>
+                        )}
+                      </For>
+                    </select>
+                  </label>
+                  <label>
+                    Filename template{" "}
+                    <input
+                      value={filenameTemplate()}
+                      onInput={(event) => {
+                        const value = event.currentTarget.value;
+                        setFilenameTemplate(value);
+                        saveSettings({ filenameTemplate: value });
+                      }}
+                      aria-label="Filename template"
+                    />
+                  </label>
+                  <p role="status">
+                    Preview:{" "}
+                    {filenameTemplate()
+                      .replaceAll("{ext}", "mkv")
+                      .replaceAll("{segment}", "1")
+                      .replaceAll("{mode}", exportMode()) || "server default"}
+                  </p>
                 </details>
                 <div aria-label="Export review">
                   <p>
-                    Scope: {exportSelection()} · {present().segments.length} segment{present().segments.length === 1 ? "" : "s"} · {formatTime(present().segments.reduce((total, segment) => total + segment.endMs - segment.startMs, 0), duration())} total
+                    Scope: {exportSelection()} · {present().segments.length} segment
+                    {present().segments.length === 1 ? "" : "s"} ·{" "}
+                    {formatTime(
+                      present().segments.reduce(
+                        (total, segment) => total + segment.endMs - segment.startMs,
+                        0,
+                      ),
+                      duration(),
+                    )}{" "}
+                    total
                   </p>
-                  <p>Destination: {destinations().find((item) => item.id === destinationId())?.label ?? destinationId()}</p>
-                  <p>Filename: {filenameTemplate().replaceAll("{ext}", "mkv").replaceAll("{segment}", "1").replaceAll("{mode}", exportMode()) || "server default"}</p>
+                  <p>
+                    Destination:{" "}
+                    {destinations().find((item) => item.id === destinationId())?.label ??
+                      destinationId()}
+                  </p>
+                  <p>
+                    Filename:{" "}
+                    {filenameTemplate()
+                      .replaceAll("{ext}", "mkv")
+                      .replaceAll("{segment}", "1")
+                      .replaceAll("{mode}", exportMode()) || "server default"}
+                  </p>
                   <p>
                     Review: {exportMode()} {exportSelection()} · {cutStrategy()}
                   </p>
@@ -2011,7 +2028,8 @@ export function App() {
                     }
                     onClick={() => void exportProject()}
                   >
-                    Export {present().segments.length} segment{present().segments.length === 1 ? "" : "s"}
+                    Export {present().segments.length} segment
+                    {present().segments.length === 1 ? "" : "s"}
                   </button>
                   <Show when={exportJob()?.state === "queued" || exportJob()?.state === "running"}>
                     <button onClick={() => void cancelExport()}>Cancel export</button>
@@ -2066,7 +2084,7 @@ export function App() {
                             href={api.url(
                               `jobs/${encodeURIComponent(exportJob()!.id)}/outputs/${position()}`,
                             )}
-                            download
+                            download=""
                           >
                             Download output {position() + 1}
                           </a>
@@ -2088,70 +2106,72 @@ export function App() {
                 <h2 id="detection-heading">Auto detection</h2>
                 <details>
                   <summary>Detection tools</summary>
-                <p role="status">
-                  {detectionStatus() || "Review candidates before they change segments."}
-                </p>
-                <div class="controls">
-                  <button
-                    disabled={
-                      !selected() ||
-                      detectionJob()?.state === "queued" ||
-                      detectionJob()?.state === "running"
-                    }
-                    onClick={() => void startDetection("silence")}
-                  >
-                    Detect silence
-                  </button>
-                  <button
-                    disabled={
-                      !selected() ||
-                      detectionJob()?.state === "queued" ||
-                      detectionJob()?.state === "running"
-                    }
-                    onClick={() => void startDetection("black")}
-                  >
-                    Detect black frames
-                  </button>
-                  <button
-                    disabled={
-                      !selected() ||
-                      detectionJob()?.state === "queued" ||
-                      detectionJob()?.state === "running"
-                    }
-                    onClick={() => void startDetection("scene")}
-                  >
-                    Detect scene changes
-                  </button>
-                  <Show
-                    when={detectionJob()?.state === "queued" || detectionJob()?.state === "running"}
-                  >
-                    <button onClick={() => void cancelDetection()}>Cancel detection</button>
+                  <p role="status">
+                    {detectionStatus() || "Review candidates before they change segments."}
+                  </p>
+                  <div class="controls">
+                    <button
+                      disabled={
+                        !selected() ||
+                        detectionJob()?.state === "queued" ||
+                        detectionJob()?.state === "running"
+                      }
+                      onClick={() => void startDetection("silence")}
+                    >
+                      Detect silence
+                    </button>
+                    <button
+                      disabled={
+                        !selected() ||
+                        detectionJob()?.state === "queued" ||
+                        detectionJob()?.state === "running"
+                      }
+                      onClick={() => void startDetection("black")}
+                    >
+                      Detect black frames
+                    </button>
+                    <button
+                      disabled={
+                        !selected() ||
+                        detectionJob()?.state === "queued" ||
+                        detectionJob()?.state === "running"
+                      }
+                      onClick={() => void startDetection("scene")}
+                    >
+                      Detect scene changes
+                    </button>
+                    <Show
+                      when={
+                        detectionJob()?.state === "queued" || detectionJob()?.state === "running"
+                      }
+                    >
+                      <button onClick={() => void cancelDetection()}>Cancel detection</button>
+                    </Show>
+                  </div>
+                  <Show when={detectionCandidates().length > 0}>
+                    <ol aria-label="Detection candidates">
+                      <For each={detectionCandidates()}>
+                        {(candidate) => (
+                          <li>
+                            {candidate.source} · {formatTime(candidate.startMs, duration())}–
+                            {formatTime(candidate.endMs, duration())} ·{" "}
+                            {Math.round(candidate.confidence * 100)}%{" "}
+                            <button onClick={() => acceptDetection(candidate)}>Accept</button>
+                            <button
+                              onClick={() => {
+                                setDetectionCandidates(
+                                  detectionCandidates().filter((item) => item.id !== candidate.id),
+                                );
+                                setDetectionStatus("Candidate rejected.");
+                              }}
+                            >
+                              Reject
+                            </button>
+                          </li>
+                        )}
+                      </For>
+                    </ol>
                   </Show>
-                </div>
-                <Show when={detectionCandidates().length > 0}>
-                  <ol aria-label="Detection candidates">
-                    <For each={detectionCandidates()}>
-                      {(candidate) => (
-                        <li>
-                          {candidate.source} · {formatTime(candidate.startMs, duration())}–
-                          {formatTime(candidate.endMs, duration())} ·{" "}
-                          {Math.round(candidate.confidence * 100)}%{" "}
-                          <button onClick={() => acceptDetection(candidate)}>Accept</button>
-                          <button
-                            onClick={() => {
-                              setDetectionCandidates(
-                                detectionCandidates().filter((item) => item.id !== candidate.id),
-                              );
-                              setDetectionStatus("Candidate rejected.");
-                            }}
-                          >
-                            Reject
-                          </button>
-                        </li>
-                      )}
-                    </For>
-                  </ol>
-                </Show>
                 </details>
               </section>
             </Show>
@@ -2506,12 +2526,22 @@ export function App() {
             <details>
               <summary>Preview diagnostics</summary>
               <dl>
-                <dt>MSE</dt><dd>{canStreamPreview() ? "supported" : "unsupported"}</dd>
-                <dt>Cache</dt><dd>{diagnostics()?.cache ?? "—"}</dd>
-                <dt>Request ID</dt><dd>{diagnostics()?.requestId ?? "—"}</dd>
-                <dt>Offset</dt><dd>{diagnostics() ? `${diagnostics()!.offsetMs} ms` : "—"}</dd>
-                <dt>Window</dt><dd>{diagnostics() ? `${diagnostics()!.startMs} ms / ${diagnostics()!.durationMs} ms` : "—"}</dd>
-                <dt>Response</dt><dd>{diagnostics() ? `${diagnostics()!.elapsedMs} ms` : "—"}</dd>
+                <dt>MSE</dt>
+                <dd>{canStreamPreview() ? "supported" : "unsupported"}</dd>
+                <dt>Cache</dt>
+                <dd>{diagnostics()?.cache ?? "—"}</dd>
+                <dt>Request ID</dt>
+                <dd>{diagnostics()?.requestId ?? "—"}</dd>
+                <dt>Offset</dt>
+                <dd>{diagnostics() ? `${diagnostics()!.offsetMs} ms` : "—"}</dd>
+                <dt>Window</dt>
+                <dd>
+                  {diagnostics()
+                    ? `${diagnostics()!.startMs} ms / ${diagnostics()!.durationMs} ms`
+                    : "—"}
+                </dd>
+                <dt>Response</dt>
+                <dd>{diagnostics() ? `${diagnostics()!.elapsedMs} ms` : "—"}</dd>
               </dl>
             </details>
             <p role="status">{serverSettingsStatus()}</p>

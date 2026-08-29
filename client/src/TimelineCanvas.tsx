@@ -36,10 +36,9 @@ export function TimelineCanvas(props: Props) {
     };
     image.src = thumbnailURL;
   };
-  createEffect(
-    () => [props.thumbnailURL, props.waveform] as const,
-    ([thumbnailURL, waveform]) => draw(thumbnailURL, waveform),
-  );
+  createEffect(() => {
+    draw(props.thumbnailURL, props.waveform);
+  });
   return (
     <canvas class="timeline-canvas" ref={(element) => (canvas = element)} aria-hidden="true" />
   );
