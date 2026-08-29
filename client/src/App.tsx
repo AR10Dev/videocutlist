@@ -27,6 +27,7 @@ import { TimelineCanvas } from "./TimelineCanvas";
 import { exportFailureMessage } from "./jobUi";
 import { cancelJobLifecycle } from "./queryLifecycle";
 import { jobPollInterval } from "./jobPolling";
+import { abortCancellationControllers } from "./cancellation";
 import type { components } from "./generated/api";
 import { saveIsCurrent } from "./saveGuards";
 import { moveSegment as moveSegments, removeSegment as removeSegments } from "./segmentEditing";
@@ -902,16 +903,13 @@ export function App() {
     projectRequest?.abort();
     cleanupPreview?.();
     if (thumbnailObjectURL) URL.revokeObjectURL(thumbnailObjectURL);
-    if (exportTimer) window.clearTimeout(exportTimer);
+    clearExportContext();
     clearDetectionContext();
-    exportCancellationController?.abort();
-    detectionCancellationController?.abort();
+    [exportCancellationController, detectionCancellationController] =
+      abortCancellationControllers(exportCancellationController, detectionCancellationController);
     projectRequestVersion++;
     saveVersion++;
-    exportRequest++;
     exportController?.abort();
-    exportCancellationController?.abort();
-    detectionCancellationController?.abort();
   });
   void api.request("destinations").then(async (response) => {
     if (!response.ok) return;
