@@ -1,7 +1,7 @@
 import { createMutation, QueryClient, QueryClientProvider } from "@tanstack/solid-query";
 import { createComponent, createRoot } from "solid-js";
 import { describe, expect, it } from "vitest";
-import { abortAndClear } from "../src/cancellation";
+import { abortAndClear, cancellationIsCurrent } from "../src/cancellation";
 import { jobPollInterval } from "../src/jobPolling";
 import { cancelJobLifecycle } from "../src/queryLifecycle";
 
@@ -96,7 +96,17 @@ describe("Solid Query lifecycle contracts", () => {
     const controller = new AbortController();
     expect(abortAndClear(controller)).toBeUndefined();
     expect(controller.signal.aborted).toBe(true);
+    expect(cancellationIsCurrent(controller, controller)).toBe(false);
     expect(abortAndClear()).toBeUndefined();
+  });
+
+  it("rejects completion from a discarded cancellation context", () => {
+    const previous = new AbortController();
+    const current = new AbortController();
+    expect(cancellationIsCurrent(previous, current)).toBe(false);
+    expect(cancellationIsCurrent(current, current)).toBe(true);
+    abortAndClear(current);
+    expect(cancellationIsCurrent(current, current)).toBe(false);
   });
 
   it("stops polling terminal jobs and avoids stale replacement", () => {

@@ -1,6 +1,6 @@
 import { For, Show, createEffect, createSignal, onCleanup } from "solid-js";
 import { createMutation, useQuery, useQueryClient } from "@tanstack/solid-query";
-import { abortAndClear } from "./cancellation";
+import { abortAndClear, cancellationIsCurrent } from "./cancellation";
 import {
   createTimelineHistory,
   editTimeline,
@@ -1068,6 +1068,7 @@ export function App() {
         jobQueryKey: ["job", "export", job.id],
         projectQueryKey: ["project", projectId()],
       });
+      if (!cancellationIsCurrent(cancellationController, exportCancellationController)) return;
       exportController?.abort();
       exportController = undefined;
       if (exportTimer) clearTimeout(exportTimer);
@@ -1152,7 +1153,11 @@ export function App() {
         jobQueryKey: ["job", "detection", job.id],
         projectQueryKey: ["project", projectId()],
       });
-      if (request !== detectionRequest) return;
+      if (
+        request !== detectionRequest ||
+        !cancellationIsCurrent(cancellationController, detectionCancellationController)
+      )
+        return;
       setDetectionJob({ ...job, state: "cancelled" });
       setDetectionStatus("Detection cancelled.");
     } catch (error) {
