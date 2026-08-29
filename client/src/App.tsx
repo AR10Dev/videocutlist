@@ -112,11 +112,7 @@ export function App() {
   const [destinations, setDestinations] = createSignal<Destination[]>([]);
   const [destinationId, setDestinationId] = createSignal("download");
   const [filenameTemplate, setFilenameTemplate] = createSignal(settings().filenameTemplate);
-  const [preflight, setPreflight] = createSignal<{
-    allowed: boolean;
-    selection: number[];
-    findings: { severity: string; code: string; message: string; streamIndex?: number }[];
-  }>();
+  const [preflight, setPreflight] = createSignal<components["schemas"]["ExportPreflight"]>();
   const [preflightPending, setPreflightPending] = createSignal(false);
   const [detectionJob, setDetectionJob] = createSignal<DetectionJob>();
   const [detectionStatus, setDetectionStatus] = createSignal("");
