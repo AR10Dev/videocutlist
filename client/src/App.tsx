@@ -1,4 +1,5 @@
 import { For, Show, createEffect, createSignal, onCleanup } from "solid-js";
+import { useQuery, useQueryClient } from "@tanstack/solid-query";
 import {
   createTimelineHistory,
   editTimeline,
@@ -25,6 +26,7 @@ import {
 } from "./preview";
 import { TimelineCanvas } from "./TimelineCanvas";
 import { exportFailureMessage } from "./jobUi";
+import { jobPollInterval } from "./jobPolling";
 import { saveIsCurrent } from "./saveGuards";
 import { moveSegment as moveSegments, removeSegment as removeSegments } from "./segmentEditing";
 import { acceptCandidate, type Candidate, type DetectionKind } from "./detection";
@@ -196,6 +198,62 @@ export function App() {
     }),
   );
   const playheadMs = () => timeline().present.playheadMs;
+  const queryClient = useQueryClient();
+  const exportStatusQuery = useQuery(() => ({
+    queryKey: ["job", "export", exportJob()?.id ?? null],
+    enabled: Boolean(exportJob()?.id),
+    queryFn: async ({ signal }) => {
+      const id = exportJob()?.id;
+      if (!id) throw new Error("Export job ID is missing.");
+      const response = await api.request(`jobs/${encodeURIComponent(id)}`, { signal });
+      if (!response.ok) throw new Error("Export status could not be updated. Try again.");
+      return (await response.json()) as ExportJob;
+    },
+    refetchInterval: (query: { state: { data?: ExportJob } }) =>
+      jobPollInterval(query.state.data, 1000),
+  }));
+  const detectionStatusQuery = useQuery(() => ({
+    queryKey: ["job", "detection", detectionJob()?.id ?? null],
+    enabled: Boolean(detectionJob()?.id),
+    queryFn: async ({ signal }) => {
+      const id = detectionJob()?.id;
+      if (!id) throw new Error("Detection job ID is missing.");
+      const response = await api.request(`jobs/${encodeURIComponent(id)}`, { signal });
+      if (!response.ok) throw new Error("Detection status could not be updated.");
+      return (await response.json()) as DetectionJob;
+    },
+    refetchInterval: (query: { state: { data?: DetectionJob } }) =>
+      jobPollInterval(query.state.data, 500),
+  }));
+  createEffect(() => {
+    const next = exportStatusQuery.data;
+    if (!next || next.id !== exportJob()?.id) return;
+    setExportJob(next);
+    setExportStatus(
+      next.state === "queued"
+        ? "Export queued."
+        : next.state === "running"
+          ? "Export running."
+          : next.state === "succeeded"
+            ? "Export complete."
+            : next.state === "cancelled"
+              ? "Export cancelled."
+              : exportFailureMessage(next.errorCode),
+    );
+  });
+  createEffect(() => {
+    const next = detectionStatusQuery.data;
+    if (!next || next.id !== detectionJob()?.id) return;
+    setDetectionJob(next);
+    if (next.state === "succeeded") {
+      setDetectionCandidates(next.candidates ?? []);
+      setDetectionStatus(`${next.candidates?.length ?? 0} candidates found. Review each before accepting.`);
+    } else if (next.state === "queued" || next.state === "running") {
+      setDetectionStatus(next.state === "queued" ? "Detection queued." : "Detection running.");
+    } else {
+      setDetectionStatus(next.state === "cancelled" ? "Detection cancelled." : `Detection failed${next.errorCode ? `: ${next.errorCode}.` : "."}`);
+    }
+  });
   let video: HTMLVideoElement | undefined;
   let mediaRequest: AbortController | undefined;
   let metadataRequest: AbortController | undefined;
@@ -809,6 +867,7 @@ export function App() {
     )
       return;
     setRevision(project.revision);
+    await queryClient.invalidateQueries({ queryKey: ["project", project.id] });
     setDirty(false);
     remember(project.id, item.name);
     setStatus(`Project saved (revision ${project.revision}).`);
@@ -1046,7 +1105,7 @@ export function App() {
     const job = (await response.json()) as ExportJob;
     if (controller.signal.aborted || request !== exportRequest) return;
     setExportJob(job);
-    const poll = async () => {
+    const _poll = async () => {
       if (controller.signal.aborted || request !== exportRequest) return;
       let nextResponse: Response;
       try {
@@ -1067,7 +1126,7 @@ export function App() {
       setExportJob(next);
       if (next.state === "queued" || next.state === "running") {
         setExportStatus(next.state === "queued" ? "Export queued." : "Export running.");
-        exportTimer = window.setTimeout(() => void poll(), 1000);
+        exportTimer = window.setTimeout(() => void _poll(), 1000);
       } else
         setExportStatus(
           next.state === "succeeded"
@@ -1088,8 +1147,7 @@ export function App() {
               ? "Export cancelled."
               : exportFailure(job.errorCode),
     );
-    if (job.state === "queued" || job.state === "running")
-      exportTimer = window.setTimeout(() => void poll(), 1000);
+    // Solid Query owns status polling and cancellation for this job.
   };
   const cancelExport = async () => {
     const job = exportJob();
@@ -1099,6 +1157,7 @@ export function App() {
         method: "DELETE",
       });
       if (!response.ok) throw new Error("Export could not be cancelled. Try again.");
+      await queryClient.cancelQueries({ queryKey: ["job", "export", job.id] });
       exportController?.abort();
       exportController = undefined;
       if (exportTimer) clearTimeout(exportTimer);
@@ -1149,7 +1208,7 @@ export function App() {
     const job = (await response.json()) as DetectionJob;
     if (controller.signal.aborted || request !== detectionRequest) return;
     setDetectionJob(job);
-    const poll = async () => {
+    const _poll = async () => {
       if (controller.signal.aborted || request !== detectionRequest) return;
       let result: Response;
       try {
@@ -1169,7 +1228,7 @@ export function App() {
       setDetectionJob(next);
       if (next.state === "queued" || next.state === "running") {
         setDetectionStatus(next.state === "queued" ? "Detection queued." : "Detection running.");
-        detectionTimer = window.setTimeout(() => void poll(), 500);
+        detectionTimer = window.setTimeout(() => void _poll(), 500);
       } else if (next.state === "succeeded") {
         setDetectionCandidates(next.candidates ?? []);
         setDetectionStatus(
@@ -1182,9 +1241,8 @@ export function App() {
             : `Detection failed${next.errorCode ? `: ${next.errorCode}.` : "."}`,
         );
     };
-    if (job.state === "queued" || job.state === "running")
-      detectionTimer = window.setTimeout(() => void poll(), 500);
-    else if (job.state === "succeeded") {
+    // Solid Query owns status polling and cancellation for this job.
+    if (job.state === "succeeded") {
       setDetectionCandidates(job.candidates ?? []);
       setDetectionStatus(
         `${job.candidates?.length ?? 0} candidates found. Review each before accepting.`,
@@ -1204,6 +1262,7 @@ export function App() {
       });
       if (request !== detectionRequest) return;
       if (!response.ok) throw new Error("Detection could not be cancelled. Try again.");
+      await queryClient.cancelQueries({ queryKey: ["job", "detection", job.id] });
       setDetectionJob({ ...job, state: "cancelled" });
       setDetectionStatus("Detection cancelled.");
     } catch (error) {
