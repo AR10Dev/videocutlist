@@ -65,7 +65,7 @@ func (s Service) Detect(ctx context.Context, request application.DetectionReques
 		sceneThreshold = 0.4
 	}
 	filter := map[domain.DetectionKind]string{domain.DetectBlack: fmt.Sprintf("blackdetect=d=%g:pix_th=0.10", minDuration), domain.DetectScene: fmt.Sprintf("select='gt(scene,%g)',showinfo", sceneThreshold)}[request.Kind]
-	args := []string{"-hide_banner", "-nostats", "-i", fmt.Sprintf("/proc/self/fd/%d", f.Fd())}
+	args := []string{"-hide_banner", "-nostats", "-i", "/proc/self/fd/3"}
 	if request.Kind == domain.DetectSilence {
 		args = append(args, "-af", fmt.Sprintf("silencedetect=noise=%gdB:d=%g", noiseDB, minDuration))
 	} else {
@@ -81,6 +81,7 @@ func (s Service) Detect(ctx context.Context, request application.DetectionReques
 		defer release()
 	}
 	cmd := exec.CommandContext(ctx, s.FFmpegPath, args...)
+	cmd.ExtraFiles = []*os.File{f}
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
 		return nil, err
