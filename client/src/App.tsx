@@ -12,7 +12,6 @@ import { createApiClient, resolveBrowserConfiguration, validInterchangeFileSize 
 import { normalizePeaks, viewportScale } from "./assets";
 import { frameDuration } from "./frame";
 import {
-  acceptsMediaMetadata,
   canStreamPreview,
   formatTime,
   hybridSmartCutKnownIneligible,
@@ -196,6 +195,27 @@ export function App() {
     mutationFn: ({ id, signal }: { id: string; signal: AbortSignal }) =>
       api.request(`jobs/${encodeURIComponent(id)}`, { method: "DELETE", signal }),
   }));
+  const refreshMutation = createMutation(() => ({
+    mutationFn: ({ signal }: { signal: AbortSignal }) =>
+      api.request("media/refresh", { method: "POST", signal }),
+  }));
+  const selectedMediaQuery = useQuery(() => ({
+    queryKey: ["media", selected()?.id ?? null],
+    enabled: Boolean(selected()?.id),
+    queryFn: async ({ signal }) => {
+      const id = selected()?.id;
+      if (!id) throw new Error("Media ID is missing.");
+      const response = await api.request(`media/${encodeURIComponent(id)}`, { signal });
+      if (!response.ok) throw new Error(`Metadata request failed (${response.status}).`);
+      return (await response.json()) as Media;
+    },
+  }));
+  createEffect(() => {
+    const item = selectedMediaQuery.data;
+    if (item && item.id === selected()?.id) setSelected(item);
+    if (selectedMediaQuery.error && selected()?.id)
+      setStatus(selectedMediaQuery.error instanceof Error ? selectedMediaQuery.error.message : "Metadata request failed.");
+  });
   const invalidatedTerminalJobs = new Set<string>();
   const exportStatusQuery = useQuery(() => ({
     queryKey: ["job", "export", exportJob()?.id ?? null],
@@ -266,8 +286,6 @@ export function App() {
   });
   let video: HTMLVideoElement | undefined;
   let mediaRequest: AbortController | undefined;
-  let metadataRequest: AbortController | undefined;
-  let metadataRequestVersion = 0;
   let assetRequest: AbortController | undefined;
   let previewRequest: AbortController | undefined;
   let cleanupPreview: (() => void) | undefined;
@@ -275,8 +293,6 @@ export function App() {
   let requestVersion = 0;
   let projectRequest: AbortController | undefined;
   let projectRequestVersion = 0;
-  let refreshRequest: AbortController | undefined;
-  let refreshRequestVersion = 0;
   let folderRequestVersion = 0;
   let saveRequest: AbortController | undefined;
   let saveVersion = 0;
@@ -541,12 +557,6 @@ export function App() {
   const refreshMedia = async () => {
     mediaRequest?.abort();
     requestVersion++;
-    metadataRequest?.abort();
-    metadataRequestVersion++;
-    refreshRequest?.abort();
-    const controller = new AbortController();
-    refreshRequest = controller;
-    const request = ++refreshRequestVersion;
     folderRequestVersion++;
     setRefreshing(true);
     setActiveFolder(undefined);
@@ -554,21 +564,16 @@ export function App() {
     setFolders([]);
     try {
       await queryClient.invalidateQueries({ queryKey: ["media"] });
-      const response = await api.request("media/refresh", {
-        method: "POST",
-        signal: controller.signal,
-      });
-      if (controller.signal.aborted || request !== refreshRequestVersion) return;
+      const response = await refreshMutation.mutateAsync({ signal: new AbortController().signal });
       if (response.status === 403) setStatus("You are not allowed to refresh media.");
       else if (response.status === 429)
         setStatus("Media refresh is already in progress. Try again shortly.");
       else if (!response.ok) setStatus("Media refresh failed. Try again.");
       else await loadFolder();
     } catch {
-      if (!controller.signal.aborted && request === refreshRequestVersion)
-        setStatus("Media refresh failed. Try again.");
+      setStatus("Media refresh failed. Try again.");
     } finally {
-      if (request === refreshRequestVersion) setRefreshing(false);
+      setRefreshing(false);
     }
   };
   const invalidateSaveContext = () => {
@@ -601,10 +606,6 @@ export function App() {
     clearExportContext();
     clearDetectionContext();
     invalidateSaveContext();
-    metadataRequest?.abort();
-    const controller = new AbortController();
-    metadataRequest = controller;
-    const request = ++metadataRequestVersion;
     setSelected(item);
     setPreviewCenterMs(0);
     setTimeline(
@@ -619,32 +620,7 @@ export function App() {
     setDiagnostics();
     setDirty(true);
     setStatus(`Selected ${item.name}.`);
-    void api
-      .request(`media/${encodeURIComponent(item.id)}`, { signal: controller.signal })
-      .then((response) => {
-        if (!response.ok) throw new Error(`Metadata request failed (${response.status}).`);
-        return response.json() as Promise<Media>;
-      })
-      .then((metadata) => {
-        if (
-          acceptsMediaMetadata(
-            controller.signal.aborted,
-            request,
-            metadataRequestVersion,
-            selected()?.id,
-            metadata.id,
-          )
-        )
-          setSelected(metadata);
-      })
-      .catch((error: unknown) => {
-        if (
-          !controller.signal.aborted &&
-          request === metadataRequestVersion &&
-          selected()?.id === item.id
-        )
-          setStatus(error instanceof Error ? error.message : "Metadata request failed.");
-      });
+
   };
   // Media root loading is owned by Solid Query; folder navigation remains explicit.
   createEffect(() => {
@@ -949,9 +925,7 @@ export function App() {
     clearDetectionContext();
     invalidateSaveContext();
     projectRequest?.abort();
-    metadataRequest?.abort();
     ++projectRequestVersion;
-    ++metadataRequestVersion;
     setProjectId(newProjectId());
     setRevision(0);
     setDirty(false);
@@ -972,20 +946,16 @@ export function App() {
   };
   onCleanup(() => {
     mediaRequest?.abort();
-    refreshRequest?.abort();
     saveRequest?.abort();
     assetRequest?.abort();
     previewRequest?.abort();
     projectRequest?.abort();
-    metadataRequest?.abort();
     cleanupPreview?.();
     if (thumbnailObjectURL) URL.revokeObjectURL(thumbnailObjectURL);
     if (exportTimer) window.clearTimeout(exportTimer);
     clearDetectionContext();
     requestVersion++;
-    metadataRequestVersion++;
     projectRequestVersion++;
-    refreshRequestVersion++;
     saveVersion++;
     exportRequest++;
     exportController?.abort();
