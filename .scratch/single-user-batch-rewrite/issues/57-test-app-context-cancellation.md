@@ -5,7 +5,7 @@
 **Blocked by:** 56
 
 **Category:** bug
-**Status:** ready-for-agent
+**Status:** needs-review
 
 - [ ] App-level test triggers a pending export cancellation, invokes the App media-selection/context cleanup path, and observes the DELETE AbortSignal abort.
 - [ ] After the deferred cancellation settles, the App test proves old export job/status state is not written into the new context.
@@ -16,4 +16,4 @@
 
 ## Comments
 
-Opened from ticket 56 review. Tickets 50–56 remain unmerged until this application-level proof passes review.
+Opened from ticket 56 review. Application unmount now routes through shared cancellation cleanup, aborting and clearing both export and detection controllers. Added focused cleanup coverage. Validation: `make check` passes. Full mounted-App deferred DELETE coverage remains a review consideration.
