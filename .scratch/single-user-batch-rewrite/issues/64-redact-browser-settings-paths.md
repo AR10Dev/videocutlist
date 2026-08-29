@@ -11,7 +11,7 @@
 - [x] Settings API responses and client UI expose aliases and safe availability diagnostics only.
 - [x] Server-side deployment paths remain accepted and applied without being returned to the browser.
 - [x] Tests prove browser settings payloads and rendered UI do not contain configured filesystem paths.
-- [x] Ticket 11 is updated with verified completion evidence after this fix.
+- [ ] Ticket 11 is updated with verified completion evidence after this fix.
 - [x] `make check` and full interchange Playwright pass.
 
 ## Comments

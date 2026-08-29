@@ -70,8 +70,8 @@ test.beforeEach(async ({ page }) => {
       return route.fulfill({
         json: { state: "ready_empty", message: "No supported media was found." },
       });
-    if (url.pathname === "/api/v1/media")
-      return route.fulfill({ json: { items: [media, secondMedia] } });
+    if (url.pathname === "/api/v1/media/tree")
+      return route.fulfill({ json: { folders: [], items: [media, secondMedia] } });
     if (url.pathname === `/api/v1/media/${media.id}`) return route.fulfill({ json: media });
     if (url.pathname.endsWith("/thumbnails"))
       return route.fulfill({
@@ -215,7 +215,9 @@ test.beforeEach(async ({ page }) => {
 });
 
 test("explains server-mounted setup when the library is empty", async ({ page }) => {
-  await page.route(`${apiOrigin}/api/v1/media`, (route) => route.fulfill({ json: { items: [] } }));
+  await page.route(`${apiOrigin}/api/v1/media/tree`, (route) =>
+    route.fulfill({ json: { folders: [], items: [] } }),
+  );
 
   await page.goto("/");
 
@@ -398,7 +400,8 @@ test("shows a safe preview failure and maps markers from the watched preview", a
   await page.unroute(`${apiOrigin}/api/v1/**`);
   await page.route(`${apiOrigin}/api/v1/**`, (route) => {
     const url = new URL(route.request().url());
-    if (url.pathname === "/api/v1/media") return route.fulfill({ json: { items: [media] } });
+    if (url.pathname === "/api/v1/media/tree")
+      return route.fulfill({ json: { folders: [], items: [media] } });
     if (url.pathname === `/api/v1/media/${media.id}`) return route.fulfill({ json: media });
     if (url.pathname.endsWith("/preview"))
       return route.fulfill({
@@ -882,9 +885,10 @@ test("refresh metadata cannot restore an old selection", async ({ page }) => {
       refreshed = true;
       return route.fulfill({ json: {} });
     }
-    if (url.pathname === "/api/v1/media" && route.request().method() === "GET")
+    if (url.pathname === "/api/v1/media/tree" && route.request().method() === "GET")
       return route.fulfill({
         json: {
+          folders: [],
           items: refreshed ? [secondMedia] : [media, secondMedia],
           nextCursor: null,
         },
@@ -1022,10 +1026,12 @@ test("loads cursor pages once and removes Load more at the end", async ({ page }
     const url = new URL(route.request().url());
     if (route.request().method() !== "GET") return route.fallback();
     if (!url.searchParams.get("cursor"))
-      return route.fulfill({ json: { items: [media], nextCursor: "next/+=" } });
+      return route.fulfill({
+        json: { folders: [], items: [media], nextCursor: "next/+=" },
+      });
     expect(url.searchParams.get("cursor")).toBe("next/+=");
     return route.fulfill({
-      json: { items: [media, secondMedia], nextCursor: null },
+      json: { folders: [], items: [media, secondMedia], nextCursor: null },
     });
   });
   await page.goto("/");
@@ -1047,10 +1053,12 @@ test("keeps the first page after a later-page failure and permits retry", async 
     const url = new URL(route.request().url());
     if (route.request().method() !== "GET") return route.fallback();
     if (!url.searchParams.get("cursor"))
-      return route.fulfill({ json: { items: [media], nextCursor: "next" } });
+      return route.fulfill({ json: { folders: [], items: [media], nextCursor: "next" } });
     attempts += 1;
     return route.fulfill(
-      attempts === 1 ? { status: 500 } : { json: { items: [secondMedia], nextCursor: null } },
+      attempts === 1
+        ? { status: 500 }
+        : { json: { folders: [], items: [secondMedia], nextCursor: null } },
     );
   });
   await page.goto("/");
@@ -1080,9 +1088,9 @@ test("refresh replaces the first page and selected metadata", async ({ page }) =
     if (route.request().method() !== "GET") return route.fallback();
     if (url.pathname === `/api/v1/media/${media.id}`)
       return route.fulfill({ json: refreshes ? refreshed : media });
-    if (url.pathname === "/api/v1/media")
+    if (url.pathname === "/api/v1/media/tree")
       return route.fulfill({
-        json: { items: refreshes ? [refreshed] : [media], nextCursor: null },
+        json: { folders: [], items: refreshes ? [refreshed] : [media], nextCursor: null },
       });
     if (refreshes && (url.pathname.endsWith("/thumbnails") || url.pathname.endsWith("/waveform"))) {
       await new Promise((resolve) => setTimeout(resolve, 300));
@@ -1102,7 +1110,7 @@ test("refresh replaces the first page and selected metadata", async ({ page }) =
   await expect(page.locator("canvas.timeline-canvas")).toBeVisible();
   await page.getByRole("button", { name: "Refresh media" }).click();
   await expect(page.getByRole("button", { name: /refreshed.mp4/ })).toBeVisible();
-  await expect(page.getByText("Media refreshed. Choose media to begin.")).toBeVisible();
+  await expect(page.getByText("Choose media to begin.")).toBeVisible();
   await expect(page.locator("canvas.timeline-canvas")).toHaveCount(1);
 });
 
