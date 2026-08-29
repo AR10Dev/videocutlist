@@ -1,5 +1,5 @@
 import { For, Show, createEffect, createSignal, onCleanup } from "solid-js";
-import { useQuery, useQueryClient } from "@tanstack/solid-query";
+import { createMutation, useQuery, useQueryClient } from "@tanstack/solid-query";
 import {
   createTimelineHistory,
   editTimeline,
@@ -20,13 +20,13 @@ import {
   streamPreview,
   validateSegments,
   watchedMediaPosition,
-  type Media,
   type PreviewDiagnostics,
   type Segment,
 } from "./preview";
 import { TimelineCanvas } from "./TimelineCanvas";
 import { exportFailureMessage } from "./jobUi";
 import { jobPollInterval } from "./jobPolling";
+import type { components } from "./generated/api";
 import { saveIsCurrent } from "./saveGuards";
 import { moveSegment as moveSegments, removeSegment as removeSegments } from "./segmentEditing";
 import { acceptCandidate, type Candidate, type DetectionKind } from "./detection";
@@ -41,16 +41,14 @@ import {
   type RecentProject,
 } from "./projectLifecycle";
 import { defaultSettings, settingsKey, storedSettings, type AppSettings } from "./settings";
-type MediaPage = { items: Media[]; nextCursor?: string | null };
+type Media = components["schemas"]["Media"];
+type MediaPage = components["schemas"]["MediaPage"];
 type FolderPage = {
   folders: { id: string; label: string }[];
   items: Media[];
   nextCursor?: string | null;
 };
-type LibraryStatus = {
-  state: "unconfigured" | "scanning" | "ready_empty" | "ready_with_media" | "failed";
-  message: string;
-};
+type LibraryStatus = components["schemas"]["LibraryStatus"];
 type LibraryRoot = {
   alias: string;
   path: string;
@@ -93,14 +91,10 @@ type Destination = {
   kind: string;
   retention?: string;
 };
-type Project = {
-  id: string;
-  mediaId: string;
-  revision: number;
-  segments: Segment[];
-  uiState: { playheadMs: number; zoom: number; muted: boolean };
-};
-type ExportJob = {
+type Project = components["schemas"]["Project"];
+type ExportJob = components["schemas"]["Job"];
+/* ExportJob is retained as a domain alias for the editor. */
+type _LegacyExportJob = {
   id: string;
   state: "queued" | "running" | "succeeded" | "failed" | "cancelled";
   progress: number;
@@ -199,6 +193,56 @@ export function App() {
   );
   const playheadMs = () => timeline().present.playheadMs;
   const queryClient = useQueryClient();
+  const fetchProject = (id: string, signal?: AbortSignal) =>
+    queryClient.fetchQuery({
+      queryKey: ["project", id],
+      queryFn: async ({ signal: querySignal }) => {
+        const response = await api.request(`projects/${encodeURIComponent(id)}`, {
+          signal: signal ?? querySignal,
+        });
+        if (!response.ok) throw new Error(`Project load failed (${response.status}).`);
+        return (await response.json()) as Project;
+      },
+    });
+  const saveMutation = createMutation(() => ({
+    mutationFn: ({
+      id,
+      body,
+      signal,
+    }: {
+      id: string;
+      body: unknown;
+      signal: AbortSignal;
+    }) =>
+      api.request(`projects/${encodeURIComponent(id)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        signal,
+        body: JSON.stringify(body),
+      }),
+  }));
+  const mediaQuery = useQuery(() => ({
+    queryKey: ["media", "tree", "root"],
+    queryFn: async ({ signal }) => {
+      const response = await api.request("media/tree", { signal });
+      if (!response.ok) throw new Error(`Media request failed (${response.status}).`);
+      const page = (await response.json()) as FolderPage;
+      const statusResponse = await api.request("media/status", { signal });
+      return {
+        page,
+        library: statusResponse.ok ? ((await statusResponse.json()) as LibraryStatus) : undefined,
+      };
+    },
+  }));
+  createEffect(() => {
+    const result = mediaQuery.data;
+    if (!result) return;
+    setFolders(result.page.folders);
+    setMedia(result.page.items);
+    setNextCursor(result.page.nextCursor ?? undefined);
+    setLibraryStatus(result.library);
+    setStatus("Choose media to begin.");
+  });
   const exportStatusQuery = useQuery(() => ({
     queryKey: ["job", "export", exportJob()?.id ?? null],
     enabled: Boolean(exportJob()?.id),
@@ -622,9 +666,7 @@ export function App() {
           setStatus(error instanceof Error ? error.message : "Metadata request failed.");
       });
   };
-  createEffect(() => {
-    void loadFolder();
-  });
+  // Media root loading is owned by Solid Query; folder navigation remains explicit.
   createEffect(() => {
     const item = selected();
     assetRequest?.abort();
@@ -809,11 +851,10 @@ export function App() {
     if (error) return void setStatus(error);
     let response: Response;
     try {
-      response = await api.request(`projects/${encodeURIComponent(snapshotProject)}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
+      response = await saveMutation.mutateAsync({
+        id: snapshotProject,
         signal: controller.signal,
-        body: JSON.stringify({
+        body: {
           mediaId: item.id,
           revision: revision(),
           segments: present().segments,
@@ -822,7 +863,7 @@ export function App() {
             zoom: present().zoom,
             muted: muted(),
           },
-        }),
+        },
       });
     } catch (error) {
       if (!controller.signal.aborted && request === saveVersion)
@@ -885,17 +926,19 @@ export function App() {
     projectRequest = controller;
     const request = ++projectRequestVersion;
     try {
-      const response = await api.request(`projects/${encodeURIComponent(id)}`, {
-        signal: controller.signal,
-      });
-      if (!response.ok) throw new Error(`Project load failed (${response.status}).`);
-      const project = (await response.json()) as Project;
+      const project = await fetchProject(id, controller.signal);
       if (controller.signal.aborted || request !== projectRequestVersion) return;
-      const mediaResponse = await api.request(`media/${encodeURIComponent(project.mediaId)}`, {
-        signal: controller.signal,
+      const item = await queryClient.fetchQuery({
+        queryKey: ["media", project.mediaId],
+        queryFn: async ({ signal }) => {
+          const mediaResponse = await api.request(`media/${encodeURIComponent(project.mediaId)}`, {
+            signal: controller.signal ?? signal,
+          });
+          if (!mediaResponse.ok)
+            throw new Error(`Media request failed (${mediaResponse.status}).`);
+          return (await mediaResponse.json()) as Media;
+        },
       });
-      if (!mediaResponse.ok) throw new Error(`Media request failed (${mediaResponse.status}).`);
-      const item = (await mediaResponse.json()) as Media;
       if (controller.signal.aborted || request !== projectRequestVersion) return;
       setProjectId(project.id);
       setRevision(project.revision);
@@ -967,7 +1010,6 @@ export function App() {
     exportRequest++;
     exportController?.abort();
   });
-  const exportFailure = exportFailureMessage;
   void api.request("destinations").then(async (response) => {
     if (!response.ok) return;
     const value = (await response.json()) as { destinations?: Destination[] };
@@ -1105,48 +1147,6 @@ export function App() {
     const job = (await response.json()) as ExportJob;
     if (controller.signal.aborted || request !== exportRequest) return;
     setExportJob(job);
-    const _poll = async () => {
-      if (controller.signal.aborted || request !== exportRequest) return;
-      let nextResponse: Response;
-      try {
-        nextResponse = await api.request(`jobs/${encodeURIComponent(job.id)}`, {
-          signal: controller.signal,
-        });
-      } catch (error) {
-        if (controller.signal.aborted || request !== exportRequest) return;
-        return setExportStatus(
-          error instanceof Error ? error.message : "Export status could not be updated. Try again.",
-        );
-      }
-      if (controller.signal.aborted || request !== exportRequest) return;
-      if (!nextResponse.ok)
-        return setExportStatus("Export status could not be updated. Try again.");
-      const next = (await nextResponse.json()) as ExportJob;
-      if (controller.signal.aborted || request !== exportRequest) return;
-      setExportJob(next);
-      if (next.state === "queued" || next.state === "running") {
-        setExportStatus(next.state === "queued" ? "Export queued." : "Export running.");
-        exportTimer = window.setTimeout(() => void _poll(), 1000);
-      } else
-        setExportStatus(
-          next.state === "succeeded"
-            ? "Export complete."
-            : next.state === "cancelled"
-              ? "Export cancelled."
-              : exportFailure(next.errorCode),
-        );
-    };
-    setExportStatus(
-      job.state === "queued"
-        ? "Export queued."
-        : job.state === "running"
-          ? "Export running."
-          : job.state === "succeeded"
-            ? "Export complete."
-            : job.state === "cancelled"
-              ? "Export cancelled."
-              : exportFailure(job.errorCode),
-    );
     // Solid Query owns status polling and cancellation for this job.
   };
   const cancelExport = async () => {
@@ -1208,39 +1208,6 @@ export function App() {
     const job = (await response.json()) as DetectionJob;
     if (controller.signal.aborted || request !== detectionRequest) return;
     setDetectionJob(job);
-    const _poll = async () => {
-      if (controller.signal.aborted || request !== detectionRequest) return;
-      let result: Response;
-      try {
-        result = await api.request(`jobs/${encodeURIComponent(job.id)}`, {
-          signal: controller.signal,
-        });
-      } catch (error) {
-        if (controller.signal.aborted || request !== detectionRequest) return;
-        return setDetectionStatus(
-          error instanceof Error ? error.message : "Detection status could not be updated.",
-        );
-      }
-      if (controller.signal.aborted || request !== detectionRequest) return;
-      if (!result.ok) return setDetectionStatus("Detection status could not be updated.");
-      const next = (await result.json()) as DetectionJob;
-      if (controller.signal.aborted || request !== detectionRequest) return;
-      setDetectionJob(next);
-      if (next.state === "queued" || next.state === "running") {
-        setDetectionStatus(next.state === "queued" ? "Detection queued." : "Detection running.");
-        detectionTimer = window.setTimeout(() => void _poll(), 500);
-      } else if (next.state === "succeeded") {
-        setDetectionCandidates(next.candidates ?? []);
-        setDetectionStatus(
-          `${next.candidates?.length ?? 0} candidates found. Review each before accepting.`,
-        );
-      } else
-        setDetectionStatus(
-          next.state === "cancelled"
-            ? "Detection cancelled."
-            : `Detection failed${next.errorCode ? `: ${next.errorCode}.` : "."}`,
-        );
-    };
     // Solid Query owns status polling and cancellation for this job.
     if (job.state === "succeeded") {
       setDetectionCandidates(job.candidates ?? []);
