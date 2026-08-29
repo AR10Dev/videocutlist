@@ -3,6 +3,7 @@ package store_test
 import (
 	"context"
 	"database/sql"
+	"path/filepath"
 	"testing"
 
 	"videocutlist/infrastructure/media/index"
@@ -55,6 +56,51 @@ func TestOpenDatabaseAppliesAllMigrations(t *testing.T) {
 			t.Fatalf("missing %s: %v", table, err)
 		}
 		assertNoOwnerColumn(t, db, table)
+	}
+}
+
+func TestOpenDatabaseMigratesLegacyIdentityColumns(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.db")
+	legacy, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, statement := range []string{
+		`CREATE TABLE media (id TEXT PRIMARY KEY, root_alias TEXT NOT NULL, relative_path TEXT NOT NULL, size_bytes INTEGER NOT NULL, mtime_ns INTEGER NOT NULL, metadata_json TEXT NOT NULL, available INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE (root_alias, relative_path))`,
+		`CREATE TABLE projects (id TEXT PRIMARY KEY, owner_login TEXT NOT NULL, revision INTEGER NOT NULL CHECK (revision > 0), document_json TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+		`CREATE TABLE export_jobs (id TEXT PRIMARY KEY, owner_login TEXT NOT NULL, project_id TEXT NOT NULL, project_revision INTEGER NOT NULL CHECK (project_revision > 0), state TEXT NOT NULL, request_json TEXT NOT NULL, result_json TEXT, error_code TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+		`CREATE TABLE detection_jobs (id TEXT PRIMARY KEY, owner_login TEXT NOT NULL, project_id TEXT NOT NULL, media_id TEXT NOT NULL, project_revision INTEGER NOT NULL CHECK (project_revision > 0), kind TEXT NOT NULL, state TEXT NOT NULL, result_json TEXT, error_code TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+	} {
+		if _, err := legacy.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	const mediaID = "m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	if _, err := legacy.Exec(`INSERT INTO media VALUES (?, 'library', 'clip.mp4', 1, 1, '{}', 1, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`, mediaID); err != nil {
+		t.Fatal(err)
+	}
+	document := `{"schemaVersion":2,"name":"Project","items":[{"id":"i_legacy","mediaId":"` + mediaID + `","segments":[]}]}`
+	if _, err := legacy.Exec(`INSERT INTO projects VALUES ('p_legacy', 'old-user', 1, ?, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`, document); err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := store.OpenDatabase(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	for _, table := range []string{"media", "projects", "export_jobs", "detection_jobs"} {
+		assertNoOwnerColumn(t, db, table)
+	}
+	var gotMedia, gotDocument string
+	if err := db.QueryRow(`SELECT media.id, projects.document_json FROM media CROSS JOIN projects`).Scan(&gotMedia, &gotDocument); err != nil {
+		t.Fatal(err)
+	}
+	if gotMedia != mediaID || gotDocument != document {
+		t.Fatalf("migration lost data: media=%q document=%q", gotMedia, gotDocument)
 	}
 }
 

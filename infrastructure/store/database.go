@@ -62,6 +62,10 @@ func OpenDatabase(ctx context.Context, path string) (*sql.DB, error) {
 			return nil, fmt.Errorf("migrate database: %w", err)
 		}
 	}
+	if err := migrateLegacyIdentityColumns(ctx, db); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("migrate legacy identity columns: %w", err)
+	}
 	if err := migrateUnifiedJobs(ctx, db); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("migrate unified jobs: %w", err)
@@ -163,6 +167,28 @@ func migrateUnifiedJobs(ctx context.Context, db *sql.DB) error {
 	}
 	if err := copyDetection(); err != nil {
 		return err
+	}
+	return tx.Commit()
+}
+
+func migrateLegacyIdentityColumns(ctx context.Context, db *sql.DB) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, table := range []string{"media", "projects", "export_jobs", "detection_jobs", "jobs", "cache_entries", "runtime_settings"} {
+		for _, column := range []string{"owner_login", "principal", "role", "capability"} {
+			var present int
+			if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?`, table, column).Scan(&present); err != nil {
+				return err
+			}
+			if present == 1 {
+				if _, err := tx.ExecContext(ctx, `ALTER TABLE `+table+` DROP COLUMN `+column); err != nil {
+					return fmt.Errorf("drop %s.%s: %w", table, column, err)
+				}
+			}
+		}
 	}
 	return tx.Commit()
 }
