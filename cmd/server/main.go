@@ -140,12 +140,17 @@ func run(ctx context.Context) error {
 			artifacts.ClearManifest(job.ID)
 			return nil
 		case store.JobScan:
-			if err := mediaService.RefreshMedia(ctx); err != nil {
-				return err
-			}
+			scanErr := mediaService.RefreshMedia(ctx)
 			result, err := json.Marshal(scanner.RootStatuses())
 			if err != nil {
 				return err
+			}
+			if scanErr != nil {
+				_, err = unifiedJobs.FailWithResult(ctx, job.ID, string(result), "scan_failed")
+				if err != nil {
+					return err
+				}
+				return scanErr
 			}
 			_, err = unifiedJobs.Succeed(ctx, job.ID, string(result))
 			return err

@@ -42,6 +42,25 @@ func TestImportJobResultMapsPersistedRootStatuses(t *testing.T) {
 	}
 }
 
+type unifiedJobsStub struct{ job store.Job }
+
+func (s unifiedJobsStub) Get(context.Context, string) (store.Job, error)    { return s.job, nil }
+func (s unifiedJobsStub) Cancel(context.Context, string) (store.Job, error) { return s.job, nil }
+
+func TestJobUseCaseMapsSafeScanResults(t *testing.T) {
+	got, err := (JobUseCase{Jobs: unifiedJobsStub{job: store.Job{
+		ID: "j_scanresult1234", Kind: store.JobScan, State: store.JobFailed,
+		ErrorCode:  sql.NullString{Valid: true, String: "/tmp/private"},
+		ResultJSON: sql.NullString{Valid: true, String: `{"library":{"state":"ready_with_media"},"../../secret":{"state":"failed","errorCode":"/tmp/root"},"bad":{"state":"unknown"}}`},
+	}}}).Get(context.Background(), "j_scanresult1234")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.RootResults) != 1 || got.RootResults["library"].State != LibraryReadyWithMedia || got.ErrorCode != nil {
+		t.Fatalf("job = %#v", got)
+	}
+}
+
 func TestMediaBrowseForwardsToCatalog(t *testing.T) {
 	want := FolderPage{Folders: []FolderNode{{ID: "f_opaque", Label: "clips"}}}
 	useCase := &MediaUseCase{Catalog: &catalogStub{browse: want}, Configured: true}
