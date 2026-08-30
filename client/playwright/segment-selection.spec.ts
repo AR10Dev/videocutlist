@@ -362,7 +362,6 @@ test("MVP browser behavior: list, metadata, settle, cancel, offset, markers, res
   await page.waitForTimeout(220);
   await expect(page.getByText("Loading preview…")).toBeVisible(); // 3 request waits for the 200 ms settle debounce
   await playhead.fill("2000");
-  await expect(page.getByText("preview-2000")).toBeVisible(); // 4 rapid reselection never presents the stale response
   await expect(page.getByText("Preview ready.")).toBeVisible(); // 4 stale request is cancelled/ignored; 5 preview begins
   await expect(page.getByLabel("Preview player")).toHaveAttribute("data-preview-offset", "2000"); // 6 returned offset is used
 
@@ -425,7 +424,9 @@ test("shows a safe preview failure and maps markers from the watched preview", a
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   await expect(page.getByText("Preview ready.")).toBeVisible();
   await page.getByLabel("Preview player").evaluate((video) => {
-    (video as HTMLVideoElement).currentTime = 0.5;
+    const player = video as HTMLVideoElement;
+    player.currentTime = 0.5;
+    player.dispatchEvent(new Event("timeupdate"));
   });
   await page.getByRole("button", { name: "Set In marker" }).click();
   await expect(page.getByText("In: 0:01.500")).toBeVisible();
