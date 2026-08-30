@@ -1538,7 +1538,7 @@ export function App() {
             <Show when={selected()}>
               <section class="project-panel" aria-labelledby="project-heading">
                 <h2 id="project-heading">Project</h2>
-                <details>
+                <details open>
                   <summary>Project administration and interchange</summary>
                   <label>
                     Project ID{" "}
@@ -1738,7 +1738,7 @@ export function App() {
               <section class="export-panel" aria-labelledby="export-heading">
                 <h2 id="export-heading">Export</h2>
                 <p role="status">{exportStatus() || "Export a saved project."}</p>
-                <details>
+                <details open>
                   <summary>Advanced export options</summary>
                   <label>
                     Mode{" "}
@@ -2005,7 +2005,7 @@ export function App() {
             <Show when={selected()}>
               <section class="detection-panel" aria-labelledby="detection-heading">
                 <h2 id="detection-heading">Auto detection</h2>
-                <details>
+                <details open>
                   <summary>Detection tools</summary>
                   <p role="status">
                     {detectionStatus() || "Review candidates before they change segments."}
