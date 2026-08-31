@@ -519,7 +519,7 @@ test("exports the saved segments, polls to a safe result, and shows warnings", a
   await page.getByRole("button", { name: "Set Out marker" }).click();
   await page.getByRole("button", { name: "Add In/Out segment" }).click();
   await page.getByRole("button", { name: "Start export" }).click();
-  await expect(page.getByText("Export queued.")).toBeVisible();
+  await expect(page.getByText(/Export (queued|running)\./)).toBeVisible();
   await expect(page.getByRole("link", { name: "Download output 1" })).toHaveCount(0);
   await expect(page.getByText("Export complete.")).toBeVisible({
     timeout: 4_000,

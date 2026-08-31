@@ -1002,6 +1002,7 @@ export function App() {
     const job = (await response.json()) as ExportJob;
     if (controller.signal.aborted || request !== exportRequest) return;
     setExportJob(job);
+    setExportStatus(job.state === "queued" ? "Export queued." : "Export running.");
     // Solid Query owns status polling and cancellation for this job.
   };
   const cancelExport = async () => {
