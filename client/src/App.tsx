@@ -882,21 +882,7 @@ export function App() {
       return;
     }
     if (exportTimer) window.clearTimeout(exportTimer);
-    if (dirty()) {
-      setPreflight({
-        allowed: false,
-        selection: [],
-        findings: [
-          {
-            severity: "blocked",
-            code: "project_not_persisted",
-            message: "Save the project before running export preflight.",
-          },
-        ],
-      });
-      setPreflightPending(false);
-      return;
-    }
+    dirty();
     setPreflightPending(true);
     const version = ++preflightVersion;
     exportTimer = window.setTimeout(async () => {
@@ -954,8 +940,30 @@ export function App() {
       setExportStatus(`Export job ${activeJob.id} is already active.`);
       return;
     }
-    if (preflightPending() || !preflight()?.allowed) return;
-    if (dirty() && !(await saveProject())) return;
+    if (preflightPending() && !dirty()) return;
+    if (dirty()) {
+      if (!(await saveProject())) return;
+      const response = await api.request(
+        `projects/${encodeURIComponent(projectId())}/exports/preflight`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            mode: exportMode(),
+            selection: exportSelection(),
+            streamIndexes: streamIndexes(),
+            cutStrategy: cutStrategy(),
+            container: "mkv",
+            destinationId: destinationId(),
+            filenameTemplate: filenameTemplate(),
+          }),
+        },
+      );
+      if (!response.ok) return void setExportStatus("Export preflight failed.");
+      const freshPreflight = (await response.json()) as components["schemas"]["ExportPreflight"];
+      setPreflight(freshPreflight);
+      if (!freshPreflight.allowed) return;
+    } else if (!preflight()?.allowed) return;
     const request = ++exportRequest;
     const controller = new AbortController();
     exportController = controller;
@@ -1922,8 +1930,8 @@ export function App() {
                     disabled={
                       !selected() ||
                       !present().segments.length ||
-                      preflightPending() ||
-                      !preflight()?.allowed ||
+                      (preflightPending() && !dirty()) ||
+                      (!preflight()?.allowed && !dirty()) ||
                       exportJob()?.state === "queued" ||
                       exportJob()?.state === "running"
                     }
