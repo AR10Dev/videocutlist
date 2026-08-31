@@ -983,7 +983,7 @@ test("new projects reset the editor and dirty changes need confirmation", async 
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "New project" }).click();
   await expect(page.getByText("New project ready.")).toBeVisible();
-  await expect(page.getByText("Select a media item.")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Choose a video to begin" })).toBeVisible();
   await expect(projectId).not.toBeVisible();
 });
 
