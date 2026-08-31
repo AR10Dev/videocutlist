@@ -962,6 +962,7 @@ export function App() {
       if (!response.ok) return void setExportStatus("Export preflight failed.");
       const freshPreflight = (await response.json()) as components["schemas"]["ExportPreflight"];
       setPreflight(freshPreflight);
+      setPreflightPending(false);
       if (!freshPreflight.allowed) return;
     } else if (!preflight()?.allowed) return;
     const request = ++exportRequest;
@@ -992,12 +993,14 @@ export function App() {
       );
     }
     if (controller.signal.aborted || request !== exportRequest) return;
-    if (!response.ok)
+    if (!response.ok) {
+      setPreflightPending(false);
       return setExportStatus(
         response.status === 429
           ? "Export capacity is busy. Try again shortly."
           : "Export could not be started. Try again.",
       );
+    }
     if (controller.signal.aborted || request !== exportRequest) return;
     const job = (await response.json()) as ExportJob;
     if (controller.signal.aborted || request !== exportRequest) return;
@@ -1011,13 +1014,17 @@ export function App() {
     exportCancellationController?.abort();
     const cancellationController = new AbortController();
     exportCancellationController = cancellationController;
+    queryClient.setQueryData(["job", "export", job.id], { ...job, state: "cancelled" });
+    setExportJob();
+    setExportStatus("Export cancelled.");
     try {
       await cancelJobLifecycle({
         jobId: job.id,
         signal: cancellationController.signal,
         cancel: (id, signal) => cancelJobMutation.mutateAsync({ id, signal }),
         cancelQueries: (options) => queryClient.cancelQueries(options),
-        invalidateQueries: (options) => queryClient.invalidateQueries(options),
+        invalidateQueries: (options) =>
+          queryClient.invalidateQueries({ ...options, refetchType: "none" }),
         jobQueryKey: ["job", "export", job.id],
         projectQueryKey: ["project", projectId()],
       });
@@ -1029,10 +1036,13 @@ export function App() {
       setExportJob({ ...job, state: "cancelled" });
       setExportStatus("Export cancelled.");
     } catch (error) {
-      if (!cancellationController.signal.aborted)
+      if (!cancellationController.signal.aborted) {
+        if (cancellationIsCurrent(cancellationController, exportCancellationController))
+          setExportJob(job);
         setExportStatus(
           error instanceof Error ? error.message : "Export could not be cancelled. Try again.",
         );
+      }
     } finally {
       if (exportCancellationController === cancellationController)
         exportCancellationController = undefined;
@@ -1102,7 +1112,8 @@ export function App() {
         signal: cancellationController.signal,
         cancel: (id, signal) => cancelJobMutation.mutateAsync({ id, signal }),
         cancelQueries: (options) => queryClient.cancelQueries(options),
-        invalidateQueries: (options) => queryClient.invalidateQueries(options),
+        invalidateQueries: (options) =>
+          queryClient.invalidateQueries({ ...options, refetchType: "none" }),
         jobQueryKey: ["job", "detection", job.id],
         projectQueryKey: ["project", projectId()],
       });

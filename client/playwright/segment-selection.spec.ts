@@ -286,7 +286,7 @@ test("clears detection results when media context changes", async ({ page }) => 
   const releasePoll = new Promise<void>((resolve) => {
     releasePollResolve = resolve;
   });
-  await page.route(`${apiOrigin}/api/v1/jobs/j_detection-silence`, async (route) => {
+  await page.route(`${apiOrigin}/api/v1/jobs/j_detection-silence-*`, async (route) => {
     pollStartedResolve();
     await releasePoll;
     await route.fulfill({
