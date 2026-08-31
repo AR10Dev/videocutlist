@@ -69,7 +69,7 @@ test("export cancellation is isolated from a changed media context", async ({ pa
   await page.getByRole("button", { name: "Go to timecode" }).click();
   await page.getByRole("button", { name: "Set Out marker" }).click();
   await page.getByRole("button", { name: "Add In/Out segment" }).click();
-  await page.getByText("Project administration and interchange").click();
+  await expect(page.getByText("Project administration and interchange")).toBeVisible();
   await page.getByRole("button", { name: "Save project" }).click();
   await expect(page.getByRole("button", { name: "Start export" })).toBeEnabled();
   await page.getByRole("button", { name: "Start export" }).click();
@@ -121,7 +121,7 @@ test("gates interchange exports until the project is persisted", async ({ page }
 
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
-  await page.getByText("Project administration and interchange").click();
+  await expect(page.getByText("Project administration and interchange")).toBeVisible();
   await expect(page.getByRole("button", { name: "Export CSV" })).toBeDisabled();
   await expect(page.getByRole("button", { name: "Export chapters" })).toBeDisabled();
   await expect(
@@ -156,7 +156,7 @@ test("separates media selection from cut-list imports", async ({ page }) => {
   await expect(page.getByLabel("Import CSV or chapters")).toHaveCount(0);
 
   await page.getByRole("button", { name: /camera.mp4/ }).click();
-  await page.getByText("Project administration and interchange").click();
+  await expect(page.getByText("Project administration and interchange")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Timeline" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Export" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Auto detection" })).toBeVisible();
