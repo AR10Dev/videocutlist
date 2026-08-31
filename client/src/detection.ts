@@ -1,14 +1,7 @@
-export type DetectionKind = "silence" | "black" | "scene";
-export type Candidate = {
-  id: string;
-  mediaId: string;
-  projectId: string;
-  projectRevision: number;
-  startMs: number;
-  endMs: number;
-  source: DetectionKind;
-  confidence: number;
-};
+import type { components } from "./generated/api";
+
+export type DetectionKind = components["schemas"]["DetectionInput"]["kind"];
+export type Candidate = components["schemas"]["DetectionCandidate"];
 export function acceptCandidate(
   candidate: Candidate,
   project: {

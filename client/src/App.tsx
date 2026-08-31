@@ -1,4 +1,6 @@
 import { For, Show, createEffect, createSignal, onCleanup } from "solid-js";
+import { createMutation, useQuery, useQueryClient } from "@tanstack/solid-query";
+import { abortAndClear, cancellationIsCurrent } from "./cancellation";
 import {
   createTimelineHistory,
   editTimeline,
@@ -11,7 +13,6 @@ import { createApiClient, resolveBrowserConfiguration, validInterchangeFileSize 
 import { normalizePeaks, viewportScale } from "./assets";
 import { frameDuration } from "./frame";
 import {
-  acceptsMediaMetadata,
   canStreamPreview,
   formatTime,
   hybridSmartCutKnownIneligible,
@@ -19,12 +20,15 @@ import {
   streamPreview,
   validateSegments,
   watchedMediaPosition,
-  type Media,
   type PreviewDiagnostics,
   type Segment,
 } from "./preview";
 import { TimelineCanvas } from "./TimelineCanvas";
 import { exportFailureMessage } from "./jobUi";
+import { cancelJobLifecycle } from "./queryLifecycle";
+import { jobPollInterval } from "./jobPolling";
+import { abortCancellationControllers } from "./cancellation";
+import type { components } from "./generated/api";
 import { saveIsCurrent } from "./saveGuards";
 import { moveSegment as moveSegments, removeSegment as removeSegments } from "./segmentEditing";
 import { acceptCandidate, type Candidate, type DetectionKind } from "./detection";
@@ -39,93 +43,23 @@ import {
   type RecentProject,
 } from "./projectLifecycle";
 import { defaultSettings, settingsKey, storedSettings, type AppSettings } from "./settings";
-type MediaPage = { items: Media[]; nextCursor?: string | null };
-type FolderPage = {
-  folders: { id: string; label: string }[];
-  items: Media[];
-  nextCursor?: string | null;
-};
-type LibraryStatus = {
-  state: "unconfigured" | "scanning" | "ready_empty" | "ready_with_media" | "failed";
-  message: string;
-};
+type Media = components["schemas"]["Media"];
+type FolderPage = components["schemas"]["FolderPage"];
+type LibraryStatus = components["schemas"]["LibraryStatus"];
 type LibraryRoot = {
   alias: string;
-  path: string;
   state?: "ready" | "unavailable";
   message?: string;
 };
-type RuntimeDestination = {
-  id: string;
-  label: string;
-  description?: string;
-  kind: string;
-  root?: string;
-  mediaRoot?: string;
-  retention?: string;
-};
+type RuntimeDestination = components["schemas"]["RuntimeDestination"];
 
-type ServerRuntimeSettings = {
-  mediaRoots?: Record<string, string>;
-  destinations?: RuntimeDestination[];
-  exportLimit: number;
-  cacheMaxBytes: number;
-  previewGlobalLimit: number;
-  previewBeforeMs: number;
-  previewAfterMs: number;
-  previewMaxMs: number;
-  previewGridMs: number;
-  mediaMaxFiles: number;
-  mediaMaxDepth: number;
-};
+type ServerRuntimeSettings = components["schemas"]["RuntimeSettings"];
 
-type ServerSettings = {
-  settings: ServerRuntimeSettings;
-  revision: number;
-  roots?: Record<string, { state: "ready" | "unavailable"; message: string }>;
-};
-type Destination = {
-  id: string;
-  label: string;
-  description?: string;
-  kind: string;
-  retention?: string;
-};
-type Project = {
-  id: string;
-  mediaId: string;
-  revision: number;
-  segments: Segment[];
-  uiState: { playheadMs: number; zoom: number; muted: boolean };
-};
-type ExportJob = {
-  id: string;
-  state: "queued" | "running" | "succeeded" | "failed" | "cancelled";
-  progress: number;
-  result?: {
-    outputName?: string;
-    outputNames?: string[];
-    appliedStrategies?: { segment: number; outputName?: string; strategy: string }[];
-    destinationKind?: string;
-    sizeBytes: number;
-    retainUntil: string;
-  };
-  warnings?: string[];
-  warningDetails?: { severity: string; code: string; message: string; streamIndex?: number }[];
-  strategy?: string;
-  appliedStrategy?: string;
-  mode?: string;
-  selection?: string;
-  selectedStreams?: number[];
-  verified?: boolean;
-  errorCode?: string;
-};
-type DetectionJob = {
-  id: string;
-  state: "queued" | "running" | "succeeded" | "failed" | "cancelled";
-  candidates?: Candidate[];
-  errorCode?: string;
-};
+type ServerSettings = components["schemas"]["SettingsResponse"];
+type Destination = components["schemas"]["Destination"];
+type Project = components["schemas"]["Project"];
+type ExportJob = components["schemas"]["Job"];
+type DetectionJob = components["schemas"]["DetectionJob"];
 const api = createApiClient(resolveBrowserConfiguration());
 const durationOf = (media?: Media) => media?.durationMs ?? 0;
 
@@ -153,7 +87,6 @@ export function App() {
   const [runtimeSettings, setRuntimeSettings] = createSignal<ServerRuntimeSettings>();
   const [settingsPending, setSettingsPending] = createSignal(false);
   const [rescanPending, setRescanPending] = createSignal(false);
-  const [rootErrors, setRootErrors] = createSignal<Record<number, string>>({});
   const [muted, setMuted] = createSignal(settings().muted);
   const [diagnostics, setDiagnostics] = createSignal<PreviewDiagnostics>();
   const [projectId, setProjectId] = createSignal(newProjectId());
@@ -177,11 +110,7 @@ export function App() {
   const [destinations, setDestinations] = createSignal<Destination[]>([]);
   const [destinationId, setDestinationId] = createSignal("download");
   const [filenameTemplate, setFilenameTemplate] = createSignal(settings().filenameTemplate);
-  const [preflight, setPreflight] = createSignal<{
-    allowed: boolean;
-    selection: number[];
-    findings: { severity: string; code: string; message: string; streamIndex?: number }[];
-  }>();
+  const [preflight, setPreflight] = createSignal<components["schemas"]["ExportPreflight"]>();
   const [preflightPending, setPreflightPending] = createSignal(false);
   const [detectionJob, setDetectionJob] = createSignal<DetectionJob>();
   const [detectionStatus, setDetectionStatus] = createSignal("");
@@ -196,19 +125,143 @@ export function App() {
     }),
   );
   const playheadMs = () => timeline().present.playheadMs;
+  const queryClient = useQueryClient();
+  const fetchProject = (id: string, signal?: AbortSignal) =>
+    queryClient.fetchQuery({
+      queryKey: ["project", id],
+      queryFn: async ({ signal: querySignal }) => {
+        const response = await api.request(`projects/${encodeURIComponent(id)}`, {
+          signal: signal ?? querySignal,
+        });
+        if (!response.ok) throw new Error(`Project load failed (${response.status}).`);
+        return (await response.json()) as Project;
+      },
+    });
+  const saveMutation = createMutation(() => ({
+    mutationFn: ({ id, body, signal }: { id: string; body: unknown; signal: AbortSignal }) =>
+      api.request(`projects/${encodeURIComponent(id)}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        signal,
+        body: JSON.stringify(body),
+      }),
+  }));
+  const cancelJobMutation = createMutation(() => ({
+    mutationFn: ({ id, signal }: { id: string; signal: AbortSignal }) =>
+      api.request(`jobs/${encodeURIComponent(id)}`, { method: "DELETE", signal }),
+  }));
+  const refreshMutation = createMutation(() => ({
+    mutationFn: ({ signal }: { signal: AbortSignal }) =>
+      api.request("media/refresh", { method: "POST", signal }),
+  }));
+  const selectedMediaQuery = useQuery(() => ({
+    queryKey: ["media", selected()?.id ?? null],
+    enabled: Boolean(selected()?.id),
+    queryFn: async ({ signal }) => {
+      const id = selected()?.id;
+      if (!id) throw new Error("Media ID is missing.");
+      const response = await api.request(`media/${encodeURIComponent(id)}`, { signal });
+      if (!response.ok) throw new Error(`Metadata request failed (${response.status}).`);
+      return (await response.json()) as Media;
+    },
+  }));
+  createEffect(() => {
+    const item = selectedMediaQuery.data;
+    if (item && item.id === selected()?.id) setSelected(item);
+    if (selectedMediaQuery.error && selected()?.id)
+      setStatus(
+        selectedMediaQuery.error instanceof Error
+          ? selectedMediaQuery.error.message
+          : "Metadata request failed.",
+      );
+  });
+  const invalidatedTerminalJobs = new Set<string>();
+  const exportStatusQuery = useQuery(() => ({
+    queryKey: ["job", "export", exportJob()?.id ?? null],
+    enabled: Boolean(exportJob()?.id),
+    queryFn: async ({ signal }) => {
+      const id = exportJob()?.id;
+      if (!id) throw new Error("Export job ID is missing.");
+      const response = await api.request(`jobs/${encodeURIComponent(id)}`, { signal });
+      if (!response.ok) throw new Error("Export status could not be updated. Try again.");
+      return (await response.json()) as ExportJob;
+    },
+    refetchInterval: (query: { state: { data?: ExportJob } }) =>
+      jobPollInterval(query.state.data, 1000),
+  }));
+  const detectionStatusQuery = useQuery(() => ({
+    queryKey: ["job", "detection", detectionJob()?.id ?? null],
+    enabled: Boolean(detectionJob()?.id),
+    queryFn: async ({ signal }) => {
+      const id = detectionJob()?.id;
+      if (!id) throw new Error("Detection job ID is missing.");
+      const response = await api.request(`jobs/${encodeURIComponent(id)}`, { signal });
+      if (!response.ok) throw new Error("Detection status could not be updated.");
+      return (await response.json()) as DetectionJob;
+    },
+    refetchInterval: (query: { state: { data?: DetectionJob } }) =>
+      jobPollInterval(query.state.data, 500),
+  }));
+  createEffect(() => {
+    const next = exportStatusQuery.data;
+    if (!next || next.id !== exportJob()?.id) return;
+    setExportJob(next);
+    setExportStatus(
+      next.state === "queued"
+        ? "Export queued."
+        : next.state === "running"
+          ? "Export running."
+          : next.state === "succeeded"
+            ? "Export complete."
+            : next.state === "cancelled"
+              ? "Export cancelled."
+              : exportFailureMessage(next.errorCode),
+    );
+    if (
+      ["succeeded", "failed", "cancelled"].includes(next.state) &&
+      !invalidatedTerminalJobs.has(next.id)
+    ) {
+      invalidatedTerminalJobs.add(next.id);
+      void queryClient.invalidateQueries({ queryKey: ["job", "export", next.id] });
+      void queryClient.invalidateQueries({ queryKey: ["project", projectId()] });
+      void queryClient.invalidateQueries({ queryKey: ["media"] });
+    }
+  });
+  createEffect(() => {
+    const next = detectionStatusQuery.data;
+    if (!next || next.id !== detectionJob()?.id) return;
+    setDetectionJob(next);
+    if (next.state === "succeeded") {
+      setDetectionCandidates(next.candidates ?? []);
+      setDetectionStatus(
+        `${next.candidates?.length ?? 0} candidates found. Review each before accepting.`,
+      );
+    } else if (next.state === "queued" || next.state === "running") {
+      setDetectionStatus(next.state === "queued" ? "Detection queued." : "Detection running.");
+    } else {
+      setDetectionStatus(
+        next.state === "cancelled"
+          ? "Detection cancelled."
+          : `Detection failed${next.errorCode ? `: ${next.errorCode}.` : "."}`,
+      );
+    }
+    if (
+      ["succeeded", "failed", "cancelled"].includes(next.state) &&
+      !invalidatedTerminalJobs.has(next.id)
+    ) {
+      invalidatedTerminalJobs.add(next.id);
+      void queryClient.invalidateQueries({ queryKey: ["job", "detection", next.id] });
+      void queryClient.invalidateQueries({ queryKey: ["project", projectId()] });
+      void queryClient.invalidateQueries({ queryKey: ["media"] });
+    }
+  });
   let video: HTMLVideoElement | undefined;
-  let mediaRequest: AbortController | undefined;
-  let metadataRequest: AbortController | undefined;
-  let metadataRequestVersion = 0;
   let assetRequest: AbortController | undefined;
   let previewRequest: AbortController | undefined;
   let cleanupPreview: (() => void) | undefined;
   let thumbnailObjectURL: string | undefined;
-  let requestVersion = 0;
   let projectRequest: AbortController | undefined;
   let projectRequestVersion = 0;
-  let refreshRequest: AbortController | undefined;
-  let refreshRequestVersion = 0;
   let folderRequestVersion = 0;
   let saveRequest: AbortController | undefined;
   let saveVersion = 0;
@@ -220,6 +273,8 @@ export function App() {
   let detectionRequest = 0;
   let exportController: AbortController | undefined;
   let detectionController: AbortController | undefined;
+  let exportCancellationController: AbortController | undefined;
+  let detectionCancellationController: AbortController | undefined;
 
   const present = () => timeline().present;
   const markDirty = () => {
@@ -239,9 +294,8 @@ export function App() {
         throw new Error("Administrator settings are unavailable: your account is not authorized.");
       if (!response.ok) throw new Error("Administrator settings are unavailable on this server.");
       const value = (await response.json()) as ServerSettings;
-      const roots = value.settings.mediaRoots ?? {};
       setLibraryRoots(
-        Object.entries(roots).map(([alias, path]) => ({ alias, path, ...value.roots?.[alias] })),
+        Object.entries(value.roots ?? {}).map(([alias, root]) => ({ alias, ...root })),
       );
       setSettingsRevision(value.revision);
       setRuntimeSettings(value.settings);
@@ -258,19 +312,7 @@ export function App() {
     setSettingsOpen(true);
     await loadServerSettings();
   };
-  const validateRoots = () => {
-    const errors: Record<number, string> = {};
-    const aliases = new Set<string>();
-    libraryRoots().forEach((root, index) => {
-      if (!root.alias.trim()) errors[index] = "Alias is required.";
-      else if (aliases.has(root.alias.trim())) errors[index] = "Aliases must be unique.";
-      else aliases.add(root.alias.trim());
-      if (!root.path.trim() || !/^(?:\/|[A-Za-z]:[\\/])/.test(root.path.trim()))
-        errors[index] = `${errors[index] ? `${errors[index]} ` : ""}Enter an absolute server path.`;
-    });
-    setRootErrors(errors);
-    return Object.keys(errors).length === 0;
-  };
+
   const saveRuntimeSettings = async (
     changes: Partial<ServerRuntimeSettings>,
     successMessage: string,
@@ -309,13 +351,6 @@ export function App() {
     }
   };
 
-  const saveLibrarySettings = async () => {
-    if (!validateRoots()) return;
-    const mediaRoots = Object.fromEntries(
-      libraryRoots().map((root) => [root.alias.trim(), root.path.trim()]),
-    );
-    await saveRuntimeSettings({ mediaRoots }, "Library settings saved.");
-  };
 
   const updateDestination = (id: string, changes: Partial<RuntimeDestination>) => {
     const current = runtimeSettings();
@@ -367,80 +402,42 @@ export function App() {
     if (folderId) params.set("folderId", folderId);
     if (cursor) params.set("cursor", cursor);
     const query = params.toString() ? `?${params}` : "";
-    if (!folderId && !cursor) setStatus("Loading media…");
-    const response = await api.request(`media/tree${query}`);
-    if (request !== folderRequestVersion || !response.ok) return;
-    const page = (await response.json()) as FolderPage;
-    if (request !== folderRequestVersion) return;
-    let library: LibraryStatus | undefined;
-    if (!folderId && !cursor) {
-      const libraryResponse = await api.request("media/status");
-      if (request !== folderRequestVersion) return;
-      if (libraryResponse.ok) library = (await libraryResponse.json()) as LibraryStatus;
-      if (request !== folderRequestVersion) return;
-    }
-    if (request !== folderRequestVersion) return;
-    if (library) setLibraryStatus(library);
-    setFolders(page.folders);
-    setMedia(cursor ? [...media(), ...page.items] : page.items);
-    setNextCursor(page.nextCursor ?? undefined);
-    setActiveFolder(folderId);
-    if (!folderId && !cursor) setStatus("Choose media to begin.");
-  };
-  const _loadMedia = async (cursor?: string, refreshed = false) => {
-    mediaRequest?.abort();
-    const controller = new AbortController();
-    mediaRequest = controller;
-    const request = ++requestVersion;
     if (cursor) setLoadingMore(true);
     else setStatus("Loading media…");
     try {
-      const response = await api.request(
-        `media?limit=50${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`,
-        { signal: controller.signal },
-      );
-      if (!response.ok) throw new Error(`Media request failed (${response.status}).`);
-      if (!cursor) {
-        const libraryResponse = await api.request("media/status", { signal: controller.signal });
-        if (controller.signal.aborted || request !== requestVersion) return;
-        if (libraryResponse.ok) setLibraryStatus((await libraryResponse.json()) as LibraryStatus);
-      }
-      const page = (await response.json()) as MediaPage;
-      if (controller.signal.aborted || request !== requestVersion) return;
-      setMedia(cursor ? [...media(), ...page.items] : page.items);
-      setNextCursor(page.nextCursor ?? undefined);
-      setStatus(refreshed ? "Media refreshed. Choose media to begin." : "Choose media to begin.");
-      if (refreshed && !cursor) {
-        const current = selected();
-        if (current && !page.items.some((item) => item.id === current.id)) {
-          const metadata = await api.request(`media/${encodeURIComponent(current.id)}`, {
-            signal: controller.signal,
-          });
-          if (controller.signal.aborted || request !== requestVersion) return;
-          if (metadata.ok) {
-            const item = (await metadata.json()) as Media;
-            if (
-              controller.signal.aborted ||
-              request !== requestVersion ||
-              selected()?.id !== current.id
-            )
-              return;
-            setSelected(item);
-          } else if (metadata.status === 404) {
-            setStatus("Selected media is no longer indexed. Unsaved project changes were kept.");
-          }
-        } else if (current) {
-          const refreshedItem = page.items.find((item) => item.id === current.id);
-          if (refreshedItem) setSelected(refreshedItem);
-        }
-      }
+      const result = await queryClient.fetchQuery({
+        queryKey: ["media", "tree", folderId ?? null, cursor ?? null],
+        queryFn: async ({ signal }) => {
+          const response = await api.request(`media/tree${query}`, { signal });
+          if (!response.ok) throw new Error(`Media request failed (${response.status}).`);
+          const page = (await response.json()) as FolderPage;
+          if (folderId || cursor) return { page };
+          const libraryResponse = await api.request("media/status", { signal });
+          return {
+            page,
+            library: libraryResponse.ok
+              ? ((await libraryResponse.json()) as LibraryStatus)
+              : undefined,
+          };
+        },
+      });
+      if (request !== folderRequestVersion) return;
+      if (result.library) setLibraryStatus(result.library);
+      setFolders(result.page.folders);
+      setMedia(cursor ? [...media(), ...result.page.items] : result.page.items);
+      setNextCursor(result.page.nextCursor ?? undefined);
+      setActiveFolder(folderId);
+      if (!folderId && !cursor) setStatus("Choose media to begin.");
     } catch (error) {
-      if (!controller.signal.aborted && request === requestVersion)
+      if (request === folderRequestVersion)
         setStatus(error instanceof Error ? error.message : "Media request failed.");
     } finally {
-      if (request === requestVersion) setLoadingMore(false);
+      if (request === folderRequestVersion) setLoadingMore(false);
     }
   };
+  createEffect(() => {
+    void loadFolder();
+  });
   const libraryMessage = () => {
     const current = libraryStatus();
     if (!current) return "Checking the server media library… Refresh to check again.";
@@ -458,35 +455,23 @@ export function App() {
   };
 
   const refreshMedia = async () => {
-    mediaRequest?.abort();
-    requestVersion++;
-    metadataRequest?.abort();
-    metadataRequestVersion++;
-    refreshRequest?.abort();
-    const controller = new AbortController();
-    refreshRequest = controller;
-    const request = ++refreshRequestVersion;
     folderRequestVersion++;
     setRefreshing(true);
     setActiveFolder(undefined);
     setNextCursor(undefined);
     setFolders([]);
     try {
-      const response = await api.request("media/refresh", {
-        method: "POST",
-        signal: controller.signal,
-      });
-      if (controller.signal.aborted || request !== refreshRequestVersion) return;
+      await queryClient.invalidateQueries({ queryKey: ["media"] });
+      const response = await refreshMutation.mutateAsync({ signal: new AbortController().signal });
       if (response.status === 403) setStatus("You are not allowed to refresh media.");
       else if (response.status === 429)
         setStatus("Media refresh is already in progress. Try again shortly.");
       else if (!response.ok) setStatus("Media refresh failed. Try again.");
       else await loadFolder();
     } catch {
-      if (!controller.signal.aborted && request === refreshRequestVersion)
-        setStatus("Media refresh failed. Try again.");
+      setStatus("Media refresh failed. Try again.");
     } finally {
-      if (request === refreshRequestVersion) setRefreshing(false);
+      setRefreshing(false);
     }
   };
   const invalidateSaveContext = () => {
@@ -496,8 +481,8 @@ export function App() {
     editorVersion++;
   };
   const clearExportContext = () => {
-    exportController?.abort();
-    exportController = undefined;
+    exportController = abortAndClear(exportController);
+    exportCancellationController = abortAndClear(exportCancellationController);
     exportRequest++;
     if (exportTimer) window.clearTimeout(exportTimer);
     exportTimer = undefined;
@@ -505,8 +490,8 @@ export function App() {
     setExportStatus("");
   };
   const clearDetectionContext = () => {
-    detectionController?.abort();
-    detectionController = undefined;
+    detectionController = abortAndClear(detectionController);
+    detectionCancellationController = abortAndClear(detectionCancellationController);
     detectionRequest++;
     if (detectionTimer) window.clearTimeout(detectionTimer);
     detectionTimer = undefined;
@@ -519,10 +504,6 @@ export function App() {
     clearExportContext();
     clearDetectionContext();
     invalidateSaveContext();
-    metadataRequest?.abort();
-    const controller = new AbortController();
-    metadataRequest = controller;
-    const request = ++metadataRequestVersion;
     setSelected(item);
     setPreviewCenterMs(0);
     setTimeline(
@@ -537,36 +518,8 @@ export function App() {
     setDiagnostics();
     setDirty(true);
     setStatus(`Selected ${item.name}.`);
-    void api
-      .request(`media/${encodeURIComponent(item.id)}`, { signal: controller.signal })
-      .then((response) => {
-        if (!response.ok) throw new Error(`Metadata request failed (${response.status}).`);
-        return response.json() as Promise<Media>;
-      })
-      .then((metadata) => {
-        if (
-          acceptsMediaMetadata(
-            controller.signal.aborted,
-            request,
-            metadataRequestVersion,
-            selected()?.id,
-            metadata.id,
-          )
-        )
-          setSelected(metadata);
-      })
-      .catch((error: unknown) => {
-        if (
-          !controller.signal.aborted &&
-          request === metadataRequestVersion &&
-          selected()?.id === item.id
-        )
-          setStatus(error instanceof Error ? error.message : "Metadata request failed.");
-      });
   };
-  createEffect(() => {
-    void loadFolder();
-  });
+  // Media root loading is owned by Solid Query; folder navigation remains explicit.
   createEffect(() => {
     const item = selected();
     assetRequest?.abort();
@@ -751,11 +704,10 @@ export function App() {
     if (error) return void setStatus(error);
     let response: Response;
     try {
-      response = await api.request(`projects/${encodeURIComponent(snapshotProject)}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
+      response = await saveMutation.mutateAsync({
+        id: snapshotProject,
         signal: controller.signal,
-        body: JSON.stringify({
+        body: {
           mediaId: item.id,
           revision: revision(),
           segments: present().segments,
@@ -764,7 +716,7 @@ export function App() {
             zoom: present().zoom,
             muted: muted(),
           },
-        }),
+        },
       });
     } catch (error) {
       if (!controller.signal.aborted && request === saveVersion)
@@ -809,6 +761,7 @@ export function App() {
     )
       return;
     setRevision(project.revision);
+    await queryClient.invalidateQueries({ queryKey: ["project", project.id] });
     setDirty(false);
     remember(project.id, item.name);
     setStatus(`Project saved (revision ${project.revision}).`);
@@ -826,17 +779,18 @@ export function App() {
     projectRequest = controller;
     const request = ++projectRequestVersion;
     try {
-      const response = await api.request(`projects/${encodeURIComponent(id)}`, {
-        signal: controller.signal,
-      });
-      if (!response.ok) throw new Error(`Project load failed (${response.status}).`);
-      const project = (await response.json()) as Project;
+      const project = await fetchProject(id, controller.signal);
       if (controller.signal.aborted || request !== projectRequestVersion) return;
-      const mediaResponse = await api.request(`media/${encodeURIComponent(project.mediaId)}`, {
-        signal: controller.signal,
+      const item = await queryClient.fetchQuery({
+        queryKey: ["media", project.mediaId],
+        queryFn: async ({ signal }) => {
+          const mediaResponse = await api.request(`media/${encodeURIComponent(project.mediaId)}`, {
+            signal: controller.signal ?? signal,
+          });
+          if (!mediaResponse.ok) throw new Error(`Media request failed (${mediaResponse.status}).`);
+          return (await mediaResponse.json()) as Media;
+        },
       });
-      if (!mediaResponse.ok) throw new Error(`Media request failed (${mediaResponse.status}).`);
-      const item = (await mediaResponse.json()) as Media;
       if (controller.signal.aborted || request !== projectRequestVersion) return;
       setProjectId(project.id);
       setRevision(project.revision);
@@ -867,9 +821,7 @@ export function App() {
     clearDetectionContext();
     invalidateSaveContext();
     projectRequest?.abort();
-    metadataRequest?.abort();
     ++projectRequestVersion;
-    ++metadataRequestVersion;
     setProjectId(newProjectId());
     setRevision(0);
     setDirty(false);
@@ -889,26 +841,22 @@ export function App() {
     setStatus("New project ready.");
   };
   onCleanup(() => {
-    mediaRequest?.abort();
-    refreshRequest?.abort();
     saveRequest?.abort();
     assetRequest?.abort();
     previewRequest?.abort();
     projectRequest?.abort();
-    metadataRequest?.abort();
     cleanupPreview?.();
     if (thumbnailObjectURL) URL.revokeObjectURL(thumbnailObjectURL);
-    if (exportTimer) window.clearTimeout(exportTimer);
+    clearExportContext();
     clearDetectionContext();
-    requestVersion++;
-    metadataRequestVersion++;
+    [exportCancellationController, detectionCancellationController] = abortCancellationControllers(
+      exportCancellationController,
+      detectionCancellationController,
+    );
     projectRequestVersion++;
-    refreshRequestVersion++;
     saveVersion++;
-    exportRequest++;
     exportController?.abort();
   });
-  const exportFailure = exportFailureMessage;
   void api.request("destinations").then(async (response) => {
     if (!response.ok) return;
     const value = (await response.json()) as { destinations?: Destination[] };
@@ -934,21 +882,7 @@ export function App() {
       return;
     }
     if (exportTimer) window.clearTimeout(exportTimer);
-    if (dirty()) {
-      setPreflight({
-        allowed: false,
-        selection: [],
-        findings: [
-          {
-            severity: "blocked",
-            code: "project_not_persisted",
-            message: "Save the project before running export preflight.",
-          },
-        ],
-      });
-      setPreflightPending(false);
-      return;
-    }
+    dirty();
     setPreflightPending(true);
     const version = ++preflightVersion;
     exportTimer = window.setTimeout(async () => {
@@ -1006,8 +940,31 @@ export function App() {
       setExportStatus(`Export job ${activeJob.id} is already active.`);
       return;
     }
-    if (preflightPending() || !preflight()?.allowed) return;
-    if (dirty() && !(await saveProject())) return;
+    if (preflightPending() && !dirty()) return;
+    if (dirty()) {
+      if (!(await saveProject())) return;
+      const response = await api.request(
+        `projects/${encodeURIComponent(projectId())}/exports/preflight`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            mode: exportMode(),
+            selection: exportSelection(),
+            streamIndexes: streamIndexes(),
+            cutStrategy: cutStrategy(),
+            container: "mkv",
+            destinationId: destinationId(),
+            filenameTemplate: filenameTemplate(),
+          }),
+        },
+      );
+      if (!response.ok) return void setExportStatus("Export preflight failed.");
+      const freshPreflight = (await response.json()) as components["schemas"]["ExportPreflight"];
+      setPreflight(freshPreflight);
+      setPreflightPending(false);
+      if (!freshPreflight.allowed) return;
+    } else if (!preflight()?.allowed) return;
     const request = ++exportRequest;
     const controller = new AbortController();
     exportController = controller;
@@ -1036,69 +993,42 @@ export function App() {
       );
     }
     if (controller.signal.aborted || request !== exportRequest) return;
-    if (!response.ok)
+    if (!response.ok) {
+      setPreflightPending(false);
       return setExportStatus(
         response.status === 429
           ? "Export capacity is busy. Try again shortly."
           : "Export could not be started. Try again.",
       );
+    }
     if (controller.signal.aborted || request !== exportRequest) return;
     const job = (await response.json()) as ExportJob;
     if (controller.signal.aborted || request !== exportRequest) return;
     setExportJob(job);
-    const poll = async () => {
-      if (controller.signal.aborted || request !== exportRequest) return;
-      let nextResponse: Response;
-      try {
-        nextResponse = await api.request(`jobs/${encodeURIComponent(job.id)}`, {
-          signal: controller.signal,
-        });
-      } catch (error) {
-        if (controller.signal.aborted || request !== exportRequest) return;
-        return setExportStatus(
-          error instanceof Error ? error.message : "Export status could not be updated. Try again.",
-        );
-      }
-      if (controller.signal.aborted || request !== exportRequest) return;
-      if (!nextResponse.ok)
-        return setExportStatus("Export status could not be updated. Try again.");
-      const next = (await nextResponse.json()) as ExportJob;
-      if (controller.signal.aborted || request !== exportRequest) return;
-      setExportJob(next);
-      if (next.state === "queued" || next.state === "running") {
-        setExportStatus(next.state === "queued" ? "Export queued." : "Export running.");
-        exportTimer = window.setTimeout(() => void poll(), 1000);
-      } else
-        setExportStatus(
-          next.state === "succeeded"
-            ? "Export complete."
-            : next.state === "cancelled"
-              ? "Export cancelled."
-              : exportFailure(next.errorCode),
-        );
-    };
-    setExportStatus(
-      job.state === "queued"
-        ? "Export queued."
-        : job.state === "running"
-          ? "Export running."
-          : job.state === "succeeded"
-            ? "Export complete."
-            : job.state === "cancelled"
-              ? "Export cancelled."
-              : exportFailure(job.errorCode),
-    );
-    if (job.state === "queued" || job.state === "running")
-      exportTimer = window.setTimeout(() => void poll(), 1000);
+    setExportStatus(job.state === "queued" ? "Export queued." : "Export running.");
+    // Solid Query owns status polling and cancellation for this job.
   };
   const cancelExport = async () => {
     const job = exportJob();
     if (!job || (job.state !== "queued" && job.state !== "running")) return;
+    exportCancellationController?.abort();
+    const cancellationController = new AbortController();
+    exportCancellationController = cancellationController;
+    queryClient.setQueryData(["job", "export", job.id], { ...job, state: "cancelled" });
+    setExportJob();
+    setExportStatus("Export cancelled.");
     try {
-      const response = await api.request(`jobs/${encodeURIComponent(job.id)}`, {
-        method: "DELETE",
+      await cancelJobLifecycle({
+        jobId: job.id,
+        signal: cancellationController.signal,
+        cancel: (id, signal) => cancelJobMutation.mutateAsync({ id, signal }),
+        cancelQueries: (options) => queryClient.cancelQueries(options),
+        invalidateQueries: (options) =>
+          queryClient.invalidateQueries({ ...options, refetchType: "none" }),
+        jobQueryKey: ["job", "export", job.id],
+        projectQueryKey: ["project", projectId()],
       });
-      if (!response.ok) throw new Error("Export could not be cancelled. Try again.");
+      if (!cancellationIsCurrent(cancellationController, exportCancellationController)) return;
       exportController?.abort();
       exportController = undefined;
       if (exportTimer) clearTimeout(exportTimer);
@@ -1106,9 +1036,16 @@ export function App() {
       setExportJob({ ...job, state: "cancelled" });
       setExportStatus("Export cancelled.");
     } catch (error) {
-      setExportStatus(
-        error instanceof Error ? error.message : "Export could not be cancelled. Try again.",
-      );
+      if (!cancellationController.signal.aborted) {
+        if (cancellationIsCurrent(cancellationController, exportCancellationController))
+          setExportJob(job);
+        setExportStatus(
+          error instanceof Error ? error.message : "Export could not be cancelled. Try again.",
+        );
+      }
+    } finally {
+      if (exportCancellationController === cancellationController)
+        exportCancellationController = undefined;
     }
   };
   const startDetection = async (kind: DetectionKind) => {
@@ -1149,47 +1086,15 @@ export function App() {
     const job = (await response.json()) as DetectionJob;
     if (controller.signal.aborted || request !== detectionRequest) return;
     setDetectionJob(job);
-    const poll = async () => {
-      if (controller.signal.aborted || request !== detectionRequest) return;
-      let result: Response;
-      try {
-        result = await api.request(`jobs/${encodeURIComponent(job.id)}`, {
-          signal: controller.signal,
-        });
-      } catch (error) {
-        if (controller.signal.aborted || request !== detectionRequest) return;
-        return setDetectionStatus(
-          error instanceof Error ? error.message : "Detection status could not be updated.",
-        );
-      }
-      if (controller.signal.aborted || request !== detectionRequest) return;
-      if (!result.ok) return setDetectionStatus("Detection status could not be updated.");
-      const next = (await result.json()) as DetectionJob;
-      if (controller.signal.aborted || request !== detectionRequest) return;
-      setDetectionJob(next);
-      if (next.state === "queued" || next.state === "running") {
-        setDetectionStatus(next.state === "queued" ? "Detection queued." : "Detection running.");
-        detectionTimer = window.setTimeout(() => void poll(), 500);
-      } else if (next.state === "succeeded") {
-        setDetectionCandidates(next.candidates ?? []);
-        setDetectionStatus(
-          `${next.candidates?.length ?? 0} candidates found. Review each before accepting.`,
-        );
-      } else
-        setDetectionStatus(
-          next.state === "cancelled"
-            ? "Detection cancelled."
-            : `Detection failed${next.errorCode ? `: ${next.errorCode}.` : "."}`,
-        );
-    };
-    if (job.state === "queued" || job.state === "running")
-      detectionTimer = window.setTimeout(() => void poll(), 500);
-    else if (job.state === "succeeded") {
+    // Solid Query owns status polling and cancellation for this job.
+    if (job.state === "succeeded") {
       setDetectionCandidates(job.candidates ?? []);
       setDetectionStatus(
         `${job.candidates?.length ?? 0} candidates found. Review each before accepting.`,
       );
     } else if (job.state === "cancelled") setDetectionStatus("Detection cancelled.");
+    else if (job.state === "queued" || job.state === "running")
+      setDetectionStatus(job.state === "queued" ? "Detection queued." : "Detection running.");
     else setDetectionStatus(`Detection failed${job.errorCode ? `: ${job.errorCode}.` : "."}`);
   };
   const cancelDetection = async () => {
@@ -1198,19 +1103,35 @@ export function App() {
     const request = ++detectionRequest;
     detectionController?.abort();
     if (detectionTimer) clearTimeout(detectionTimer);
+    detectionCancellationController?.abort();
+    const cancellationController = new AbortController();
+    detectionCancellationController = cancellationController;
     try {
-      const response = await api.request(`jobs/${encodeURIComponent(job.id)}`, {
-        method: "DELETE",
+      await cancelJobLifecycle({
+        jobId: job.id,
+        signal: cancellationController.signal,
+        cancel: (id, signal) => cancelJobMutation.mutateAsync({ id, signal }),
+        cancelQueries: (options) => queryClient.cancelQueries(options),
+        invalidateQueries: (options) =>
+          queryClient.invalidateQueries({ ...options, refetchType: "none" }),
+        jobQueryKey: ["job", "detection", job.id],
+        projectQueryKey: ["project", projectId()],
       });
-      if (request !== detectionRequest) return;
-      if (!response.ok) throw new Error("Detection could not be cancelled. Try again.");
+      if (
+        request !== detectionRequest ||
+        !cancellationIsCurrent(cancellationController, detectionCancellationController)
+      )
+        return;
       setDetectionJob({ ...job, state: "cancelled" });
       setDetectionStatus("Detection cancelled.");
     } catch (error) {
-      if (request === detectionRequest)
+      if (request === detectionRequest && !cancellationController.signal.aborted)
         setDetectionStatus(
           error instanceof Error ? error.message : "Detection could not be cancelled. Try again.",
         );
+    } finally {
+      if (detectionCancellationController === cancellationController)
+        detectionCancellationController = undefined;
     }
   };
   const acceptDetection = (candidate: Candidate) => {
@@ -1637,7 +1558,7 @@ export function App() {
             <Show when={selected()}>
               <section class="project-panel" aria-labelledby="project-heading">
                 <h2 id="project-heading">Project</h2>
-                <details>
+                <details open>
                   <summary>Project administration and interchange</summary>
                   <label>
                     Project ID{" "}
@@ -1837,7 +1758,7 @@ export function App() {
               <section class="export-panel" aria-labelledby="export-heading">
                 <h2 id="export-heading">Export</h2>
                 <p role="status">{exportStatus() || "Export a saved project."}</p>
-                <details>
+                <details open>
                   <summary>Advanced export options</summary>
                   <label>
                     Mode{" "}
@@ -2021,8 +1942,8 @@ export function App() {
                     disabled={
                       !selected() ||
                       !present().segments.length ||
-                      preflightPending() ||
-                      !preflight()?.allowed ||
+                      (preflightPending() && !dirty()) ||
+                      (!preflight()?.allowed && !dirty()) ||
                       exportJob()?.state === "queued" ||
                       exportJob()?.state === "running"
                     }
@@ -2104,7 +2025,7 @@ export function App() {
             <Show when={selected()}>
               <section class="detection-panel" aria-labelledby="detection-heading">
                 <h2 id="detection-heading">Auto detection</h2>
-                <details>
+                <details open>
                   <summary>Detection tools</summary>
                   <p role="status">
                     {detectionStatus() || "Review candidates before they change segments."}
@@ -2190,85 +2111,26 @@ export function App() {
           </p>
           <section aria-labelledby="library-settings-heading">
             <h3 id="library-settings-heading">Library</h3>
-            <p>
-              Media is indexed by the server. Type an absolute path below; this browser cannot
-              choose a host folder. The service account needs read access. In a container, mount the
-              host directory first and enter its container path.
-            </p>
+            <p>Media roots are deployment-managed. This browser only shows safe aliases and availability.</p>
             <Show when={libraryRoots().length > 0} fallback={<p>No media roots configured.</p>}>
               <div class="library-roots" aria-label="Media roots">
                 <For each={libraryRoots()}>
-                  {(root, index) => (
+                  {(root) => (
                     <div class="library-root">
-                      <label>
-                        Alias
-                        <input
-                          value={root.alias}
-                          aria-label={`Alias for media root ${index() + 1}`}
-                          onInput={(event) =>
-                            setLibraryRoots(
-                              libraryRoots().map((item, i) =>
-                                i === index()
-                                  ? { ...item, alias: event.currentTarget.value }
-                                  : item,
-                              ),
-                            )
-                          }
-                        />
-                      </label>
-                      <label>
-                        Server path
-                        <input
-                          value={root.path}
-                          aria-label={`Server path for media root ${index() + 1}`}
-                          onInput={(event) =>
-                            setLibraryRoots(
-                              libraryRoots().map((item, i) =>
-                                i === index() ? { ...item, path: event.currentTarget.value } : item,
-                              ),
-                            )
-                          }
-                        />
-                      </label>
+                      <span>
+                        Alias: <strong>{root.alias}</strong>
+                      </span>
                       <span role="status">
                         {root.state === "unavailable"
                           ? root.message
                           : (root.message ?? "Available")}
                       </span>
-                      <Show when={rootErrors()[index()] as string | undefined}>
-                        {(error) => (
-                          <p class="field-error" role="alert">
-                            {error()}
-                          </p>
-                        )}
-                      </Show>
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setLibraryRoots(libraryRoots().filter((_, i) => i !== index()))
-                        }
-                      >
-                        Remove
-                      </button>
                     </div>
                   )}
                 </For>
               </div>
             </Show>
             <div class="settings-actions">
-              <button
-                type="button"
-                onClick={() => setLibraryRoots([...libraryRoots(), { alias: "", path: "" }])}
-              >
-                Add root
-              </button>
-              <button
-                type="button"
-                onClick={() => void saveLibrarySettings()}
-                disabled={settingsPending()}
-              >
-                {settingsPending() ? "Saving…" : "Save library settings"}
-              </button>
               <button
                 type="button"
                 onClick={() => void rescanLibrary()}

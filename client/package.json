@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc --noEmit && vite build && node scripts/compress.mjs",
+    "api:generate": "openapi-typescript ../docs/contracts/api.openapi.yaml -o src/generated/api.ts",
     "dev": "vite",
     "lint": "oxlint .",
     "format": "oxfmt --write .",
@@ -18,12 +19,13 @@
   },
   "devDependencies": {
     "@playwright/test": "1.58.2",
-    "vite-plugin-solid": "2.11.14",
     "@types/node": "26.1.2",
+    "openapi-typescript": "7.13.0",
     "oxfmt": "0.64.0",
     "oxlint": "1.79.0",
     "typescript": "6.0.3",
     "vite": "8.1.5",
+    "vite-plugin-solid": "2.11.14",
     "vitest": "4.1.10"
   }
 }

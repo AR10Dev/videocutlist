@@ -69,6 +69,30 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/MediaPage"
+  /media/tree:
+    get:
+      summary: Browse indexed media folders and items
+      operationId: browseMediaTree
+      parameters:
+        - name: folderId
+          in: query
+          schema:
+            type: string
+        - name: cursor
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Media folder page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FolderPage"
+        "400":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
   /media/status:
     get:
       summary: Read media-library status
@@ -205,6 +229,31 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/Project"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /projects/{projectId}/detections:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+    post:
+      summary: Start media detection
+      operationId: createDetection
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DetectionInput"
+      responses:
+        "202":
+          description: Detection queued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DetectionJob"
+        "404":
+          $ref: "#/components/responses/Error"
         "409":
           $ref: "#/components/responses/Error"
         "422":
@@ -439,6 +488,41 @@ components:
         settings:
           type: object
           additionalProperties: true
+    RuntimeDestination:
+      type: object
+      required: [id, label, kind]
+      properties:
+        id: {type: string}
+        label: {type: string}
+        description: {type: string}
+        kind: {type: string, enum: [download, archive, source_adjacent]}
+        retention: {type: string}
+    RuntimeSettings:
+      type: object
+      additionalProperties: false
+      properties:
+        destinations:
+          type: array
+          items:
+            $ref: "#/components/schemas/RuntimeDestination"
+        exportLimit:
+          type: integer
+        cacheMaxBytes:
+          type: integer
+        previewGlobalLimit:
+          type: integer
+        previewBeforeMs:
+          type: integer
+        previewAfterMs:
+          type: integer
+        previewMaxMs:
+          type: integer
+        previewGridMs:
+          type: integer
+        mediaMaxFiles:
+          type: integer
+        mediaMaxDepth:
+          type: integer
     SettingsResponse:
       type: object
       required:
@@ -450,8 +534,7 @@ components:
         - roots
       properties:
         settings:
-          type: object
-          additionalProperties: true
+          $ref: "#/components/schemas/RuntimeSettings"
         revision:
           type: integer
         schemaVersion:
@@ -515,6 +598,30 @@ components:
           additionalProperties: true
         etag:
           type: string
+    FolderNode:
+      type: object
+      required: [id, label]
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+    FolderPage:
+      type: object
+      required: [folders, items]
+      properties:
+        folders:
+          type: array
+          items:
+            $ref: "#/components/schemas/FolderNode"
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Media"
+        nextCursor:
+          type:
+            - string
+            - "null"
     MediaPage:
       type: object
       required:
@@ -606,6 +713,56 @@ components:
           exclusiveMinimum: 0
         muted:
           type: boolean
+    DetectionInput:
+      type: object
+      required: [mediaId, projectRevision, kind]
+      properties:
+        mediaId:
+          type: string
+        projectRevision:
+          type: integer
+          minimum: 1
+        kind:
+          type: string
+          enum: [silence, black, scene]
+        sourceFingerprint:
+          type: string
+        noiseDb:
+          type: number
+        minDurationMs:
+          type: integer
+          minimum: 0
+        sceneThreshold:
+          type: number
+          minimum: 0
+          maximum: 1
+    DetectionCandidate:
+      type: object
+      required: [id, mediaId, projectId, projectRevision, startMs, endMs, source, confidence]
+      properties:
+        id: {type: string}
+        mediaId: {type: string}
+        projectId: {type: string}
+        projectRevision: {type: integer}
+        startMs: {type: integer}
+        endMs: {type: integer}
+        source: {type: string, enum: [silence, black, scene]}
+        confidence: {type: number}
+    DetectionJob:
+      type: object
+      required: [id, type, state, mediaId, projectId, projectRevision, kind]
+      properties:
+        id: {type: string}
+        type: {type: string, enum: [detection]}
+        state: {type: string, enum: [queued, running, succeeded, failed, cancelled]}
+        mediaId: {type: string}
+        projectId: {type: string}
+        projectRevision: {type: integer}
+        kind: {type: string, enum: [silence, black, scene]}
+        candidates:
+          type: array
+          items: {$ref: "#/components/schemas/DetectionCandidate"}
+        errorCode: {type: string}
     ExportInput:
       type: object
       additionalProperties: false

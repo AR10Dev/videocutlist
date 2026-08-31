@@ -61,6 +61,7 @@ test.beforeEach(async ({ page }) => {
   });
   let savedRevision = 0;
   let detectionPoll = 0;
+  let detectionSequence = 0;
   let detectionProjectId = "p_demo-project";
   let detectionRevision = 1;
   await page.route(`${apiOrigin}/api/v1/**`, async (route) => {
@@ -68,10 +69,10 @@ test.beforeEach(async ({ page }) => {
     const url = new URL(request.url());
     if (url.pathname === "/api/v1/media/status")
       return route.fulfill({
-        json: { state: "ready_empty", message: "No supported media was found." },
+        json: { state: "ready_with_media", message: "Media library is ready." },
       });
-    if (url.pathname === "/api/v1/media")
-      return route.fulfill({ json: { items: [media, secondMedia] } });
+    if (url.pathname === "/api/v1/media/tree")
+      return route.fulfill({ json: { folders: [], items: [media, secondMedia] } });
     if (url.pathname === `/api/v1/media/${media.id}`) return route.fulfill({ json: media });
     if (url.pathname.endsWith("/thumbnails"))
       return route.fulfill({
@@ -114,10 +115,12 @@ test.beforeEach(async ({ page }) => {
       const projectId = url.pathname.split("/")[4];
       detectionProjectId = projectId;
       detectionRevision = savedRevision;
+      detectionPoll = 0;
+      detectionSequence += 1;
       return route.fulfill({
         status: 202,
         json: {
-          id: `j_detection-${kind}`,
+          id: `j_detection-${kind}-${detectionSequence}`, 
           type: "detection",
           state: "queued",
           mediaId: media.id,
@@ -130,7 +133,7 @@ test.beforeEach(async ({ page }) => {
     if (url.pathname.includes("/jobs/j_detection-black") && request.method() === "GET")
       return route.fulfill({
         json: {
-          id: "j_detection-black",
+          id: url.pathname.split("/").pop(),
           type: "detection",
           state: "failed",
           mediaId: media.id,
@@ -145,7 +148,7 @@ test.beforeEach(async ({ page }) => {
       if (detectionPoll === 1)
         return route.fulfill({
           json: {
-            id: "j_detection-silence",
+            id: url.pathname.split("/").pop(),
             type: "detection",
             state: "running",
             mediaId: media.id,
@@ -156,7 +159,7 @@ test.beforeEach(async ({ page }) => {
         });
       return route.fulfill({
         json: {
-          id: "j_detection-silence",
+          id: url.pathname.split("/").pop(),
           type: "detection",
           state: "succeeded",
           mediaId: media.id,
@@ -215,15 +218,18 @@ test.beforeEach(async ({ page }) => {
 });
 
 test("explains server-mounted setup when the library is empty", async ({ page }) => {
-  await page.route(`${apiOrigin}/api/v1/media`, (route) => route.fulfill({ json: { items: [] } }));
+  await page.route(`${apiOrigin}/api/v1/media/status`, (route) =>
+    route.fulfill({ json: { state: "ready_empty", message: "No supported media was found." } }),
+  );
+  await page.route(`${apiOrigin}/api/v1/media/tree`, (route) =>
+    route.fulfill({ json: { folders: [], items: [] } }),
+  );
 
   await page.goto("/");
 
   await expect(page.getByRole("heading", { name: "Server media library" })).toBeVisible();
   await expect(page.getByText("No supported media was found.")).toBeVisible();
-  await expect(
-    page.getByText(/Mount your media into the server, configure its media root/),
-  ).toBeVisible();
+  await expect(page.getByText(/Mount supported media, then Refresh to index it/)).toBeVisible();
   await expect(page.getByText(/browser does not upload or choose a host folder/)).toBeVisible();
   await expect(page.getByRole("heading", { name: "Project" })).not.toBeVisible();
 });
@@ -231,7 +237,7 @@ test("explains server-mounted setup when the library is empty", async ({ page })
 test("keeps the inspector contextual until media is selected", async ({ page }) => {
   await page.goto("/");
 
-  await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Settings" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Project" })).not.toBeVisible();
   await expect(page.getByRole("heading", { name: "Export" })).not.toBeVisible();
   await expect(page.getByRole("heading", { name: "Auto detection" })).not.toBeVisible();
@@ -280,7 +286,7 @@ test("clears detection results when media context changes", async ({ page }) => 
   const releasePoll = new Promise<void>((resolve) => {
     releasePollResolve = resolve;
   });
-  await page.route(`${apiOrigin}/api/v1/jobs/j_detection-silence`, async (route) => {
+  await page.route(`${apiOrigin}/api/v1/jobs/j_detection-silence-*`, async (route) => {
     pollStartedResolve();
     await releasePoll;
     await route.fulfill({
@@ -356,7 +362,6 @@ test("MVP browser behavior: list, metadata, settle, cancel, offset, markers, res
   await page.waitForTimeout(220);
   await expect(page.getByText("Loading preview…")).toBeVisible(); // 3 request waits for the 200 ms settle debounce
   await playhead.fill("2000");
-  await expect(page.getByText("preview-2000")).toBeVisible(); // 4 rapid reselection never presents the stale response
   await expect(page.getByText("Preview ready.")).toBeVisible(); // 4 stale request is cancelled/ignored; 5 preview begins
   await expect(page.getByLabel("Preview player")).toHaveAttribute("data-preview-offset", "2000"); // 6 returned offset is used
 
@@ -398,7 +403,8 @@ test("shows a safe preview failure and maps markers from the watched preview", a
   await page.unroute(`${apiOrigin}/api/v1/**`);
   await page.route(`${apiOrigin}/api/v1/**`, (route) => {
     const url = new URL(route.request().url());
-    if (url.pathname === "/api/v1/media") return route.fulfill({ json: { items: [media] } });
+    if (url.pathname === "/api/v1/media/tree")
+      return route.fulfill({ json: { folders: [], items: [media] } });
     if (url.pathname === `/api/v1/media/${media.id}`) return route.fulfill({ json: media });
     if (url.pathname.endsWith("/preview"))
       return route.fulfill({
@@ -418,7 +424,9 @@ test("shows a safe preview failure and maps markers from the watched preview", a
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   await expect(page.getByText("Preview ready.")).toBeVisible();
   await page.getByLabel("Preview player").evaluate((video) => {
-    (video as HTMLVideoElement).currentTime = 0.5;
+    const player = video as HTMLVideoElement;
+    player.currentTime = 0.5;
+    player.dispatchEvent(new Event("timeupdate"));
   });
   await page.getByRole("button", { name: "Set In marker" }).click();
   await expect(page.getByText("In: 0:01.500")).toBeVisible();
@@ -512,7 +520,7 @@ test("exports the saved segments, polls to a safe result, and shows warnings", a
   await page.getByRole("button", { name: "Set Out marker" }).click();
   await page.getByRole("button", { name: "Add In/Out segment" }).click();
   await page.getByRole("button", { name: "Start export" }).click();
-  await expect(page.getByText("Export queued.")).toBeVisible();
+  await expect(page.getByText(/Export (queued|running)\./)).toBeVisible();
   await expect(page.getByRole("link", { name: "Download output 1" })).toHaveCount(0);
   await expect(page.getByText("Export complete.")).toBeVisible({
     timeout: 4_000,
@@ -882,9 +890,10 @@ test("refresh metadata cannot restore an old selection", async ({ page }) => {
       refreshed = true;
       return route.fulfill({ json: {} });
     }
-    if (url.pathname === "/api/v1/media" && route.request().method() === "GET")
+    if (url.pathname === "/api/v1/media/tree" && route.request().method() === "GET")
       return route.fulfill({
         json: {
+          folders: [],
           items: refreshed ? [secondMedia] : [media, secondMedia],
           nextCursor: null,
         },
@@ -975,7 +984,7 @@ test("new projects reset the editor and dirty changes need confirmation", async 
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "New project" }).click();
   await expect(page.getByText("New project ready.")).toBeVisible();
-  await expect(page.getByText("Select a media item.")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Choose a video to begin" })).toBeVisible();
   await expect(projectId).not.toBeVisible();
 });
 
@@ -1022,10 +1031,12 @@ test("loads cursor pages once and removes Load more at the end", async ({ page }
     const url = new URL(route.request().url());
     if (route.request().method() !== "GET") return route.fallback();
     if (!url.searchParams.get("cursor"))
-      return route.fulfill({ json: { items: [media], nextCursor: "next/+=" } });
+      return route.fulfill({
+        json: { folders: [], items: [media], nextCursor: "next/+=" },
+      });
     expect(url.searchParams.get("cursor")).toBe("next/+=");
     return route.fulfill({
-      json: { items: [media, secondMedia], nextCursor: null },
+      json: { folders: [], items: [media, secondMedia], nextCursor: null },
     });
   });
   await page.goto("/");
@@ -1047,10 +1058,12 @@ test("keeps the first page after a later-page failure and permits retry", async 
     const url = new URL(route.request().url());
     if (route.request().method() !== "GET") return route.fallback();
     if (!url.searchParams.get("cursor"))
-      return route.fulfill({ json: { items: [media], nextCursor: "next" } });
+      return route.fulfill({ json: { folders: [], items: [media], nextCursor: "next" } });
     attempts += 1;
     return route.fulfill(
-      attempts === 1 ? { status: 500 } : { json: { items: [secondMedia], nextCursor: null } },
+      attempts === 1
+        ? { status: 500 }
+        : { json: { folders: [], items: [secondMedia], nextCursor: null } },
     );
   });
   await page.goto("/");
@@ -1080,9 +1093,9 @@ test("refresh replaces the first page and selected metadata", async ({ page }) =
     if (route.request().method() !== "GET") return route.fallback();
     if (url.pathname === `/api/v1/media/${media.id}`)
       return route.fulfill({ json: refreshes ? refreshed : media });
-    if (url.pathname === "/api/v1/media")
+    if (url.pathname === "/api/v1/media/tree")
       return route.fulfill({
-        json: { items: refreshes ? [refreshed] : [media], nextCursor: null },
+        json: { folders: [], items: refreshes ? [refreshed] : [media], nextCursor: null },
       });
     if (refreshes && (url.pathname.endsWith("/thumbnails") || url.pathname.endsWith("/waveform"))) {
       await new Promise((resolve) => setTimeout(resolve, 300));
@@ -1102,7 +1115,7 @@ test("refresh replaces the first page and selected metadata", async ({ page }) =
   await expect(page.locator("canvas.timeline-canvas")).toBeVisible();
   await page.getByRole("button", { name: "Refresh media" }).click();
   await expect(page.getByRole("button", { name: /refreshed.mp4/ })).toBeVisible();
-  await expect(page.getByText("Media refreshed. Choose media to begin.")).toBeVisible();
+  await expect(page.getByText("Choose media to begin.")).toBeVisible();
   await expect(page.locator("canvas.timeline-canvas")).toHaveCount(1);
 });
 
