@@ -5,7 +5,7 @@
 **Blocked by:** 66
 
 **Category:** bug
-**Status:** completed
+**Status:** wontfix
 
 - [x] MVP preview test observes the current preview status/offset after rapid playhead changes.
 - [x] Watched preview marker test observes current marker mapping after preview readiness.

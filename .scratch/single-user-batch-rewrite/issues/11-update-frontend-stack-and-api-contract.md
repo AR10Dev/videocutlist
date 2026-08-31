@@ -5,7 +5,7 @@
 **Blocked by:** 02, 03, 05, 08, 09, 10
 
 **Category:** enhancement
-**Status:** completed
+**Status:** wontfix
 
 - [x] The client uses a stable SolidJS release compatible with the selected Vite and TypeScript versions.
 - [x] `openapi-typescript` generates request and response types from the checked-in OpenAPI contract during a reproducible script.

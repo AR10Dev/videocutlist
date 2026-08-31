@@ -5,7 +5,7 @@
 **Blocked by:** 66
 
 **Category:** bug
-**Status:** completed
+**Status:** wontfix
 
 - [x] Preflight and export polling tests pass with current generated job contracts.
 - [x] Active and delayed cancellation tests pass without stale state restoration.

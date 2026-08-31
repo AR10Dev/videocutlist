@@ -5,7 +5,7 @@
 **Blocked by:** 67, 69, 71, 72
 
 **Category:** bug
-**Status:** completed
+**Status:** wontfix
 
 - [x] Detection context-change test completes without a timeout and preserves cancellation safety.
 - [x] Failed/capacity export retry becomes available after terminal failure under save-on-export semantics.

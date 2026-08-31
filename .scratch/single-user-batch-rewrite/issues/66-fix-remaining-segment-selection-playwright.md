@@ -5,7 +5,7 @@
 **Blocked by:** 65
 
 **Category:** bug
-**Status:** completed
+**Status:** wontfix
 
 - [x] Remaining fixture failures diagnosed and fixed without weakening assertions.
 - [x] Remaining `segment-selection.spec.ts` failures are fixed.

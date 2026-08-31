@@ -5,7 +5,7 @@
 **Blocked by:** 68
 
 **Category:** enhancement
-**Status:** completed
+**Status:** wontfix
 
 - [x] Start export is enabled with dirty editor changes.
 - [x] Export saves the current edit, then runs fresh preflight and submits from that saved revision; cancellation and stale-context guards remain intact.

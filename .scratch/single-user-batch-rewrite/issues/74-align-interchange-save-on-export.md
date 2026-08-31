@@ -5,7 +5,7 @@
 **Blocked by:** 69, 73
 
 **Category:** bug
-**Status:** completed
+**Status:** wontfix
 
 - [x] Interchange cancellation test reaches the project save/export controls under the current UI layout.
 - [x] Interchange persistence tests assert the current visibility and enabled/disabled behavior under save-on-export.
