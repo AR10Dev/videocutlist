@@ -5,7 +5,7 @@
 **Blocked by:** 02, 03, 05, 08, 09, 10
 
 **Category:** enhancement
-**Status:** needs-review
+**Status:** completed
 
 - [x] The client uses a stable SolidJS release compatible with the selected Vite and TypeScript versions.
 - [x] `openapi-typescript` generates request and response types from the checked-in OpenAPI contract during a reproducible script.
@@ -18,5 +18,5 @@
 
 ## Comments
 
-- Implementation completed through tickets 49–64; final status remains needs-review while full Playwright fixture regressions are resolved by ticket 65.
-- `make check` passes; full Playwright is not yet green.
+- Completed through tickets 49–74.
+- Validation: `make check` passes; full Playwright passes (43 tests).
