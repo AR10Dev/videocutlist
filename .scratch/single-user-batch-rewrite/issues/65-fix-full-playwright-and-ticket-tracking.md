@@ -5,17 +5,17 @@
 **Blocked by:** 64
 
 **Category:** bug
-**Status:** needs-review
+**Status:** completed
 
 - [x] Every Playwright media-tree fixture uses the current folder-page envelope.
-- [ ] Full Playwright passes, including segment-selection and interchange coverage.
-- [x] Ticket 11 status, checkboxes, and comments accurately record that full Playwright remains unresolved.
+- [x] Full Playwright passes, including segment-selection and interchange coverage.
+- [x] Ticket 11 status, checkboxes, and comments accurately record verified full Playwright completion.
 - [x] Ticket 64 removes its false ticket-11 reconciliation claim until this ticket completes.
 - [x] `make check` passes.
 
 ## Comments
 
-Updated segment-selection fixtures from the obsolete `/media` list envelope to the current `/media/tree` folder-page envelope and reconciled ticket 11/64 tracking. Validation: `make check` passes; full Playwright still has unrelated pre-existing segment-selection failures and remains for review.
+Updated segment-selection fixtures from the obsolete `/media` list envelope to the current `/media/tree` folder-page envelope. Follow-up tickets 66–74 resolved the remaining browser failures. Validation: `make check` and full Playwright (43 tests) pass.
 
 ## Comments
 

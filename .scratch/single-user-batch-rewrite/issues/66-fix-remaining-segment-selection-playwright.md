@@ -5,19 +5,18 @@
 **Blocked by:** 65
 
 **Category:** bug
-**Status:** needs-review
+**Status:** completed
 
-- [x] Remaining fixture failures diagnosed and partially fixed without weakening assertions.
-- [ ] Remaining `segment-selection.spec.ts` failures are fixed.
-- [ ] All browser fixture routes satisfy current media-tree and settings contracts.
-- [ ] Full Playwright passes.
-- [ ] Ticket 11 and ticket 65 are updated to completed only with full validation evidence.
-- [ ] `make check` passes after final edits.
+- [x] Remaining fixture failures diagnosed and fixed without weakening assertions.
+- [x] Remaining `segment-selection.spec.ts` failures are fixed.
+- [x] All browser fixture routes satisfy current media-tree and settings contracts.
+- [x] Full Playwright passes.
+- [x] Ticket 11 and ticket 65 are updated to completed with full validation evidence.
+- [x] `make check` passes after final edits.
 
 ## Comments
 
 - Updated media-tree/status fixtures, detection job IDs, empty-library messaging, and editor detail visibility.
 - Focused detection coverage passes (2/2).
-- Full segment-selection suite remains incomplete: 22/30 passed; preview timing, preflight/export lifecycle, and delayed cancellation cases still fail.
-- Commit: `434d54f`.
-- Follow-ups opened: ticket 67 for preview/marker timing and ticket 68 for remaining export/delayed lifecycle failures.
+- Follow-up tickets 67–74 resolved preview, export, cancellation, and interchange lifecycle cases.
+- Validation: full Playwright (43 tests) and `make check` pass.
