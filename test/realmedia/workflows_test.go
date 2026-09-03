@@ -222,20 +222,43 @@ func TestProductionBatchCancellationLifecycle(t *testing.T) {
 	project := map[string]any{"revision": 0, "schemaVersion": 2, "name": "cancel", "items": []any{map[string]any{"id": "i_abcdefghijklmnopqrstuvwx", "mediaId": media.Items[0].ID, "segments": []any{map[string]any{"startMs": 0, "endMs": 52000}}, "exportOptions": map[string]any{"mode": "merge", "selection": "segments", "cutStrategy": "precise_reencode", "container": "mkv", "destinationId": "download"}}}}
 	created := p.requestBody(t, http.MethodPut, "/api/v1/projects/p_cancel_123456", project)
 	created.Body.Close()
-	submit := func() string {
+	submit := func() (string, string) {
 		response := p.requestBody(t, http.MethodPost, "/api/v1/projects/p_cancel_123456/exports", map[string]any{"itemIds": []string{"i_abcdefghijklmnopqrstuvwx"}})
 		defer response.Body.Close()
 		var value struct {
 			BatchID string `json:"batchId"`
+			Jobs    []struct {
+				ID string `json:"id"`
+			} `json:"jobs"`
 		}
 		if response.StatusCode != http.StatusAccepted || json.NewDecoder(response.Body).Decode(&value) != nil {
 			t.Fatalf("cancel export status=%d", response.StatusCode)
 		}
-		return value.BatchID
+		if len(value.Jobs) != 1 {
+			t.Fatal("cancel export returned no job")
+		}
+		return value.BatchID, value.Jobs[0].ID
 	}
-	first, second := submit(), submit()
+	firstBatch, firstJob := submit()
+	waitFor(t, 10*time.Second, func() bool {
+		response := p.request(t, http.MethodGet, "/api/v1/jobs/"+firstJob)
+		defer response.Body.Close()
+		var job struct {
+			State string `json:"state"`
+		}
+		return json.NewDecoder(response.Body).Decode(&job) == nil && job.State == "running"
+	})
+	second, secondJob := submit()
+	waitFor(t, 10*time.Second, func() bool {
+		response := p.request(t, http.MethodGet, "/api/v1/jobs/"+secondJob)
+		defer response.Body.Close()
+		var job struct {
+			State string `json:"state"`
+		}
+		return json.NewDecoder(response.Body).Decode(&job) == nil && job.State == "queued"
+	})
 	cancel := p.request(t, http.MethodDelete, "/api/v1/batches/"+second)
-	if cancel.StatusCode != http.StatusNoContent && cancel.StatusCode != http.StatusNotFound {
+	if cancel.StatusCode != http.StatusNoContent {
 		cancel.Body.Close()
 		t.Fatalf("batch cancellation status=%d", cancel.StatusCode)
 	}
@@ -249,15 +272,22 @@ func TestProductionBatchCancellationLifecycle(t *testing.T) {
 		if json.NewDecoder(response.Body).Decode(&value) != nil {
 			return false
 		}
-		return value.State == "cancelled" || value.State == "succeeded"
+		return value.State == "cancelled"
 	})
 	repeat := p.request(t, http.MethodDelete, "/api/v1/batches/"+second)
-	if repeat.StatusCode != http.StatusNoContent && repeat.StatusCode != http.StatusNotFound {
+	if repeat.StatusCode != http.StatusNoContent {
 		repeat.Body.Close()
 		t.Fatalf("terminal batch cancellation status=%d", repeat.StatusCode)
 	}
 	repeat.Body.Close()
-	_ = first
+	output := p.request(t, http.MethodGet, "/api/v1/jobs/"+secondJob+"/outputs/0")
+	if output.StatusCode != http.StatusNotFound {
+		output.Body.Close()
+		t.Fatalf("cancelled output status=%d", output.StatusCode)
+	}
+	output.Body.Close()
+	assertNoTemporaryArtifacts(t, root)
+	_ = firstBatch
 }
 
 func TestProductionRestartReconcilesExport(t *testing.T) {
@@ -272,42 +302,55 @@ func TestProductionRestartReconcilesExport(t *testing.T) {
 	project := map[string]any{"revision": 0, "schemaVersion": 2, "name": "restart", "items": []any{map[string]any{"id": "i_abcdefghijklmnopqrstuvwx", "mediaId": media.Items[0].ID, "segments": []any{map[string]any{"startMs": 0, "endMs": 52000}}, "exportOptions": map[string]any{"mode": "merge", "selection": "segments", "cutStrategy": "precise_reencode", "container": "mkv", "destinationId": "download"}}}}
 	created := p.requestBody(t, http.MethodPut, "/api/v1/projects/p_restart_reconcile", project)
 	created.Body.Close()
-	export := p.requestBody(t, http.MethodPost, "/api/v1/projects/p_restart_reconcile/exports", map[string]any{"itemIds": []string{"i_abcdefghijklmnopqrstuvwx"}})
-	var submitted struct {
-		Jobs []struct {
-			ID string `json:"id"`
-		} `json:"jobs"`
+	submit := func() string {
+		export := p.requestBody(t, http.MethodPost, "/api/v1/projects/p_restart_reconcile/exports", map[string]any{"itemIds": []string{"i_abcdefghijklmnopqrstuvwx"}})
+		defer export.Body.Close()
+		var submitted struct {
+			Jobs []struct {
+				ID string `json:"id"`
+			} `json:"jobs"`
+		}
+		if export.StatusCode != http.StatusAccepted || json.NewDecoder(export.Body).Decode(&submitted) != nil || len(submitted.Jobs) != 1 {
+			t.Fatalf("restart export submission status=%d", export.StatusCode)
+		}
+		return submitted.Jobs[0].ID
 	}
-	if json.NewDecoder(export.Body).Decode(&submitted) != nil || len(submitted.Jobs) != 1 {
-		export.Body.Close()
-		t.Fatal("restart export submission failed")
-	}
-	export.Body.Close()
+	runningID := submit()
 	waitFor(t, 10*time.Second, func() bool {
-		response := p.request(t, http.MethodGet, "/api/v1/jobs/"+submitted.Jobs[0].ID)
+		response := p.request(t, http.MethodGet, "/api/v1/jobs/"+runningID)
 		defer response.Body.Close()
 		var job struct {
 			State string `json:"state"`
 		}
 		return json.NewDecoder(response.Body).Decode(&job) == nil && job.State == "running"
 	})
-	p.stop()
-	p = startProcess(t, root)
-	getJSON(t, p, "/api/v1/projects/p_restart_reconcile", &map[string]any{})
+	queuedID := submit()
 	waitFor(t, 10*time.Second, func() bool {
-		response := p.request(t, http.MethodGet, "/api/v1/jobs/"+submitted.Jobs[0].ID)
+		response := p.request(t, http.MethodGet, "/api/v1/jobs/"+queuedID)
 		defer response.Body.Close()
 		var job struct {
 			State string `json:"state"`
-			Error string `json:"errorCode"`
 		}
-		if json.NewDecoder(response.Body).Decode(&job) != nil {
-			return false
+		return json.NewDecoder(response.Body).Decode(&job) == nil && job.State == "queued"
+	})
+	p.stop()
+	p = startProcess(t, root)
+	getJSON(t, p, "/api/v1/projects/p_restart_reconcile", &map[string]any{})
+	var recovered struct {
+		State string `json:"state"`
+		Error string `json:"errorCode"`
+	}
+	getJSON(t, p, "/api/v1/jobs/"+runningID, &recovered)
+	if recovered.State != "failed" || recovered.Error != "interrupted_by_restart" {
+		t.Fatalf("running recovery state=%q error=%q", recovered.State, recovered.Error)
+	}
+	waitFor(t, 90*time.Second, func() bool {
+		response := p.request(t, http.MethodGet, "/api/v1/jobs/"+queuedID)
+		defer response.Body.Close()
+		var job struct {
+			State string `json:"state"`
 		}
-		if job.State == "failed" {
-			return job.Error == "interrupted_by_restart"
-		}
-		return false
+		return json.NewDecoder(response.Body).Decode(&job) == nil && (job.State == "succeeded" || job.State == "failed")
 	})
 }
 
