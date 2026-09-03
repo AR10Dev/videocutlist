@@ -93,7 +93,8 @@ export function EditorView() {
             <Show when={diagnostics()}>
               {(info) => (
                 <p class="preview-range" aria-label="Preview source range">
-                  Preview: {formatTime(info().startMs, duration())} to {formatTime(info().startMs + info().durationMs, duration())}
+                  Preview: {formatTime(info().startMs, duration())} to{" "}
+                  {formatTime(info().startMs + info().durationMs, duration())}
                 </p>
               )}
             </Show>
@@ -135,6 +136,7 @@ export function EditorView() {
                 style={{
                   transform: `translateX(${(present().inMs / duration()) * 100}%)`,
                 }}
+                role="img"
                 aria-label="In marker"
               />
               <span
@@ -142,6 +144,7 @@ export function EditorView() {
                 style={{
                   transform: `translateX(${(present().outMs / duration()) * 100}%)`,
                 }}
+                role="img"
                 aria-label="Out marker"
               />
               <For each={present().segments}>
@@ -152,11 +155,13 @@ export function EditorView() {
                       left: `${(segment.startMs / duration()) * 100}%`,
                       width: `${((segment.endMs - segment.startMs) / duration()) * 100}%`,
                     }}
+                    role="img"
                     aria-label={`Segment ${formatTime(segment.startMs, duration())} to ${formatTime(segment.endMs, duration())}`}
                   />
                 )}
               </For>
               <span
+                role="img"
                 class="timeline-overlay timeline-playhead"
                 style={{
                   transform: `translateX(${(playheadMs() / duration()) * 100}%)`,
@@ -168,6 +173,8 @@ export function EditorView() {
             <input
               id="playhead"
               aria-label="Timeline playhead"
+              aria-valuetext={`${formatTime(playheadMs(), duration())} of ${formatTime(duration(), duration())}`}
+              aria-keyshortcuts="ArrowLeft ArrowRight"
               type="range"
               min="0"
               max={duration()}
@@ -184,7 +191,9 @@ export function EditorView() {
               {formatTime(present().outMs, duration())}
             </p>
             <div class="controls">
-              <button onClick={togglePlayback}>Play / pause preview</button>
+              <button aria-keyshortcuts="Space" onClick={togglePlayback}>
+                Play / pause preview
+              </button>
               <button
                 onClick={() => {
                   const step = frameDuration(selected());
@@ -193,6 +202,7 @@ export function EditorView() {
                   });
                   markDirty();
                 }}
+                aria-keyshortcuts="ArrowLeft"
               >
                 Previous frame
               </button>
@@ -206,6 +216,7 @@ export function EditorView() {
                   });
                   markDirty();
                 }}
+                aria-keyshortcuts="ArrowRight"
               >
                 Next frame
               </button>
@@ -217,6 +228,7 @@ export function EditorView() {
                   setPreviewCenterMs(next.present.playheadMs);
                   markDirty();
                 }}
+                aria-keyshortcuts="Control+Z Meta+Z"
               >
                 Undo
               </button>
@@ -228,11 +240,19 @@ export function EditorView() {
                   setPreviewCenterMs(next.present.playheadMs);
                   markDirty();
                 }}
+                aria-keyshortcuts="Control+Y Meta+Shift+Z"
               >
                 Redo
               </button>
-              <button onClick={() => setMarker("inMs", watchedPosition())}>Set start</button>
-              <button onClick={() => setMarker("outMs", Math.min(duration(), watchedPosition()))}>Set end</button>
+              <button aria-keyshortcuts="I" onClick={() => setMarker("inMs", watchedPosition())}>
+                Set start
+              </button>
+              <button
+                aria-keyshortcuts="O"
+                onClick={() => setMarker("outMs", Math.min(duration(), watchedPosition()))}
+              >
+                Set end
+              </button>
               <button
                 class="primary"
                 onClick={addSegment}
@@ -272,11 +292,16 @@ export function EditorView() {
                 ? "Set a start before the end to add a segment."
                 : "Marker range is ready to add."}
             </p>
-            <p class="control-help">Keyboard: Space plays or pauses; arrows step frames; I/O set markers; Ctrl/Cmd+Z undoes.</p>
+            <p class="control-help">
+              Keyboard: Space plays or pauses; arrows step frames; I/O set markers; Ctrl/Cmd+Z
+              undoes.
+            </p>
             <ol aria-label="Selected segments">
               <For each={present().segments}>
                 {(segment, index) => (
-                  <li class={selectedSegment() === index() ? "segment-row selected" : "segment-row"}>
+                  <li
+                    class={selectedSegment() === index() ? "segment-row selected" : "segment-row"}
+                  >
                     <button
                       type="button"
                       aria-label={`Select segment ${index() + 1}`}

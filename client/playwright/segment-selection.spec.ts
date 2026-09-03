@@ -1371,3 +1371,59 @@ for (const [status, message] of [
     await expect(refresh).toBeEnabled();
   });
 }
+
+test("covers the responsive workspace and keyboard editing workflow", async ({ page }) => {
+  for (const viewport of [
+    { width: 1440, height: 900 },
+    { width: 1024, height: 768 },
+    { width: 390, height: 844 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await page.goto("/");
+    await expect(page.locator("main")).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+      viewport.width,
+    );
+  }
+
+  await page.setViewportSize({ width: 1024, height: 768 });
+  await page.goto("/");
+  await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await expect(page.getByText(/Preview: 0:00.000 to 0:08.000/)).toBeVisible();
+  await expect(page.getByLabel("Project ID")).not.toBeVisible();
+  await page.getByRole("tab", { name: "Export" }).click();
+  await expect(page.getByText("Advanced export options")).toBeVisible();
+  await expect(page.getByText("Advanced export options").locator("..")).not.toHaveAttribute(
+    "open",
+    "",
+  );
+  await page.getByRole("tab", { name: "Project" }).focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(page.getByRole("tab", { name: "Export" })).toHaveAttribute("aria-selected", "true");
+
+  await page.getByRole("tab", { name: "Project" }).click();
+  await expect(page.getByLabel("Preview source range")).toBeVisible();
+  await page.getByLabel("Preview player").evaluate((video) => {
+    const player = video as HTMLVideoElement;
+    player.currentTime = 0.1;
+    player.dispatchEvent(new Event("timeupdate"));
+  });
+  await page.getByRole("heading", { name: "Timeline" }).focus();
+  await page.keyboard.press("i");
+  await page.getByLabel("Preview player").evaluate((video) => {
+    const player = video as HTMLVideoElement;
+    player.currentTime = 0.7;
+    player.dispatchEvent(new Event("timeupdate"));
+  });
+  await page.getByRole("heading", { name: "Timeline" }).focus();
+  await page.keyboard.press("o");
+  await expect(page.getByRole("button", { name: "Add segment" })).toBeEnabled();
+  await page.getByRole("button", { name: "Add segment" }).click();
+  await expect(page.getByRole("list", { name: "Selected segments" })).toContainText("0:00.100");
+  await page.getByRole("button", { name: "Save project" }).click();
+  await expect(page.getByText("Saved", { exact: true })).toBeVisible();
+  await page.getByRole("tab", { name: "Detection" }).click();
+  await expect(page.getByRole("heading", { name: "Auto detection" })).toBeVisible();
+  await page.getByRole("tab", { name: "Export" }).click();
+  await expect(page.getByRole("button", { name: "Start export" })).toBeEnabled();
+});

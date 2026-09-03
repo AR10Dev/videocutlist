@@ -13,6 +13,18 @@ export function App() {
   const controller = createWorkspaceController();
   const { selected, projectName, dirty, settingsOpen, openSettings } = controller;
   const [activeTask, setActiveTask] = createSignal<"project" | "export" | "detection">("project");
+  const taskTabs = ["project", "export", "detection"] as const;
+  const moveTask = (current: (typeof taskTabs)[number], direction: number) => {
+    const start = taskTabs.indexOf(current);
+    for (let offset = 1; offset <= taskTabs.length; offset += 1) {
+      const candidate = taskTabs[(start + direction * offset + taskTabs.length) % taskTabs.length];
+      if (candidate !== "detection" || selected()) {
+        setActiveTask(candidate);
+        document.getElementById(`${candidate}-tab`)?.focus();
+        return;
+      }
+    }
+  };
   return (
     <WorkspaceProvider value={controller}>
       <main class="app-shell" aria-label="VideoCutlist segment selection">
@@ -54,6 +66,15 @@ export function App() {
                     aria-controls="project-tabpanel"
                     tabIndex={activeTask() === "project" ? 0 : -1}
                     onClick={() => setActiveTask("project")}
+                    onKeyDown={(event) => {
+                      if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+                        event.preventDefault();
+                        moveTask("project", 1);
+                      } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+                        event.preventDefault();
+                        moveTask("project", -1);
+                      }
+                    }}
                   >
                     Project
                   </button>
@@ -65,6 +86,15 @@ export function App() {
                     aria-controls="export-tabpanel"
                     tabIndex={activeTask() === "export" ? 0 : -1}
                     onClick={() => setActiveTask("export")}
+                    onKeyDown={(event) => {
+                      if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+                        event.preventDefault();
+                        moveTask("export", 1);
+                      } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+                        event.preventDefault();
+                        moveTask("export", -1);
+                      }
+                    }}
                   >
                     Export
                   </button>
@@ -77,6 +107,15 @@ export function App() {
                     tabIndex={activeTask() === "detection" ? 0 : -1}
                     disabled={!selected()}
                     onClick={() => setActiveTask("detection")}
+                    onKeyDown={(event) => {
+                      if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+                        event.preventDefault();
+                        moveTask("detection", 1);
+                      } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+                        event.preventDefault();
+                        moveTask("detection", -1);
+                      }
+                    }}
                   >
                     Detection
                   </button>
