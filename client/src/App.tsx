@@ -1,4 +1,4 @@
-import { Show } from "solid-js";
+import { createSignal, Show } from "solid-js";
 import { DetectionView } from "./features/detection/DetectionView";
 import { EditorView } from "./features/editor/EditorView";
 import { ExportView } from "./features/export/ExportView";
@@ -11,15 +11,19 @@ import { WorkspaceProvider } from "./features/app/WorkspaceContext";
 
 export function App() {
   const controller = createWorkspaceController();
-  const { selected, status, settingsOpen, openSettings } = controller;
+  const { selected, projectName, dirty, settingsOpen, openSettings } = controller;
+  const [activeTask, setActiveTask] = createSignal<"project" | "export" | "detection">("project");
   return (
     <WorkspaceProvider value={controller}>
       <main class="app-shell" aria-label="VideoCutlist segment selection">
         <header class="app-header">
-          <h1>VideoCutlist</h1>
-          <p role="status" aria-live="polite">
-            {status()}
-          </p>
+          <div class="app-heading">
+            <h1>VideoCutlist</h1>
+            <div class="project-status" aria-label="Project status">
+              <strong>{selected() && !dirty() ? projectName() : "Unsaved project"}</strong>
+              <span>{dirty() ? "Unsaved" : "Saved"}</span>
+            </div>
+          </div>
           <button
             class="settings-button"
             type="button"
@@ -40,12 +44,59 @@ export function App() {
             <>
               <LibraryView />
               <EditorView />
-              <ProjectsView />
-              <ExportView />
-              <Show when={selected()}>
-                <DetectionView />
-              </Show>
-              <QueueView />
+              <aside class="task-panel" aria-label="Workspace tasks">
+                <div class="task-tabs" role="tablist" aria-label="Workspace tasks">
+                  <button
+                    id="project-tab"
+                    role="tab"
+                    type="button"
+                    aria-selected={activeTask() === "project"}
+                    aria-controls="project-tabpanel"
+                    tabIndex={activeTask() === "project" ? 0 : -1}
+                    onClick={() => setActiveTask("project")}
+                  >
+                    Project
+                  </button>
+                  <button
+                    id="export-tab"
+                    role="tab"
+                    type="button"
+                    aria-selected={activeTask() === "export"}
+                    aria-controls="export-tabpanel"
+                    tabIndex={activeTask() === "export" ? 0 : -1}
+                    onClick={() => setActiveTask("export")}
+                  >
+                    Export
+                  </button>
+                  <button
+                    id="detection-tab"
+                    role="tab"
+                    type="button"
+                    aria-selected={activeTask() === "detection"}
+                    aria-controls="detection-tabpanel"
+                    tabIndex={activeTask() === "detection" ? 0 : -1}
+                    onClick={() => setActiveTask("detection")}
+                  >
+                    Detection
+                  </button>
+                </div>
+                <Show when={activeTask() === "project"}>
+                  <div id="project-tabpanel" role="tabpanel" aria-labelledby="project-tab">
+                    <ProjectsView />
+                  </div>
+                </Show>
+                <Show when={activeTask() === "export"}>
+                  <div id="export-tabpanel" role="tabpanel" aria-labelledby="export-tab">
+                    <ExportView />
+                  </div>
+                </Show>
+                <Show when={activeTask() === "detection" && selected()}>
+                  <div id="detection-tabpanel" role="tabpanel" aria-labelledby="detection-tab">
+                    <DetectionView />
+                  </div>
+                </Show>
+                <QueueView />
+              </aside>
             </>
           }
         >

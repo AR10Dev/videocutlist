@@ -38,10 +38,7 @@ button[aria-pressed="true"] {
   grid-template-columns: 248px minmax(0, 1fr) 310px;
   grid-template-areas:
     "header header header"
-    "media editor project"
-    "media editor export"
-    "media editor settings"
-    "media editor detection";
+    "media editor task";
   gap: 12px;
   align-items: start;
 }
@@ -62,10 +59,33 @@ section {
   gap: 20px;
   padding: 12px 16px;
 }
+.app-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 18px;
+  min-width: 0;
+}
 .app-header h1 {
   font-size: 1.2rem;
   letter-spacing: -0.03em;
   margin: 0;
+}
+.project-status {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  color: #b9bcc5;
+  font-size: 0.875rem;
+}
+.project-status strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.project-status span {
+  color: #888b96;
+  white-space: nowrap;
 }
 .app-header p {
   margin: 0;
@@ -80,6 +100,23 @@ section {
 .editor-panel {
   grid-area: editor;
   min-width: 0;
+}
+.task-panel {
+  grid-area: task;
+  min-width: 0;
+  background: #1a1b20;
+  border: 1px solid #2b2d35;
+  border-radius: 8px;
+  padding: 12px;
+}
+.task-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+.task-tabs button[aria-selected="true"] {
+  color: #f4b23e;
+  border-bottom-color: #f4b23e;
 }
 .project-panel {
   grid-area: project;
@@ -454,7 +491,7 @@ ul {
 @media (max-width: 1050px) {
   .app-shell {
     grid-template-columns: 220px minmax(0, 1fr);
-    grid-template-areas: "header header" "media editor" "project export" "settings detection";
+    grid-template-areas: "header header" "media editor" "media editor" "task task";
   }
   .media-panel {
     position: static;
@@ -467,17 +504,22 @@ ul {
   .app-shell {
     padding: 8px;
     grid-template-columns: 1fr;
-    grid-template-areas: "header" "media" "editor" "project" "export" "settings" "detection";
+    grid-template-areas: "header" "media" "editor" "task";
     gap: 8px;
   }
   header,
-  section {
+  section,
+  .task-panel {
     padding: 12px;
   }
   .app-header {
     align-items: flex-start;
     flex-direction: column;
     gap: 4px;
+  }
+  .app-heading {
+    flex-wrap: wrap;
+    gap: 4px 12px;
   }
   .timeline-canvas {
     height: 60px;
