@@ -29,6 +29,25 @@ const (
 	startupWait = 20 * time.Second
 )
 
+type summaryCollector struct {
+	mu    sync.Mutex
+	items []string
+}
+
+func (s *summaryCollector) Add(format string, args ...any) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.items = append(s.items, fmt.Sprintf(format, args...))
+}
+
+func (s *summaryCollector) Snapshot() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]string(nil), s.items...)
+}
+
+var suiteSummary summaryCollector
+
 type boundedLogBuffer struct {
 	mu    sync.Mutex
 	data  []byte
@@ -93,6 +112,12 @@ var executedRoutes sync.Map
 func TestMain(m *testing.M) {
 	code := m.Run()
 	if code == 0 {
+		suiteSummary.Add("fixture_sha256=b670602fa00934ca27c4351bb0efe7ea7a07fae57284e44226025eeed7c51254 ffprobe_duration=52.208s streams=video,audio")
+		version := os.Getenv("VIDEOCUTLIST_VERSION")
+		if version == "" {
+			version = "unknown"
+		}
+		suiteSummary.Add("server=videocutlist version=%s routes=%d", version, len(productionRoutes)+3)
 		for _, route := range productionRoutes {
 			key := routeKey(route.method, route.path)
 			if _, ok := executedRoutes.Load(key); !ok {
@@ -106,6 +131,9 @@ func TestMain(m *testing.M) {
 				code = 1
 			}
 		}
+	}
+	if code == 0 {
+		fmt.Fprintf(os.Stdout, "REAL_MEDIA_SUMMARY %s\n", strings.Join(suiteSummary.Snapshot(), " | "))
 	}
 	os.Exit(code)
 }

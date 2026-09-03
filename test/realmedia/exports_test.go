@@ -135,6 +135,7 @@ func TestProductionExportsJobsAndOutputs(t *testing.T) {
 		revision = saved.Revision
 		ids := export(base(tc.mode, tc.selection, tc.strategy))
 		batchID, jobID := ids[0], ids[1]
+		suiteSummary.Add("project_id=%s batch_id=%s job_id=%s", projectID, batchID, jobID)
 		var final map[string]any
 		var terminal map[string]any
 		last := -1.0
@@ -268,6 +269,7 @@ func TestProductionExportsJobsAndOutputs(t *testing.T) {
 		invalidPosition.Body.Close()
 	}
 	assertNoTemporaryArtifacts(t, root)
+	suiteSummary.Add("exports=validated output_names_safe sizes_positive durations_plausible streams=video,audio positions_and_count temp_free")
 
 	invalid := p.request(t, "GET", "/api/v1/jobs/j_invalid-output/outputs/99")
 	if invalid.StatusCode != 404 {

@@ -288,6 +288,7 @@ func TestProductionBatchCancellationLifecycle(t *testing.T) {
 	}
 	output.Body.Close()
 	assertNoTemporaryArtifacts(t, root)
+	suiteSummary.Add("cancellation batch_id=%s job_id=%s state=cancelled", second, secondJob)
 	_ = firstBatch
 }
 
@@ -360,6 +361,7 @@ func TestProductionRestartReconcilesExport(t *testing.T) {
 		t.Fatalf("queued restart output status=%d bytes=%d: %v", output.StatusCode, len(data), err)
 	}
 	probeBytes(t, data, ".mkv")
+	suiteSummary.Add("restart running_job=%s state=interrupted_by_restart queued_job=%s state=succeeded", runningID, queuedID)
 }
 
 func TestProductionAuthNoneLoopback(t *testing.T) {
