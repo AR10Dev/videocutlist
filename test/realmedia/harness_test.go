@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -32,16 +33,19 @@ type process struct {
 
 func startProcess(t *testing.T, root string) *process {
 	t.Helper()
+	repositoryRoot := repositoryRoot(t)
+	fixture := filepath.Join(repositoryRoot, fixturePath)
 	for _, tool := range []string{"ffmpeg", "ffprobe"} {
 		if _, err := exec.LookPath(tool); err != nil {
 			t.Fatalf("real-media suite requires %s; install it before running make test-real-media", tool)
 		}
 	}
-	if _, err := os.Stat(fixturePath); err != nil {
+	if _, err := os.Stat(fixture); err != nil {
 		t.Fatalf("real-media fixture is unavailable; run test/harness/acquire-real-media.sh (make test-real-media): %v", err)
 	}
 	binary := filepath.Join(t.TempDir(), "videocutlist")
 	build := exec.Command("go", "build", "-o", binary, "./cmd/videocutlist")
+	build.Dir = repositoryRoot
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build production process: %v\n%s", err, output)
 	}
@@ -50,7 +54,7 @@ func startProcess(t *testing.T, root string) *process {
 	if err := os.MkdirAll(mediaRoot, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := copyFile(fixturePath, filepath.Join(mediaRoot, "sintel-trailer.mp4")); err != nil {
+	if err := copyFile(fixture, filepath.Join(mediaRoot, "sintel-trailer.mp4")); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -120,6 +124,15 @@ func (p *process) request(t *testing.T, method, path string) *http.Response {
 		t.Fatalf("%s %s: %v\n%s", method, path, err, boundedLog(p.log.String()))
 	}
 	return resp
+}
+
+func repositoryRoot(t *testing.T) string {
+	t.Helper()
+	_, filename, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("locate real-media harness")
+	}
+	return filepath.Clean(filepath.Join(filepath.Dir(filename), "../.."))
 }
 
 func reservePort(t *testing.T) string {
