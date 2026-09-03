@@ -115,11 +115,38 @@ func TestProductionProcessMediaAndDerivedAssets(t *testing.T) {
 		t.Fatal(err)
 	}
 	cancelledRequest.Header.Set("Authorization", "Bearer "+bearerToken)
-	cancelRequest()
-	if response, requestErr := http.DefaultClient.Do(cancelledRequest); requestErr == nil {
-		response.Body.Close()
+	initialCacheFiles := cacheTempFiles(root)
+	responseDone := make(chan *http.Response, 1)
+	go func() { response, _ := http.DefaultClient.Do(cancelledRequest); responseDone <- response }()
+	started := false
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if response := cacheTempFiles(root); len(response) > len(initialCacheFiles) {
+			started = true
+			break
+		}
+		select {
+		case response := <-responseDone:
+			if response != nil {
+				response.Body.Close()
+			}
+			t.Fatal("preview request completed before cancellation")
+		default:
+			time.Sleep(25 * time.Millisecond)
+		}
 	}
-	time.Sleep(200 * time.Millisecond)
+	if !started {
+		t.Fatal("preview request did not publish an in-flight cache artifact before deadline")
+	}
+	cancelRequest()
+	select {
+	case response := <-responseDone:
+		if response != nil {
+			response.Body.Close()
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("cancelled preview request did not stop")
+	}
 	assertNoTemporaryArtifacts(t, root)
 	resp = p.request(t, http.MethodGet, previewPath)
 	if resp.StatusCode != http.StatusOK || resp.Header.Get("X-Preview-Cache") != "hit" {
@@ -187,6 +214,17 @@ func TestProductionProcessMediaAndDerivedAssets(t *testing.T) {
 		t.Fatalf("waveform conditional status=%d", conditionalWave.StatusCode)
 	}
 	conditionalWave.Body.Close()
+}
+
+func cacheTempFiles(root string) []string {
+	var files []string
+	_ = filepath.Walk(filepath.Join(root, "cache"), func(path string, info os.FileInfo, err error) error {
+		if err == nil && info != nil && !info.IsDir() && !info.IsDir() {
+			files = append(files, path)
+		}
+		return nil
+	})
+	return files
 }
 
 func TestProductionProcessSecurityBoundaries(t *testing.T) {

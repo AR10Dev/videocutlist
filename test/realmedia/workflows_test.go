@@ -283,6 +283,14 @@ func TestProductionRestartReconcilesExport(t *testing.T) {
 		t.Fatal("restart export submission failed")
 	}
 	export.Body.Close()
+	waitFor(t, 10*time.Second, func() bool {
+		response := p.request(t, http.MethodGet, "/api/v1/jobs/"+submitted.Jobs[0].ID)
+		defer response.Body.Close()
+		var job struct {
+			State string `json:"state"`
+		}
+		return json.NewDecoder(response.Body).Decode(&job) == nil && job.State == "running"
+	})
 	p.stop()
 	p = startProcess(t, root)
 	getJSON(t, p, "/api/v1/projects/p_restart_reconcile", &map[string]any{})

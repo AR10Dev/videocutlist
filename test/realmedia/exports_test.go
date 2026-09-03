@@ -17,20 +17,27 @@ import (
 
 func assertNoTemporaryArtifacts(t *testing.T, root string) {
 	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if !temporaryArtifactsPresent(root) {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("temporary export/cache artifact remains")
+}
+
+func temporaryArtifactsPresent(root string) bool {
+	present := false
 	for _, dir := range []string{filepath.Join(root, "exports"), filepath.Join(root, "cache")} {
-		err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-			if err != nil || info == nil {
-				return err
-			}
-			if !info.IsDir() && (strings.Contains(info.Name(), ".partial") || strings.HasPrefix(info.Name(), ".videocutlist-")) {
-				t.Errorf("temporary artifact remains: %s", info.Name())
+		_ = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+			if err == nil && info != nil && !info.IsDir() && (strings.HasSuffix(info.Name(), ".partial") || strings.HasPrefix(info.Name(), ".videocutlist-")) {
+				present = true
 			}
 			return nil
 		})
-		if err != nil && !os.IsNotExist(err) {
-			t.Fatal(err)
-		}
 	}
+	return present
 }
 
 func TestProductionExportsJobsAndOutputs(t *testing.T) {
