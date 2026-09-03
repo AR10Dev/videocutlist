@@ -206,6 +206,7 @@ func TestProductionProcessSecurityBoundaries(t *testing.T) {
 			req.Header.Set(key, value)
 		}
 		resp, err := client.Do(req)
+		recordRoute(method, path)
 		if err != nil {
 			t.Fatal(err)
 		}

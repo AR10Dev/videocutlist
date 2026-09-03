@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -14,9 +15,12 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
+
+	"videocutlist/internal/httpapi"
 )
 
 const (
@@ -26,10 +30,42 @@ const (
 )
 
 type process struct {
-	cmd    *exec.Cmd
-	base   string
-	log    *strings.Builder
-	cancel context.CancelFunc
+	cmd       *exec.Cmd
+	base      string
+	log       *strings.Builder
+	cancel    context.CancelFunc
+	forbidden []string
+}
+
+var executedRoutes sync.Map
+
+func TestMain(m *testing.M) {
+	code := m.Run()
+	if code == 0 {
+		for _, kind := range httpapi.RouteCoverageKinds() {
+			if _, ok := executedRoutes.Load(kind); !ok {
+				fmt.Fprintf(os.Stderr, "real-media route not exercised: %s\n", kind)
+				code = 1
+			}
+		}
+		for _, route := range []string{"GET /api/v1/health", "GET /api/v1/ready", "GET /", "GET /metrics"} {
+			if _, ok := executedRoutes.Load(route); !ok {
+				fmt.Fprintf(os.Stderr, "real-media route not exercised: %s\n", route)
+				code = 1
+			}
+		}
+	}
+	os.Exit(code)
+}
+
+func recordRoute(method, path string) {
+	path = strings.Split(path, "?")[0]
+	if kind := httpapi.RouteCoverageKind(method, path); kind != "" {
+		executedRoutes.Store(kind, true)
+	}
+	if path == "/" || path == "/metrics" || path == "/api/v1/health" || path == "/api/v1/ready" {
+		executedRoutes.Store(method+" "+path, true)
+	}
 }
 
 func startProcess(t *testing.T, root string) *process {
@@ -90,7 +126,7 @@ func startProcessWithEnv(t *testing.T, root string, overrides map[string]string)
 		cancel()
 		t.Fatal(err)
 	}
-	p := &process{cmd: cmd, log: logBuffer, cancel: cancel}
+	p := &process{cmd: cmd, log: logBuffer, cancel: cancel, forbidden: []string{mediaRoot, filepath.Join(root, "videocutlist.db"), filepath.Join(root, "cache"), filepath.Join(root, "exports"), fixture}}
 	t.Cleanup(func() {
 		if cmd.Process != nil {
 			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
@@ -109,6 +145,7 @@ func startProcessWithEnv(t *testing.T, root string, overrides map[string]string)
 			}
 			<-waited
 		}
+		assertNoSecrets(t, p)
 	})
 	client := &http.Client{Timeout: time.Second}
 	deadline := time.Now().Add(startupWait)
@@ -175,6 +212,7 @@ func (p *process) requestHeaders(t *testing.T, method, path string, body io.Read
 		req.Header.Set("Content-Type", "application/json")
 	}
 	resp, err := http.DefaultClient.Do(req)
+	recordRoute(method, path)
 	if err != nil {
 		t.Fatalf("%s %s: %v\n%s", method, path, err, boundedLog(p.log.String()))
 	}
@@ -205,6 +243,15 @@ func copyFile(source, destination string) error {
 		return err
 	}
 	return out.Close()
+}
+
+func assertNoSecrets(t *testing.T, p *process) {
+	t.Helper()
+	for _, value := range p.forbidden {
+		if strings.Contains(p.log.String(), value) {
+			t.Fatalf("process log exposed forbidden path")
+		}
+	}
 }
 
 func boundedLog(value string) string {

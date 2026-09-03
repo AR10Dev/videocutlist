@@ -36,6 +36,8 @@ func TestProductionSettingsAndAutomationWorkflows(t *testing.T) {
 		Settings map[string]any `json:"settings"`
 	}
 	getJSON(t, p, "/api/v1/settings", &persisted)
+	projects := p.request(t, http.MethodGet, "/api/v1/projects")
+	projects.Body.Close()
 	if value, ok := persisted.Settings["previewGlobalLimit"].(float64); !ok || value != 2 {
 		t.Fatalf("settings did not persist after restart: %#v", persisted.Settings)
 	}

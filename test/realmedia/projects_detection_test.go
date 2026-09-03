@@ -122,6 +122,7 @@ func (p *process) raw(t *testing.T, method, path string, body []byte) *http.Resp
 		req.Header.Set("Content-Type", "application/json")
 	}
 	resp, err := http.DefaultClient.Do(req)
+	recordRoute(method, path)
 	if err != nil {
 		t.Fatalf("%s %s: %v\n%s", method, path, err, boundedLog(p.log.String()))
 	}
