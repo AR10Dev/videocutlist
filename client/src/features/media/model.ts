@@ -26,7 +26,7 @@ const readableContainer = (container: string) =>
   ({ mp4: "MP4", mov: "MOV", webm: "WebM", mkv: "Matroska" })[container.toLowerCase()] ?? container;
 
 export function mediaSummary(media: Media): string {
-  const video = media.streams.video as VideoStream | undefined;
+  const video = media.streams?.video as VideoStream | undefined;
   const codec = typeof video?.codec === "string" ? readableCodec(video.codec) : "Unknown codec";
   const width = typeof video?.width === "number" ? video.width : 0;
   const height = typeof video?.height === "number" ? video.height : 0;

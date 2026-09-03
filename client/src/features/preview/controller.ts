@@ -1,4 +1,4 @@
-import { createEffect, createSignal, onCleanup, type Accessor, type Setter } from "solid-js";
+import { createEffect, createSignal, onCleanup, type Accessor } from "solid-js";
 import type { ApiClient } from "../../api";
 import type { components } from "../../generated/api";
 import { normalizePeaks } from "./assets";
@@ -17,11 +17,11 @@ export function createPreviewController(
     selected: Accessor<Media | undefined>;
     muted: Accessor<boolean>;
     playheadMs: Accessor<number>;
-    setStatus: Setter<string>;
     updatePlaybackPosition: (positionMs: number) => void;
   },
 ) {
   const [assetStatus, setAssetStatus] = createSignal("");
+  const [previewStatus, setPreviewStatus] = createSignal("");
   const [thumbnailURL, setThumbnailURL] = createSignal<string>();
   const [waveform, setWaveform] = createSignal<number[]>([]);
   const [previewCenterMs, setPreviewCenterMs] = createSignal(0);
@@ -40,6 +40,7 @@ export function createPreviewController(
     setThumbnailURL();
     setWaveform([]);
     setAssetStatus("");
+    setPreviewStatus("");
     if (!item) return;
     const controller = new AbortController();
     assetRequest = controller;
@@ -105,7 +106,7 @@ export function createPreviewController(
         afterMs: "6000",
         mute: String(isMuted),
       });
-      dependencies.setStatus("Loading preview…");
+      setPreviewStatus("Loading preview…");
       cleanupPreview = streamPreview(
         player,
         () =>
@@ -115,11 +116,11 @@ export function createPreviewController(
         (value) => {
           if (!request.signal.aborted) {
             setDiagnostics(value);
-            dependencies.setStatus("Preview ready.");
+            setPreviewStatus("Preview ready.");
           }
         },
         (error) => {
-          if (!request.signal.aborted) dependencies.setStatus(error.message);
+          if (!request.signal.aborted) setPreviewStatus(error.message);
         },
       );
     }, 200);
@@ -156,6 +157,7 @@ export function createPreviewController(
 
   return {
     assetStatus,
+    previewStatus,
     thumbnailURL,
     waveform,
     previewCenterMs,

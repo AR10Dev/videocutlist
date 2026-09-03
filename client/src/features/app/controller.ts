@@ -181,8 +181,16 @@ export function createWorkspaceController() {
     refreshing,
     loadFolder,
     libraryMessage,
-    refreshMedia,
+    refreshMedia: refreshLibraryMedia,
   } = libraryFeature;
+  const refreshMedia = async () => {
+    await refreshLibraryMedia();
+    const refreshed = media().find((item) => item.id === selected()?.id);
+    if (refreshed) {
+      queryClient.setQueryData(["media", refreshed.id], refreshed);
+      setSelected(refreshed);
+    }
+  };
   const selectedMediaQuery = useQuery(() => ({
     queryKey: ["media", selected()?.id ?? null],
     enabled: Boolean(selected()?.id),
@@ -208,11 +216,11 @@ export function createWorkspaceController() {
     selected,
     muted,
     playheadMs,
-    setStatus,
     updatePlaybackPosition,
   });
   const {
     assetStatus,
+    previewStatus,
     thumbnailURL,
     waveform,
     setPreviewCenterMs,
@@ -341,6 +349,7 @@ export function createWorkspaceController() {
     status,
     setStatus,
     assetStatus,
+    previewStatus,
     segmentLabel,
     setSegmentLabel,
     timecode,

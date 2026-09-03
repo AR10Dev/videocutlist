@@ -13,6 +13,7 @@ export function LibraryView() {
     loadingMore,
     refreshing,
     libraryMessage,
+    status,
     refreshMedia,
     loadFolder,
     chooseMedia,
@@ -39,6 +40,14 @@ export function LibraryView() {
           ↻
         </button>
       </div>
+      <Show
+        when={
+          status().startsWith("Media refresh") ||
+          status() === "You are not allowed to refresh media."
+        }
+      >
+        <p role="status">{status()}</p>
+      </Show>
       <Show when={!selected()}>
         <section class="library-setup" aria-labelledby="library-setup-heading">
           <h3 id="library-setup-heading">Server media library</h3>

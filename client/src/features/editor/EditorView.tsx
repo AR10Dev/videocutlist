@@ -11,6 +11,7 @@ export function EditorView() {
     selected,
     setStatus,
     assetStatus,
+    previewStatus,
     segmentLabel,
     setSegmentLabel,
     timecode,
@@ -135,6 +136,7 @@ export function EditorView() {
                 </p>
               )}
             </Show>
+            <Show when={previewStatus()}>{(message) => <p role="status">{message()}</p>}</Show>
             <Show
               when={canStreamPreview()}
               fallback={

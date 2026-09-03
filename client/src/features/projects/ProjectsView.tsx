@@ -10,6 +10,7 @@ const api = createApiClient(resolveBrowserConfiguration());
 export function ProjectsView() {
   const {
     selected,
+    status,
     setStatus,
     projectId,
     projectName,
@@ -35,6 +36,7 @@ export function ProjectsView() {
         <h2 id="project-heading">Project</h2>
         <details>
           <summary>Project details</summary>
+          <p>Project ID: {projectId()}</p>
           <p>
             Revision {revision()} · {dirty() ? "unsaved changes" : "saved"}
           </p>
@@ -93,8 +95,16 @@ export function ProjectsView() {
         <div class="controls">
           <button class="primary" onClick={() => void projects.saveProject()}>Save project</button>
           <button onClick={projects.newProject}>New project</button>
-          <button onClick={() => void projects.loadProject()}>Load project</button>
+          <button
+            onClick={() => {
+              const id = window.prompt("Project ID to load", "");
+              if (id) void projects.loadProject(id);
+            }}
+          >
+            Load project
+          </button>
         </div>
+        <Show when={status()}>{(message) => <p role="status">{message()}</p>}</Show>
         <Show when={dirty()}>
           <p role="status">Save this project to keep your changes.</p>
         </Show>
