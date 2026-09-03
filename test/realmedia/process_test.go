@@ -128,7 +128,7 @@ func TestProductionProcessMediaAndDerivedAssets(t *testing.T) {
 	cancelledRequest.Header.Set("Authorization", "Bearer "+bearerToken)
 	initialCacheFiles := cacheTempFiles(root)
 	responseDone := make(chan *http.Response, 1)
-	go func() { response, _ := http.DefaultClient.Do(cancelledRequest); responseDone <- response }()
+	go func() { response, _ := p.do(cancelledRequest); responseDone <- response }()
 	started := false
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {

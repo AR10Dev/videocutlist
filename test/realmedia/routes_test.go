@@ -4,6 +4,7 @@ package realmedia
 
 import (
 	"net/http"
+	"strings"
 	"testing"
 
 	"videocutlist/internal/httpapi"
@@ -53,27 +54,25 @@ var productionRoutes = []struct {
 	{http.MethodPost, "/api/v1/settings/media/refresh", "settings"},
 }
 
-func behavioralCase(method, path string) string {
-	switch {
-	case path == "/api/v1/settings" && method == http.MethodPut:
-		return "TestProductionSettingsAndAutomationWorkflows"
-	case path == "/api/v1/automation":
-		return "TestProductionSettingsAndAutomationWorkflows"
-	case path == "/api/v1/projects/p_aaaaaaaaaaaa/exports":
-		return "TestProductionExportsJobsAndOutputs"
-	case path == "/api/v1/projects/p_aaaaaaaaaaaa/exports/preflight":
-		return "TestProductionExportsJobsAndOutputs"
-	case path == "/api/v1/jobs/j_aaaaaaaaaaaa/retry":
-		return "TestProductionBatchCancellationLifecycle"
-	case path == "/api/v1/batches/b_aaaaaaaaaaaa" && method == http.MethodDelete:
-		return "TestProductionBatchCancellationLifecycle"
-	case path == "/api/v1/media/m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/preview":
-		return "TestProductionProcessMediaAndDerivedAssets"
-	case path == "/api/v1/settings/media/refresh":
-		return "TestProductionProcessMediaAndDerivedAssets"
-	default:
-		return "TestProductionProcessMediaAndDerivedAssets"
+func routePathMatches(template, actual string) bool {
+	templateParts := strings.Split(strings.Trim(template, "/"), "/")
+	actualParts := strings.Split(strings.Trim(actual, "/"), "/")
+	if len(templateParts) != len(actualParts) {
+		return false
 	}
+	for i, part := range templateParts {
+		if part == actualParts[i] {
+			continue
+		}
+		if len(part) > 2 && strings.HasSuffix(part, "aaaaaaaaaaaa") {
+			prefix := part[:2]
+			if (prefix == "m_" || prefix == "p_" || prefix == "j_" || prefix == "b_") && strings.HasPrefix(actualParts[i], prefix) {
+				continue
+			}
+		}
+		return false
+	}
+	return true
 }
 
 func TestProductionRouteCoverageTable(t *testing.T) {
@@ -85,10 +84,6 @@ func TestProductionRouteCoverageTable(t *testing.T) {
 			t.Errorf("duplicate route coverage entry %s", key)
 		}
 		seen[key] = true
-		behavior := behavioralCase(tc.method, tc.path)
-		if behavior == "" {
-			t.Errorf("route %s has no behavioral test owner", key)
-		}
 		kind := httpapi.RouteCoverageKind(tc.method, tc.path)
 		if kind == "" {
 			t.Errorf("route coverage entry is not accepted by production router: %s", key)

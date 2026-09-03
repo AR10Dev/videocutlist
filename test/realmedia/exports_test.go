@@ -181,7 +181,7 @@ func TestProductionExportsJobsAndOutputs(t *testing.T) {
 			continue
 		}
 		if final["state"] != "succeeded" {
-			t.Fatalf("batch %s terminal state = %v jobs=%v detail=%v\n%s", batchID, final["state"], final["jobs"], terminal, boundedLog(p.log.String()))
+			t.Fatalf("batch %s terminal state = %v jobs=%v detail=%v\n%s", batchID, final["state"], final["jobs"], terminal, boundedLog(p.log.Snapshot()))
 		}
 		job := p.request(t, "GET", "/api/v1/jobs/"+jobID)
 		var detail struct {

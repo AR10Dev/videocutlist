@@ -29,10 +29,32 @@ const (
 	startupWait = 20 * time.Second
 )
 
+type boundedLogBuffer struct {
+	mu    sync.Mutex
+	data  []byte
+	limit int
+}
+
+func (b *boundedLogBuffer) Write(data []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.data = append(b.data, data...)
+	if len(b.data) > b.limit {
+		b.data = b.data[len(b.data)-b.limit:]
+	}
+	return len(data), nil
+}
+
+func (b *boundedLogBuffer) Snapshot() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return string(append([]byte(nil), b.data...))
+}
+
 type process struct {
 	cmd                *exec.Cmd
 	base               string
-	log                *strings.Builder
+	log                *boundedLogBuffer
 	cancel             context.CancelFunc
 	forbidden          []string
 	redactionViolation bool
@@ -71,9 +93,10 @@ var executedRoutes sync.Map
 func TestMain(m *testing.M) {
 	code := m.Run()
 	if code == 0 {
-		for _, kind := range httpapi.RouteCoverageKinds() {
-			if _, ok := executedRoutes.Load(kind); !ok {
-				fmt.Fprintf(os.Stderr, "real-media route not exercised: %s\n", kind)
+		for _, route := range productionRoutes {
+			key := routeKey(route.method, route.path)
+			if _, ok := executedRoutes.Load(key); !ok {
+				fmt.Fprintf(os.Stderr, "real-media route not exercised: %s\n", key)
 				code = 1
 			}
 		}
@@ -87,11 +110,23 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
+func routeKey(method, path string) string {
+	path = strings.Split(path, "?")[0]
+	kind := httpapi.RouteCoverageKind(method, path)
+	for _, route := range productionRoutes {
+		if route.method == method && httpapi.RouteCoverageKind(route.method, route.path) == kind && routePathMatches(route.path, path) {
+			return method + " " + kind + " " + route.path
+		}
+	}
+	if kind != "" {
+		return method + " " + kind + " " + path
+	}
+	return method + " " + path
+}
+
 func recordRoute(method, path string) {
 	path = strings.Split(path, "?")[0]
-	if kind := httpapi.RouteCoverageKind(method, path); kind != "" {
-		executedRoutes.Store(kind, true)
-	}
+	executedRoutes.Store(routeKey(method, path), true)
 	if path == "/" || path == "/metrics" || path == "/api/v1/health" || path == "/api/v1/ready" {
 		executedRoutes.Store(method+" "+path, true)
 	}
@@ -136,7 +171,7 @@ func startProcessWithEnv(t *testing.T, root string, overrides map[string]string)
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(ctx, binary)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	logBuffer := new(strings.Builder)
+	logBuffer := &boundedLogBuffer{limit: 64 * 1024}
 	cmd.Stdout, cmd.Stderr = logBuffer, logBuffer
 	cmd.Env = append(os.Environ(),
 		"VIDEOCUTLIST_DATABASE_PATH="+filepath.Join(root, "videocutlist.db"),
@@ -180,7 +215,7 @@ func startProcessWithEnv(t *testing.T, root string, overrides map[string]string)
 	deadline := time.Now().Add(startupWait)
 	for time.Now().Before(deadline) {
 		if p.base == "" {
-			if match := regexp.MustCompile(`"listen_addr":"(127\.0\.0\.1:[0-9]+)"`).FindStringSubmatch(logBuffer.String()); len(match) == 2 {
+			if match := regexp.MustCompile(`"listen_addr":"(127\.0\.0\.1:[0-9]+)"`).FindStringSubmatch(logBuffer.Snapshot()); len(match) == 2 {
 				p.base = "http://" + match[1]
 			}
 		}
@@ -197,7 +232,7 @@ func startProcessWithEnv(t *testing.T, root string, overrides map[string]string)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	t.Fatalf("production process did not become ready\n%s", boundedLog(p.log.String()))
+	t.Fatalf("production process did not become ready\n%s", boundedLog(p.log.Snapshot()))
 	return nil
 }
 
@@ -216,12 +251,36 @@ func (p *process) requestNoAuth(t *testing.T, method, path string) *http.Respons
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp, err := http.DefaultClient.Do(req)
-	recordRoute(method, path)
+	resp, err := p.do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return resp
+}
+
+func (p *process) do(req *http.Request) (*http.Response, error) {
+	resp, err := http.DefaultClient.Do(req)
+	recordRoute(req.Method, req.URL.Path)
+	if resp == nil {
+		return resp, err
+	}
+	for _, values := range resp.Header {
+		for _, value := range values {
+			p.checkRedaction(value)
+		}
+	}
+	resp.Body = &redactionBody{ReadCloser: resp.Body, process: p}
+	return resp, err
+}
+
+func (p *process) checkRedaction(value string) {
+	for _, forbidden := range p.forbidden {
+		if forbidden != "" && strings.Contains(value, forbidden) {
+			p.redactionMu.Lock()
+			p.redactionViolation = true
+			p.redactionMu.Unlock()
+		}
+	}
 }
 
 func (p *process) request(t *testing.T, method, path string) *http.Response {
@@ -254,24 +313,9 @@ func (p *process) requestHeaders(t *testing.T, method, path string, body io.Read
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	resp, err := http.DefaultClient.Do(req)
-	recordRoute(method, path)
-	if resp != nil {
-		for _, values := range resp.Header {
-			for _, value := range values {
-				for _, forbidden := range p.forbidden {
-					if forbidden != "" && strings.Contains(value, forbidden) {
-						p.redactionMu.Lock()
-						p.redactionViolation = true
-						p.redactionMu.Unlock()
-					}
-				}
-			}
-		}
-		resp.Body = &redactionBody{ReadCloser: resp.Body, process: p}
-	}
+	resp, err := p.do(req)
 	if err != nil {
-		t.Fatalf("%s %s: %v\n%s", method, path, err, boundedLog(p.log.String()))
+		t.Fatalf("%s %s: %v\n%s", method, path, err, boundedLog(p.log.Snapshot()))
 	}
 	return resp
 }
@@ -311,7 +355,7 @@ func assertNoSecrets(t *testing.T, p *process) {
 	violated := p.redactionViolation
 	p.redactionMu.Unlock()
 	for _, value := range p.forbidden {
-		if strings.Contains(p.log.String(), value) {
+		if strings.Contains(p.log.Snapshot(), value) {
 			violated = true
 		}
 	}

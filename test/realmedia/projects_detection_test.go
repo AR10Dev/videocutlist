@@ -134,13 +134,9 @@ func (p *process) raw(t *testing.T, method, path string, body []byte) *http.Resp
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	resp, err := http.DefaultClient.Do(req)
-	recordRoute(method, path)
-	if resp != nil {
-		resp.Body = &redactionBody{ReadCloser: resp.Body, process: p}
-	}
+	resp, err := p.do(req)
 	if err != nil {
-		t.Fatalf("%s %s: %v\n%s", method, path, err, boundedLog(p.log.String()))
+		t.Fatalf("%s %s: %v\n%s", method, path, err, boundedLog(p.log.Snapshot()))
 	}
 	return resp
 }
