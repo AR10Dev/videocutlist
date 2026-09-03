@@ -1,15 +1,15 @@
 GO ?= go
 GOFMT ?= gofmt
 PNPM ?= pnpm
-GO_PACKAGES := ./cmd/... ./domain/... ./application/... ./protocol/... ./infrastructure/...
+GO_PACKAGES := ./cmd/... ./internal/...
 GO_TEST_PACKAGES := $(GO_PACKAGES) ./test/...
 
 .PHONY: build check client-install e2e format lint smoke test
 
 build:
 	$(PNPM) --dir client run build
-	rm -rf infrastructure/webassets/dist
-	cp -a client/dist infrastructure/webassets/dist
+	rm -rf internal/web/webassets/dist
+	cp -a client/dist internal/web/webassets/dist
 	$(GO) build -tags embed_frontend $(GO_PACKAGES)
 
 check: lint test build
@@ -21,7 +21,7 @@ format:
 	$(PNPM) --dir client run format
 
 lint:
-	test -z "$$($(GOFMT) -l $$(git ls-files '*.go'))"
+	test -z "$$($(GOFMT) -l $$(find cmd internal test -type f -name '*.go'))"
 	$(GO) vet $(GO_TEST_PACKAGES)
 	$(PNPM) --dir client run lint
 

@@ -11,8 +11,8 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-COPY --from=client /src/client/dist /src/infrastructure/webassets/dist
-RUN CGO_ENABLED=0 go build -tags embed_frontend -trimpath -o /videocutlist ./cmd/server
+COPY --from=client /src/client/dist /src/internal/web/webassets/dist
+RUN CGO_ENABLED=0 go build -tags embed_frontend -trimpath -o /videocutlist ./cmd/videocutlist
 
 FROM debian:bookworm-slim
 RUN apt-get update \

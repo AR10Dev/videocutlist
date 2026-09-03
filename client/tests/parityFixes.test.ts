@@ -4,13 +4,13 @@ import {
   parseTimecode,
   watchedMediaPosition,
   hybridSmartCutKnownIneligible,
-} from "../src/preview";
+} from "../src/features/preview/model";
 import { validInterchangeFileSize } from "../src/api";
-import { normalizePeaks, viewportScale } from "../src/assets";
-import { moveSegment, removeSegment } from "../src/segmentEditing";
-import { exportFailureMessage } from "../src/jobUi";
-import { saveIsCurrent } from "../src/saveGuards";
-import { frameDuration } from "../src/frame";
+import { normalizePeaks, viewportScale } from "../src/features/preview/assets";
+import { moveSegment, removeSegment } from "../src/features/editor/segmentEditing";
+import { exportFailureMessage } from "../src/features/queue/jobUi";
+import { saveIsCurrent } from "../src/features/projects/saveGuards";
+import { frameDuration } from "../src/features/editor/frame";
 
 describe("Solid parity editing helpers", () => {
   it("parses only valid millisecond timecodes", () => {

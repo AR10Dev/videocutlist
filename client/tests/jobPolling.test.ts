@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { jobPollInterval } from "../src/jobPolling";
+import { jobPollInterval } from "../src/features/queue/jobPolling";
 
 describe("job polling", () => {
   it("polls queued and running jobs", () => {

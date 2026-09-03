@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { acceptCandidate } from "../src/detection";
+import { acceptCandidate } from "../src/features/detection/model";
 const candidate = {
   id: "c_1",
   mediaId: "m_1",

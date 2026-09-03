@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { defaultSettings, loadSettings } from "../src/settings";
+import { defaultSettings, loadSettings } from "../src/features/settings/model";
 
 describe("settings", () => {
   it("falls back to safe defaults for invalid persisted values", () => {

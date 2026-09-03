@@ -1,36 +1,67 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://videocutlist.local/contracts/project-v1.json",
+  "$id": "https://videocutlist.local/contracts/project-v2.json",
   "title": "VideoCutlist Project",
   "type": "object",
   "additionalProperties": false,
-  "required": ["mediaId", "revision", "segments", "uiState"],
+  "required": ["schemaVersion", "name", "items"],
   "properties": {
-    "mediaId": {"type": "string", "pattern": "^m_[A-Za-z0-9_-]{43}$"},
-    "revision": {"type": "integer", "minimum": 0},
-    "segments": {
+    "schemaVersion": { "const": 2 },
+    "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+    "items": {
       "type": "array",
+      "minItems": 1,
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["startMs", "endMs"],
+        "required": ["id", "mediaId", "segments", "exportOptions"],
         "properties": {
-          "startMs": {"type": "integer", "minimum": 0},
-          "endMs": {"type": "integer", "minimum": 1},
-          "label": {"type": "string", "maxLength": 200}
+          "id": { "type": "string", "pattern": "^i_[A-Za-z0-9_-]{24}$" },
+          "mediaId": { "type": "string", "pattern": "^m_[A-Za-z0-9_-]{43}$" },
+          "segments": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["startMs", "endMs"],
+              "properties": {
+                "startMs": { "type": "integer", "minimum": 0 },
+                "endMs": { "type": "integer", "minimum": 1 },
+                "label": { "type": "string", "maxLength": 200 }
+              }
+            }
+          },
+          "editorState": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["playheadMs", "zoom", "muted"],
+            "properties": {
+              "playheadMs": { "type": "integer", "minimum": 0 },
+              "zoom": { "type": "number", "exclusiveMinimum": 0 },
+              "muted": { "type": "boolean" }
+            }
+          },
+          "exportOptions": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "mode": { "enum": ["merge", "separate"] },
+              "selection": { "enum": ["segments", "gaps"] },
+              "streamIndexes": {
+                "type": "array",
+                "uniqueItems": true,
+                "items": { "type": "integer", "minimum": 0 }
+              },
+              "cutStrategy": {
+                "enum": ["stream_copy_preferred", "precise_reencode", "hybrid_smart_cut"]
+              },
+              "container": { "const": "mkv" },
+              "destinationId": { "type": "string", "maxLength": 64 },
+              "filenameTemplate": { "type": "string", "maxLength": 160 }
+            }
+          }
         }
-      }
-    },
-    "uiState": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["playheadMs", "zoom", "muted"],
-      "properties": {
-        "playheadMs": {"type": "integer", "minimum": 0},
-        "zoom": {"type": "number", "exclusiveMinimum": 0},
-        "muted": {"type": "boolean"}
       }
     }
   }
 }
-

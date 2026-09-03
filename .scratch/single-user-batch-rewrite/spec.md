@@ -75,10 +75,6 @@ No ORM, external queue, Redis, PostgreSQL, GraphQL, WebSockets, Tailwind, UI fra
 
 Implement tickets in dependency order. New behavior should land in the target feature modules. Remove the old horizontal packages only after all callers have moved.
 
-## Superseded work
-
-This rewrite supersedes the proposed `.scratch/settings-management/` plan. Deployment paths become deployment-only; the browser receives aliases and safe availability diagnostics rather than original-media or destination paths.
-
 ## Out of scope
 
 - Multiple users, tenants, roles, or per-user quotas

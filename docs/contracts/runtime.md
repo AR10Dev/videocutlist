@@ -1,4 +1,4 @@
-# Frozen Runtime Contracts — v1
+# Frozen Runtime Contracts — v2
 
 ## Settings scopes and administration
 
@@ -7,16 +7,16 @@ VideoCutlist has three settings scopes:
 - **Deployment bootstrap (environment-only):** database path, listener and port,
   authentication, trusted proxy and CORS policy, FFmpeg/FFprobe paths, and
   container mounts. These values are never editable through the Settings API.
-- **Server runtime settings (shared by every client):** media roots, export
-  defaults and destinations, preview limits, cache policy, and scan limits.
-  These values use a typed persisted document; deployment values provide first-run
-  defaults only.
+- **Server runtime settings (shared by every client):** safe export defaults,
+  destination labels and retention, preview limits, cache policy, and scan limits.
+  Filesystem paths, mounts, executables, and listener settings remain deployment-only.
 - **Browser preferences (local to one browser profile):** editor conveniences
   such as mute, cut strategy, and filename template. They are stored in browser
   local storage and are never sent to the server settings store.
 
 The Settings API is a shared single-user operation. Its HTTP handlers run only
-after the deployment access gate. The local `auth=none` mode is loopback-only; a
+after the deployment access gate and return safe aliases rather than filesystem
+paths. The local `auth=none` mode is loopback-only; a
 non-loopback deployment must configure `bearer` or `trusted_proxy` access.
 
 ## Access gate and media
@@ -51,16 +51,18 @@ Incomplete files end in `.partial`; only atomic rename publishes a hit.
 
 ## Projects and jobs
 
-- Projects are single-user resources. Revision zero creates; successful PUT
-  increments revision; stale revisions return 409.
-- Segment bounds are non-negative, ordered, non-overlapping, within the media
-  duration, and `startMs < endMs`.
-- Job states: `queued`, `running`, `succeeded`, `failed`, `cancelled`.
-  Terminal states never transition.
-- Export capacity is admission-controlled before a durable job is created;
-  excess submissions return HTTP 429 rather than forming an unbounded queue.
-- On restart, both `queued` and `running` jobs become failed with
-  `interrupted_by_restart`.
+- Projects contain ordered media items. Each item has a stable opaque ID,
+  independent segments, editor state, and export options. Revision zero creates;
+  successful PUT increments revision; stale revisions return 409.
+- Segment bounds are non-negative, ordered, non-overlapping, within each item's
+  media duration, and `startMs < endMs`.
+- Export, detection, and library-scan jobs use one durable SQLite state machine:
+  `queued`, `running`, `succeeded`, `failed`, `cancelled`. Terminal states never
+  transition, and batch state is derived from child jobs.
+- Queue admission and insertion are atomic. Queue capacity is independent from
+  worker concurrency; excess submissions return HTTP 429.
+- On restart, queued jobs remain queued. Running jobs become failed with
+  `interrupted_by_restart` unless artifact reconciliation proves completion.
 - MVP exports use MKV and `stream_copy_preferred`; no smart-boundary re-encode.
   Non-keyframe accuracy limitations are explicit structured warnings.
 
@@ -119,10 +121,10 @@ development mode remains loopback-only.
 
 Public base URLs and allowed origins accept only absolute HTTP(S) values
 without credentials, query, or fragment; origins also have no path.
-`VIDEOCUTLIST_ALLOWED_ORIGINS` is comma-separated and empty by default. CORS is
-deny-by-default: requests without `Origin` remain ordinary same-origin or
-non-browser requests, while a request with `Origin` must exactly match the
-configured list. Allowed responses echo that origin, set
+`VIDEOCUTLIST_ALLOWED_ORIGINS` is comma-separated and empty by default. Requests
+without `Origin` and requests whose origin exactly matches the listener are
+same-origin. Other browser origins must exactly match the configured list.
+Allowed responses echo that origin, set
 `Access-Control-Allow-Credentials: true`, vary on `Origin`, and expose
 `ETag`, `X-Request-ID`, `X-Preview-Start`, `X-Preview-Duration`,
 `X-Preview-Offset`, `X-Preview-Cache`, and `Retry-After`. Wildcard origins are
@@ -157,6 +159,17 @@ layer.
 
 Read and idle timeouts must be positive Go durations. Write timeout may be
 zero so streamed previews are not terminated by a whole-response deadline.
+
+## Source layout
+
+Production code is rooted at `cmd/videocutlist`. SQLite schema and general
+persistence live under `internal/db`; durable job persistence and scheduling live
+under `internal/jobs`. Feature behavior lives under `internal/library`,
+`internal/projects`, `internal/preview`, `internal/export`, `internal/detection`,
+`internal/settings`, `internal/httpapi`, and `internal/web`. `internal/runtime`
+contains executable-boundary infrastructure composition. The browser entrypoint
+is `client/src/App.tsx`; its current application composition and feature helpers
+live under `client/src/features` and use generated OpenAPI types.
 
 ## Browser client
 

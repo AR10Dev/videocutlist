@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizePeaks, viewportScale } from "../src/assets";
+import { normalizePeaks, viewportScale } from "../src/features/preview/assets";
 
 describe("timeline assets", () => {
   it("normalizes bounded waveform peaks", () => {

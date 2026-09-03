@@ -5,9 +5,9 @@ import {
   abortAndClear,
   abortCancellationControllers,
   cancellationIsCurrent,
-} from "../src/cancellation";
-import { jobPollInterval } from "../src/jobPolling";
-import { cancelJobLifecycle } from "../src/queryLifecycle";
+} from "../src/features/queue/cancellation";
+import { jobPollInterval } from "../src/features/queue/jobPolling";
+import { cancelJobLifecycle } from "../src/features/queue/queryLifecycle";
 
 describe("Solid Query lifecycle contracts", () => {
   it("cancels an in-flight query through QueryClient", async () => {

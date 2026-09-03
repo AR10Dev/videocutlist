@@ -20,18 +20,26 @@ CREATE TABLE projects (
   updated_at TEXT NOT NULL
 );
 
-CREATE TABLE export_jobs (
+CREATE TABLE jobs (
   id TEXT PRIMARY KEY,
-  project_id TEXT NOT NULL,
-  project_revision INTEGER NOT NULL,
-  state TEXT NOT NULL,
+  batch_id TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('export', 'detection', 'library_scan')),
+  project_id TEXT,
+  project_item_id TEXT,
+  state TEXT NOT NULL CHECK (state IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')),
   request_json TEXT NOT NULL,
   result_json TEXT,
   error_code TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
-  FOREIGN KEY (project_id) REFERENCES projects(id)
+  CHECK (
+    (kind = 'library_scan' AND project_id IS NULL AND project_item_id IS NULL)
+    OR (kind != 'library_scan' AND project_id IS NOT NULL AND project_item_id IS NOT NULL)
+  )
 );
+
+CREATE INDEX jobs_batch_updated ON jobs (batch_id, updated_at);
+CREATE INDEX jobs_state_updated ON jobs (state, updated_at);
 
 CREATE TABLE cache_entries (
   cache_key TEXT PRIMARY KEY,

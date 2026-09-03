@@ -9,7 +9,7 @@ import {
   updateTimelinePlayback,
   undoTimeline,
   type TimelineSnapshot,
-} from "../src/timeline";
+} from "../src/features/editor/timeline";
 
 const initial: TimelineSnapshot = {
   playheadMs: 0,

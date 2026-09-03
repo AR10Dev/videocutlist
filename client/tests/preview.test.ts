@@ -7,7 +7,7 @@ import {
   streamPreview,
   validateSegments,
   watchedMediaPosition,
-} from "../src/preview";
+} from "../src/features/preview/model";
 
 afterEach(() => vi.unstubAllGlobals());
 

@@ -22,6 +22,7 @@ const secondMedia = {
 };
 
 const apiOrigin = "http://127.0.0.1:8787";
+const itemId = "i_aaaaaaaaaaaaaaaaaaaaaaaa";
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
@@ -120,7 +121,7 @@ test.beforeEach(async ({ page }) => {
       return route.fulfill({
         status: 202,
         json: {
-          id: `j_detection-${kind}-${detectionSequence}`, 
+          id: `j_detection-${kind}-${detectionSequence}`,
           type: "detection",
           state: "queued",
           mediaId: media.id,
@@ -187,10 +188,19 @@ test.beforeEach(async ({ page }) => {
       return route.fulfill({
         json: {
           id: "p_demo-project",
-          mediaId: media.id,
           revision: 4,
-          segments: [{ startMs: 100, endMs: 700, label: "restored" }],
-          uiState: { playheadMs: 700, zoom: 1, muted: false },
+          schemaVersion: 2,
+          name: "Demo project",
+          updatedAt: "2026-08-20T12:00:00Z",
+          items: [
+            {
+              id: itemId,
+              mediaId: media.id,
+              segments: [{ startMs: 100, endMs: 700, label: "restored" }],
+              editorState: { playheadMs: 700, zoom: 1, muted: false },
+              exportOptions: {},
+            },
+          ],
         },
       });
     if (request.method() === "PUT") {
@@ -203,18 +213,218 @@ test.beforeEach(async ({ page }) => {
         });
       savedRevision += 1;
       const savedProjectId = url.pathname.split("/")[4];
+      const body = request.postDataJSON();
       return route.fulfill({
         json: {
+          ...body,
           id: savedProjectId,
-          mediaId: media.id,
           revision: savedRevision,
-          segments: [],
-          uiState: { playheadMs: 0, zoom: 1, muted: false },
+          updatedAt: "2026-08-20T12:00:00Z",
         },
       });
     }
     return route.fulfill({ status: 404 });
   });
+});
+
+test("edits independent project items and submits a durable batch", async ({ page }) => {
+  let savedBody: Record<string, unknown> | undefined;
+  let exportBody: Record<string, unknown> | undefined;
+  let submitted = false;
+  const batch = {
+    batchId: "b_batch-edit01",
+    projectId: "p_batch-edit01",
+    projectRevision: 1,
+    state: "queued",
+    progress: 0,
+    jobs: [
+      {
+        id: "j_batch-edit01",
+        batchId: "b_batch-edit01",
+        projectItemId: itemId,
+        mediaLabel: "camera.mp4",
+        type: "export",
+        state: "queued",
+        progress: 0,
+      },
+    ],
+  };
+  await page.route(`${apiOrigin}/api/v1/media/${secondMedia.id}`, (route) =>
+    route.fulfill({ json: secondMedia }),
+  );
+  await page.route(`${apiOrigin}/api/v1/projects/*`, async (route) => {
+    if (route.request().method() !== "PUT") return route.fallback();
+    savedBody = route.request().postDataJSON() as Record<string, unknown>;
+    return route.fulfill({
+      json: {
+        ...savedBody,
+        id: "p_batch-edit01",
+        revision: 1,
+        updatedAt: "2026-08-20T12:00:00Z",
+      },
+    });
+  });
+  await page.route(`${apiOrigin}/api/v1/batches**`, (route) => {
+    const path = new URL(route.request().url()).pathname;
+    return route.fulfill({
+      json: path === "/api/v1/batches" ? { items: submitted ? [batch] : [] } : batch,
+    });
+  });
+  await page.route(`${apiOrigin}/api/v1/projects/*/exports`, (route) => {
+    exportBody = route.request().postDataJSON() as Record<string, unknown>;
+    submitted = true;
+    return route.fulfill({ status: 202, json: batch });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await page.getByLabel("Timeline playhead").fill("100");
+  await page.getByRole("button", { name: "Set In marker" }).click();
+  await page.getByLabel("Timeline playhead").fill("700");
+  await page.getByRole("button", { name: "Set Out marker" }).click();
+  await page.getByRole("button", { name: "Add In/Out segment" }).click();
+
+  await page.getByRole("button", { name: /second.mp4/ }).click();
+  await page.getByLabel("Timeline playhead").fill("200");
+  await page.getByRole("button", { name: "Set In marker" }).click();
+  await page.getByLabel("Timeline playhead").fill("800");
+  await page.getByRole("button", { name: "Set Out marker" }).click();
+  await page.getByRole("button", { name: "Add In/Out segment" }).click();
+
+  const projectItems = page.getByRole("list", { name: "Project media items" });
+  await projectItems.getByRole("button", { name: "camera.mp4", exact: true }).click();
+  await expect(page.getByRole("list", { name: "Selected segments" })).toContainText("0:00.100");
+  await expect(page.getByRole("list", { name: "Selected segments" })).not.toContainText("0:00.200");
+  await page.getByRole("button", { name: "Move second.mp4 up" }).click();
+  await page.getByRole("button", { name: "Save project" }).click();
+  await expect.poll(() => savedBody).toBeTruthy();
+  const items = savedBody?.items as Array<{
+    mediaId: string;
+    segments: Array<{ startMs: number }>;
+  }>;
+  expect(items.map((item) => item.mediaId)).toEqual([secondMedia.id, media.id]);
+  expect(items.map((item) => item.segments[0]?.startMs)).toEqual([200, 100]);
+
+  await page.getByLabel("Mode").selectOption("separate");
+  await expect(page.getByText(/unsaved changes/)).toBeVisible();
+  await page.getByRole("button", { name: "Start export" }).click();
+  await expect.poll(() => exportBody).toBeTruthy();
+  const exportedItems = savedBody?.items as Array<{
+    mediaId: string;
+    exportOptions: { mode?: string };
+  }>;
+  expect(exportedItems.find((item) => item.mediaId === media.id)?.exportOptions.mode).toBe(
+    "separate",
+  );
+  expect(exportBody?.itemIds).toBeUndefined();
+  await expect(page.getByRole("heading", { name: "Export queue" })).toBeVisible();
+  await expect(page.getByText(/camera.mp4 · queued/)).toBeVisible();
+});
+
+test("restores the durable queue and retries a failed child as a new job", async ({ page }) => {
+  const failedBatch = {
+    batchId: "b_failedqueue01",
+    projectId: "p_batch-edit01",
+    projectRevision: 3,
+    state: "failed",
+    progress: 1,
+    jobs: [
+      {
+        id: "j_failedqueue01",
+        batchId: "b_failedqueue01",
+        projectItemId: itemId,
+        mediaLabel: "camera.mp4",
+        type: "export",
+        state: "failed",
+        progress: 1,
+        errorCode: "source_changed",
+      },
+    ],
+  };
+  const retryBatch = {
+    ...failedBatch,
+    batchId: "b_retryqueue001",
+    state: "queued",
+    progress: 0,
+    jobs: [
+      {
+        ...failedBatch.jobs[0],
+        id: "j_retryqueue001",
+        batchId: "b_retryqueue001",
+        state: "queued",
+        progress: 0,
+        errorCode: undefined,
+      },
+    ],
+  };
+  let retried = false;
+  await page.route(`${apiOrigin}/api/v1/batches**`, (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === "/api/v1/batches/b_retryqueue001") return route.fulfill({ json: retryBatch });
+    return route.fulfill({ json: { items: retried ? [retryBatch, failedBatch] : [failedBatch] } });
+  });
+  await page.route(`${apiOrigin}/api/v1/jobs/j_failedqueue01/retry`, (route) => {
+    retried = true;
+    return route.fulfill({ status: 202, json: retryBatch });
+  });
+
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "Export queue" })).toBeVisible();
+  await expect(page.getByText(/camera.mp4 · failed · 100% · source_changed/)).toBeVisible();
+  await page.getByRole("button", { name: "Retry" }).click();
+  await expect.poll(() => retried).toBe(true);
+  await expect(page.getByRole("article", { name: "Batch b_retryqueue001" })).toBeVisible();
+});
+
+test("reload restores the active project and permits child and batch cancellation", async ({
+  page,
+}) => {
+  const queuedBatch = {
+    batchId: "b_restorequeue01",
+    projectId: "p_demo-project",
+    projectRevision: 4,
+    state: "queued",
+    progress: 0,
+    jobs: [
+      {
+        id: "j_restorequeue01",
+        batchId: "b_restorequeue01",
+        projectItemId: itemId,
+        mediaLabel: "camera.mp4",
+        type: "export",
+        state: "queued",
+        progress: 0,
+      },
+    ],
+  };
+  let childCancelled = false;
+  let batchCancelled = false;
+  await page.addInitScript(() =>
+    localStorage.setItem("videocutlist.active-project.v2", "p_demo-project"),
+  );
+  await page.route(`${apiOrigin}/api/v1/batches**`, (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (route.request().method() === "DELETE") {
+      batchCancelled = true;
+      return route.fulfill({ status: 204 });
+    }
+    return route.fulfill({
+      json: path === "/api/v1/batches" ? { items: [queuedBatch] } : queuedBatch,
+    });
+  });
+  await page.route(`${apiOrigin}/api/v1/jobs/j_restorequeue01`, (route) => {
+    if (route.request().method() === "DELETE") childCancelled = true;
+    return route.fulfill({ status: 204 });
+  });
+
+  await page.goto("/");
+  await expect(page.getByLabel("Project ID")).toHaveValue("p_demo-project");
+  await expect(page.getByLabel("Preview player")).toBeVisible();
+  const restored = page.getByRole("article", { name: "Batch b_restorequeue01" });
+  await restored.getByRole("button", { name: "Cancel job" }).click();
+  await expect.poll(() => childCancelled).toBe(true);
+  await restored.getByRole("button", { name: "Cancel batch" }).click();
+  await expect.poll(() => batchCancelled).toBe(true);
 });
 
 test("explains server-mounted setup when the library is empty", async ({ page }) => {
@@ -239,7 +449,7 @@ test("keeps the inspector contextual until media is selected", async ({ page }) 
 
   await expect(page.getByRole("button", { name: "Settings" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Project" })).not.toBeVisible();
-  await expect(page.getByRole("heading", { name: "Export" })).not.toBeVisible();
+  await expect(page.getByRole("heading", { name: "Export", exact: true })).not.toBeVisible();
   await expect(page.getByRole("heading", { name: "Auto detection" })).not.toBeVisible();
   await expect(page.getByText("Default cut strategy")).not.toBeVisible();
   await expect(page.getByText("Default filename template")).not.toBeVisible();
@@ -247,7 +457,7 @@ test("keeps the inspector contextual until media is selected", async ({ page }) 
   await page.getByRole("button", { name: /camera.mp4/ }).click();
 
   await expect(page.getByRole("heading", { name: "Project" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Export" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Export", exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Auto detection" })).toBeVisible();
 });
 
@@ -370,8 +580,8 @@ test("MVP browser behavior: list, metadata, settle, cancel, offset, markers, res
   await playhead.fill("700");
   await page.getByRole("button", { name: "Set Out marker" }).click();
   await page.getByRole("button", { name: "Add In/Out segment" }).click();
-  await expect(page.locator("ol")).toContainText("0:00.100");
-  await expect(page.locator("ol")).toContainText("0:00.700");
+  await expect(page.getByRole("list", { name: "Selected segments" })).toContainText("0:00.100");
+  await expect(page.getByRole("list", { name: "Selected segments" })).toContainText("0:00.700");
   await page.getByRole("button", { name: "Save project" }).click();
   await expect(page.getByText(/Revision 1 · saved/)).toBeVisible(); // 7 markers save
 
@@ -486,7 +696,10 @@ test("exports the saved segments, polls to a safe result, and shows warnings", a
       filenameTemplate: "{source}-{segment}.{ext}",
     });
     await route.fulfill({
-      json: { id: "j_export", type: "export", state: "queued", progress: 0 },
+      json: {
+        batchId: "b_export000001",
+        jobs: [{ id: "j_export", type: "export", state: "queued", progress: 0 }],
+      },
     });
   });
   await page.route(`${apiOrigin}/api/v1/jobs/j_export`, async (route) => {
@@ -577,7 +790,10 @@ test("shows stable failed and capacity messages and permits retry", async ({ pag
     creates += 1;
     if (creates === 1) return route.fulfill({ status: 429 });
     return route.fulfill({
-      json: { id: "j_failed", type: "export", state: "queued", progress: 0 },
+      json: {
+        batchId: "b_failed000001",
+        jobs: [{ id: "j_failed", type: "export", state: "queued", progress: 0 }],
+      },
     });
   });
   await page.route(`${apiOrigin}/api/v1/jobs/j_failed`, (route) =>
@@ -619,10 +835,13 @@ test("cancels an active export without showing a path", async ({ page }) => {
   let cancelled = false;
   await page.route(`${apiOrigin}/api/v1/projects/*/exports`, (route) =>
     route.fulfill({
-      json: { id: "j_cancel", type: "export", state: "queued", progress: 0 },
+      json: {
+        batchId: "b_cancel000001",
+        jobs: [{ id: "j_cancel", type: "export", state: "queued", progress: 0 }],
+      },
     }),
   );
-  await page.route(`${apiOrigin}/api/v1/jobs/j_cancel`, (route) => {
+  await page.route(`${apiOrigin}/api/v1/batches/b_cancel000001`, (route) => {
     if (route.request().method() === "DELETE") cancelled = true;
     return route.fulfill({ status: 204 });
   });
@@ -694,7 +913,10 @@ test("delayed saves stay dirty and cannot launch obsolete exports", async ({ pag
   await page.route(`${apiOrigin}/api/v1/projects/*/exports`, (route) => {
     exports += 1;
     return route.fulfill({
-      json: { id: "j_new", type: "export", state: "queued", progress: 0 },
+      json: {
+        batchId: "b_newexport001",
+        jobs: [{ id: "j_new", type: "export", state: "queued", progress: 0 }],
+      },
     });
   });
   await page.goto("/");
@@ -871,10 +1093,12 @@ test("stale selection metadata cannot replace a refresh or newer selection statu
   await page.getByRole("button", { name: /second.mp4/ }).click();
   await page.getByRole("button", { name: "Refresh media" }).click();
   release();
-  await expect(page.getByRole("button", { name: /second.mp4/ })).toHaveAttribute(
-    "aria-pressed",
-    "true",
-  );
+  await expect(
+    page.getByRole("list", { name: "Project media items" }).getByRole("button", {
+      name: "second.mp4",
+      exact: true,
+    }),
+  ).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByText(/Metadata request failed/)).toHaveCount(0);
 });
 
@@ -911,10 +1135,12 @@ test("refresh metadata cannot restore an old selection", async ({ page }) => {
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: /second.mp4/ }).click();
   release();
-  await expect(page.getByRole("button", { name: /second.mp4/ })).toHaveAttribute(
-    "aria-pressed",
-    "true",
-  );
+  await expect(
+    page.getByRole("list", { name: "Project media items" }).getByRole("button", {
+      name: "second.mp4",
+      exact: true,
+    }),
+  ).toHaveAttribute("aria-pressed", "true");
 });
 
 test("delayed cancellation cannot overwrite a replacement export", async ({ page }) => {
@@ -925,20 +1151,20 @@ test("delayed cancellation cannot overwrite a replacement export", async ({ page
   let exports = 0;
   await page.route(`${apiOrigin}/api/v1/projects/*/exports`, (route) => {
     exports += 1;
+    const id = exports === 1 ? "j_old" : "j_new";
     return route.fulfill({
       json: {
-        id: exports === 1 ? "j_old" : "j_new",
-        type: "export",
-        state: "queued",
-        progress: 0,
+        batchId: exports === 1 ? "b_oldexport001" : "b_newexport001",
+        jobs: [{ id, type: "export", state: "queued", progress: 0 }],
       },
     });
   });
-  await page.route(`${apiOrigin}/api/v1/jobs/j_old`, async (route) => {
-    if (route.request().method() !== "DELETE")
-      return route.fulfill({
-        json: { id: "j_old", type: "export", state: "queued", progress: 0 },
-      });
+  await page.route(`${apiOrigin}/api/v1/jobs/j_old`, (route) =>
+    route.fulfill({
+      json: { id: "j_old", type: "export", state: "queued", progress: 0 },
+    }),
+  );
+  await page.route(`${apiOrigin}/api/v1/batches/b_oldexport001`, async (route) => {
     await delayed;
     return route.fulfill({ status: 204 });
   });
@@ -971,12 +1197,16 @@ test("new projects reset the editor and dirty changes need confirmation", async 
   await page.getByRole("button", { name: "Load project" }).click();
   await page.waitForTimeout(50);
   expect(projectLoads).toBe(0);
-  page.once("dialog", (dialog) => dialog.dismiss());
   await page.getByRole("button", { name: /second.mp4/ }).click();
-  await expect(page.getByRole("button", { name: /camera.mp4/ })).toHaveAttribute(
-    "aria-pressed",
-    "true",
-  );
+  await expect(
+    page.getByRole("list", { name: "Project media items" }).getByRole("button", {
+      name: "second.mp4",
+      exact: true,
+    }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(
+    page.getByRole("list", { name: "Project media items" }).getByRole("listitem"),
+  ).toHaveCount(2);
   page.once("dialog", (dialog) => dialog.dismiss());
   await page.getByRole("button", { name: "New project" }).click();
   await expect(page.getByText("New project ready.")).not.toBeVisible();
@@ -1003,10 +1233,19 @@ test("load fetches project media directly and corrupt recents do not block start
     route.fulfill({
       json: {
         id: "p_outside-media",
-        mediaId: outsideMedia.id,
         revision: 7,
-        segments: [{ startMs: 100, endMs: 700, label: "outside" }],
-        uiState: { playheadMs: 700, zoom: 2, muted: true },
+        updatedAt: "2026-01-01T00:00:00Z",
+        schemaVersion: 2,
+        name: "Outside media",
+        items: [
+          {
+            id: "i_outside000001",
+            mediaId: outsideMedia.id,
+            segments: [{ startMs: 100, endMs: 700, label: "outside" }],
+            editorState: { playheadMs: 700, zoom: 2, muted: true },
+            exportOptions: {},
+          },
+        ],
       },
     }),
   );

@@ -1,0 +1,268 @@
+// Package runtime composes feature infrastructure at the executable boundary.
+package runtime
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"path/filepath"
+	"time"
+
+	"videocutlist/internal/db"
+	exporter "videocutlist/internal/export"
+	jobqueue "videocutlist/internal/jobs"
+	"videocutlist/internal/library/media/index"
+	"videocutlist/internal/preview/cache"
+	"videocutlist/internal/preview/ffmpeg"
+	"videocutlist/internal/projects"
+	"videocutlist/internal/projects/model"
+)
+
+type MediaCatalog struct {
+	Scanner *index.Scanner
+	Store   *store.MediaStore
+}
+
+func (m MediaCatalog) List(ctx context.Context, cursor string, limit int) (projects.MediaPage, error) {
+	page, err := m.Store.List(ctx, cursor, limit)
+	if err != nil {
+		return projects.MediaPage{}, err
+	}
+	result := projects.MediaPage{Items: make([]projects.Media, 0, len(page.Items))}
+	for _, item := range page.Items {
+		result.Items = append(result.Items, media(item))
+	}
+	if page.NextCursor != "" {
+		result.NextCursor = &page.NextCursor
+	}
+	return result, nil
+}
+func (m MediaCatalog) Browse(ctx context.Context, folderID, cursor string, limit int) (projects.FolderPage, error) {
+	folders, items, next, err := m.Store.Browse(ctx, folderID, cursor, limit)
+	if err != nil {
+		return projects.FolderPage{}, err
+	}
+	page := projects.FolderPage{Folders: make([]projects.FolderNode, 0, len(folders)), Items: make([]projects.Media, 0, len(items))}
+	for _, folder := range folders {
+		page.Folders = append(page.Folders, projects.FolderNode{ID: folder.ID, Label: folder.Label})
+	}
+	for _, item := range items {
+		page.Items = append(page.Items, media(item))
+	}
+	if next != "" {
+		page.NextCursor = &next
+	}
+	return page, nil
+}
+func (m MediaCatalog) Get(ctx context.Context, id string) (projects.Media, error) {
+	record, err := m.Store.Get(ctx, id)
+	if err != nil {
+		return projects.Media{}, err
+	}
+	return media(record.Media), nil
+}
+func (m MediaCatalog) Refresh(ctx context.Context) error         { return m.Scanner.Refresh(ctx, m.Store) }
+func (m MediaCatalog) RootStatuses() map[string]index.RootStatus { return m.Scanner.RootStatuses() }
+func (m MediaCatalog) Preview(ctx context.Context, request projects.PreviewSpec) (model.PreviewSpec, error) {
+	item, err := m.Store.Get(ctx, request.MediaID)
+	if err != nil {
+		return model.PreviewSpec{}, err
+	}
+	return preview(item.Media, request), nil
+}
+func media(item index.Media) projects.Media {
+	streams := map[string]any{}
+	if item.Metadata.Video != nil {
+		streams["video"] = item.Metadata.Video
+	}
+	if item.Metadata.Audio != nil {
+		streams["audio"] = item.Metadata.Audio
+	}
+	streams["tracks"] = item.Metadata.Streams
+	return projects.Media{ID: item.ID, Name: item.Name, DurationMS: item.Metadata.DurationMS, SizeBytes: item.SizeBytes, Container: item.Metadata.Container, Streams: streams, ETag: index.SourceFingerprint(item)}
+}
+func preview(item index.Media, request projects.PreviewSpec) model.PreviewSpec {
+	return model.PreviewSpec{MediaID: item.ID, SizeBytes: item.SizeBytes, MtimeNS: item.MtimeNS, StartMS: request.StartMS, DurationMS: request.WindowMS, OffsetMS: request.OffsetMS, Width: 1280, Height: 720, FPS: 30, Audio: !request.Mute, Encoder: "software-h264-v1", EncoderImpl: "libx264"}
+}
+
+type PreviewCache struct{ Store *cache.Store }
+
+func (p PreviewCache) Open(ctx context.Context, key string, validator projects.Validator) (io.ReadCloser, error) {
+	return p.Store.Open(ctx, key, cache.Validator(validator))
+}
+func (p PreviewCache) Begin(key string) (projects.PreviewPartial, error) {
+	return p.Store.Begin(key)
+}
+
+type PreviewRunner struct {
+	Scanner *index.Scanner
+	Media   *store.MediaStore
+	FFmpeg  ffmpeg.Runner
+}
+
+func (r PreviewRunner) Start(ctx context.Context, spec model.PreviewSpec) (*projects.RunningPreview, error) {
+	source, item, err := r.Scanner.Open(ctx, r.Media, spec.MediaID)
+	if err != nil {
+		return nil, err
+	}
+	defer source.Close()
+	if item.ID != spec.MediaID || item.SizeBytes != spec.SizeBytes || item.MtimeNS != spec.MtimeNS {
+		return nil, index.ErrSourceChanged
+	}
+	file, ok := source.(*os.File)
+	if !ok {
+		return nil, errors.New("media source is not a file")
+	}
+	return r.FFmpeg.Start(ctx, file, spec)
+}
+
+type ProjectRepository struct{ Store *store.ProjectStore }
+
+func (p ProjectRepository) List(ctx context.Context, cursor string, limit int) ([]store.ProjectSummary, *string, error) {
+	return p.Store.List(ctx, cursor, limit)
+}
+func (p ProjectRepository) Get(ctx context.Context, id string) (projects.ProjectRecord, error) {
+	record, err := p.Store.Get(ctx, id)
+	if err != nil {
+		return projects.ProjectRecord{}, err
+	}
+	return project(record)
+}
+func (p ProjectRepository) Save(ctx context.Context, id string, revision int64, document model.Document) (projects.ProjectRecord, error) {
+	data, err := json.Marshal(document)
+	if err != nil {
+		return projects.ProjectRecord{}, err
+	}
+	record, err := p.Store.Save(ctx, id, revision, string(data))
+	if err != nil {
+		return projects.ProjectRecord{}, err
+	}
+	return project(record)
+}
+func project(record store.ProjectRecord) (projects.ProjectRecord, error) {
+	var document model.Document
+	if err := json.Unmarshal([]byte(record.DocumentJSON), &document); err != nil {
+		return projects.ProjectRecord{}, err
+	}
+	return projects.ProjectRecord{Document: document, Revision: record.Revision, UpdatedAt: record.UpdatedAt}, nil
+}
+
+type ExportExecutor struct {
+	Jobs     *jobqueue.JobsStore
+	Scanner  *index.Scanner
+	Media    *store.MediaStore
+	Service  exporter.Service
+	Settings *store.RuntimeSettingsState
+}
+
+func NewExportExecutor(jobs *jobqueue.JobsStore, scanner *index.Scanner, media *store.MediaStore, service exporter.Service) ExportExecutor {
+	return ExportExecutor{Jobs: jobs, Scanner: scanner, Media: media, Service: service}
+}
+func (e ExportExecutor) Preflight(ctx context.Context, _ string, project projects.Project, input projects.ExportInput) (projects.ExportPreflight, error) {
+	if len(project.Items) != 1 {
+		return projects.ExportPreflight{}, errors.New("preflight requires one project item")
+	}
+	source, _, err := e.Scanner.Open(ctx, e.Media, project.Items[0].MediaID)
+	if err != nil {
+		return projects.ExportPreflight{}, err
+	}
+	defer source.Close()
+	file, ok := source.(*os.File)
+	if !ok {
+		return projects.ExportPreflight{}, errors.New("media source is not a file")
+	}
+	service := e.Service
+	if e.Settings != nil {
+		applyRuntimeSettings(&service, e.Settings.Snapshot())
+	}
+	result, err := service.Preflight(ctx, file, exporter.Request{Mode: input.Mode, Selection: input.Selection, StreamIndexes: input.StreamIndexes, CutStrategy: input.CutStrategy, Container: input.Container, DestinationID: input.DestinationID, FilenameTemplate: input.FilenameTemplate})
+	if err != nil {
+		return projects.ExportPreflight{}, err
+	}
+	findings := make([]projects.ExportFinding, len(result.Findings))
+	for i, finding := range result.Findings {
+		findings[i] = projects.ExportFinding{Severity: finding.Severity, Code: finding.Code, Message: finding.Message, StreamIndex: finding.StreamIndex}
+	}
+	return projects.ExportPreflight{Allowed: result.Allowed, Selection: result.Selection, Findings: findings}, nil
+}
+
+func (e ExportExecutor) Download(ctx context.Context, jobID string, position int) (io.ReadCloser, string, error) {
+	if e.Service.Artifacts == nil || e.Jobs == nil {
+		return nil, "", jobqueue.ErrJobNotFound
+	}
+	var resultJSON string
+	job, err := e.Jobs.Get(ctx, jobID)
+	if err == nil && job.Kind == jobqueue.JobExport && job.State == jobqueue.JobSucceeded && job.ResultJSON.Valid {
+		resultJSON = job.ResultJSON.String
+	}
+	var result exporter.Result
+	if resultJSON == "" || json.Unmarshal([]byte(resultJSON), &result) != nil || result.DestinationKind == exporter.KindSourceAdjacent {
+		return nil, "", jobqueue.ErrJobNotFound
+	}
+	destination := exporter.Destination{ID: "download", Kind: exporter.KindDownload, Root: e.Service.OutputDir}
+	for _, candidate := range e.Service.Destinations {
+		if candidate.ID == result.DestinationID {
+			destination = candidate
+			break
+		}
+	}
+	if destination.Root == "" {
+		return nil, "", jobqueue.ErrJobNotFound
+	}
+	names := result.OutputNames
+	if result.OutputName != "" {
+		names = []string{result.OutputName}
+	}
+	if position < 0 || position >= len(names) {
+		return nil, "", jobqueue.ErrJobNotFound
+	}
+	values := make([]exporter.Artifact, len(names))
+	for i, name := range names {
+		values[i] = exporter.Artifact{Path: filepath.Join(destination.Root, name), Name: name, Kind: result.DestinationKind, Expires: result.RetainUntil}
+	}
+	e.Service.Artifacts.Put(jobID, values)
+	file, artifact, err := e.Service.Artifacts.Open(jobID, position, time.Now().UTC())
+	if err != nil {
+		return nil, "", err
+	}
+	return file, artifact.Name, nil
+}
+
+func (e ExportExecutor) ExecuteBatchSnapshot(ctx context.Context, id string, snapshot projects.ExportSnapshot) (string, error) {
+	source, _, err := e.Scanner.Open(ctx, e.Media, snapshot.Source.MediaID)
+	if err != nil {
+		return "", fmt.Errorf("open batch source: %w", err)
+	}
+	defer source.Close()
+	file, ok := source.(*os.File)
+	if !ok {
+		return "", errors.New("media source is not a file")
+	}
+	service := e.Service
+	if snapshot.RuntimeSettings != nil {
+		applyRuntimeSettings(&service, *snapshot.RuntimeSettings)
+	}
+	item := snapshot.Item
+	document := model.Document{SchemaVersion: model.ProjectSchemaVersion, Name: "Batch export", Items: []model.ProjectItem{item}}
+	result, err := service.Run(ctx, file, document, exporter.Request{
+		Mode: item.ExportOptions.Mode, Selection: item.ExportOptions.Selection,
+		StreamIndexes: item.ExportOptions.StreamIndexes, CutStrategy: item.ExportOptions.CutStrategy,
+		Container: item.ExportOptions.Container, DestinationID: item.ExportOptions.DestinationID,
+		FilenameTemplate: item.ExportOptions.FilenameTemplate, JobID: id,
+	})
+	if err != nil {
+		return "", err
+	}
+	encoded, err := json.Marshal(result)
+	return string(encoded), err
+}
+
+func applyRuntimeSettings(service *exporter.Service, settings store.RuntimeSettings) {
+	service.Destinations = make([]exporter.Destination, len(settings.Destinations))
+	for i, destination := range settings.Destinations {
+		service.Destinations[i] = exporter.Destination{ID: destination.ID, Label: destination.Label, Description: destination.Description, Kind: destination.Kind, Root: destination.Root, RetentionText: destination.Retention, MediaRoot: destination.MediaRoot}
+	}
+}

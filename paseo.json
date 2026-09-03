@@ -1,7 +1,7 @@
 {
   "worktree": {
     "setup": "make client-install",
-    "teardown": "rm -rf client/dist infrastructure/webassets/dist"
+    "teardown": "rm -rf client/dist internal/web/webassets/dist"
   },
   "scripts": {
     "check": {

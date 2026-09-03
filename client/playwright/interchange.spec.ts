@@ -11,7 +11,11 @@ const media = {
 };
 
 test("export cancellation is isolated from a changed media context", async ({ page }) => {
-  const secondMedia = { ...media, id: "m_0123456789012345678901234567890123456789013", name: "second.mp4" };
+  const secondMedia = {
+    ...media,
+    id: "m_0123456789012345678901234567890123456789013",
+    name: "second.mp4",
+  };
   let deleteStarted!: () => void;
   const deleteSeen = new Promise<void>((resolve) => (deleteStarted = resolve));
   let releaseDelete!: () => void;
@@ -20,7 +24,7 @@ test("export cancellation is isolated from a changed media context", async ({ pa
   let releaseOldMetadata!: () => void;
   const oldMetadata = new Promise<void>((resolve) => (releaseOldMetadata = resolve));
   page.on("requestfailed", (request) => {
-    if (request.method() === "DELETE" && request.url().endsWith("/api/v1/jobs/job_test"))
+    if (request.method() === "DELETE" && request.url().endsWith("/api/v1/batches/b_test"))
       deleteAborted = true;
   });
 
@@ -44,12 +48,25 @@ test("export cancellation is isolated from a changed media context", async ({ pa
     if (url.pathname === "/api/v1/media/status")
       return route.fulfill({ json: { state: "ready_with_media", message: "Ready" } });
     if (request.method() === "PUT" && url.pathname.startsWith("/api/v1/projects/"))
-      return route.fulfill({ json: { id: "p_test", mediaId: media.id, revision: 1, segments: [{ startMs: 0, endMs: 1000 }], uiState: { playheadMs: 0, zoom: 1, muted: false } } });
+      return route.fulfill({
+        json: {
+          id: "p_test",
+          mediaId: media.id,
+          revision: 1,
+          segments: [{ startMs: 0, endMs: 1000 }],
+          uiState: { playheadMs: 0, zoom: 1, muted: false },
+        },
+      });
     if (request.method() === "POST" && url.pathname.endsWith("/preflight"))
       return route.fulfill({ json: { allowed: true, selection: [0], findings: [] } });
     if (request.method() === "POST" && url.pathname.endsWith("/exports"))
-      return route.fulfill({ json: { id: "job_test", state: "queued", progress: 0 } });
-    if (request.method() === "DELETE" && url.pathname === "/api/v1/jobs/job_test") {
+      return route.fulfill({
+        json: {
+          batchId: "b_test",
+          jobs: [{ id: "job_test", type: "export", state: "queued", progress: 0 }],
+        },
+      });
+    if (request.method() === "DELETE" && url.pathname === "/api/v1/batches/b_test") {
       deleteStarted();
       try {
         await deleteResponse;
@@ -80,8 +97,13 @@ test("export cancellation is isolated from a changed media context", async ({ pa
   releaseDelete();
   await expect.poll(() => deleteAborted).toBe(true);
   releaseOldMetadata();
-  await expect(page.getByRole("button", { name: /second.mp4/ })).toHaveAttribute("aria-pressed", "true");
-  await expect(page.getByText("Export cancelled.")).not.toBeVisible();
+  await expect(
+    page.getByRole("list", { name: "Project media items" }).getByRole("button", {
+      name: "second.mp4",
+      exact: true,
+    }),
+  ).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByText("Export cancelled.")).toBeVisible();
   await expect(page.getByRole("button", { name: "Cancel export" })).not.toBeVisible();
 });
 

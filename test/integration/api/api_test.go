@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"videocutlist/application"
-	auth "videocutlist/domain"
-	api "videocutlist/protocol/http"
+	api "videocutlist/internal/httpapi"
+	jobqueue "videocutlist/internal/jobs"
+	"videocutlist/internal/projects"
 )
 
 const validMedia = "m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -41,15 +41,15 @@ func (m *mediaStub) RefreshMedia(_ context.Context) error {
 	return m.refreshErr
 }
 func (m *mediaStub) Status() api.LibraryStatus { return m.status }
-func (m *mediaStub) StartImport(context.Context) (application.ImportJob, error) {
+func (m *mediaStub) StartImport(context.Context) (projects.ImportJob, error) {
 	m.importStarts++
 	if m.importErr != nil {
-		return application.ImportJob{}, m.importErr
+		return projects.ImportJob{}, m.importErr
 	}
-	return application.ImportJob{ID: "j_scanresult1234", State: "queued"}, nil
+	return projects.ImportJob{ID: "j_scanresult1234", State: "queued"}, nil
 }
-func (m *mediaStub) ImportStatus(context.Context, string) (application.ImportJob, error) {
-	return application.ImportJob{}, nil
+func (m *mediaStub) ImportStatus(context.Context, string) (projects.ImportJob, error) {
+	return projects.ImportJob{}, nil
 }
 func (m *mediaStub) CancelImport(context.Context, string) error { return nil }
 
@@ -69,25 +69,36 @@ type projectStub struct {
 	getCalls, saveCalls int
 }
 
-func (p *projectStub) Create(_ context.Context, id string, input auth.Document) (api.Project, error) {
+func (p *projectStub) Create(_ context.Context, id string, input projects.ProjectInput) (api.Project, error) {
 	p.saveCalls++
-	return api.Project{ID: id, Document: input}, nil
+	return api.Project{ID: id, Document: input.Document, Revision: input.Revision}, nil
 }
 func (p *projectStub) Get(context.Context, string) (api.Project, error) {
 	p.getCalls++
 	return p.get, nil
 }
-func (p *projectStub) Save(_ context.Context, id string, input auth.Document) (api.Project, error) {
+func (p *projectStub) Save(_ context.Context, id string, input projects.ProjectInput) (api.Project, error) {
 	p.saveCalls++
-	return api.Project{ID: id, Document: input}, nil
+	return api.Project{ID: id, Document: input.Document, Revision: input.Revision}, nil
 }
 
 type exportStub struct{ calls int }
 
-func (e *exportStub) Create(context.Context, string, api.Project, api.ExportInput) (api.Job, error) {
+func (e *exportStub) Submit(context.Context, projects.BatchExportRequest) (string, []projects.Job, error) {
 	e.calls++
-	return api.Job{ID: "j_aaaaaaaaaaaa", Type: "export", State: "queued"}, nil
+	return "b_aaaaaaaaaaaa", []projects.Job{{ID: "j_aaaaaaaaaaaa", Type: "export", State: "queued"}}, nil
 }
+func (*exportStub) Progress(context.Context, string) (jobqueue.JobState, float64, error) {
+	return jobqueue.JobQueued, 0, nil
+}
+func (*exportStub) Get(context.Context, string) (projects.Batch, error) { return projects.Batch{}, nil }
+func (*exportStub) List(context.Context, int) (projects.BatchPage, error) {
+	return projects.BatchPage{}, nil
+}
+func (*exportStub) Retry(context.Context, string) (projects.Batch, error) {
+	return projects.Batch{}, nil
+}
+func (*exportStub) Cancel(context.Context, string) error { return nil }
 
 type jobsStub struct {
 	getCalls, cancelCalls int
@@ -124,9 +135,9 @@ func server(t *testing.T, authenticator api.Authenticator, media *mediaStub, pre
 	return serverWith(t, authenticator, media, preview, &projectStub{get: api.Project{ID: validProject}}, exports, &jobsStub{}, nil)
 }
 
-func serverWith(t *testing.T, authenticator api.Authenticator, media *mediaStub, preview api.PreviewService, projects api.ProjectService, exports *exportStub, jobs api.JobService, download application.ExportDownloadService) *api.Server {
+func serverWith(t *testing.T, authenticator api.Authenticator, media *mediaStub, preview api.PreviewService, projects api.ProjectService, exports *exportStub, jobs api.JobService, download projects.ExportDownloadService) *api.Server {
 	t.Helper()
-	result, err := api.New(api.Config{Authenticator: authenticator, Media: media, MediaImport: media, Preview: preview, Projects: projects, Exports: exports, Jobs: jobs, Download: download})
+	result, err := api.New(api.Config{Authenticator: authenticator, Media: media, MediaImport: media, Preview: preview, Projects: projects, BatchExports: exports, Jobs: jobs, Download: download})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -334,7 +345,7 @@ func TestRefreshReturnsAcceptedUnifiedJobAndPropagatesSubmissionFailure(t *testi
 	service := server(t, noneAuth(t), media, &previewStub{start: func(context.Context) (api.PreviewResult, error) { return api.PreviewResult{}, nil }}, &exportStub{})
 	response := httptest.NewRecorder()
 	service.ServeHTTP(response, localRequest(http.MethodPost, "/api/v1/media/refresh", nil))
-	var job application.ImportJob
+	var job projects.ImportJob
 	if err := json.Unmarshal(response.Body.Bytes(), &job); err != nil {
 		t.Fatal(err)
 	}
@@ -353,7 +364,7 @@ func TestJobResponsesExposeOnlySafeTerminalMetadata(t *testing.T) {
 	retainUntil := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
 	code := "media_unavailable"
 	jobs := &jobsStub{get: func(_ context.Context, _ string) (api.Job, error) {
-		return api.Job{ID: "j_aaaaaaaaaaaa", Type: "export", State: "succeeded", Progress: 1, Result: &application.JobResult{OutputName: "export.mkv", SizeBytes: 42, RetainUntil: retainUntil}, Warnings: []string{"Cut may start at an earlier keyframe."}}, nil
+		return api.Job{ID: "j_aaaaaaaaaaaa", Type: "export", State: "succeeded", Progress: 1, Result: &projects.JobResult{OutputName: "export.mkv", SizeBytes: 42, RetainUntil: retainUntil}, Warnings: []string{"Cut may start at an earlier keyframe."}}, nil
 	}}
 	service := serverWith(t, headerAuthenticator{}, &mediaStub{}, &previewStub{start: func(context.Context) (api.PreviewResult, error) { return api.PreviewResult{}, nil }}, &projectStub{get: api.Project{ID: validProject}}, &exportStub{}, jobs, nil)
 	response := httptest.NewRecorder()

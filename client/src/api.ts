@@ -131,6 +131,13 @@ export function createApiClient(
     projectId: string,
     format: "csv" | "chapters",
     init: RequestInit = {},
-  ) => request(`projects/${encodeURIComponent(projectId)}/interchange/${format}`, init);
+    projectItemId?: string,
+  ) =>
+    request(
+      `projects/${encodeURIComponent(projectId)}/interchange/${format}${projectItemId ? `?itemId=${encodeURIComponent(projectItemId)}` : ""}`,
+      init,
+    );
   return { url, request, assetRequest, interchangeRequest };
 }
+
+export type ApiClient = ReturnType<typeof createApiClient>;

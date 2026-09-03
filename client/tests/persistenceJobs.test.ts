@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { acceptCandidate } from "../src/detection";
-import { confirmDiscard, recentProjects } from "../src/projectLifecycle";
+import { acceptCandidate } from "../src/features/detection/model";
+import { confirmDiscard, recentProjects } from "../src/features/projects/lifecycle";
 
 describe("Solid persistence and jobs contracts", () => {
   it("accepts only candidates matching the saved project revision", () => {

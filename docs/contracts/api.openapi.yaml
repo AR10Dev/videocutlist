@@ -109,8 +109,12 @@ paths:
       summary: Refresh the media index
       operationId: refreshMedia
       responses:
-        "204":
-          description: Refresh completed
+        "202":
+          description: Durable library scan job accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
         "403":
           $ref: "#/components/responses/Error"
   /media/{mediaId}:
@@ -198,11 +202,36 @@ paths:
           description: Complete cached preview exists
         "404":
           description: No complete cached preview
+  /projects:
+    get:
+      summary: List saved projects
+      operationId: listProjects
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+        - name: cursor
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Project page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectPage"
+        "400":
+          $ref: "#/components/responses/Error"
   /projects/{projectId}:
     parameters:
       - $ref: "#/components/parameters/ProjectId"
     get:
-      summary: Read an owned project
+      summary: Read a project
       operationId: getProject
       responses:
         "200":
@@ -214,7 +243,7 @@ paths:
         "404":
           $ref: "#/components/responses/Error"
     put:
-      summary: Save an owned project
+      summary: Save a project
       operationId: putProject
       requestBody:
         required: true
@@ -285,6 +314,27 @@ paths:
           $ref: "#/components/responses/Error"
         "422":
           $ref: "#/components/responses/Error"
+  /batches:
+    get:
+      summary: List durable batches
+      operationId: listBatches
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
+      responses:
+        "200":
+          description: Recent durable batches
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BatchPage"
+        "400":
+          $ref: "#/components/responses/Error"
   /batches/{batchId}:
     parameters:
       - name: batchId
@@ -301,7 +351,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/BatchProgress"
+                $ref: "#/components/schemas/Batch"
         "404":
           $ref: "#/components/responses/Error"
     delete:
@@ -335,7 +385,7 @@ paths:
           $ref: "#/components/responses/Error"
   /destinations:
     get:
-      summary: List administrator-configured export destinations
+      summary: List configured export destinations
       operationId: listDestinations
       responses:
         "200":
@@ -355,7 +405,7 @@ paths:
     parameters:
       - $ref: "#/components/parameters/JobId"
     get:
-      summary: Read an owned job
+      summary: Read a job
       operationId: getJob
       responses:
         "200":
@@ -367,12 +417,31 @@ paths:
         "404":
           $ref: "#/components/responses/Error"
     delete:
-      summary: Cancel an owned job
+      summary: Cancel a job
       operationId: cancelJob
       responses:
         "204":
           description: Cancelled or already terminal
         "404":
+          $ref: "#/components/responses/Error"
+  /jobs/{jobId}/retry:
+    parameters:
+      - $ref: "#/components/parameters/JobId"
+    post:
+      summary: Retry a failed export as a new job
+      operationId: retryJob
+      responses:
+        "202":
+          description: New retry batch
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Batch"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "429":
           $ref: "#/components/responses/Error"
   /jobs/{jobId}/outputs/{position}:
     parameters:
@@ -385,7 +454,7 @@ paths:
           minimum: 0
           maximum: 99
     get:
-      summary: Download one owned completed download output
+      summary: Download one completed output
       operationId: downloadJobOutput
       responses:
         "200":
@@ -400,13 +469,12 @@ paths:
           $ref: "#/components/responses/Error"
   /settings:
     get:
-      summary: Read administrator runtime settings and safe root diagnostics
+      summary: Read runtime settings and safe root diagnostics
       operationId: getSettings
       responses:
         "200":
           description: >-
-            Effective settings (including raw paths) for an authorized
-            administrator
+            Effective settings with safe labels; raw paths are never returned
           content:
             application/json:
               schema:
@@ -414,7 +482,7 @@ paths:
         "403":
           $ref: "#/components/responses/Error"
     put:
-      summary: Replace administrator runtime settings
+      summary: Replace runtime settings
       operationId: updateSettings
       requestBody:
         required: true
@@ -433,11 +501,15 @@ paths:
           $ref: "#/components/responses/Error"
   /settings/media/refresh:
     post:
-      summary: Refresh the media library as an administrator
+      summary: Queue a media library refresh
       operationId: refreshSettingsMedia
       responses:
-        "204":
-          description: Refresh completed
+        "202":
+          description: Durable library scan job accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
         "403":
           $ref: "#/components/responses/Error"
         "409":
@@ -492,11 +564,11 @@ components:
       type: object
       required: [id, label, kind]
       properties:
-        id: {type: string}
-        label: {type: string}
-        description: {type: string}
-        kind: {type: string, enum: [download, archive, source_adjacent]}
-        retention: {type: string}
+        id: { type: string }
+        label: { type: string }
+        description: { type: string }
+        kind: { type: string, enum: [download, archive, source_adjacent] }
+        retention: { type: string }
     RuntimeSettings:
       type: object
       additionalProperties: false
@@ -653,23 +725,58 @@ components:
           type: string
     ProjectInput:
       type: object
+      additionalProperties: false
       required:
-        - mediaId
         - revision
-        - segments
-        - uiState
+        - schemaVersion
+        - name
+        - items
       properties:
-        mediaId:
-          type: string
         revision:
           type: integer
           minimum: 0
-        segments:
+        schemaVersion:
+          type: integer
+          const: 2
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+        items:
+          type: array
+          minItems: 1
+          items:
+            $ref: "#/components/schemas/ProjectItem"
+    ProjectSummary:
+      type: object
+      required:
+        - id
+        - name
+        - revision
+        - updatedAt
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        revision:
+          type: integer
+          minimum: 1
+        updatedAt:
+          type: string
+          format: date-time
+    ProjectPage:
+      type: object
+      required:
+        - items
+        - nextCursor
+      properties:
+        items:
           type: array
           items:
-            $ref: "#/components/schemas/Segment"
-        uiState:
-          $ref: "#/components/schemas/UIState"
+            $ref: "#/components/schemas/ProjectSummary"
+        nextCursor:
+          type: [string, "null"]
     Project:
       allOf:
         - $ref: "#/components/schemas/ProjectInput"
@@ -683,6 +790,57 @@ components:
             updatedAt:
               type: string
               format: date-time
+    ProjectItem:
+      type: object
+      additionalProperties: false
+      required:
+        - id
+        - mediaId
+        - segments
+        - exportOptions
+      properties:
+        id:
+          type: string
+          pattern: ^i_[A-Za-z0-9_-]{24}$
+        mediaId:
+          type: string
+          pattern: ^m_[A-Za-z0-9_-]{43}$
+        segments:
+          type: array
+          items:
+            $ref: "#/components/schemas/Segment"
+        editorState:
+          $ref: "#/components/schemas/UIState"
+        exportOptions:
+          $ref: "#/components/schemas/ProjectExportOptions"
+    ProjectExportOptions:
+      type: object
+      additionalProperties: false
+      properties:
+        mode:
+          type: string
+          enum: [merge, separate]
+        selection:
+          type: string
+          enum: [segments, gaps]
+        streamIndexes:
+          type: array
+          uniqueItems: true
+          items:
+            type: integer
+            minimum: 0
+        cutStrategy:
+          type: string
+          enum: [stream_copy_preferred, precise_reencode, hybrid_smart_cut]
+        container:
+          type: string
+          enum: [mkv]
+        destinationId:
+          type: string
+          maxLength: 64
+        filenameTemplate:
+          type: string
+          maxLength: 160
     Segment:
       type: object
       required:
@@ -715,9 +873,11 @@ components:
           type: boolean
     DetectionInput:
       type: object
-      required: [mediaId, projectRevision, kind]
+      required: [mediaId, projectItemId, projectRevision, kind]
       properties:
         mediaId:
+          type: string
+        projectItemId:
           type: string
         projectRevision:
           type: integer
@@ -738,31 +898,41 @@ components:
           maximum: 1
     DetectionCandidate:
       type: object
-      required: [id, mediaId, projectId, projectRevision, startMs, endMs, source, confidence]
+      required:
+        - id
+        - mediaId
+        - projectId
+        - projectRevision
+        - startMs
+        - endMs
+        - source
+        - confidence
       properties:
-        id: {type: string}
-        mediaId: {type: string}
-        projectId: {type: string}
-        projectRevision: {type: integer}
-        startMs: {type: integer}
-        endMs: {type: integer}
-        source: {type: string, enum: [silence, black, scene]}
-        confidence: {type: number}
+        id: { type: string }
+        mediaId: { type: string }
+        projectId: { type: string }
+        projectRevision: { type: integer }
+        startMs: { type: integer }
+        endMs: { type: integer }
+        source: { type: string, enum: [silence, black, scene] }
+        confidence: { type: number }
     DetectionJob:
       type: object
       required: [id, type, state, mediaId, projectId, projectRevision, kind]
       properties:
-        id: {type: string}
-        type: {type: string, enum: [detection]}
-        state: {type: string, enum: [queued, running, succeeded, failed, cancelled]}
-        mediaId: {type: string}
-        projectId: {type: string}
-        projectRevision: {type: integer}
-        kind: {type: string, enum: [silence, black, scene]}
+        id: { type: string }
+        type: { type: string, enum: [detection] }
+        state:
+          type: string
+          enum: [queued, running, succeeded, failed, cancelled]
+        mediaId: { type: string }
+        projectId: { type: string }
+        projectRevision: { type: integer }
+        kind: { type: string, enum: [silence, black, scene] }
         candidates:
           type: array
-          items: {$ref: "#/components/schemas/DetectionCandidate"}
-        errorCode: {type: string}
+          items: { $ref: "#/components/schemas/DetectionCandidate" }
+        errorCode: { type: string }
     ExportInput:
       type: object
       additionalProperties: false
@@ -803,7 +973,7 @@ components:
           type: string
           maxLength: 64
           description: >-
-            Opaque administrator destination ID; never a filesystem path.
+            Opaque configured destination ID; never a filesystem path.
         filenameTemplate:
           type: string
           maxLength: 160
@@ -827,21 +997,41 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Job"
-    BatchProgress:
+    Batch:
       type: object
       required:
         - batchId
         - state
         - progress
+        - jobs
       properties:
         batchId:
           type: string
+        projectId:
+          type: string
+        projectRevision:
+          type: integer
+          minimum: 1
         state:
           type: string
+          enum: [queued, running, succeeded, failed, cancelled]
         progress:
           type: number
           minimum: 0
           maximum: 1
+        jobs:
+          type: array
+          items:
+            $ref: "#/components/schemas/Job"
+    BatchPage:
+      type: object
+      required:
+        - items
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/Batch"
     Destination:
       type: object
       required:
@@ -910,10 +1100,26 @@ components:
       properties:
         id:
           type: string
+        batchId:
+          type: string
+        projectItemId:
+          type: string
+        mediaLabel:
+          type: string
+        mediaId:
+          type: string
+        projectId:
+          type: string
+        projectRevision:
+          type: integer
+        kind:
+          type: string
         type:
           type: string
           enum:
             - export
+            - detection
+            - library_scan
         state:
           type: string
           enum:
@@ -961,7 +1167,7 @@ components:
                 - source_adjacent
             appliedStrategies:
               type: array
-              description:
+              description: >-
                 Strategy used for each selected segment; outputName identifies
                 separately published outputs.
               items:
@@ -976,7 +1182,7 @@ components:
                     minimum: 1
                   outputName:
                     type: string
-                    description:
+                    description: >-
                       Published separate-export filename, never a filesystem
                       path.
                   strategy:
@@ -986,7 +1192,7 @@ components:
           description: Requested cut strategy.
         appliedStrategy:
           type: string
-          description:
+          description: >-
             Strategy used by every selected segment; omitted when segments
             use different strategies. See result.appliedStrategies for
             per-segment values.

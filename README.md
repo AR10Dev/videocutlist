@@ -7,8 +7,10 @@ files. Original-media filesystem paths never leave the server.
 ## Features
 
 - Read-only media indexing below configured media roots
+- Ordered multi-media projects with independent edits per item
 - Browser previews for selecting segments
-- Stream-copy-preferred MKV exports
+- Stream-copy-preferred MKV batch exports
+- Durable SQLite job queue with cancellation and explicit retry
 - Loopback-only service by default
 - Bearer and trusted-proxy authentication options
 - SQLite-backed state and reproducible preview cache
@@ -32,7 +34,7 @@ VIDEOCUTLIST_DATABASE_PATH="$DATA_DIR/videocutlist.db" \
 VIDEOCUTLIST_CACHE_DIR="$DATA_DIR/cache" \
 VIDEOCUTLIST_EXPORT_DIR="$DATA_DIR/exports" \
 VIDEOCUTLIST_MEDIA_ROOTS_JSON='{"media":"/path/to/media"}' \
-  go run ./cmd/server
+  go run ./cmd/videocutlist
 ```
 
 The server listens on `127.0.0.1:8787` by default. Run it as a dedicated
