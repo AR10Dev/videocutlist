@@ -58,6 +58,67 @@ func TestParseRoute(t *testing.T) {
 	}
 }
 
+// routeCoverage is the production route inventory. Keep one entry here for every
+// routeKind so adding a route without a black-box case fails this check.
+func TestRouteCoverageInventory(t *testing.T) {
+	media := "m_" + strings.Repeat("a", 43)
+	project := "p_" + strings.Repeat("b", 12)
+	job := "j_" + strings.Repeat("c", 12)
+	batch := "b_" + strings.Repeat("d", 12)
+	inventory := []struct {
+		method, path string
+		kind         routeKind
+	}{
+		{http.MethodGet, "/api/v1/media", routeListMedia},
+		{http.MethodGet, "/api/v1/media/tree", routeBrowseMedia},
+		{http.MethodGet, "/api/v1/media/status", routeMediaStatus},
+		{http.MethodPost, "/api/v1/media/refresh", routeRefreshMedia},
+		{http.MethodPost, "/api/v1/settings/media/refresh", routeRefreshSettings},
+		{http.MethodPost, "/api/v1/media/import", routeStartMediaImport},
+		{http.MethodGet, "/api/v1/media/import/" + job, routeGetMediaImport},
+		{http.MethodDelete, "/api/v1/media/import/" + job, routeCancelMediaImport},
+		{http.MethodGet, "/api/v1/media/" + media, routeGetMedia},
+		{http.MethodGet, "/api/v1/media/" + media + "/preview", routePreview},
+		{http.MethodHead, "/api/v1/media/" + media + "/preview", routePreview},
+		{http.MethodGet, "/api/v1/media/" + media + "/thumbnails", routeThumbnails},
+		{http.MethodGet, "/api/v1/media/" + media + "/waveform", routeWaveform},
+		{http.MethodGet, "/api/v1/projects", routeListProjects},
+		{http.MethodGet, "/api/v1/projects/" + project, routeGetProject},
+		{http.MethodPut, "/api/v1/projects/" + project, routePutProject},
+		{http.MethodPost, "/api/v1/projects/" + project + "/exports", routeCreateExport},
+		{http.MethodPost, "/api/v1/projects/" + project + "/exports/preflight", routePreflightExport},
+		{http.MethodPost, "/api/v1/projects/" + project + "/interchange/csv", routeImportInterchange},
+		{http.MethodGet, "/api/v1/projects/" + project + "/interchange/chapters", routeExportInterchange},
+		{http.MethodPost, "/api/v1/projects/" + project + "/detections", routeCreateDetection},
+		{http.MethodGet, "/api/v1/jobs/" + job, routeGetJob},
+		{http.MethodDelete, "/api/v1/jobs/" + job, routeCancelJob},
+		{http.MethodPost, "/api/v1/jobs/" + job + "/retry", routeRetryJob},
+		{http.MethodGet, "/api/v1/jobs/" + job + "/outputs/0", routeDownloadOutput},
+		{http.MethodGet, "/api/v1/batches", routeListBatches},
+		{http.MethodGet, "/api/v1/batches/" + batch, routeGetBatch},
+		{http.MethodDelete, "/api/v1/batches/" + batch, routeCancelBatch},
+		{http.MethodPost, "/api/v1/automation", routeAutomation},
+		{http.MethodGet, "/api/v1/destinations", routeListDestinations},
+		{http.MethodGet, "/api/v1/settings", routeGetSettings},
+		{http.MethodPut, "/api/v1/settings", routePutSettings},
+	}
+	seen := make(map[routeKind]bool, len(inventory))
+	for _, entry := range inventory {
+		if got := parseRoute(entry.method, entry.path); got.kind != entry.kind {
+			t.Errorf("%s %s: got route kind %d, want %d", entry.method, entry.path, got.kind, entry.kind)
+		}
+		seen[entry.kind] = true
+	}
+	for kind := routeListMedia; kind <= routeRetryJob; kind++ {
+		if !seen[kind] {
+			t.Errorf("route kind %d is missing from the production route inventory", kind)
+		}
+	}
+	if len(seen) != int(routeRetryJob) {
+		t.Fatalf("route inventory accounts for %d kinds, want %d", len(seen), routeRetryJob)
+	}
+}
+
 func TestParseRouteRejectsMalformedIDsAndPaths(t *testing.T) {
 	valid := "m_" + strings.Repeat("a", 43)
 	for _, path := range []string{
