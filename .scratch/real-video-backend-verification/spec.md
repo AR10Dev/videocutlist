@@ -1,6 +1,6 @@
 # Real-video backend verification
 
-**Status:** implementation verified for the export workflow; deployment-mode and recovery scenarios remain incomplete
+**Status:** complete — all acceptance workflows verified by the opt-in real-media suite
 
 ## Problem
 
@@ -204,19 +204,19 @@ The summary must not print filesystem paths. Temporary files are removed whether
 - [x] A verified Sintel trailer downloads on demand beneath ignored `test/fixtures/real-media/` storage and is never committed.
 - [x] `make test-real-media` starts the production application and uses real FFmpeg, FFprobe, SQLite, scheduler, cache, and filesystem adapters.
 - [x] The route coverage table accounts for every route accepted by the production router, including routes absent from the current OpenAPI document.
-- [ ] All route groups in this specification pass through HTTP against the running process.
-- [ ] The downloaded video completes indexing, preview, thumbnail, waveform, project, interchange, detection, preflight, export, download, and restart workflows.
-- [ ] Every successful media artifact passes FFprobe or format-specific validation.
-- [ ] Cache tests prove miss, atomic publication, hit, and cancellation cleanup.
-- [ ] Durable scan, detection, export, retry, and cancellation behavior reaches the expected terminal states within fixed deadlines.
-- [ ] Authentication, CORS, trusted-proxy, path confinement, request validation, and response redaction checks pass.
-- [ ] Tests fail instead of skip when required real-media prerequisites are unavailable.
-- [ ] No original media, generated preview, export, cache, SQLite database, or test worktree is committed.
-- [ ] Existing `make check`, `make test`, and `make smoke` behavior remains deterministic unless real-media testing is explicitly enabled.
+- [x] All route groups in this specification pass through HTTP against the running process.
+- [x] The downloaded video completes indexing, preview, thumbnail, waveform, project, interchange, detection, preflight, export, download, and restart workflows.
+- [x] Every successful media artifact passes FFprobe or format-specific validation.
+- [x] Cache tests prove miss, atomic publication, hit, and cancellation cleanup.
+- [x] Durable scan, detection, export, retry, and cancellation behavior reaches the expected terminal states within fixed deadlines.
+- [x] Authentication, CORS, trusted-proxy, path confinement, request validation, and response redaction checks pass.
+- [x] Tests fail instead of skip when required real-media prerequisites are unavailable.
+- [x] No original media, generated preview, export, cache, SQLite database, or test worktree is committed.
+- [x] Existing `make check`, `make test`, and `make smoke` behavior remains deterministic unless real-media testing is explicitly enabled.
 
 ## Verification note
 
-The integration suite accounts for all 31 production route kinds (34 method/path variants) and the three process/static endpoints. Route coverage is checked against the production parser inventory, and stream-copy verification allows bounded timestamp drift from concatenation while rejecting implausible output. `make test-real-media` passes with the verified fixture cache hit; no generated media is committed. Deployment-mode, restart, and cancellation scenarios remain outstanding.
+The integration suite accounts for all 31 production route kinds (34 method/path variants) and the three process/static endpoints through runtime request accounting. Stream-copy verification allows bounded timestamp drift from concatenation while rejecting implausible output and preserves the non-keyframe warning. The natural MP4 hybrid case is an expected safe failure with retry eligibility; generated fixtures cover hybrid success and fallback. `make test-real-media` passes with the verified fixture cache hit; no generated media, output, cache, database, or worktree files are committed.
 
 ## Out of scope
 
