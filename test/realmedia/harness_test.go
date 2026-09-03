@@ -30,11 +30,40 @@ const (
 )
 
 type process struct {
-	cmd       *exec.Cmd
-	base      string
-	log       *strings.Builder
-	cancel    context.CancelFunc
-	forbidden []string
+	cmd                *exec.Cmd
+	base               string
+	log                *strings.Builder
+	cancel             context.CancelFunc
+	forbidden          []string
+	redactionViolation bool
+	redactionMu        sync.Mutex
+}
+
+type redactionBody struct {
+	io.ReadCloser
+	process  *process
+	contents strings.Builder
+}
+
+func (b *redactionBody) Read(data []byte) (int, error) {
+	n, err := b.ReadCloser.Read(data)
+	_, _ = b.contents.Write(data[:n])
+	if err == io.EOF {
+		b.check()
+	}
+	return n, err
+}
+func (b *redactionBody) Close() error { b.check(); return b.ReadCloser.Close() }
+func (b *redactionBody) check() {
+	value := b.contents.String()
+	for _, forbidden := range b.process.forbidden {
+		if forbidden != "" && strings.Contains(value, forbidden) {
+			b.process.redactionMu.Lock()
+			b.process.redactionViolation = true
+			b.process.redactionMu.Unlock()
+			return
+		}
+	}
 }
 
 var executedRoutes sync.Map
@@ -126,7 +155,7 @@ func startProcessWithEnv(t *testing.T, root string, overrides map[string]string)
 		cancel()
 		t.Fatal(err)
 	}
-	p := &process{cmd: cmd, log: logBuffer, cancel: cancel, forbidden: []string{mediaRoot, filepath.Join(root, "videocutlist.db"), filepath.Join(root, "cache"), filepath.Join(root, "exports"), fixture}}
+	p := &process{cmd: cmd, log: logBuffer, cancel: cancel, forbidden: []string{root, mediaRoot, filepath.Join(root, "videocutlist.db"), filepath.Join(root, "cache"), filepath.Join(root, "exports"), fixture}}
 	t.Cleanup(func() {
 		if cmd.Process != nil {
 			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
@@ -213,6 +242,20 @@ func (p *process) requestHeaders(t *testing.T, method, path string, body io.Read
 	}
 	resp, err := http.DefaultClient.Do(req)
 	recordRoute(method, path)
+	if resp != nil {
+		for _, values := range resp.Header {
+			for _, value := range values {
+				for _, forbidden := range p.forbidden {
+					if forbidden != "" && strings.Contains(value, forbidden) {
+						p.redactionMu.Lock()
+						p.redactionViolation = true
+						p.redactionMu.Unlock()
+					}
+				}
+			}
+		}
+		resp.Body = &redactionBody{ReadCloser: resp.Body, process: p}
+	}
 	if err != nil {
 		t.Fatalf("%s %s: %v\n%s", method, path, err, boundedLog(p.log.String()))
 	}
@@ -247,10 +290,16 @@ func copyFile(source, destination string) error {
 
 func assertNoSecrets(t *testing.T, p *process) {
 	t.Helper()
+	p.redactionMu.Lock()
+	violated := p.redactionViolation
+	p.redactionMu.Unlock()
 	for _, value := range p.forbidden {
 		if strings.Contains(p.log.String(), value) {
-			t.Fatalf("process log exposed forbidden path")
+			violated = true
 		}
+	}
+	if violated {
+		t.Fatal("response or process log exposed forbidden data")
 	}
 }
 
