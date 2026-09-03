@@ -79,7 +79,9 @@ export function EditorView() {
   };
   return (
     <section class="editor-panel" aria-labelledby="timeline-heading" onKeyDown={handleKeyDown}>
-      <h2 id="timeline-heading" tabIndex={-1}>Timeline</h2>
+      <h2 id="timeline-heading" tabIndex={-1}>
+        Timeline
+      </h2>
       <Show
         when={selected()}
         fallback={

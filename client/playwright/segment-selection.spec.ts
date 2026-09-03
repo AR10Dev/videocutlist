@@ -705,9 +705,7 @@ test("shows unsupported preview guidance without making a preview request", asyn
 
 test("save reports an optimistic revision conflict", async ({ page }) => {
   await page.route(`${apiOrigin}/api/v1/projects/*`, (route) =>
-    route.request().method() === "PUT"
-      ? route.fulfill({ status: 409 })
-      : route.fallback(),
+    route.request().method() === "PUT" ? route.fulfill({ status: 409 }) : route.fallback(),
   );
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
@@ -1329,10 +1327,7 @@ test("loads cursor pages once and removes Load more at the end", async ({ page }
   await expect(page.getByRole("button", { name: /second.mp4/ })).toBeVisible();
   await expect(page.getByRole("button", { name: "Load more" })).toHaveCount(0);
   expect(
-    await page
-      .locator(".media-list")
-      .getByRole("button", { name: "Select camera.mp4" })
-      .count(),
+    await page.locator(".media-list").getByRole("button", { name: "Select camera.mp4" }).count(),
   ).toBeGreaterThan(0);
 });
 
