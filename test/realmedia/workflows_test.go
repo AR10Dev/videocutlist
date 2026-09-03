@@ -5,7 +5,10 @@ package realmedia
 import (
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestProductionSettingsAndAutomationWorkflows(t *testing.T) {
@@ -118,6 +121,106 @@ func TestProductionCORSAndTrustedProxy(t *testing.T) {
 		t.Fatalf("trusted proxy request status=%d", forwarded.StatusCode)
 	}
 	forwarded.Body.Close()
+}
+
+func TestProductionSymlinkAndSourceChange(t *testing.T) {
+	root := t.TempDir()
+	p := startProcess(t, root)
+	if err := os.Symlink("/etc/passwd", filepath.Join(root, "media", "escape.mp4")); err != nil {
+		t.Fatal(err)
+	}
+	refresh := p.request(t, http.MethodPost, "/api/v1/media/refresh")
+	if refresh.StatusCode != http.StatusAccepted {
+		refresh.Body.Close()
+		t.Fatalf("refresh status=%d", refresh.StatusCode)
+	}
+	refresh.Body.Close()
+	time.Sleep(500 * time.Millisecond)
+	var media struct {
+		Items []struct {
+			ID string `json:"id"`
+		} `json:"items"`
+	}
+	getJSON(t, p, "/api/v1/media", &media)
+	if len(media.Items) != 1 {
+		t.Fatalf("escaped symlink indexed: %d items", len(media.Items))
+	}
+	os.Remove(filepath.Join(root, "media", "sintel-trailer.mp4"))
+	project := map[string]any{"revision": 0, "schemaVersion": 2, "name": "source change", "items": []any{map[string]any{"id": "i_abcdefghijklmnopqrstuvwx", "mediaId": media.Items[0].ID, "segments": []any{map[string]any{"startMs": 0, "endMs": 1000}}, "exportOptions": map[string]any{"mode": "merge", "selection": "segments", "cutStrategy": "stream_copy_preferred", "container": "mkv", "destinationId": "download"}}}}
+	created := p.requestBody(t, http.MethodPut, "/api/v1/projects/p_source_change", project)
+	if created.StatusCode != http.StatusOK {
+		created.Body.Close()
+		t.Fatalf("project status=%d", created.StatusCode)
+	}
+	created.Body.Close()
+	export := p.requestBody(t, http.MethodPost, "/api/v1/projects/p_source_change/exports", map[string]any{"itemIds": []string{"i_abcdefghijklmnopqrstuvwx"}})
+	var submitted struct {
+		Jobs []struct {
+			ID string `json:"id"`
+		} `json:"jobs"`
+	}
+	if export.StatusCode != http.StatusAccepted || json.NewDecoder(export.Body).Decode(&submitted) != nil {
+		export.Body.Close()
+		t.Fatalf("export status=%d", export.StatusCode)
+	}
+	export.Body.Close()
+	if len(submitted.Jobs) != 1 {
+		t.Fatal("source-change export returned no job")
+	}
+	waitFor(t, 10*time.Second, func() bool {
+		response := p.request(t, http.MethodGet, "/api/v1/jobs/"+submitted.Jobs[0].ID)
+		defer response.Body.Close()
+		var job struct {
+			State string `json:"state"`
+			Error string `json:"errorCode"`
+		}
+		if json.NewDecoder(response.Body).Decode(&job) != nil {
+			return false
+		}
+		if job.State == "failed" {
+			return true
+		}
+		return false
+	})
+}
+
+func TestProductionRestartReconcilesExport(t *testing.T) {
+	root := t.TempDir()
+	p := startProcess(t, root)
+	var media struct {
+		Items []struct {
+			ID string `json:"id"`
+		} `json:"items"`
+	}
+	getJSON(t, p, "/api/v1/media", &media)
+	project := map[string]any{"revision": 0, "schemaVersion": 2, "name": "restart", "items": []any{map[string]any{"id": "i_abcdefghijklmnopqrstuvwx", "mediaId": media.Items[0].ID, "segments": []any{map[string]any{"startMs": 0, "endMs": 52000}}, "exportOptions": map[string]any{"mode": "merge", "selection": "segments", "cutStrategy": "precise_reencode", "container": "mkv", "destinationId": "download"}}}}
+	created := p.requestBody(t, http.MethodPut, "/api/v1/projects/p_restart_reconcile", project)
+	created.Body.Close()
+	export := p.requestBody(t, http.MethodPost, "/api/v1/projects/p_restart_reconcile/exports", map[string]any{"itemIds": []string{"i_abcdefghijklmnopqrstuvwx"}})
+	var submitted struct {
+		Jobs []struct {
+			ID string `json:"id"`
+		} `json:"jobs"`
+	}
+	if json.NewDecoder(export.Body).Decode(&submitted) != nil || len(submitted.Jobs) != 1 {
+		export.Body.Close()
+		t.Fatal("restart export submission failed")
+	}
+	export.Body.Close()
+	p.stop()
+	p = startProcess(t, root)
+	getJSON(t, p, "/api/v1/projects/p_restart_reconcile", &map[string]any{})
+	waitFor(t, 10*time.Second, func() bool {
+		response := p.request(t, http.MethodGet, "/api/v1/jobs/"+submitted.Jobs[0].ID)
+		defer response.Body.Close()
+		var job struct {
+			State string `json:"state"`
+		}
+		if json.NewDecoder(response.Body).Decode(&job) != nil {
+			return false
+		}
+		return job.State == "failed" || job.State == "succeeded"
+	})
 }
 
 func TestProductionAuthNoneLoopback(t *testing.T) {
