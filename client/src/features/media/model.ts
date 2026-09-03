@@ -22,12 +22,21 @@ const readableCodec = (codec: string) =>
     codec.toLowerCase()
   ] ?? codec.toUpperCase();
 
-const readableContainer = (container: string) => {
+const readableContainer = (container: string, filename: string) => {
+  const names = {
+    mp4: "MP4",
+    mov: "MOV",
+    webm: "WebM",
+    matroska: "Matroska",
+    mkv: "Matroska",
+  } as const;
+  const extension = filename.split(".").pop()?.toLowerCase() as keyof typeof names;
+  if (names[extension]) return names[extension];
   const aliases = container.toLowerCase().split(",");
-  const known = ["mp4", "mov", "webm", "matroska", "mkv"].find((name) => aliases.includes(name));
-  return known
-    ? { mp4: "MP4", mov: "MOV", webm: "WebM", matroska: "Matroska", mkv: "Matroska" }[known]
-    : "Video";
+  const known = (["mp4", "mov", "matroska", "mkv", "webm"] as const).find((name) =>
+    aliases.includes(name),
+  );
+  return known ? names[known] : "Video";
 };
 
 export function mediaSummary(media: Media): string {
@@ -36,5 +45,5 @@ export function mediaSummary(media: Media): string {
   const width = typeof video?.width === "number" ? video.width : 0;
   const height = typeof video?.height === "number" ? video.height : 0;
   const dimensions = width > 0 && height > 0 ? `${width}×${height}` : "dimensions unavailable";
-  return `${readableContainer(media.container)} · ${codec} · ${dimensions}`;
+  return `${readableContainer(media.container, media.name)} · ${codec} · ${dimensions}`;
 }

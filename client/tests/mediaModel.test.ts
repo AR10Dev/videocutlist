@@ -18,6 +18,14 @@ describe("media explorer display", () => {
       etag: "etag",
     };
     expect(mediaSummary(item)).toBe("MP4 · H.264 · 854×480");
-    expect(mediaSummary({ ...item, container: "unknown,alias" })).toBe("Video · H.264 · 854×480");
+    expect(mediaSummary({ ...item, name: "camera.bin", container: "unknown,alias" })).toBe(
+      "Video · H.264 · 854×480",
+    );
+    expect(mediaSummary({ ...item, name: "movie.mkv", container: "matroska,webm" })).toBe(
+      "Matroska · H.264 · 854×480",
+    );
+    expect(mediaSummary({ ...item, name: "movie.webm", container: "matroska,webm" })).toBe(
+      "WebM · H.264 · 854×480",
+    );
   });
 });
