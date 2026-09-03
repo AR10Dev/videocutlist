@@ -75,6 +75,7 @@ export function App() {
                     aria-selected={activeTask() === "detection"}
                     aria-controls="detection-tabpanel"
                     tabIndex={activeTask() === "detection" ? 0 : -1}
+                    disabled={!selected()}
                     onClick={() => setActiveTask("detection")}
                   >
                     Detection

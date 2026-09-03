@@ -5,9 +5,13 @@
 **Blocked by:** None
 
 **Category:** enhancement
-**Status:** ready
+**Status:** complete
 
-- [ ] Exactly one Project, Export, or Detection panel is visible at a time and Project is the default.
-- [ ] The header shows the current project name or "Unsaved project" plus Saved/Unsaved state.
-- [ ] Preview, export, detection, and other transient status text is absent from the global header.
-- [ ] Tab state and relationships are exposed with semantic, keyboard-operable controls.
+- [x] Exactly one Project, Export, or Detection panel is visible at a time and Project is the default.
+- [x] The header shows the current project name or "Unsaved project" plus Saved/Unsaved state.
+- [x] Preview, export, detection, and other transient status text is absent from the global header.
+- [x] Tab state and relationships are exposed with semantic, keyboard-operable controls.
+
+## Comments
+
+- 2026-09-03: Integrated workspace shell commit; verified focused diff and whitespace checks. Detection tab is disabled until media is selected so one task panel remains visible. Client dependencies are unavailable in this checkout, so web tests/build/lint could not run.
