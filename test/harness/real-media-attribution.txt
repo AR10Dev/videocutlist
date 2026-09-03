@@ -1,0 +1,2 @@
+The Sintel trailer fixture is downloaded by test/harness/acquire-real-media.sh.
+Source: Sintel by Blender Foundation, CC BY 3.0.
