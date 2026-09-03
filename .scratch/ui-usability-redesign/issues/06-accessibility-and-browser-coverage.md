@@ -15,4 +15,5 @@
 
 ## Comments
 
-- 2026-09-03: Integrated accessibility and responsive browser coverage commit c410edc (handoff b24c8e7); focused Playwright responsive workflow, TypeScript, Oxlint, formatting, build, and diff checks passed. Full Playwright suite was not run.
+- 2026-09-03: Integrated accessibility and responsive browser coverage commit c410edc (handoff b24c8e7); focused Playwright responsive workflow, TypeScript, Oxlint, formatting, build, and diff checks passed.
+- 2026-09-03: Final review fixes added complete keyboard-only workflow coverage and hid remaining technical identifiers. `make check`, `make test`, and `make smoke` passed; Playwright 47/47 and Vitest 84/84 passed.

@@ -68,7 +68,10 @@ export const parseTimecode = (value: string) => {
 
 export const formatTime = (positionMs: number, durationMs: number) => {
   const ms = clampMediaPosition(positionMs, durationMs);
-  return `${Math.floor(ms / 60_000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, "0")}.${String(ms % 1000).padStart(3, "0")}`;
+  const hours = Math.floor(ms / 3_600_000);
+  const minutes = Math.floor(ms / 60_000) % 60;
+  const seconds = Math.floor(ms / 1000) % 60;
+  return `${hours ? `${String(hours).padStart(2, "0")}:` : ""}${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}.${String(ms % 1000).padStart(3, "0")}`;
 };
 
 export const watchedMediaPosition = (

@@ -315,8 +315,10 @@ test("edits independent project items and submits a durable batch", async ({ pag
 
   const projectItems = page.getByRole("list", { name: "Project media items" });
   await projectItems.getByRole("button", { name: "camera.mp4", exact: true }).click();
-  await expect(page.getByRole("list", { name: "Selected segments" })).toContainText("0:00.100");
-  await expect(page.getByRole("list", { name: "Selected segments" })).not.toContainText("0:00.200");
+  await expect(page.getByRole("list", { name: "Selected segments" })).toContainText("00:00.100");
+  await expect(page.getByRole("list", { name: "Selected segments" })).not.toContainText(
+    "00:00.200",
+  );
   await page.getByRole("button", { name: "Move second.mp4 up" }).click();
   await page.getByRole("button", { name: "Save project" }).click();
   await expect.poll(() => savedBody).toBeTruthy();
@@ -396,10 +398,12 @@ test("restores the durable queue and retries a failed child as a new job", async
 
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Export queue" })).toBeVisible();
+  await expect(page.getByText("b_failedqueue01", { exact: false })).toHaveCount(0);
   await expect(page.getByText(/camera.mp4 · failed · 100% · source_changed/)).toBeVisible();
   await page.getByRole("button", { name: "Retry" }).click();
   await expect.poll(() => retried).toBe(true);
-  await expect(page.getByRole("article", { name: "Batch b_retryqueue001" })).toBeVisible();
+  await expect(page.getByRole("article", { name: "Export batch 1" })).toBeVisible();
+  await expect(page.getByText("b_retryqueue001", { exact: false })).toHaveCount(0);
 });
 
 test("reload restores the active project and permits child and batch cancellation", async ({
@@ -448,7 +452,7 @@ test("reload restores the active project and permits child and batch cancellatio
   const projectDetails = page.locator("details").filter({ hasText: "Project details" });
   await expect(projectDetails).toBeVisible();
   await expect(projectDetails).not.toHaveAttribute("open", "");
-  const restored = page.getByRole("article", { name: "Batch b_restorequeue01" });
+  const restored = page.getByRole("article", { name: "Export batch 1" });
   await restored.getByRole("button", { name: "Cancel job" }).click();
   await expect.poll(() => childCancelled).toBe(true);
   await restored.getByRole("button", { name: "Cancel batch" }).click();
@@ -611,8 +615,8 @@ test("MVP browser behavior: list, metadata, settle, cancel, offset, markers, res
   await playhead.fill("700");
   await page.getByRole("button", { name: "Set end" }).click();
   await page.getByRole("button", { name: "Add segment" }).click();
-  await expect(page.getByRole("list", { name: "Selected segments" })).toContainText("0:00.100");
-  await expect(page.getByRole("list", { name: "Selected segments" })).toContainText("0:00.700");
+  await expect(page.getByRole("list", { name: "Selected segments" })).toContainText("00:00.100");
+  await expect(page.getByRole("list", { name: "Selected segments" })).toContainText("00:00.700");
   await page.getByRole("button", { name: "Save project" }).click();
   await expect(page.getByText("Project saved (revision 1).")).toBeVisible(); // 7 markers save
 
@@ -637,7 +641,7 @@ test("keeps playback position, markers, and undo history synchronized", async ({
   await expect(page.getByLabel("Timeline playhead")).toHaveValue("2500");
   await expect(page.getByRole("button", { name: "Undo" })).toBeDisabled();
   await page.getByRole("button", { name: "Set start" }).click();
-  await expect(page.getByText("In: 0:02.500")).toBeVisible();
+  await expect(page.getByText("In: 00:02.500")).toBeVisible();
 });
 
 test("shows a safe preview failure and maps markers from the watched preview", async ({ page }) => {
@@ -670,7 +674,7 @@ test("shows a safe preview failure and maps markers from the watched preview", a
     player.dispatchEvent(new Event("timeupdate"));
   });
   await page.getByRole("button", { name: "Set start" }).click();
-  await expect(page.getByText("In: 0:01.500")).toBeVisible();
+  await expect(page.getByText("In: 00:01.500")).toBeVisible();
 });
 
 test("shows a safe preview request failure", async ({ page }) => {
@@ -1413,6 +1417,14 @@ for (const [status, message] of [
 }
 
 test("covers the responsive workspace and keyboard editing workflow", async ({ page }) => {
+  await page.route(`${apiOrigin}/api/v1/projects/*/exports`, (route) =>
+    route.fulfill({
+      json: {
+        batchId: "b_keyboard-flow01",
+        jobs: [{ id: "j_keyboard-flow01", type: "export", state: "queued", progress: 0 }],
+      },
+    }),
+  );
   for (const viewport of [
     { width: 1440, height: 900 },
     { width: 1024, height: 768 },
@@ -1428,41 +1440,69 @@ test("covers the responsive workspace and keyboard editing workflow", async ({ p
 
   await page.setViewportSize({ width: 1024, height: 768 });
   await page.goto("/");
-  await page.getByRole("button", { name: /camera.mp4/ }).click();
-  await expect(page.getByText(/Preview: 0:00.000 to 0:08.000/)).toBeVisible();
-  await page.getByRole("tab", { name: "Export" }).click();
+  await page.getByRole("button", { name: /camera.mp4/ }).focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByText(/Preview: 00:00.000 to 00:08.000/)).toBeVisible();
+
+  const projectTab = page.getByRole("tab", { name: "Project" });
+  const exportTab = page.getByRole("tab", { name: "Export" });
+  const detectionTab = page.getByRole("tab", { name: "Detection" });
+  await projectTab.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(exportTab).toHaveAttribute("aria-selected", "true");
   await expect(page.getByText("Advanced export options")).toBeVisible();
   await expect(page.getByText("Advanced export options").locator("..")).not.toHaveAttribute(
     "open",
     "",
   );
-  await page.getByRole("tab", { name: "Project" }).focus();
-  await page.keyboard.press("ArrowRight");
-  await expect(page.getByRole("tab", { name: "Export" })).toHaveAttribute("aria-selected", "true");
+  await page.keyboard.press("ArrowLeft");
+  await expect(projectTab).toHaveAttribute("aria-selected", "true");
 
-  await page.getByRole("tab", { name: "Project" }).click();
   await expect(page.getByLabel("Preview source range")).toBeVisible();
-  await page.getByLabel("Preview player").evaluate((video) => {
-    const player = video as HTMLVideoElement;
-    player.currentTime = 0.1;
-    player.dispatchEvent(new Event("timeupdate"));
-  });
   await page.getByRole("heading", { name: "Timeline" }).focus();
+  await page.keyboard.press("ArrowRight");
   await page.keyboard.press("i");
-  await page.getByLabel("Preview player").evaluate((video) => {
-    const player = video as HTMLVideoElement;
-    player.currentTime = 0.7;
-    player.dispatchEvent(new Event("timeupdate"));
-  });
-  await page.getByRole("heading", { name: "Timeline" }).focus();
+  await page.keyboard.press("ArrowRight");
   await page.keyboard.press("o");
-  await expect(page.getByRole("button", { name: "Add segment" })).toBeEnabled();
-  await page.getByRole("button", { name: "Add segment" }).click();
-  await expect(page.getByRole("list", { name: "Selected segments" })).toContainText("0:00.100");
-  await page.getByRole("button", { name: "Save project" }).click();
+  const addSegment = page.getByRole("button", { name: "Add segment" });
+  await expect(addSegment).toBeEnabled();
+  await addSegment.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("list", { name: "Selected segments" })).toContainText("00:02.000");
+  await page.getByRole("button", { name: "Select segment 1" }).focus();
+  await page.keyboard.press("Enter");
+  await page.getByRole("button", { name: "Save project" }).focus();
+  await page.keyboard.press("Enter");
   await expect(page.getByText("Saved", { exact: true })).toBeVisible();
-  await page.getByRole("tab", { name: "Detection" }).click();
-  await expect(page.getByRole("heading", { name: "Auto detection" })).toBeVisible();
-  await page.getByRole("tab", { name: "Export" }).click();
-  await expect(page.getByRole("button", { name: "Start export" })).toBeEnabled();
+
+  await exportTab.focus();
+  await page.keyboard.press("Enter");
+  await expect(exportTab).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByText("Saved", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Select none" }).focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByText("Select at least one project item.")).toBeVisible();
+  await expect(page.getByText("Saved", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Select all" }).focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByText("Saved", { exact: true })).toBeVisible();
+  await exportTab.focus();
+  await page.keyboard.press("ArrowLeft");
+  await page.getByRole("button", { name: "Save project" }).focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByText("Saved", { exact: true })).toBeVisible();
+  await exportTab.focus();
+  await page.keyboard.press("Enter");
+  const startExport = page.getByRole("button", { name: "Start export" });
+  await expect(startExport).toBeEnabled();
+  await startExport.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByText("Export queued.")).toBeVisible();
+
+  await detectionTab.focus();
+  await page.keyboard.press("Enter");
+  await expect(detectionTab).toHaveAttribute("aria-selected", "true");
+  await page.getByRole("button", { name: "Detect silence" }).focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByText("Detection running.")).toBeVisible();
 });

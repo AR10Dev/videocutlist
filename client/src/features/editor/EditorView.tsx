@@ -306,7 +306,7 @@ export function EditorView() {
                 Timecode{" "}
                 <input
                   value={timecode()}
-                  placeholder="0:00.000"
+                  placeholder="00:00.000"
                   onInput={(event) => setTimecode(event.currentTarget.value)}
                 />
               </label>

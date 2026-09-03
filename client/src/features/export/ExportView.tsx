@@ -246,7 +246,7 @@ export function ExportView() {
           <Show when={!selected()}>
             <p>Add a video before exporting.</p>
           </Show>
-          <Show when={selected() && !projectItems().length}>
+          <Show when={selected() && !selectedExportItems().length}>
             <p>Select at least one project item.</p>
           </Show>
           <Show when={selected() && projectItems().length === 1 && !present().segments.length}>
@@ -272,7 +272,7 @@ export function ExportView() {
         </div>
         <div class="controls">
           <Show when={exportJob()?.state === "queued" || exportJob()?.state === "running"}>
-            <p role="status">Export job {exportJob()!.id} is active; wait or cancel it.</p>
+            <p role="status">An export job is active; wait or cancel it.</p>
           </Show>
           <button
             class="primary"

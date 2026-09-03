@@ -1,6 +1,6 @@
 # Editing workspace usability redesign
 
-**Status:** active
+**Status:** complete
 
 ## Problem
 
@@ -186,24 +186,24 @@ At 390 by 844:
 
 ## Acceptance criteria
 
-- [ ] The workspace exposes one open task section at a time for Project, Export, or Detection.
-- [ ] The global header contains no preview or operation status message.
-- [ ] The preview labels its absolute source range and does not look like a second full-video timeline.
-- [ ] The selected video's duration and absolute playhead use consistent formatting everywhere.
-- [ ] A user can set a start marker, set an end marker, and add a segment in the displayed control order.
-- [ ] "Add segment" cannot submit an invalid or empty range and states why it is unavailable.
-- [ ] Added segments appear in a visible segment list and can be selected and removed.
-- [ ] Export presents one primary action and names every blocking condition next to it.
-- [ ] Advanced export controls start collapsed.
-- [ ] Project ID, revision, raw container aliases, language codes, dispositions, and stream indexes do not appear in the default workspace view.
-- [ ] Repeated project-save warnings are replaced by one actionable message.
-- [ ] Media cards and task controls create no horizontal scrollbar at 1024 by 768 or 390 by 844.
-- [ ] The page does not require scrolling past closed Project, Export, or Detection content to reach the active task's primary action.
-- [ ] Media entries expose filename, duration, container, codec, and dimensions using readable labels.
-- [ ] The filmstrip contains readable thumbnails and visible time references.
-- [ ] Keyboard-only users can select media, edit markers, manage segments, save, run detection, and start a valid export.
-- [ ] Automated browser tests cover 1440×900, 1024×768, and 390×844 layouts.
-- [ ] Web lint, Vitest, build, and Playwright checks pass.
+- [x] The workspace exposes one open task section at a time for Project, Export, or Detection.
+- [x] The global header contains no preview or operation status message.
+- [x] The preview labels its absolute source range and does not look like a second full-video timeline.
+- [x] The selected video's duration and absolute playhead use consistent formatting everywhere.
+- [x] A user can set a start marker, set an end marker, and add a segment in the displayed control order.
+- [x] "Add segment" cannot submit an invalid or empty range and states why it is unavailable.
+- [x] Added segments appear in a visible segment list and can be selected and removed.
+- [x] Export presents one primary action and names every blocking condition next to it.
+- [x] Advanced export controls start collapsed.
+- [x] Project ID, revision, raw container aliases, language codes, dispositions, and stream indexes do not appear in the default workspace view.
+- [x] Repeated project-save warnings are replaced by one actionable message.
+- [x] Media cards and task controls create no horizontal scrollbar at 1024 by 768 or 390 by 844.
+- [x] The page does not require scrolling past closed Project, Export, or Detection content to reach the active task's primary action.
+- [x] Media entries expose filename, duration, container, codec, and dimensions using readable labels.
+- [x] The filmstrip contains readable thumbnails and visible time references.
+- [x] Keyboard-only users can select media, edit markers, manage segments, save, run detection, and start a valid export.
+- [x] Automated browser tests cover 1440×900, 1024×768, and 390×844 layouts.
+- [x] Web lint, Vitest, build, and Playwright checks pass.
 
 ## Out of scope
 

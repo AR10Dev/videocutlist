@@ -22,8 +22,13 @@ const readableCodec = (codec: string) =>
     codec.toLowerCase()
   ] ?? codec.toUpperCase();
 
-const readableContainer = (container: string) =>
-  ({ mp4: "MP4", mov: "MOV", webm: "WebM", mkv: "Matroska" })[container.toLowerCase()] ?? container;
+const readableContainer = (container: string) => {
+  const aliases = container.toLowerCase().split(",");
+  const known = ["mp4", "mov", "webm", "matroska", "mkv"].find((name) => aliases.includes(name));
+  return known
+    ? { mp4: "MP4", mov: "MOV", webm: "WebM", matroska: "Matroska", mkv: "Matroska" }[known]
+    : "Video";
+};
 
 export function mediaSummary(media: Media): string {
   const video = media.streams?.video as VideoStream | undefined;
