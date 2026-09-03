@@ -279,17 +279,17 @@ test("edits independent project items and submits a durable batch", async ({ pag
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   await page.getByLabel("Timeline playhead").fill("100");
-  await page.getByRole("button", { name: "Set In marker" }).click();
+  await page.getByRole("button", { name: "Set start" }).click();
   await page.getByLabel("Timeline playhead").fill("700");
-  await page.getByRole("button", { name: "Set Out marker" }).click();
-  await page.getByRole("button", { name: "Add In/Out segment" }).click();
+  await page.getByRole("button", { name: "Set end" }).click();
+  await page.getByRole("button", { name: "Add segment" }).click();
 
   await page.getByRole("button", { name: /second.mp4/ }).click();
   await page.getByLabel("Timeline playhead").fill("200");
-  await page.getByRole("button", { name: "Set In marker" }).click();
+  await page.getByRole("button", { name: "Set start" }).click();
   await page.getByLabel("Timeline playhead").fill("800");
-  await page.getByRole("button", { name: "Set Out marker" }).click();
-  await page.getByRole("button", { name: "Add In/Out segment" }).click();
+  await page.getByRole("button", { name: "Set end" }).click();
+  await page.getByRole("button", { name: "Add segment" }).click();
 
   const projectItems = page.getByRole("list", { name: "Project media items" });
   await projectItems.getByRole("button", { name: "camera.mp4", exact: true }).click();
@@ -418,8 +418,10 @@ test("reload restores the active project and permits child and batch cancellatio
   });
 
   await page.goto("/");
-  await expect(page.getByLabel("Project ID")).toHaveValue("p_demo-project");
   await expect(page.getByLabel("Preview player")).toBeVisible();
+  const projectDetails = page.locator("details").filter({ hasText: "Project details" });
+  await expect(projectDetails).toBeVisible();
+  await expect(projectDetails).not.toHaveAttribute("open", "");
   const restored = page.getByRole("article", { name: "Batch b_restorequeue01" });
   await restored.getByRole("button", { name: "Cancel job" }).click();
   await expect.poll(() => childCancelled).toBe(true);
@@ -576,10 +578,10 @@ test("MVP browser behavior: list, metadata, settle, cancel, offset, markers, res
   await expect(page.getByLabel("Preview player")).toHaveAttribute("data-preview-offset", "2000"); // 6 returned offset is used
 
   await playhead.fill("100");
-  await page.getByRole("button", { name: "Set In marker" }).click();
+  await page.getByRole("button", { name: "Set start" }).click();
   await playhead.fill("700");
-  await page.getByRole("button", { name: "Set Out marker" }).click();
-  await page.getByRole("button", { name: "Add In/Out segment" }).click();
+  await page.getByRole("button", { name: "Set end" }).click();
+  await page.getByRole("button", { name: "Add segment" }).click();
   await expect(page.getByRole("list", { name: "Selected segments" })).toContainText("0:00.100");
   await expect(page.getByRole("list", { name: "Selected segments" })).toContainText("0:00.700");
   await page.getByRole("button", { name: "Save project" }).click();
@@ -605,7 +607,7 @@ test("keeps playback position, markers, and undo history synchronized", async ({
   });
   await expect(page.getByLabel("Timeline playhead")).toHaveValue("2500");
   await expect(page.getByRole("button", { name: "Undo" })).toBeDisabled();
-  await page.getByRole("button", { name: "Set In marker" }).click();
+  await page.getByRole("button", { name: "Set start" }).click();
   await expect(page.getByText("In: 0:02.500")).toBeVisible();
 });
 
@@ -638,7 +640,7 @@ test("shows a safe preview failure and maps markers from the watched preview", a
     player.currentTime = 0.5;
     player.dispatchEvent(new Event("timeupdate"));
   });
-  await page.getByRole("button", { name: "Set In marker" }).click();
+  await page.getByRole("button", { name: "Set start" }).click();
   await expect(page.getByText("In: 0:01.500")).toBeVisible();
 });
 
@@ -728,10 +730,10 @@ test("exports the saved segments, polls to a safe result, and shows warnings", a
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   await page.getByLabel("Timeline playhead").fill("100");
-  await page.getByRole("button", { name: "Set In marker" }).click();
+  await page.getByRole("button", { name: "Set start" }).click();
   await page.getByLabel("Timeline playhead").fill("700");
-  await page.getByRole("button", { name: "Set Out marker" }).click();
-  await page.getByRole("button", { name: "Add In/Out segment" }).click();
+  await page.getByRole("button", { name: "Set end" }).click();
+  await page.getByRole("button", { name: "Add segment" }).click();
   await page.getByRole("button", { name: "Start export" }).click();
   await expect(page.getByText(/Export (queued|running)\./)).toBeVisible();
   await expect(page.getByRole("link", { name: "Download output 1" })).toHaveCount(0);
@@ -816,10 +818,10 @@ test("shows stable failed and capacity messages and permits retry", async ({ pag
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   await page.getByLabel("Timeline playhead").fill("100");
-  await page.getByRole("button", { name: "Set In marker" }).click();
+  await page.getByRole("button", { name: "Set start" }).click();
   await page.getByLabel("Timeline playhead").fill("700");
-  await page.getByRole("button", { name: "Set Out marker" }).click();
-  await page.getByRole("button", { name: "Add In/Out segment" }).click();
+  await page.getByRole("button", { name: "Set end" }).click();
+  await page.getByRole("button", { name: "Add segment" }).click();
   const exportButton = page.getByRole("button", { name: "Start export" });
   await exportButton.click();
   await expect(page.getByText("Export capacity is busy. Try again shortly.")).toBeVisible();
@@ -848,10 +850,10 @@ test("cancels an active export without showing a path", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   await page.getByLabel("Timeline playhead").fill("100");
-  await page.getByRole("button", { name: "Set In marker" }).click();
+  await page.getByRole("button", { name: "Set start" }).click();
   await page.getByLabel("Timeline playhead").fill("700");
-  await page.getByRole("button", { name: "Set Out marker" }).click();
-  await page.getByRole("button", { name: "Add In/Out segment" }).click();
+  await page.getByRole("button", { name: "Set end" }).click();
+  await page.getByRole("button", { name: "Add segment" }).click();
   await page.getByRole("button", { name: "Start export" }).click();
   await page.getByRole("button", { name: "Cancel export" }).click();
   await expect(page.getByText("Export cancelled.")).toBeVisible();
@@ -923,10 +925,10 @@ test("delayed saves stay dirty and cannot launch obsolete exports", async ({ pag
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   await page.getByLabel("Project ID").fill("p_save-race012");
   await page.getByLabel("Timeline playhead").fill("100");
-  await page.getByRole("button", { name: "Set In marker" }).click();
+  await page.getByRole("button", { name: "Set start" }).click();
   await page.getByLabel("Timeline playhead").fill("700");
-  await page.getByRole("button", { name: "Set Out marker" }).click();
-  await page.getByRole("button", { name: "Add In/Out segment" }).click();
+  await page.getByRole("button", { name: "Set end" }).click();
+  await page.getByRole("button", { name: "Add segment" }).click();
   await page.getByRole("button", { name: "Start export" }).click();
   await page.getByLabel("Timeline playhead").fill("1");
   release();
@@ -992,10 +994,10 @@ test("a delayed old-project save stays silent after New and the new project save
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   await page.getByLabel("Project ID").fill("p_old-save0123");
   await page.getByLabel("Timeline playhead").fill("100");
-  await page.getByRole("button", { name: "Set In marker" }).click();
+  await page.getByRole("button", { name: "Set start" }).click();
   await page.getByLabel("Timeline playhead").fill("700");
-  await page.getByRole("button", { name: "Set Out marker" }).click();
-  await page.getByRole("button", { name: "Add In/Out segment" }).click();
+  await page.getByRole("button", { name: "Set end" }).click();
+  await page.getByRole("button", { name: "Add segment" }).click();
   await page.getByRole("button", { name: "Save project" }).click();
   await oldStart;
   page.once("dialog", (dialog) => dialog.accept());
@@ -1003,10 +1005,10 @@ test("a delayed old-project save stays silent after New and the new project save
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   const newID = await page.getByLabel("Project ID").inputValue();
   await page.getByLabel("Timeline playhead").fill("100");
-  await page.getByRole("button", { name: "Set In marker" }).click();
+  await page.getByRole("button", { name: "Set start" }).click();
   await page.getByLabel("Timeline playhead").fill("700");
-  await page.getByRole("button", { name: "Set Out marker" }).click();
-  await page.getByRole("button", { name: "Add In/Out segment" }).click();
+  await page.getByRole("button", { name: "Set end" }).click();
+  await page.getByRole("button", { name: "Add segment" }).click();
   await page.getByRole("button", { name: "Save project" }).click();
   await newComplete;
   expect(await page.getByLabel("Project ID").inputValue()).toBe(newID);
@@ -1057,10 +1059,10 @@ test("unmounting a deferred export save cannot start export, poll, or remember a
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   await page.getByLabel("Project ID").fill("p_unmount-save12");
   await page.getByLabel("Timeline playhead").fill("100");
-  await page.getByRole("button", { name: "Set In marker" }).click();
+  await page.getByRole("button", { name: "Set start" }).click();
   await page.getByLabel("Timeline playhead").fill("700");
-  await page.getByRole("button", { name: "Set Out marker" }).click();
-  await page.getByRole("button", { name: "Add In/Out segment" }).click();
+  await page.getByRole("button", { name: "Set end" }).click();
+  await page.getByRole("button", { name: "Add segment" }).click();
   await page.getByRole("button", { name: "Start export" }).click();
   await saveStart;
   await page.close();
@@ -1171,10 +1173,10 @@ test("delayed cancellation cannot overwrite a replacement export", async ({ page
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   await page.getByLabel("Timeline playhead").fill("100");
-  await page.getByRole("button", { name: "Set In marker" }).click();
+  await page.getByRole("button", { name: "Set start" }).click();
   await page.getByLabel("Timeline playhead").fill("700");
-  await page.getByRole("button", { name: "Set Out marker" }).click();
-  await page.getByRole("button", { name: "Add In/Out segment" }).click();
+  await page.getByRole("button", { name: "Set end" }).click();
+  await page.getByRole("button", { name: "Add segment" }).click();
   await page.getByRole("button", { name: "Start export" }).click();
   await expect(page.getByText("Export queued.")).toBeVisible();
   await page.getByRole("button", { name: "Cancel export" }).click();

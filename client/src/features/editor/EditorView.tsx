@@ -39,9 +39,46 @@ export function EditorView() {
     togglePlayback,
   } = useWorkspace();
   const [selectedSegment, setSelectedSegment] = createSignal<number>();
+  const handleKeyDown = (event: KeyboardEvent) => {
+    const target = event.target as HTMLElement;
+    if (target.matches("input, textarea, select, [contenteditable='true']")) return;
+    const key = event.key.toLowerCase();
+    if (key === "i" || key === "o") {
+      event.preventDefault();
+      setMarker(
+        key === "i" ? "inMs" : "outMs",
+        key === "i" ? watchedPosition() : Math.min(duration(), watchedPosition()),
+      );
+    } else if (key === " ") {
+      event.preventDefault();
+      togglePlayback();
+    } else if (key === "arrowleft" || key === "arrowright") {
+      event.preventDefault();
+      const step = frameDuration(selected()) || 1000;
+      updateTimeline({
+        playheadMs:
+          key === "arrowleft"
+            ? Math.max(0, playheadMs() - step)
+            : Math.min(duration(), playheadMs() + step),
+      });
+      markDirty();
+    } else if ((event.ctrlKey || event.metaKey) && key === "z") {
+      event.preventDefault();
+      const next = event.shiftKey ? redoTimeline(timeline()) : undoTimeline(timeline());
+      setTimeline(next);
+      setPreviewCenterMs(next.present.playheadMs);
+      markDirty();
+    } else if (event.ctrlKey && key === "y") {
+      event.preventDefault();
+      const next = redoTimeline(timeline());
+      setTimeline(next);
+      setPreviewCenterMs(next.present.playheadMs);
+      markDirty();
+    }
+  };
   return (
-    <section class="editor-panel" aria-labelledby="timeline-heading">
-      <h2 id="timeline-heading">Timeline</h2>
+    <section class="editor-panel" aria-labelledby="timeline-heading" onKeyDown={handleKeyDown}>
+      <h2 id="timeline-heading" tabIndex={-1}>Timeline</h2>
       <Show
         when={selected()}
         fallback={
