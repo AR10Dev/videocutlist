@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -250,10 +251,15 @@ func run(ctx context.Context) error {
 		return err
 	}
 	server := newHTTPServer(cfg, httpapi.CORS(cfg.AllowedOrigins, proxied))
+	listener, err := net.Listen("tcp", server.Addr)
+	if err != nil {
+		return fmt.Errorf("listen on %s: %w", server.Addr, err)
+	}
+	server.Addr = listener.Addr().String()
 	failed := make(chan error, 1)
 	go func() {
 		logger.Printf(`{"event":"server_started","listen_addr":%q}`, server.Addr)
-		failed <- server.ListenAndServe()
+		failed <- server.Serve(listener)
 	}()
 	select {
 	case err := <-failed:

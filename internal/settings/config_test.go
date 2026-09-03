@@ -42,7 +42,7 @@ func TestLoadListenerConfiguration(t *testing.T) {
 		{name: "bearer LAN", changes: map[string]string{"VIDEOCUTLIST_AUTH_MODE": "bearer", "VIDEOCUTLIST_BEARER_TOKEN": "secret", "VIDEOCUTLIST_LISTEN_ADDRESS": "0.0.0.0", "VIDEOCUTLIST_PORT": "4000"}, listenAddr: "0.0.0.0:4000"},
 		{name: "invalid IP", changes: map[string]string{"VIDEOCUTLIST_LISTEN_ADDRESS": "localhost"}, wantErr: true},
 		{name: "host port is not an IP", changes: map[string]string{"VIDEOCUTLIST_LISTEN_ADDRESS": "127.0.0.1:9000"}, wantErr: true},
-		{name: "zero port", changes: map[string]string{"VIDEOCUTLIST_PORT": "0"}, wantErr: true},
+		{name: "ephemeral port", changes: map[string]string{"VIDEOCUTLIST_PORT": "0"}, listenAddr: "127.0.0.1:0"},
 		{name: "high port", changes: map[string]string{"VIDEOCUTLIST_PORT": "65536"}, wantErr: true},
 		{name: "invalid port", changes: map[string]string{"VIDEOCUTLIST_PORT": "nope"}, wantErr: true},
 	} {

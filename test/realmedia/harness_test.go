@@ -7,13 +7,12 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"net"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
-	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -59,7 +58,9 @@ func startProcessWithEnv(t *testing.T, root string, overrides map[string]string)
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build production process: %v\n%s", err, output)
 	}
-	port := reservePort(t)
+	// Port zero lets the kernel allocate and retain the listener atomically;
+	// reserving and then closing a port introduces a startup TOCTOU race.
+	port := "0"
 	mediaRoot := filepath.Join(root, "media")
 	if err := os.MkdirAll(mediaRoot, 0o755); err != nil {
 		t.Fatal(err)
@@ -89,7 +90,7 @@ func startProcessWithEnv(t *testing.T, root string, overrides map[string]string)
 		cancel()
 		t.Fatal(err)
 	}
-	p := &process{cmd: cmd, base: "http://127.0.0.1:" + port, log: logBuffer, cancel: cancel}
+	p := &process{cmd: cmd, log: logBuffer, cancel: cancel}
 	t.Cleanup(func() {
 		if cmd.Process != nil {
 			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
@@ -112,6 +113,15 @@ func startProcessWithEnv(t *testing.T, root string, overrides map[string]string)
 	client := &http.Client{Timeout: time.Second}
 	deadline := time.Now().Add(startupWait)
 	for time.Now().Before(deadline) {
+		if p.base == "" {
+			if match := regexp.MustCompile(`"listen_addr":"(127\.0\.0\.1:[0-9]+)"`).FindStringSubmatch(logBuffer.String()); len(match) == 2 {
+				p.base = "http://" + match[1]
+			}
+		}
+		if p.base == "" {
+			time.Sleep(100 * time.Millisecond)
+			continue
+		}
 		resp, err := client.Get(p.base + "/api/v1/ready")
 		if err == nil {
 			resp.Body.Close()
@@ -178,16 +188,6 @@ func repositoryRoot(t *testing.T) string {
 		t.Fatal("locate real-media harness")
 	}
 	return filepath.Clean(filepath.Join(filepath.Dir(filename), "../.."))
-}
-
-func reservePort(t *testing.T) string {
-	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer listener.Close()
-	return strconv.Itoa(listener.Addr().(*net.TCPAddr).Port)
 }
 
 func copyFile(source, destination string) error {

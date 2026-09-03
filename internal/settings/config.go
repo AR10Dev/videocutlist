@@ -192,8 +192,8 @@ func loadListener(c *Config, lookup func(string) (string, bool)) error {
 
 func parsePort(value, setting string) (int, error) {
 	port, err := strconv.Atoi(value)
-	if err != nil || port < 1 || port > 65535 {
-		return 0, fmt.Errorf("%s must be an integer from 1 through 65535", setting)
+	if err != nil || port < 0 || port > 65535 {
+		return 0, fmt.Errorf("%s must be an integer from 0 through 65535", setting)
 	}
 	return port, nil
 }
