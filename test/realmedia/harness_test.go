@@ -34,6 +34,10 @@ type process struct {
 }
 
 func startProcess(t *testing.T, root string) *process {
+	return startProcessWithEnv(t, root, nil)
+}
+
+func startProcessWithEnv(t *testing.T, root string, overrides map[string]string) *process {
 	t.Helper()
 	repositoryRoot := repositoryRoot(t)
 	fixture := filepath.Join(repositoryRoot, fixturePath)
@@ -78,6 +82,9 @@ func startProcess(t *testing.T, root string) *process {
 		"VIDEOCUTLIST_AUTH_MODE=bearer",
 		"VIDEOCUTLIST_BEARER_TOKEN="+bearerToken,
 	)
+	for key, value := range overrides {
+		cmd.Env = append(cmd.Env, key+"="+value)
+	}
 	if err := cmd.Start(); err != nil {
 		cancel()
 		t.Fatal(err)
@@ -116,6 +123,15 @@ func startProcess(t *testing.T, root string) *process {
 	}
 	t.Fatalf("production process did not become ready\n%s", boundedLog(p.log.String()))
 	return nil
+}
+
+func (p *process) stop() {
+	if p.cmd.Process == nil {
+		return
+	}
+	_ = syscall.Kill(-p.cmd.Process.Pid, syscall.SIGTERM)
+	p.cancel()
+	_ = p.cmd.Wait()
 }
 
 func (p *process) request(t *testing.T, method, path string) *http.Response {
