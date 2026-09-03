@@ -70,6 +70,12 @@ func TestProductionSettingsAndAutomationWorkflows(t *testing.T) {
 		t.Fatalf("project status=%d", created.StatusCode)
 	}
 	created.Body.Close()
+	missingAuth := p.requestNoAuth(t, http.MethodPost, "/api/v1/automation")
+	if missingAuth.StatusCode != http.StatusUnauthorized {
+		missingAuth.Body.Close()
+		t.Fatalf("missing automation auth status=%d", missingAuth.StatusCode)
+	}
+	missingAuth.Body.Close()
 	command := func(payload map[string]any) *http.Response {
 		return p.requestBody(t, http.MethodPost, "/api/v1/automation", payload)
 	}

@@ -210,6 +210,20 @@ func (p *process) stop() {
 	_ = p.cmd.Wait()
 }
 
+func (p *process) requestNoAuth(t *testing.T, method, path string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(method, p.base+path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	recordRoute(method, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp
+}
+
 func (p *process) request(t *testing.T, method, path string) *http.Response {
 	return p.requestBody(t, method, path, nil)
 }

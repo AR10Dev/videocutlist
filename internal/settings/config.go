@@ -127,6 +127,9 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 	if c.AuthMode != "none" && c.AuthMode != "bearer" && c.AuthMode != "trusted_proxy" {
 		return Config{}, fmt.Errorf("VIDEOCUTLIST_AUTH_MODE must be none, bearer, or trusted_proxy")
 	}
+	if c.AuthMode == "none" && net.ParseIP(c.ListenAddress) != nil && !net.ParseIP(c.ListenAddress).IsLoopback() {
+		return Config{}, fmt.Errorf("VIDEOCUTLIST_AUTH_MODE=none requires a loopback listen address")
+	}
 	if c.AuthMode == "bearer" {
 		if c.BearerToken == "" || containsControl(c.BearerToken) {
 			return Config{}, fmt.Errorf("VIDEOCUTLIST_BEARER_TOKEN must be non-empty and control-free in bearer mode")
