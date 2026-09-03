@@ -94,6 +94,17 @@ func TestProductionProcessMediaAndDerivedAssets(t *testing.T) {
 		t.Fatalf("DELETE media import status=%d", resp.StatusCode)
 	}
 	resp.Body.Close()
+	waitFor(t, 10*time.Second, func() bool {
+		response := p.request(t, http.MethodGet, "/api/v1/media/import/"+importJob.ID)
+		defer response.Body.Close()
+		var job struct {
+			State string `json:"state"`
+		}
+		if json.NewDecoder(response.Body).Decode(&job) != nil {
+			return false
+		}
+		return job.State == "cancelled" || job.State == "succeeded" || job.State == "failed"
+	})
 
 	previewPath := "/api/v1/media/" + mediaID + "/preview?centerMs=26000&beforeMs=1000&afterMs=1000"
 	resp = p.request(t, http.MethodHead, previewPath)
