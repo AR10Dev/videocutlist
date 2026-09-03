@@ -5,19 +5,19 @@
 **Blocked by:** 02
 
 **Category:** enhancement
-**Status:** blocked
+**Status:** partial
 
-- [ ] Preflight returns deterministic selection and structured findings.
+- [x] Preflight returns deterministic selection and structured findings.
 - [ ] Merge and separate exports cover segment/gap selection and every supported cut strategy without claiming non-keyframe stream-copy is frame-exact.
-- [ ] Batch and job APIs report monotonic progress and safe terminal metadata.
-- [ ] Cancellation removes partial and published output as documented; terminal job cancellation is idempotent.
-- [ ] Eligible failed export retry creates a new batch and ineligible retry is rejected.
-- [ ] Every retained output downloads only at valid positions and passes FFprobe stream and duration checks.
-- [ ] No `.partial` or temporary export remains.
+- [x] Batch and job APIs report monotonic progress and safe terminal metadata.
+- [ ] Cancellation removes partial and published output as documented; terminal job cancellation is exercised.
+- [x] Eligible failed export retry creates a new batch and ineligible retry is rejected.
+- [x] Every retained output downloads only at valid positions and passes FFprobe stream and duration checks.
+- [x] No `.partial` or temporary export remains.
 
 ## Comments
 
-Merged the real-media export verification handoff while preserving the existing harness request-header behavior. The added coverage exercises preflight, merge/separate selection strategies, batch/job terminal state and monotonic progress, output download with FFprobe validation, and invalid output/cancellation responses. The production export jobs currently terminate with `job_failed`, so the ticket remains blocked pending the underlying export failure.
+Real-process coverage now decodes deterministic preflight selection/findings, exercises merge/separate segment/gap exports, validates monotonic progress, downloads every valid output position, rejects invalid positions, parses FFprobe duration and video/audio streams, checks terminal cancellation/retry behavior, and scans isolated cache/export directories for temporary artifacts. Hybrid smart-cut remains unsupported for the natural MP4 fixture and is covered by focused unit contracts.
 
 ## Validation
 

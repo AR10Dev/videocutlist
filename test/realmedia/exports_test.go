@@ -10,9 +10,28 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
+
+func assertNoTemporaryArtifacts(t *testing.T, root string) {
+	t.Helper()
+	for _, dir := range []string{filepath.Join(root, "exports"), filepath.Join(root, "cache")} {
+		err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+			if err != nil || info == nil {
+				return err
+			}
+			if !info.IsDir() && (strings.Contains(info.Name(), ".partial") || strings.HasPrefix(info.Name(), ".videocutlist-")) {
+				t.Errorf("temporary artifact remains: %s", info.Name())
+			}
+			return nil
+		})
+		if err != nil && !os.IsNotExist(err) {
+			t.Fatal(err)
+		}
+	}
+}
 
 func TestProductionExportsJobsAndOutputs(t *testing.T) {
 	root := t.TempDir()
@@ -218,7 +237,14 @@ func TestProductionExportsJobsAndOutputs(t *testing.T) {
 			t.Fatalf("successful retry status=%d", retry.StatusCode)
 		}
 		retry.Body.Close()
+		invalidPosition := p.request(t, "GET", "/api/v1/jobs/"+jobID+"/outputs/99")
+		if invalidPosition.StatusCode != http.StatusNotFound {
+			invalidPosition.Body.Close()
+			t.Fatalf("invalid output position status=%d", invalidPosition.StatusCode)
+		}
+		invalidPosition.Body.Close()
 	}
+	assertNoTemporaryArtifacts(t, root)
 
 	invalid := p.request(t, "GET", "/api/v1/jobs/j_invalid-output/outputs/99")
 	if invalid.StatusCode != 404 {
