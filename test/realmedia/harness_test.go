@@ -372,6 +372,83 @@ func repositoryRoot(t *testing.T) string {
 	return filepath.Clean(filepath.Join(filepath.Dir(filename), "../.."))
 }
 
+func ffmpegDescendant(t *testing.T, p *process) int {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if pid := findFFmpegChild(p.cmd.Process.Pid); pid > 0 && syscall.Kill(pid, syscall.SIGSTOP) == nil {
+			return pid
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatal("real FFmpeg descendant did not start")
+	return 0
+}
+
+func findFFmpegChild(pid int) int {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/task/%d/children", pid, pid))
+	if err != nil {
+		return 0
+	}
+	for _, field := range strings.Fields(string(data)) {
+		var child int
+		if _, err := fmt.Sscan(field, &child); err != nil {
+			continue
+		}
+		exe, _ := os.Readlink(fmt.Sprintf("/proc/%d/exe", child))
+		if strings.Contains(filepath.Base(exe), "ffmpeg") {
+			return child
+		}
+		if nested := findFFmpegChild(child); nested > 0 {
+			return nested
+		}
+	}
+	// Workers can briefly reparent a child while starting it; confirm the
+	// process is still in this process tree before selecting it.
+	entries, _ := os.ReadDir("/proc")
+	for _, entry := range entries {
+		var child int
+		if _, err := fmt.Sscan(entry.Name(), &child); err != nil || child == pid {
+			continue
+		}
+		exe, _ := os.Readlink(fmt.Sprintf("/proc/%d/exe", child))
+		if !strings.Contains(filepath.Base(exe), "ffmpeg") {
+			continue
+		}
+		for current := child; current > 1; {
+			stat, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", current))
+			if err != nil {
+				break
+			}
+			fields := strings.Fields(string(stat))
+			if len(fields) < 4 {
+				break
+			}
+			var parent int
+			if _, err := fmt.Sscan(fields[3], &parent); err != nil || parent == current {
+				break
+			}
+			if parent == pid {
+				return child
+			}
+			current = parent
+		}
+	}
+	return 0
+}
+
+func waitPIDExit(t *testing.T, pid int) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(fmt.Sprintf("/proc/%d", pid)); os.IsNotExist(err) {
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("FFmpeg process %d did not exit", pid)
+}
+
 func copyFile(source, destination string) error {
 	if _, err := os.Stat(destination); err == nil {
 		return nil

@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -169,7 +170,8 @@ func TestProductionProcessMediaAndDerivedAssets(t *testing.T) {
 	initialCacheFiles := cacheTempFiles(root)
 	responseDone := make(chan *http.Response, 1)
 	go func() { response, _ := p.do(cancelledRequest); responseDone <- response }()
-	started := false
+	ffmpegPID := ffmpegDescendant(t, p)
+	started := true
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		if response := cacheTempFiles(root); len(response) > len(initialCacheFiles) {
@@ -190,6 +192,7 @@ func TestProductionProcessMediaAndDerivedAssets(t *testing.T) {
 		t.Fatal("preview request did not publish an in-flight cache artifact before deadline")
 	}
 	cancelRequest()
+	_ = syscall.Kill(ffmpegPID, syscall.SIGCONT)
 	select {
 	case response := <-responseDone:
 		if response != nil {
@@ -199,6 +202,7 @@ func TestProductionProcessMediaAndDerivedAssets(t *testing.T) {
 		t.Fatal("cancelled preview request did not stop")
 	}
 	assertNoTemporaryArtifacts(t, root)
+	waitPIDExit(t, ffmpegPID)
 	resp = p.request(t, http.MethodGet, previewPath)
 	if resp.StatusCode != http.StatusOK || resp.Header.Get("X-Preview-Cache") != "hit" {
 		resp.Body.Close()

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -100,12 +101,19 @@ func TestProjectsInterchangeAndDetectionUseProductionProcess(t *testing.T) {
 	cancelRequest := map[string]any{"mediaId": m.ID, "projectItemId": itemID, "projectRevision": project.Revision, "kind": "scene", "sourceFingerprint": m.ETag, "minDurationMs": 100}
 	var cancelled realJob
 	p.json(t, http.MethodPost, "/api/v1/projects/"+projectID+"/detections", cancelRequest, http.StatusAccepted, &cancelled)
+	waitFor(t, 10*time.Second, func() bool {
+		p.jsonNoFail(t, http.MethodGet, "/api/v1/jobs/"+cancelled.ID, nil, http.StatusOK, &cancelled)
+		return cancelled.State == "running"
+	})
+	ffmpegPID := ffmpegDescendant(t, p)
 	cancelResponse := p.request(t, http.MethodDelete, "/api/v1/jobs/"+cancelled.ID)
 	if cancelResponse.StatusCode != http.StatusNoContent {
 		cancelResponse.Body.Close()
 		t.Fatalf("detection cancellation status=%d", cancelResponse.StatusCode)
 	}
 	cancelResponse.Body.Close()
+	_ = syscall.Kill(ffmpegPID, syscall.SIGCONT)
+	waitPIDExit(t, ffmpegPID)
 	waitFor(t, 45*time.Second, func() bool {
 		p.jsonNoFail(t, http.MethodGet, "/api/v1/jobs/"+cancelled.ID, nil, http.StatusOK, &cancelled)
 		return cancelled.State == "cancelled"

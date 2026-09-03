@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -275,6 +276,7 @@ func TestProductionBatchCancellationLifecycle(t *testing.T) {
 		}
 		return json.NewDecoder(response.Body).Decode(&job) == nil && job.State == "running"
 	})
+	ffmpegPID := ffmpegDescendant(t, p)
 	second, secondJob := submit()
 	waitFor(t, 10*time.Second, func() bool {
 		response := p.request(t, http.MethodGet, "/api/v1/jobs/"+secondJob)
@@ -284,6 +286,7 @@ func TestProductionBatchCancellationLifecycle(t *testing.T) {
 		}
 		return json.NewDecoder(response.Body).Decode(&job) == nil && job.State == "queued"
 	})
+	_ = syscall.Kill(ffmpegPID, syscall.SIGCONT)
 	cancel := p.request(t, http.MethodDelete, "/api/v1/batches/"+second)
 	if cancel.StatusCode != http.StatusNoContent {
 		cancel.Body.Close()
@@ -352,6 +355,7 @@ func TestProductionRestartReconcilesExport(t *testing.T) {
 		}
 		return json.NewDecoder(response.Body).Decode(&job) == nil && job.State == "running"
 	})
+	ffmpegPID := ffmpegDescendant(t, p)
 	queuedID := submit()
 	waitFor(t, 10*time.Second, func() bool {
 		response := p.request(t, http.MethodGet, "/api/v1/jobs/"+queuedID)
@@ -362,6 +366,8 @@ func TestProductionRestartReconcilesExport(t *testing.T) {
 		return json.NewDecoder(response.Body).Decode(&job) == nil && job.State == "queued"
 	})
 	p.stop()
+	_ = syscall.Kill(ffmpegPID, syscall.SIGCONT)
+	waitPIDExit(t, ffmpegPID)
 	p = startProcess(t, root)
 	getJSON(t, p, "/api/v1/projects/p_restart_reconcile", &map[string]any{})
 	var recovered struct {
