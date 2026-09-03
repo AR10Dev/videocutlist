@@ -33,6 +33,8 @@ var productionRoutes = []struct {
 	{http.MethodPost, "/api/v1/projects/p_aaaaaaaaaaaa/exports", "exports"},
 	{http.MethodPost, "/api/v1/projects/p_aaaaaaaaaaaa/exports/preflight", "exports"},
 	{http.MethodPost, "/api/v1/projects/p_aaaaaaaaaaaa/interchange/csv", "interchange"},
+	{http.MethodGet, "/api/v1/projects/p_aaaaaaaaaaaa/interchange/csv", "interchange"},
+	{http.MethodPost, "/api/v1/projects/p_aaaaaaaaaaaa/interchange/chapters", "interchange"},
 	{http.MethodGet, "/api/v1/projects/p_aaaaaaaaaaaa/interchange/chapters", "interchange"},
 	{http.MethodPost, "/api/v1/projects/p_aaaaaaaaaaaa/detections", "detection"},
 	{http.MethodGet, "/api/v1/jobs/j_aaaaaaaaaaaa", "jobs"},

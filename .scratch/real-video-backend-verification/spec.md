@@ -216,7 +216,7 @@ The summary must not print filesystem paths. Temporary files are removed whether
 
 ## Verification note
 
-The integration suite now accounts for all 31 API routes and the three process/static endpoints, and `make test-real-media` publishes its compact evidence with `-v`. Fixture acquisition and production build pass. Full acceptance remains blocked because the real production export currently reaches `job_failed`; no generated media is committed.
+The integration suite now accounts for all 31 production route kinds (34 method/path variants) and the three process/static endpoints, and `make test-real-media` publishes its compact evidence with `-v`. Fixture acquisition and production build pass. Full acceptance remains blocked because the real production export currently reaches `job_failed`; no generated media is committed.
 
 ## Out of scope
 
