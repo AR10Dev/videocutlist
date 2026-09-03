@@ -113,12 +113,23 @@ func startProcess(t *testing.T, root string) *process {
 }
 
 func (p *process) request(t *testing.T, method, path string) *http.Response {
+	return p.requestBody(t, method, path, nil)
+}
+
+func (p *process) requestBody(t *testing.T, method, path string, body io.Reader) *http.Response {
+	return p.requestHeaders(t, method, path, body, nil)
+}
+
+func (p *process) requestHeaders(t *testing.T, method, path string, body io.Reader, headers map[string]string) *http.Response {
 	t.Helper()
-	req, err := http.NewRequest(method, p.base+path, nil)
+	req, err := http.NewRequest(method, p.base+path, body)
 	if err != nil {
 		t.Fatal(err)
 	}
 	req.Header.Set("Authorization", "Bearer "+bearerToken)
+	for key, value := range headers {
+		req.Header.Set(key, value)
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("%s %s: %v\n%s", method, path, err, boundedLog(p.log.String()))
