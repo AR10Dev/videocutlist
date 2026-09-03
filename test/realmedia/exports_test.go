@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 )
@@ -53,6 +54,18 @@ func TestProductionExportsJobsAndOutputs(t *testing.T) {
 			body, _ := io.ReadAll(preflight.Body)
 			preflight.Body.Close()
 			t.Fatalf("preflight status=%d body=%s", preflight.StatusCode, body)
+		}
+		var checked struct {
+			Allowed   bool  `json:"allowed"`
+			Selection []int `json:"selection"`
+			Findings  []struct {
+				Code     string `json:"code"`
+				Severity string `json:"severity"`
+			} `json:"findings"`
+		}
+		if json.NewDecoder(preflight.Body).Decode(&checked) != nil || !checked.Allowed || len(checked.Selection) != 2 || checked.Selection[0] != 0 || checked.Selection[1] != 1 {
+			preflight.Body.Close()
+			t.Fatalf("preflight selection=%v allowed=%v", checked.Selection, checked.Allowed)
 		}
 		preflight.Body.Close()
 		response := p.requestBody(t, "POST", "/api/v1/projects/"+projectID+"/exports", payload)
@@ -133,34 +146,65 @@ func TestProductionExportsJobsAndOutputs(t *testing.T) {
 			State  string `json:"state"`
 			Result *struct {
 				OutputCount int `json:"outputCount"`
+				Warnings    []struct {
+					Code string `json:"code"`
+				} `json:"warnings"`
 			} `json:"result"`
 		}
-		if json.NewDecoder(job.Body).Decode(&detail) != nil || detail.State != "succeeded" {
+		if json.NewDecoder(job.Body).Decode(&detail) != nil || detail.State != "succeeded" || detail.Result == nil {
 			t.Fatalf("job %s is not successful", jobID)
 		}
 		job.Body.Close()
-		output := p.request(t, "GET", "/api/v1/jobs/"+jobID+"/outputs/0")
-		if output.StatusCode != 200 {
+		positions := 1
+		if tc.mode == "separate" {
+			positions = 2
+		}
+		for position := 0; position < positions; position++ {
+			output := p.request(t, "GET", "/api/v1/jobs/"+jobID+"/outputs/"+strconv.Itoa(position))
+			if output.StatusCode != 200 {
+				output.Body.Close()
+				t.Fatalf("download output status=%d", output.StatusCode)
+			}
+			path := filepath.Join(root, "probe-"+jobID+"-"+strconv.Itoa(position))
+			file, err := os.Create(path)
+			if err != nil {
+				output.Body.Close()
+				t.Fatal(err)
+			}
+			_, err = io.Copy(file, output.Body)
 			output.Body.Close()
-			t.Fatalf("download output status=%d", output.StatusCode)
-		}
-		path := filepath.Join(root, "probe-"+jobID)
-		file, err := os.Create(path)
-		if err != nil {
-			output.Body.Close()
-			t.Fatal(err)
-		}
-		_, err = io.Copy(file, output.Body)
-		output.Body.Close()
-		if closeErr := file.Close(); err != nil || closeErr != nil {
-			t.Fatalf("save output: %v", err)
-		}
-		probe := exec.Command("ffprobe", "-v", "error", "-show_entries", "format=duration:stream=codec_type", "-of", "json", path)
-		if data, err := probe.Output(); err != nil || len(data) == 0 {
-			t.Fatalf("ffprobe output: %v", err)
-		}
-		if err := os.Remove(path); err != nil {
-			t.Fatal(err)
+			if closeErr := file.Close(); err != nil || closeErr != nil {
+				t.Fatalf("save output: %v", err)
+			}
+			probe := exec.Command("ffprobe", "-v", "error", "-show_entries", "format=duration:stream=codec_type", "-of", "json", path)
+			var parsed struct {
+				Format struct {
+					Duration string `json:"duration"`
+				} `json:"format"`
+				Streams []struct {
+					Type string `json:"codec_type"`
+				} `json:"streams"`
+			}
+			data, err := probe.Output()
+			var parseErr error
+			if err == nil {
+				parseErr = json.Unmarshal(data, &parsed)
+			}
+			seconds, durationErr := strconv.ParseFloat(parsed.Format.Duration, 64)
+			if err != nil || parseErr != nil || durationErr != nil || seconds <= 0 {
+				t.Fatalf("ffprobe output: %v", err)
+			}
+			hasVideo, hasAudio := false, false
+			for _, stream := range parsed.Streams {
+				hasVideo = hasVideo || stream.Type == "video"
+				hasAudio = hasAudio || stream.Type == "audio"
+			}
+			if !hasVideo || !hasAudio {
+				t.Fatalf("ffprobe streams: %#v", parsed.Streams)
+			}
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
 		}
 		terminalDelete := p.request(t, "DELETE", "/api/v1/jobs/"+jobID)
 		if terminalDelete.StatusCode != http.StatusNoContent {
