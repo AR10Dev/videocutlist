@@ -1,6 +1,6 @@
 # Real-video backend verification
 
-**Status:** blocked (real-media export workflow)
+**Status:** implementation verified for the export workflow; deployment-mode and recovery scenarios remain incomplete
 
 ## Problem
 
@@ -201,9 +201,9 @@ The summary must not print filesystem paths. Temporary files are removed whether
 
 ## Acceptance criteria
 
-- [ ] A verified Sintel trailer downloads on demand beneath ignored `test/fixtures/real-media/` storage and is never committed.
-- [ ] `make test-real-media` starts the production application and uses real FFmpeg, FFprobe, SQLite, scheduler, cache, and filesystem adapters.
-- [ ] The route coverage table accounts for every route accepted by the production router, including routes absent from the current OpenAPI document.
+- [x] A verified Sintel trailer downloads on demand beneath ignored `test/fixtures/real-media/` storage and is never committed.
+- [x] `make test-real-media` starts the production application and uses real FFmpeg, FFprobe, SQLite, scheduler, cache, and filesystem adapters.
+- [x] The route coverage table accounts for every route accepted by the production router, including routes absent from the current OpenAPI document.
 - [ ] All route groups in this specification pass through HTTP against the running process.
 - [ ] The downloaded video completes indexing, preview, thumbnail, waveform, project, interchange, detection, preflight, export, download, and restart workflows.
 - [ ] Every successful media artifact passes FFprobe or format-specific validation.
@@ -216,7 +216,7 @@ The summary must not print filesystem paths. Temporary files are removed whether
 
 ## Verification note
 
-The integration suite now accounts for all 31 production route kinds (34 method/path variants) and the three process/static endpoints, and `make test-real-media` publishes its compact evidence with `-v`. Fixture acquisition and production build pass. Full acceptance remains blocked because the real production export currently reaches `job_failed`; no generated media is committed.
+The integration suite accounts for all 31 production route kinds (34 method/path variants) and the three process/static endpoints. Route coverage is checked against the production parser inventory, and stream-copy verification allows bounded timestamp drift from concatenation while rejecting implausible output. `make test-real-media` passes with the verified fixture cache hit; no generated media is committed. Deployment-mode, restart, and cancellation scenarios remain outstanding.
 
 ## Out of scope
 

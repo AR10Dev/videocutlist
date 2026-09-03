@@ -57,6 +57,29 @@ type route struct {
 	id   string
 }
 
+// RouteCoverageKinds exposes the production route-kind inventory to black-box
+// tests without exposing route parsing or filesystem details.
+func RouteCoverageKinds() []string {
+	return []string{
+		"list_media", "browse_media", "media_status", "refresh_media", "start_media_import",
+		"get_media_import", "cancel_media_import", "get_media", "preview", "thumbnails", "waveform",
+		"list_projects", "get_project", "put_project", "create_export", "preflight_export",
+		"import_interchange", "export_interchange", "create_detection", "get_job", "cancel_job",
+		"automation", "list_destinations", "get_settings", "put_settings", "refresh_settings",
+		"download_output", "list_batches", "get_batch", "cancel_batch", "retry_job",
+	}
+}
+
+// RouteCoverageKind resolves a representative route to its production kind.
+func RouteCoverageKind(method, path string) string {
+	r := parseRoute(method, path)
+	kinds := RouteCoverageKinds()
+	if r.kind == routeUnknown || int(r.kind)-1 >= len(kinds) {
+		return ""
+	}
+	return kinds[r.kind-1]
+}
+
 func validMediaID(value string) bool   { return mediaIDPattern.MatchString(value) }
 func validFolderID(value string) bool  { return folderIDPattern.MatchString(value) }
 func validProjectID(value string) bool { return projectIDPattern.MatchString(value) }

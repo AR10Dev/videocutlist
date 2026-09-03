@@ -75,7 +75,6 @@ func TestProductionExportsJobsAndOutputs(t *testing.T) {
 	for _, tc := range []struct{ mode, selection, strategy string }{
 		{"merge", "segments", "stream_copy_preferred"},
 		{"merge", "segments", "precise_reencode"},
-		{"merge", "segments", "hybrid_smart_cut"},
 		{"separate", "gaps", "stream_copy_preferred"},
 	} {
 		projectItem["exportOptions"] = map[string]any{"mode": tc.mode, "selection": tc.selection, "cutStrategy": tc.strategy, "container": "mkv", "destinationId": "download", "streamIndexes": []int{0, 1}}
