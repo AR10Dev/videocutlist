@@ -380,6 +380,16 @@ video {
   height: 80px;
   opacity: 0.82;
 }
+.timeline-labels {
+  position: absolute;
+  inset: auto 6px 2px;
+  display: flex;
+  justify-content: space-between;
+  color: #e5e6ea;
+  font-size: 0.68rem;
+  text-shadow: 0 1px 2px #000;
+  pointer-events: none;
+}
 .timeline-overlay,
 .timeline-segment {
   position: absolute;
@@ -393,6 +403,18 @@ video {
   width: auto;
   background: #53c18d;
   opacity: 0.38;
+}
+.timeline-segment.selected {
+  opacity: 0.8;
+  outline: 2px solid #f4b23e;
+}
+.control-help {
+  color: #a9acb5;
+  font-size: 0.8rem;
+}
+.segment-row.selected {
+  outline: 1px solid #53c18d;
+  outline-offset: 3px;
 }
 .timeline-playhead {
   background: #ff5f5f;
@@ -418,14 +440,6 @@ video {
   padding: 10px 0;
   border-top: 1px solid #30323a;
   border-bottom: 1px solid #30323a;
-}
-.editor-panel .controls button:nth-child(5),
-.editor-panel .controls button:nth-child(6),
-.editor-panel .controls button:nth-child(7) {
-  background: #b8791e;
-  border-color: #d59939;
-  color: #16110a;
-  font-weight: 650;
 }
 .editor-panel ol {
   margin: 14px 0;

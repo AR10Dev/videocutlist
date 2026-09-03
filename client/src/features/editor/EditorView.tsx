@@ -1,4 +1,4 @@
-import { For, Show } from "solid-js";
+import { createSignal, For, Show } from "solid-js";
 import { frameDuration } from "./frame";
 import { redoTimeline, undoTimeline } from "./timeline";
 import { TimelineCanvas } from "./TimelineCanvas";
@@ -36,7 +36,9 @@ export function EditorView() {
     removeSegment,
     moveSegment,
     setVideo,
+    togglePlayback,
   } = useWorkspace();
+  const [selectedSegment, setSelectedSegment] = createSignal<number>();
   return (
     <section class="editor-panel" aria-labelledby="timeline-heading">
       <h2 id="timeline-heading">Timeline</h2>
@@ -88,6 +90,13 @@ export function EditorView() {
                 ? `${present().segments.length} segment${present().segments.length === 1 ? "" : "s"} selected.`
                 : "No segments selected."}
             </p>
+            <Show when={diagnostics()}>
+              {(info) => (
+                <p class="preview-range" aria-label="Preview source range">
+                  Preview: {formatTime(info().startMs, duration())} to {formatTime(info().startMs + info().durationMs, duration())}
+                </p>
+              )}
+            </Show>
             <Show
               when={canStreamPreview()}
               fallback={
@@ -101,7 +110,6 @@ export function EditorView() {
                 ref={(element) => {
                   setVideo(element);
                 }}
-                controls
                 muted={muted()}
                 aria-label="Preview player"
                 data-preview-offset={diagnostics()?.offsetMs ?? 0}
@@ -117,6 +125,11 @@ export function EditorView() {
               style={{ width: `${viewportScale(present().zoom) * 100}%` }}
             >
               <TimelineCanvas thumbnailURL={thumbnailURL()} waveform={waveform()} />
+              <div class="timeline-labels" aria-hidden="true">
+                <span>{formatTime(0, duration())}</span>
+                <span>{formatTime(duration() / 2, duration())}</span>
+                <span>{formatTime(duration(), duration())}</span>
+              </div>
               <span
                 class="timeline-overlay timeline-in"
                 style={{
@@ -132,9 +145,9 @@ export function EditorView() {
                 aria-label="Out marker"
               />
               <For each={present().segments}>
-                {(segment) => (
+                {(segment, index) => (
                   <span
-                    class="timeline-segment"
+                    class={`timeline-segment ${selectedSegment() === index() ? "selected" : ""}`}
                     style={{
                       left: `${(segment.startMs / duration()) * 100}%`,
                       width: `${((segment.endMs - segment.startMs) / duration()) * 100}%`,
@@ -171,6 +184,7 @@ export function EditorView() {
               {formatTime(present().outMs, duration())}
             </p>
             <div class="controls">
+              <button onClick={togglePlayback}>Play / pause preview</button>
               <button
                 onClick={() => {
                   const step = frameDuration(selected());
@@ -217,10 +231,14 @@ export function EditorView() {
               >
                 Redo
               </button>
-              <button onClick={addSegment}>Add In/Out segment</button>
-              <button onClick={() => setMarker("inMs", watchedPosition())}>Set In marker</button>
-              <button onClick={() => setMarker("outMs", Math.min(duration(), watchedPosition()))}>
-                Set Out marker
+              <button onClick={() => setMarker("inMs", watchedPosition())}>Set start</button>
+              <button onClick={() => setMarker("outMs", Math.min(duration(), watchedPosition()))}>Set end</button>
+              <button
+                onClick={addSegment}
+                disabled={present().inMs >= present().outMs}
+                aria-describedby="add-segment-help"
+              >
+                Add segment
               </button>
               <label>
                 Timecode{" "}
@@ -248,10 +266,26 @@ export function EditorView() {
                 />
               </label>
             </div>
+            <p id="add-segment-help" class="control-help" role="status">
+              {present().inMs >= present().outMs
+                ? "Set a start before the end to add a segment."
+                : "Marker range is ready to add."}
+            </p>
+            <p class="control-help">Keyboard: Space plays or pauses; arrows step frames; I/O set markers; Ctrl/Cmd+Z undoes.</p>
             <ol aria-label="Selected segments">
               <For each={present().segments}>
                 {(segment, index) => (
-                  <li>
+                  <li class={selectedSegment() === index() ? "segment-row selected" : "segment-row"}>
+                    <button
+                      type="button"
+                      aria-label={`Select segment ${index() + 1}`}
+                      aria-pressed={selectedSegment() === index()}
+                      onClick={() => {
+                        setSelectedSegment(index());
+                      }}
+                    >
+                      Select
+                    </button>
                     <strong>Segment {index() + 1}</strong> · {segment.label ?? "Unlabelled"}:{" "}
                     <span>
                       {formatTime(segment.startMs, duration())} –{" "}

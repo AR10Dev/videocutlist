@@ -221,6 +221,7 @@ export function createWorkspaceController() {
     watchedPosition,
     syncPreviewPosition,
     setVideo,
+    togglePlayback,
   } = initializedPreviewFeature;
   previewRef.current = initializedPreviewFeature;
   const chooseMedia = (item: Media) => {
@@ -437,6 +438,7 @@ export function createWorkspaceController() {
     cancelDetection,
     acceptDetection,
     setVideo,
+    togglePlayback,
   };
 }
 
