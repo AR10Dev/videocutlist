@@ -5,9 +5,13 @@
 **Blocked by:** 01
 
 **Category:** enhancement
-**Status:** ready
+**Status:** complete
 
-- [ ] Media entries show filename, duration, readable container, codec, and dimensions.
-- [ ] Raw aliases, language codes, dispositions, stream indexes, and internal IDs are absent from the default list.
-- [ ] Selected media is exposed semantically and long content cannot force horizontal overflow.
-- [ ] Narrow layouts can collapse the explorer after selection and expose a "Change video" action.
+- [x] Media entries show filename, duration, readable container, codec, and dimensions.
+- [x] Raw aliases, language codes, dispositions, stream indexes, and internal IDs are absent from the default list.
+- [x] Selected media is exposed semantically and long content cannot force horizontal overflow.
+- [x] Narrow layouts can collapse the explorer after selection and expose a "Change video" action.
+
+## Comments
+
+- 2026-09-03: Integrated media explorer commit 154b25e; handoff reported focused tests, lint, build, and formatting passed. Integration rerun was unavailable because client dependencies are not installed; diff checks passed.
