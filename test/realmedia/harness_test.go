@@ -218,6 +218,21 @@ func startProcessWithEnv(t *testing.T, root string, overrides map[string]string)
 		cancel()
 		t.Fatal(err)
 	}
+	if overrides["VIDEOCUTLIST_EXPECT_STARTUP_FAILURE"] == "1" {
+		done := make(chan error, 1)
+		go func() { done <- cmd.Wait() }()
+		select {
+		case err := <-done:
+			if err == nil {
+				t.Fatalf("unsafe startup was accepted")
+			}
+		case <-time.After(5 * time.Second):
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+			t.Fatal("unsafe auth-none process did not reject startup")
+		}
+		cancel()
+		return nil
+	}
 	p := &process{cmd: cmd, log: logBuffer, cancel: cancel, forbidden: []string{root, mediaRoot, filepath.Join(root, "videocutlist.db"), filepath.Join(root, "cache"), filepath.Join(root, "exports"), fixture}}
 	t.Cleanup(func() {
 		if cmd.Process != nil {

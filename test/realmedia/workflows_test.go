@@ -148,12 +148,27 @@ func TestProductionCORSAndTrustedProxy(t *testing.T) {
 		t.Fatal("disallowed CORS preflight succeeded")
 	}
 	disallowed.Body.Close()
-	forwarded := p.requestHeaders(t, http.MethodGet, "/api/v1/ready", nil, map[string]string{"X-Forwarded-For": "203.0.113.9"})
-	if forwarded.StatusCode != http.StatusOK || forwarded.Header.Get("X-Forwarded-For") != "" {
+	_ = p
+	excluded := startProcessWithEnv(t, t.TempDir(), map[string]string{"VIDEOCUTLIST_AUTH_MODE": "trusted_proxy", "VIDEOCUTLIST_TRUSTED_PROXY_CIDRS": "192.0.2.0/24"})
+	unauthenticated := excluded.requestHeaders(t, http.MethodGet, "/api/v1/media", nil, map[string]string{"X-Forwarded-For": "203.0.113.9", "X-Forwarded-Proto": "https"})
+	if unauthenticated.StatusCode != http.StatusUnauthorized {
+		unauthenticated.Body.Close()
+		t.Fatalf("untrusted forwarded request status=%d", unauthenticated.StatusCode)
+	}
+	unauthenticated.Body.Close()
+	included := startProcessWithEnv(t, t.TempDir(), map[string]string{"VIDEOCUTLIST_AUTH_MODE": "trusted_proxy", "VIDEOCUTLIST_TRUSTED_PROXY_CIDRS": "127.0.0.1/32"})
+	forwarded := included.requestHeaders(t, http.MethodGet, "/api/v1/media", nil, map[string]string{"X-Forwarded-For": "203.0.113.9", "X-Forwarded-Proto": "https"})
+	if forwarded.StatusCode != http.StatusOK {
 		forwarded.Body.Close()
-		t.Fatalf("trusted proxy request status=%d", forwarded.StatusCode)
+		t.Fatalf("trusted forwarded request status=%d", forwarded.StatusCode)
 	}
 	forwarded.Body.Close()
+	malformed := included.requestHeaders(t, http.MethodGet, "/api/v1/media", nil, map[string]string{"X-Forwarded-For": "not-an-ip"})
+	if malformed.StatusCode != http.StatusBadRequest {
+		malformed.Body.Close()
+		t.Fatalf("malformed forwarded request status=%d", malformed.StatusCode)
+	}
+	malformed.Body.Close()
 }
 
 func TestProductionSymlinkAndSourceChange(t *testing.T) {
@@ -383,4 +398,5 @@ func TestProductionAuthNoneLoopback(t *testing.T) {
 		t.Fatalf("auth-none readiness=%d", resp.StatusCode)
 	}
 	resp.Body.Close()
+	startProcessWithEnv(t, t.TempDir(), map[string]string{"VIDEOCUTLIST_AUTH_MODE": "none", "VIDEOCUTLIST_LISTEN_ADDRESS": "0.0.0.0", "VIDEOCUTLIST_EXPECT_STARTUP_FAILURE": "1"})
 }
