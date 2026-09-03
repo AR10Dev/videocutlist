@@ -95,12 +95,23 @@ func TestProductionSettingsAndAutomationWorkflows(t *testing.T) {
 		t.Fatalf("automation import status=%d", imported.StatusCode)
 	}
 	imported.Body.Close()
-	unknown := command(map[string]any{"action": "job.status", "jobId": "j_aaaaaaaaaaaa"})
-	if unknown.StatusCode != http.StatusNotFound {
-		unknown.Body.Close()
-		t.Fatalf("automation status lookup=%d", unknown.StatusCode)
+	jobResponse := p.requestBody(t, http.MethodPost, "/api/v1/projects/p_real_automation/exports", map[string]any{"itemIds": []string{"i_abcdefghijklmnopqrstuvwx"}})
+	var submitted struct {
+		Jobs []struct {
+			ID string `json:"id"`
+		} `json:"jobs"`
 	}
-	unknown.Body.Close()
+	if jobResponse.StatusCode != http.StatusAccepted || json.NewDecoder(jobResponse.Body).Decode(&submitted) != nil || len(submitted.Jobs) != 1 {
+		jobResponse.Body.Close()
+		t.Fatalf("automation job setup status=%d", jobResponse.StatusCode)
+	}
+	jobResponse.Body.Close()
+	jobStatus := command(map[string]any{"action": "job.status", "jobId": submitted.Jobs[0].ID})
+	if jobStatus.StatusCode != http.StatusOK {
+		jobStatus.Body.Close()
+		t.Fatalf("automation status lookup=%d", jobStatus.StatusCode)
+	}
+	jobStatus.Body.Close()
 	malformed := p.requestHeaders(t, http.MethodPost, "/api/v1/automation", strings.NewReader("{"), nil)
 	if malformed.StatusCode != http.StatusUnprocessableEntity {
 		malformed.Body.Close()

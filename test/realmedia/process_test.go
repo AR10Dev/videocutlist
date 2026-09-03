@@ -282,7 +282,6 @@ func cacheTempFiles(root string) []string {
 func TestProductionProcessSecurityBoundaries(t *testing.T) {
 	root := t.TempDir()
 	p := startProcess(t, root)
-	client := &http.Client{Timeout: time.Second}
 	request := func(method, path, token string, headers map[string]string) (int, string) {
 		t.Helper()
 		req, err := http.NewRequest(method, p.base+path, nil)
@@ -295,8 +294,7 @@ func TestProductionProcessSecurityBoundaries(t *testing.T) {
 		for key, value := range headers {
 			req.Header.Set(key, value)
 		}
-		resp, err := client.Do(req)
-		recordRoute(method, path)
+		resp, err := p.do(req)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -321,8 +319,13 @@ func TestProductionProcessSecurityBoundaries(t *testing.T) {
 	if status, body := request(http.MethodPost, "/api/v1/automation", bearerToken, map[string]string{"Origin": "https://untrusted.example"}); status != http.StatusForbidden || strings.Contains(body, root) {
 		t.Fatalf("automation origin status=%d body=%s", status, body)
 	}
-	if status, body := request(http.MethodGet, "/metrics", bearerToken, nil); status != http.StatusOK || strings.Contains(body, root) || strings.Contains(body, "m_") {
-		t.Fatalf("metrics redaction status=%d body=%s", status, body)
+	metrics := p.request(t, http.MethodGet, "/metrics")
+	metricsBody, metricsErr := io.ReadAll(metrics.Body)
+	contentType := metrics.Header.Get("Content-Type")
+	metrics.Body.Close()
+	body := string(metricsBody)
+	if metricsErr != nil || metrics.StatusCode != http.StatusOK || !strings.Contains(contentType, "text/plain") || !strings.Contains(body, "http_requests_total{") || !strings.Contains(body, "export_jobs_total") || strings.Contains(body, root) || strings.Contains(body, "m_") {
+		t.Fatalf("metrics contract status=%d content-type=%q body=%s", metrics.StatusCode, contentType, body)
 	}
 }
 
