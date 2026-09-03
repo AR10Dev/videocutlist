@@ -286,6 +286,9 @@ func repositoryRoot(t *testing.T) string {
 }
 
 func copyFile(source, destination string) error {
+	if _, err := os.Stat(destination); err == nil {
+		return nil
+	}
 	in, err := os.Open(source)
 	if err != nil {
 		return err

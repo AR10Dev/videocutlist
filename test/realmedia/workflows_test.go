@@ -4,6 +4,7 @@ package realmedia
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -350,8 +351,15 @@ func TestProductionRestartReconcilesExport(t *testing.T) {
 		var job struct {
 			State string `json:"state"`
 		}
-		return json.NewDecoder(response.Body).Decode(&job) == nil && (job.State == "succeeded" || job.State == "failed")
+		return json.NewDecoder(response.Body).Decode(&job) == nil && job.State == "succeeded"
 	})
+	output := p.request(t, http.MethodGet, "/api/v1/jobs/"+queuedID+"/outputs/0")
+	data, err := io.ReadAll(output.Body)
+	output.Body.Close()
+	if output.StatusCode != http.StatusOK || err != nil || len(data) == 0 {
+		t.Fatalf("queued restart output status=%d bytes=%d: %v", output.StatusCode, len(data), err)
+	}
+	probeBytes(t, data, ".mkv")
 }
 
 func TestProductionAuthNoneLoopback(t *testing.T) {
