@@ -39,20 +39,15 @@ export function ExportView() {
         <h2 id="export-heading">Export</h2>
         <p role="status">{exportStatus() || "Export a saved project."}</p>
         <Show when={batchId()}>
-          <p role="note">
-            Batch {batchId()} · immutable project revision {exportRevision()}
-          </p>
-          <ul aria-label="Export batch jobs">
-            <For each={batchJobs()}>
-              {(job) => (
-                <li>
-                  {job.id}: {job.state}
-                </li>
-              )}
-            </For>
-          </ul>
+          <details>
+            <summary>Export activity</summary>
+            <p role="note">Exporting saved project revision {exportRevision()}.</p>
+            <ul aria-label="Export batch jobs">
+              <For each={batchJobs()}>{(job) => <li>{job.state}</li>}</For>
+            </ul>
+          </details>
         </Show>
-        <details open>
+        <details>
           <summary>Advanced export options</summary>
           <label>
             Mode{" "}
@@ -100,10 +95,12 @@ export function ExportView() {
                         );
                       }}
                     />{" "}
-                    {track.type} {track.codec}
-                    {track.language ? ` · ${track.language}` : ""}
-                    {track.disposition?.length ? ` · ${track.disposition.join(", ")}` : ""} (#
-                    {track.index})
+                    {track.type === "video"
+                      ? "Video"
+                      : track.type === "audio"
+                        ? "Audio"
+                        : "Subtitle"}
+                    : {track.codec}
                   </label>
                 );
               }}
@@ -200,7 +197,7 @@ export function ExportView() {
               )
               .join(", ") || "none"}
           </p>
-          <p>Selected streams: {preflight()?.selection?.join(", ") || "default safe streams"}</p>
+          <p>Selected streams: {preflight()?.selection?.length ?? "default safe streams"}</p>
           <Show when={cutStrategy() === "stream_copy_preferred"}>
             <p>Stream-copy cuts may begin at an earlier keyframe; no frame-exactness is claimed.</p>
           </Show>
@@ -245,6 +242,34 @@ export function ExportView() {
             Select none
           </button>
         </fieldset>
+        <div class="export-blockers" aria-live="polite">
+          <Show when={!selected()}>
+            <p>Add a video before exporting.</p>
+          </Show>
+          <Show when={selected() && !projectItems().length}>
+            <p>Select at least one project item.</p>
+          </Show>
+          <Show when={selected() && projectItems().length === 1 && !present().segments.length}>
+            <p>Add at least one segment.</p>
+          </Show>
+          <Show when={selected() && dirty()}>
+            <p>Save the project before exporting.</p>
+          </Show>
+          <Show when={selected() && preflightPending() && !dirty()}>
+            <p>Checking export requirements…</p>
+          </Show>
+          <Show
+            when={
+              selected() && !preflightPending() && !dirty() && preflight() && !preflight()!.allowed
+            }
+          >
+            <p>
+              {preflight()!
+                .findings.map((finding) => finding.message)
+                .join(" ") || "The source video is unavailable."}
+            </p>
+          </Show>
+        </div>
         <div class="controls">
           <Show when={exportJob()?.state === "queued" || exportJob()?.state === "running"}>
             <p role="status">Export job {exportJob()!.id} is active; wait or cancel it.</p>
@@ -253,6 +278,7 @@ export function ExportView() {
             aria-label="Start export"
             disabled={
               !selected() ||
+              dirty() ||
               !selectedExportItems().length ||
               (projectItems().length === 1 && !present().segments.length) ||
               (projectItems().length === 1 && preflightPending() && !dirty()) ||
