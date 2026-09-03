@@ -110,11 +110,11 @@ test("browses folders, paginates within the active folder, and returns to root",
   });
   await page.goto("/");
   await page.getByRole("button", { name: "Clips" }).click();
-  await expect(page.getByRole("button", { name: "clip-1.mp4" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Select clip-1.mp4" })).toBeVisible();
   await page.getByRole("button", { name: "Load more" }).click();
-  await expect(page.getByRole("button", { name: "clip-2.mp4" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Select clip-2.mp4" })).toBeVisible();
   await page.getByRole("button", { name: /Server media library/ }).click();
-  await expect(page.getByRole("button", { name: "root.mp4" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Select root.mp4" })).toBeVisible();
   expect(treeRequests).toEqual([
     "",
     "?folderId=f_" + "x".repeat(43),
@@ -169,9 +169,9 @@ test("ignores a delayed folder response after refresh returns to root", async ({
   await page.goto("/");
   await page.getByRole("button", { name: "Clips" }).click();
   await page.getByRole("button", { name: "Refresh media" }).click();
-  await expect(page.getByRole("button", { name: "root.mp4" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Select root.mp4" })).toBeVisible();
   releaseFolder();
-  await expect(page.getByRole("button", { name: "old-folder.mp4" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Select old-folder.mp4" })).toHaveCount(0);
 });
 
 test("loads status once and refreshes it after a rescan", async ({ page }) => {
