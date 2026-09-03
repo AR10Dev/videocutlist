@@ -286,7 +286,28 @@ func TestProductionBatchCancellationLifecycle(t *testing.T) {
 		}
 		return json.NewDecoder(response.Body).Decode(&job) == nil && job.State == "queued"
 	})
+	runningCancel := p.request(t, http.MethodDelete, "/api/v1/batches/"+firstBatch)
+	if runningCancel.StatusCode != http.StatusNoContent {
+		runningCancel.Body.Close()
+		t.Fatalf("running batch cancellation status=%d", runningCancel.StatusCode)
+	}
+	runningCancel.Body.Close()
+	waitFor(t, 10*time.Second, func() bool {
+		response := p.request(t, http.MethodGet, "/api/v1/batches/"+firstBatch)
+		defer response.Body.Close()
+		var value struct {
+			State string `json:"state"`
+		}
+		return json.NewDecoder(response.Body).Decode(&value) == nil && value.State == "cancelled"
+	})
+	runningOutput := p.request(t, http.MethodGet, "/api/v1/jobs/"+firstJob+"/outputs/0")
+	if runningOutput.StatusCode != http.StatusNotFound {
+		runningOutput.Body.Close()
+		t.Fatalf("running cancelled output status=%d", runningOutput.StatusCode)
+	}
+	runningOutput.Body.Close()
 	_ = syscall.Kill(ffmpegPID, syscall.SIGCONT)
+	waitPIDExit(t, ffmpegPID)
 	cancel := p.request(t, http.MethodDelete, "/api/v1/batches/"+second)
 	if cancel.StatusCode != http.StatusNoContent {
 		cancel.Body.Close()

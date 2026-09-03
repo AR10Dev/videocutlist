@@ -115,9 +115,17 @@ func TestMain(m *testing.M) {
 		suiteSummary.Add("fixture_sha256=b670602fa00934ca27c4351bb0efe7ea7a07fae57284e44226025eeed7c51254 ffprobe_duration=52.208s streams=video,audio")
 		version := os.Getenv("VIDEOCUTLIST_VERSION")
 		if version == "" {
-			version = "unknown"
+			resolved, err := exec.Command("git", "rev-parse", "--short", "HEAD").Output()
+			if err != nil || len(strings.TrimSpace(string(resolved))) == 0 {
+				fmt.Fprintln(os.Stderr, "real-media summary requires a tested server version or commit")
+				code = 1
+			} else {
+				version = strings.TrimSpace(string(resolved))
+			}
 		}
-		suiteSummary.Add("server=videocutlist version=%s routes=%d", version, len(productionRoutes)+3)
+		if code == 0 {
+			suiteSummary.Add("server=videocutlist version=%s routes=%d", version, len(productionRoutes)+3)
+		}
 		for _, route := range productionRoutes {
 			key := routeKey(route.method, route.path)
 			if _, ok := executedRoutes.Load(key); !ok {
@@ -285,7 +293,14 @@ func (p *process) stop() {
 	}
 	_ = syscall.Kill(-p.cmd.Process.Pid, syscall.SIGTERM)
 	p.cancel()
-	_ = p.cmd.Wait()
+	waited := make(chan struct{})
+	go func() { _ = p.cmd.Wait(); close(waited) }()
+	select {
+	case <-waited:
+	case <-time.After(5 * time.Second):
+		_ = syscall.Kill(-p.cmd.Process.Pid, syscall.SIGKILL)
+		<-waited
+	}
 }
 
 func (p *process) requestNoAuth(t *testing.T, method, path string) *http.Response {
@@ -377,6 +392,11 @@ func ffmpegDescendant(t *testing.T, p *process) int {
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
 		if pid := findFFmpegChild(p.cmd.Process.Pid); pid > 0 && syscall.Kill(pid, syscall.SIGSTOP) == nil {
+			t.Cleanup(func() {
+				_ = syscall.Kill(pid, syscall.SIGCONT)
+				_ = syscall.Kill(-p.cmd.Process.Pid, syscall.SIGKILL)
+				waitPIDExit(t, pid)
+			})
 			return pid
 		}
 		time.Sleep(25 * time.Millisecond)

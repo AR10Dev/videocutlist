@@ -107,6 +107,26 @@ func TestProductionExportsJobsAndOutputs(t *testing.T) {
 			t.Fatalf("export status=%d body=%s", response.StatusCode, body)
 		}
 		response.Body.Close()
+		listing := p.request(t, "GET", "/api/v1/batches?limit=100")
+		var batches struct {
+			Items []struct {
+				ID       string  `json:"batchId"`
+				State    string  `json:"state"`
+				Progress float64 `json:"progress"`
+			} `json:"items"`
+		}
+		if json.NewDecoder(listing.Body).Decode(&batches) != nil {
+			listing.Body.Close()
+			t.Fatal("cannot decode batch listing")
+		}
+		listing.Body.Close()
+		found := false
+		for _, batch := range batches.Items {
+			found = found || batch.ID == submitted.BatchID
+		}
+		if !found {
+			t.Fatalf("submitted batch %s missing from paginated listing", submitted.BatchID)
+		}
 		return []string{submitted.BatchID, submitted.Jobs[0].ID}
 	}
 	base := func(mode, selection, strategy string) map[string]any {
@@ -188,7 +208,9 @@ func TestProductionExportsJobsAndOutputs(t *testing.T) {
 		var detail struct {
 			State  string `json:"state"`
 			Result *struct {
-				OutputCount int `json:"outputCount"`
+				OutputCount int      `json:"outputCount"`
+				OutputName  string   `json:"outputName"`
+				OutputNames []string `json:"outputNames"`
 				Warnings    []struct {
 					Code string `json:"code"`
 				} `json:"warnings"`
@@ -214,7 +236,7 @@ func TestProductionExportsJobsAndOutputs(t *testing.T) {
 				output.Body.Close()
 				t.Fatal(err)
 			}
-			_, err = io.Copy(file, output.Body)
+			outputBytes, err := io.Copy(file, output.Body)
 			output.Body.Close()
 			if closeErr := file.Close(); err != nil || closeErr != nil {
 				t.Fatalf("save output: %v", err)
@@ -245,6 +267,14 @@ func TestProductionExportsJobsAndOutputs(t *testing.T) {
 			if !hasVideo || !hasAudio {
 				t.Fatalf("ffprobe streams: %#v", parsed.Streams)
 			}
+			outputName := detail.Result.OutputName
+			if len(detail.Result.OutputNames) > position {
+				outputName = detail.Result.OutputNames[position]
+			}
+			if outputName == "" {
+				t.Fatalf("missing output name for position %d", position)
+			}
+			suiteSummary.Add("output filename=%s size=%d duration=%.3fs streams=video,audio", outputName, outputBytes, seconds)
 			if err := os.Remove(path); err != nil {
 				t.Fatal(err)
 			}
