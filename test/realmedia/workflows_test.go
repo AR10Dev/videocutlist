@@ -291,11 +291,15 @@ func TestProductionRestartReconcilesExport(t *testing.T) {
 		defer response.Body.Close()
 		var job struct {
 			State string `json:"state"`
+			Error string `json:"errorCode"`
 		}
 		if json.NewDecoder(response.Body).Decode(&job) != nil {
 			return false
 		}
-		return job.State == "failed" || job.State == "succeeded"
+		if job.State == "failed" {
+			return job.Error == "interrupted_by_restart"
+		}
+		return false
 	})
 }
 
