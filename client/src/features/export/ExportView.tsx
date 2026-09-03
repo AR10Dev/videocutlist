@@ -275,6 +275,7 @@ export function ExportView() {
             <p role="status">Export job {exportJob()!.id} is active; wait or cancel it.</p>
           </Show>
           <button
+            class="primary"
             aria-label="Start export"
             disabled={
               !selected() ||

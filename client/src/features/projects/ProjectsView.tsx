@@ -91,7 +91,7 @@ export function ProjectsView() {
           </For>
         </ol>
         <div class="controls">
-          <button onClick={() => void projects.saveProject()}>Save project</button>
+          <button class="primary" onClick={() => void projects.saveProject()}>Save project</button>
           <button onClick={projects.newProject}>New project</button>
           <button onClick={() => void projects.loadProject()}>Load project</button>
         </div>

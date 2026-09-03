@@ -234,6 +234,7 @@ export function EditorView() {
               <button onClick={() => setMarker("inMs", watchedPosition())}>Set start</button>
               <button onClick={() => setMarker("outMs", Math.min(duration(), watchedPosition()))}>Set end</button>
               <button
+                class="primary"
                 onClick={addSegment}
                 disabled={present().inMs >= present().outMs}
                 aria-describedby="add-segment-help"
