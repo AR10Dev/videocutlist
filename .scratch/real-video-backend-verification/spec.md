@@ -1,6 +1,6 @@
 # Real-video backend verification
 
-**Status:** draft
+**Status:** blocked (real-media export workflow)
 
 ## Problem
 
@@ -213,6 +213,10 @@ The summary must not print filesystem paths. Temporary files are removed whether
 - [ ] Tests fail instead of skip when required real-media prerequisites are unavailable.
 - [ ] No original media, generated preview, export, cache, SQLite database, or test worktree is committed.
 - [ ] Existing `make check`, `make test`, and `make smoke` behavior remains deterministic unless real-media testing is explicitly enabled.
+
+## Verification note
+
+The integration suite now accounts for all 31 API routes and the three process/static endpoints, and `make test-real-media` publishes its compact evidence with `-v`. Fixture acquisition and production build pass. Full acceptance remains blocked because the real production export currently reaches `job_failed`; no generated media is committed.
 
 ## Out of scope
 

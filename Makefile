@@ -39,7 +39,7 @@ test-real-media:
 	$(PNPM) --dir client run build
 	rm -rf internal/web/webassets/dist
 	cp -a client/dist internal/web/webassets/dist
-	$(GO) test -tags realmedia -count=1 ./test/realmedia
+	$(GO) test -tags realmedia -count=1 -v ./test/realmedia
 
 client-install:
 	$(PNPM) --dir client install --frozen-lockfile
