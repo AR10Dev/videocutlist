@@ -36,6 +36,9 @@ test:
 
 test-real-media:
 	./test/harness/acquire-real-media.sh
+	$(PNPM) --dir client run build
+	rm -rf internal/web/webassets/dist
+	cp -a client/dist internal/web/webassets/dist
 	$(GO) test -tags realmedia -count=1 ./test/realmedia
 
 client-install:

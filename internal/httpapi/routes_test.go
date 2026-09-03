@@ -521,6 +521,19 @@ func TestAutomationRequiresBearerLoopbackAndNoOrigin(t *testing.T) {
 	if recorder.Code != http.StatusUnprocessableEntity || strings.Contains(recorder.Body.String(), "/secret/source") {
 		t.Fatalf("unsupported command response=%s", recorder.Body.String())
 	}
+	for _, command := range []string{
+		`{"action":"job.status","jobId":"not-an-id"}`,
+		`{"action":"project.export","projectId":"not-a-project","format":"csv"}`,
+		`{"action":"project.import","projectId":"not-a-project","format":"csv"}`,
+	} {
+		recorder = httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "http://api.test/api/v1/automation", strings.NewReader(command))
+		req.Header.Set("Authorization", "Bearer secret")
+		newServer("127.0.0.1").ServeHTTP(recorder, req)
+		if recorder.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("invalid command status=%d body=%s", recorder.Code, recorder.Body.String())
+		}
+	}
 }
 
 func TestValidOpaqueIDs(t *testing.T) {

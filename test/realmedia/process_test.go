@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestProductionProcessMediaAndDerivedAssets(t *testing.T) {
@@ -161,6 +162,52 @@ func TestProductionProcessMediaAndDerivedAssets(t *testing.T) {
 		}
 	}
 	getJSON(t, p, wavePath, &wave)
+}
+
+func TestProductionProcessSecurityBoundaries(t *testing.T) {
+	root := t.TempDir()
+	p := startProcess(t, root)
+	client := &http.Client{Timeout: time.Second}
+	request := func(method, path, token string, headers map[string]string) (int, string) {
+		t.Helper()
+		req, err := http.NewRequest(method, p.base+path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		for key, value := range headers {
+			req.Header.Set(key, value)
+		}
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp.StatusCode, string(body)
+	}
+	if status, _ := request(http.MethodGet, "/api/v1/media", "", nil); status != http.StatusUnauthorized {
+		t.Fatalf("missing bearer status=%d", status)
+	}
+	if status, _ := request(http.MethodGet, "/api/v1/media", "wrong", nil); status != http.StatusUnauthorized {
+		t.Fatalf("bad bearer status=%d", status)
+	}
+	for _, path := range []string{"/api/v1/not-a-route", "/api/v1/media?unexpected=true", "/api/v1/media/m_bad"} {
+		if status, body := request(http.MethodGet, path, bearerToken, nil); status < 400 || status >= 500 || strings.Contains(body, root) {
+			t.Fatalf("unsafe request %s status=%d body=%s", path, status, body)
+		}
+	}
+	if status, body := request(http.MethodPost, "/api/v1/automation", bearerToken, map[string]string{"Origin": "https://untrusted.example"}); status != http.StatusForbidden || strings.Contains(body, root) {
+		t.Fatalf("automation origin status=%d body=%s", status, body)
+	}
+	if status, body := request(http.MethodGet, "/metrics", bearerToken, nil); status != http.StatusOK || strings.Contains(body, root) || strings.Contains(body, "m_") {
+		t.Fatalf("metrics redaction status=%d body=%s", status, body)
+	}
 }
 
 func getJSON(t *testing.T, p *process, path string, target any) {

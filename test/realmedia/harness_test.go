@@ -46,7 +46,11 @@ func startProcess(t *testing.T, root string) *process {
 		t.Fatalf("real-media fixture is unavailable; run test/harness/acquire-real-media.sh (make test-real-media): %v", err)
 	}
 	binary := filepath.Join(t.TempDir(), "videocutlist")
-	build := exec.Command("go", "build", "-o", binary, "./cmd/videocutlist")
+	buildArgs := []string{"build", "-o", binary, "./cmd/videocutlist"}
+	if _, err := os.Stat(filepath.Join(repositoryRoot, "internal/web/webassets/dist/index.html")); err == nil {
+		buildArgs = []string{"build", "-tags", "embed_frontend", "-o", binary, "./cmd/videocutlist"}
+	}
+	build := exec.Command("go", buildArgs...)
 	build.Dir = repositoryRoot
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build production process: %v\n%s", err, output)
