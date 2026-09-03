@@ -5,6 +5,7 @@ package realmedia
 import (
 	"encoding/json"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -161,6 +162,18 @@ func TestProductionExportsJobsAndOutputs(t *testing.T) {
 		if err := os.Remove(path); err != nil {
 			t.Fatal(err)
 		}
+		terminalDelete := p.request(t, "DELETE", "/api/v1/jobs/"+jobID)
+		if terminalDelete.StatusCode != http.StatusNoContent {
+			terminalDelete.Body.Close()
+			t.Fatalf("terminal cancellation status=%d", terminalDelete.StatusCode)
+		}
+		terminalDelete.Body.Close()
+		retry := p.request(t, "POST", "/api/v1/jobs/"+jobID+"/retry")
+		if retry.StatusCode != http.StatusConflict {
+			retry.Body.Close()
+			t.Fatalf("successful retry status=%d", retry.StatusCode)
+		}
+		retry.Body.Close()
 	}
 
 	invalid := p.request(t, "GET", "/api/v1/jobs/j_invalid-output/outputs/99")
