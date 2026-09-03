@@ -3,7 +3,9 @@
 package realmedia
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net"
 	"net/http"
@@ -116,8 +118,17 @@ func (p *process) request(t *testing.T, method, path string) *http.Response {
 	return p.requestBody(t, method, path, nil)
 }
 
-func (p *process) requestBody(t *testing.T, method, path string, body io.Reader) *http.Response {
-	return p.requestHeaders(t, method, path, body, nil)
+func (p *process) requestBody(t *testing.T, method, path string, body any) *http.Response {
+	t.Helper()
+	var payload io.Reader
+	if body != nil {
+		data, err := json.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		payload = bytes.NewReader(data)
+	}
+	return p.requestHeaders(t, method, path, payload, nil)
 }
 
 func (p *process) requestHeaders(t *testing.T, method, path string, body io.Reader, headers map[string]string) *http.Response {
@@ -129,6 +140,9 @@ func (p *process) requestHeaders(t *testing.T, method, path string, body io.Read
 	req.Header.Set("Authorization", "Bearer "+bearerToken)
 	for key, value := range headers {
 		req.Header.Set(key, value)
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
