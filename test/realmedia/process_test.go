@@ -4,6 +4,7 @@ package realmedia
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -16,7 +17,8 @@ import (
 )
 
 func TestProductionProcessMediaAndDerivedAssets(t *testing.T) {
-	p := startProcess(t, t.TempDir())
+	root := t.TempDir()
+	p := startProcess(t, root)
 	for _, path := range []string{"/api/v1/health", "/api/v1/ready", "/", "/api/v1/destinations", "/api/v1/settings", "/api/v1/batches"} {
 		resp := p.request(t, http.MethodGet, path)
 		if resp.StatusCode != http.StatusOK {
@@ -107,6 +109,18 @@ func TestProductionProcessMediaAndDerivedAssets(t *testing.T) {
 		t.Fatalf("preview miss response status=%d bytes=%d cache=%q err=%v", resp.StatusCode, len(preview), resp.Header.Get("X-Preview-Cache"), err)
 	}
 	probeBytes(t, preview, ".mp4")
+	cancelContext, cancelRequest := context.WithCancel(context.Background())
+	cancelledRequest, err := http.NewRequestWithContext(cancelContext, http.MethodGet, p.base+"/api/v1/media/"+mediaID+"/preview?centerMs=12000&beforeMs=7000&afterMs=7000", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelledRequest.Header.Set("Authorization", "Bearer "+bearerToken)
+	cancelRequest()
+	if response, requestErr := http.DefaultClient.Do(cancelledRequest); requestErr == nil {
+		response.Body.Close()
+	}
+	time.Sleep(200 * time.Millisecond)
+	assertNoTemporaryArtifacts(t, root)
 	resp = p.request(t, http.MethodGet, previewPath)
 	if resp.StatusCode != http.StatusOK || resp.Header.Get("X-Preview-Cache") != "hit" {
 		resp.Body.Close()

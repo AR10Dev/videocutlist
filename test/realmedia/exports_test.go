@@ -105,10 +105,14 @@ func TestProductionExportsJobsAndOutputs(t *testing.T) {
 	base := func(mode, selection, strategy string) map[string]any {
 		return map[string]any{"mode": mode, "selection": selection, "cutStrategy": strategy, "container": "mkv", "itemIds": []string{"i_abcdefghijklmnopqrstuvwx"}}
 	}
-	for _, tc := range []struct{ mode, selection, strategy string }{
-		{"merge", "segments", "stream_copy_preferred"},
-		{"merge", "segments", "precise_reencode"},
-		{"separate", "gaps", "stream_copy_preferred"},
+	for _, tc := range []struct {
+		mode, selection, strategy string
+		expectSuccess             bool
+	}{
+		{"merge", "segments", "stream_copy_preferred", true},
+		{"merge", "segments", "precise_reencode", true},
+		{"separate", "gaps", "stream_copy_preferred", true},
+		{"merge", "segments", "hybrid_smart_cut", false},
 	} {
 		projectItem["exportOptions"] = map[string]any{"mode": tc.mode, "selection": tc.selection, "cutStrategy": tc.strategy, "container": "mkv", "destinationId": "download", "streamIndexes": []int{0, 1}}
 		project["revision"] = revision
@@ -157,6 +161,18 @@ func TestProductionExportsJobsAndOutputs(t *testing.T) {
 			}
 			return false
 		})
+		if !tc.expectSuccess {
+			if final["state"] != "failed" {
+				t.Fatalf("hybrid batch state=%v", final["state"])
+			}
+			retry := p.request(t, "POST", "/api/v1/jobs/"+jobID+"/retry")
+			if retry.StatusCode != http.StatusAccepted {
+				retry.Body.Close()
+				t.Fatalf("hybrid retry status=%d", retry.StatusCode)
+			}
+			retry.Body.Close()
+			continue
+		}
 		if final["state"] != "succeeded" {
 			t.Fatalf("batch %s terminal state = %v jobs=%v detail=%v\n%s", batchID, final["state"], final["jobs"], terminal, boundedLog(p.log.String()))
 		}
