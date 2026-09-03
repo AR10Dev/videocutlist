@@ -134,9 +134,9 @@ func TestProductionProcessMediaAndDerivedAssets(t *testing.T) {
 		t.Fatal("thumbnail response has no ETag")
 	}
 	resp = p.requestBody(t, http.MethodGet, thumbPath, nil)
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK || resp.Header.Get("ETag") != etag {
 		resp.Body.Close()
-		t.Fatalf("thumbnail repeat status=%d", resp.StatusCode)
+		t.Fatalf("thumbnail repeat status=%d etag=%q", resp.StatusCode, resp.Header.Get("ETag"))
 	}
 	resp.Body.Close()
 	conditional := p.requestHeaders(t, http.MethodGet, thumbPath, nil, map[string]string{"If-None-Match": etag})
@@ -161,7 +161,18 @@ func TestProductionProcessMediaAndDerivedAssets(t *testing.T) {
 			t.Fatalf("waveform peak=%v", peak)
 		}
 	}
-	getJSON(t, p, wavePath, &wave)
+	waveResp := p.request(t, http.MethodGet, wavePath)
+	waveETag := waveResp.Header.Get("ETag")
+	waveResp.Body.Close()
+	if waveETag == "" {
+		t.Fatal("waveform response has no ETag")
+	}
+	conditionalWave := p.requestHeaders(t, http.MethodGet, wavePath, nil, map[string]string{"If-None-Match": waveETag})
+	if conditionalWave.StatusCode != http.StatusNotModified {
+		conditionalWave.Body.Close()
+		t.Fatalf("waveform conditional status=%d", conditionalWave.StatusCode)
+	}
+	conditionalWave.Body.Close()
 }
 
 func TestProductionProcessSecurityBoundaries(t *testing.T) {
