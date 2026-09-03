@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -91,6 +92,18 @@ func TestProductionSettingsAndAutomationWorkflows(t *testing.T) {
 		t.Fatalf("automation status lookup=%d", unknown.StatusCode)
 	}
 	unknown.Body.Close()
+	malformed := p.requestHeaders(t, http.MethodPost, "/api/v1/automation", strings.NewReader("{"), nil)
+	if malformed.StatusCode != http.StatusUnprocessableEntity {
+		malformed.Body.Close()
+		t.Fatalf("malformed automation status=%d", malformed.StatusCode)
+	}
+	malformed.Body.Close()
+	overlarge := p.requestHeaders(t, http.MethodPost, "/api/v1/automation", strings.NewReader(strings.Repeat("x", 2<<20)), nil)
+	if overlarge.StatusCode != http.StatusRequestEntityTooLarge {
+		overlarge.Body.Close()
+		t.Fatalf("oversized automation status=%d", overlarge.StatusCode)
+	}
+	overlarge.Body.Close()
 	for _, bad := range []map[string]any{{"action": "filesystem.read"}, {"action": "project.export", "projectId": "p_real_automation", "format": "csv", "extra": true}} {
 		rejected := command(bad)
 		if rejected.StatusCode < 400 || rejected.StatusCode >= 500 {

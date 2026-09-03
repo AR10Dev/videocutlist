@@ -53,6 +53,29 @@ var productionRoutes = []struct {
 	{http.MethodPost, "/api/v1/settings/media/refresh", "settings"},
 }
 
+func behavioralCase(method, path string) string {
+	switch {
+	case path == "/api/v1/settings" && method == http.MethodPut:
+		return "TestProductionSettingsAndAutomationWorkflows"
+	case path == "/api/v1/automation":
+		return "TestProductionSettingsAndAutomationWorkflows"
+	case path == "/api/v1/projects/p_aaaaaaaaaaaa/exports":
+		return "TestProductionExportsJobsAndOutputs"
+	case path == "/api/v1/projects/p_aaaaaaaaaaaa/exports/preflight":
+		return "TestProductionExportsJobsAndOutputs"
+	case path == "/api/v1/jobs/j_aaaaaaaaaaaa/retry":
+		return "TestProductionBatchCancellationLifecycle"
+	case path == "/api/v1/batches/b_aaaaaaaaaaaa" && method == http.MethodDelete:
+		return "TestProductionBatchCancellationLifecycle"
+	case path == "/api/v1/media/m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/preview":
+		return "TestProductionProcessMediaAndDerivedAssets"
+	case path == "/api/v1/settings/media/refresh":
+		return "TestProductionProcessMediaAndDerivedAssets"
+	default:
+		return "TestProductionProcessMediaAndDerivedAssets"
+	}
+}
+
 func TestProductionRouteCoverageTable(t *testing.T) {
 	seen := make(map[string]bool, len(productionRoutes))
 	kinds := make(map[string]bool, len(productionRoutes))
@@ -62,6 +85,10 @@ func TestProductionRouteCoverageTable(t *testing.T) {
 			t.Errorf("duplicate route coverage entry %s", key)
 		}
 		seen[key] = true
+		behavior := behavioralCase(tc.method, tc.path)
+		if behavior == "" {
+			t.Errorf("route %s has no behavioral test owner", key)
+		}
 		kind := httpapi.RouteCoverageKind(tc.method, tc.path)
 		if kind == "" {
 			t.Errorf("route coverage entry is not accepted by production router: %s", key)
