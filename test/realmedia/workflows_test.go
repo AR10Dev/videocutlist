@@ -172,16 +172,71 @@ func TestProductionSymlinkAndSourceChange(t *testing.T) {
 		defer response.Body.Close()
 		var job struct {
 			State string `json:"state"`
-			Error string `json:"errorCode"`
 		}
 		if json.NewDecoder(response.Body).Decode(&job) != nil {
 			return false
 		}
-		if job.State == "failed" {
-			return true
-		}
-		return false
+		return job.State == "failed"
 	})
+	retry := p.request(t, http.MethodPost, "/api/v1/jobs/"+submitted.Jobs[0].ID+"/retry")
+	var retried struct {
+		BatchID string `json:"batchId"`
+	}
+	if retry.StatusCode != http.StatusAccepted || json.NewDecoder(retry.Body).Decode(&retried) != nil || retried.BatchID == "" {
+		retry.Body.Close()
+		t.Fatalf("failed export retry status=%d", retry.StatusCode)
+	}
+	retry.Body.Close()
+}
+
+func TestProductionBatchCancellationLifecycle(t *testing.T) {
+	root := t.TempDir()
+	p := startProcess(t, root)
+	var media struct {
+		Items []struct {
+			ID string `json:"id"`
+		} `json:"items"`
+	}
+	getJSON(t, p, "/api/v1/media", &media)
+	project := map[string]any{"revision": 0, "schemaVersion": 2, "name": "cancel", "items": []any{map[string]any{"id": "i_abcdefghijklmnopqrstuvwx", "mediaId": media.Items[0].ID, "segments": []any{map[string]any{"startMs": 0, "endMs": 52000}}, "exportOptions": map[string]any{"mode": "merge", "selection": "segments", "cutStrategy": "precise_reencode", "container": "mkv", "destinationId": "download"}}}}
+	created := p.requestBody(t, http.MethodPut, "/api/v1/projects/p_cancel_123456", project)
+	created.Body.Close()
+	submit := func() string {
+		response := p.requestBody(t, http.MethodPost, "/api/v1/projects/p_cancel_123456/exports", map[string]any{"itemIds": []string{"i_abcdefghijklmnopqrstuvwx"}})
+		defer response.Body.Close()
+		var value struct {
+			BatchID string `json:"batchId"`
+		}
+		if response.StatusCode != http.StatusAccepted || json.NewDecoder(response.Body).Decode(&value) != nil {
+			t.Fatalf("cancel export status=%d", response.StatusCode)
+		}
+		return value.BatchID
+	}
+	first, second := submit(), submit()
+	cancel := p.request(t, http.MethodDelete, "/api/v1/batches/"+second)
+	if cancel.StatusCode != http.StatusNoContent && cancel.StatusCode != http.StatusNotFound {
+		cancel.Body.Close()
+		t.Fatalf("batch cancellation status=%d", cancel.StatusCode)
+	}
+	cancel.Body.Close()
+	waitFor(t, 10*time.Second, func() bool {
+		response := p.request(t, http.MethodGet, "/api/v1/batches/"+second)
+		defer response.Body.Close()
+		var value struct {
+			State string `json:"state"`
+		}
+		if json.NewDecoder(response.Body).Decode(&value) != nil {
+			return false
+		}
+		return value.State == "cancelled" || value.State == "succeeded"
+	})
+	repeat := p.request(t, http.MethodDelete, "/api/v1/batches/"+second)
+	if repeat.StatusCode != http.StatusNoContent && repeat.StatusCode != http.StatusNotFound {
+		repeat.Body.Close()
+		t.Fatalf("terminal batch cancellation status=%d", repeat.StatusCode)
+	}
+	repeat.Body.Close()
+	_ = first
 }
 
 func TestProductionRestartReconcilesExport(t *testing.T) {
