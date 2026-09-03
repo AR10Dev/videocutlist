@@ -26,6 +26,15 @@ func TestProductionSettingsAndAutomationWorkflows(t *testing.T) {
 		t.Fatalf("settings update status=%d", resp.StatusCode)
 	}
 	resp.Body.Close()
+	p.stop()
+	p = startProcess(t, root)
+	var persisted struct {
+		Settings map[string]any `json:"settings"`
+	}
+	getJSON(t, p, "/api/v1/settings", &persisted)
+	if value, ok := persisted.Settings["previewGlobalLimit"].(float64); !ok || value != 2 {
+		t.Fatalf("settings did not persist after restart: %#v", persisted.Settings)
+	}
 	stale := p.requestBody(t, http.MethodPut, "/api/v1/settings", map[string]any{"revision": settings.Revision, "settings": settings.Settings})
 	if stale.StatusCode != http.StatusConflict {
 		stale.Body.Close()
@@ -87,6 +96,28 @@ func TestProductionSettingsAndAutomationWorkflows(t *testing.T) {
 		}
 		rejected.Body.Close()
 	}
+}
+
+func TestProductionCORSAndTrustedProxy(t *testing.T) {
+	p := startProcessWithEnv(t, t.TempDir(), map[string]string{"VIDEOCUTLIST_ALLOWED_ORIGINS": "https://allowed.example", "VIDEOCUTLIST_TRUSTED_PROXY_CIDRS": "127.0.0.1/32"})
+	allowed := p.requestHeaders(t, http.MethodOptions, "/api/v1/media", nil, map[string]string{"Origin": "https://allowed.example", "Access-Control-Request-Method": "GET"})
+	if allowed.StatusCode != http.StatusNoContent || allowed.Header.Get("Access-Control-Allow-Origin") != "https://allowed.example" {
+		allowed.Body.Close()
+		t.Fatalf("allowed CORS status=%d origin=%q", allowed.StatusCode, allowed.Header.Get("Access-Control-Allow-Origin"))
+	}
+	allowed.Body.Close()
+	disallowed := p.requestHeaders(t, http.MethodOptions, "/api/v1/media", nil, map[string]string{"Origin": "https://evil.example", "Access-Control-Request-Method": "GET"})
+	if disallowed.StatusCode == http.StatusNoContent {
+		disallowed.Body.Close()
+		t.Fatal("disallowed CORS preflight succeeded")
+	}
+	disallowed.Body.Close()
+	forwarded := p.requestHeaders(t, http.MethodGet, "/api/v1/ready", nil, map[string]string{"X-Forwarded-For": "203.0.113.9"})
+	if forwarded.StatusCode != http.StatusOK || forwarded.Header.Get("X-Forwarded-For") != "" {
+		forwarded.Body.Close()
+		t.Fatalf("trusted proxy request status=%d", forwarded.StatusCode)
+	}
+	forwarded.Body.Close()
 }
 
 func TestProductionAuthNoneLoopback(t *testing.T) {
