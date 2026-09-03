@@ -96,6 +96,11 @@ section {
   grid-area: media;
   position: sticky;
   top: 16px;
+  min-width: 0;
+}
+.current-video,
+.change-video {
+  display: none;
 }
 .editor-panel {
   grid-area: editor;
@@ -307,11 +312,25 @@ select:focus-visible {
   display: grid;
   gap: 4px;
   max-height: 62vh;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 .media-list button {
   width: 100%;
+  min-width: 0;
+  overflow: hidden;
   text-align: left;
+}
+.media-list strong,
+.current-video strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.media-list span,
+.current-video span {
+  overflow-wrap: anywhere;
 }
 .media-list span {
   display: block;
@@ -511,6 +530,19 @@ ul {
   section,
   .task-panel {
     padding: 12px;
+  }
+  .media-panel.has-selection .change-video {
+    display: block;
+    padding: 4px 8px;
+  }
+  .media-panel.has-selection .current-video {
+    display: grid;
+    gap: 3px;
+    min-width: 0;
+    margin-bottom: 8px;
+  }
+  .media-panel.has-selection:not(.explorer-open) .file-tree {
+    display: none;
   }
   .app-header {
     align-items: flex-start;
