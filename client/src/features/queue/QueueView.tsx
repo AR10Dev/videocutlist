@@ -8,11 +8,9 @@ export function QueueView() {
       <section class="queue-panel" aria-labelledby="queue-heading">
         <h2 id="queue-heading">Export queue</h2>
         <For each={batches()}>
-          {(batch) => (
-            <article aria-label={`Batch ${batch.batchId}`}>
-              <h3>
-                Batch {batch.batchId} · revision {batch.projectRevision ?? "unknown"}
-              </h3>
+          {(batch, index) => (
+            <article aria-label={`Export batch ${index() + 1}`}>
+              <h3>Export batch {index() + 1}</h3>
               <p>
                 {batch.state} · {Math.round(batch.progress * 100)}%
               </p>

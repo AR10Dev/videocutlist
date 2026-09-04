@@ -25,8 +25,26 @@ button:disabled {
   opacity: 0.45;
 }
 button[aria-pressed="true"] {
-  border-color: #f4b23e;
-  background: #343038;
+  border-color: #53c18d;
+  background: #203a33;
+}
+
+button.primary {
+  border-color: #6ea8fe;
+  background: #24518a;
+  font-weight: 700;
+}
+button.primary:hover:not(:disabled) {
+  border-color: #9cc4ff;
+  background: #2d68ad;
+}
+button.destructive {
+  border-color: #b85c63;
+  background: #4a252b;
+}
+button.destructive:hover:not(:disabled) {
+  border-color: #ff9d9d;
+  background: #642f37;
 }
 
 .app-shell {
@@ -38,10 +56,7 @@ button[aria-pressed="true"] {
   grid-template-columns: 248px minmax(0, 1fr) 310px;
   grid-template-areas:
     "header header header"
-    "media editor project"
-    "media editor export"
-    "media editor settings"
-    "media editor detection";
+    "media editor task";
   gap: 12px;
   align-items: start;
 }
@@ -62,10 +77,33 @@ section {
   gap: 20px;
   padding: 12px 16px;
 }
+.app-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 18px;
+  min-width: 0;
+}
 .app-header h1 {
   font-size: 1.2rem;
   letter-spacing: -0.03em;
   margin: 0;
+}
+.project-status {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  color: #b9bcc5;
+  font-size: 0.875rem;
+}
+.project-status strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.project-status span {
+  color: #888b96;
+  white-space: nowrap;
 }
 .app-header p {
   margin: 0;
@@ -76,10 +114,32 @@ section {
   grid-area: media;
   position: sticky;
   top: 16px;
+  min-width: 0;
+}
+.current-video,
+.change-video {
+  display: none;
 }
 .editor-panel {
   grid-area: editor;
   min-width: 0;
+}
+.task-panel {
+  grid-area: task;
+  min-width: 0;
+  background: #1a1b20;
+  border: 1px solid #2b2d35;
+  border-radius: 8px;
+  padding: 12px;
+}
+.task-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+.task-tabs button[aria-selected="true"] {
+  color: #f4b23e;
+  border-bottom-color: #f4b23e;
 }
 .project-panel {
   grid-area: project;
@@ -170,8 +230,6 @@ h2 {
   font-size: 0.9rem;
   color: #c6c8d0;
   font-weight: 650;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
 }
 h3 {
   font-size: 0.85rem;
@@ -270,11 +328,29 @@ select:focus-visible {
   display: grid;
   gap: 4px;
   max-height: 62vh;
-  overflow: auto;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 .media-list button {
   width: 100%;
+  min-width: 0;
+  overflow: hidden;
   text-align: left;
+}
+.media-list button[aria-pressed="true"] {
+  border-color: #53c18d;
+  background: #203a33;
+}
+.media-list strong,
+.current-video strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.media-list span,
+.current-video span {
+  overflow-wrap: anywhere;
 }
 .media-list span {
   display: block;
@@ -324,6 +400,16 @@ video {
   height: 80px;
   opacity: 0.82;
 }
+.timeline-labels {
+  position: absolute;
+  inset: auto 6px 2px;
+  display: flex;
+  justify-content: space-between;
+  color: #e5e6ea;
+  font-size: 0.68rem;
+  text-shadow: 0 1px 2px #000;
+  pointer-events: none;
+}
 .timeline-overlay,
 .timeline-segment {
   position: absolute;
@@ -337,6 +423,18 @@ video {
   width: auto;
   background: #53c18d;
   opacity: 0.38;
+}
+.timeline-segment.selected {
+  opacity: 0.8;
+  outline: 2px solid #f4b23e;
+}
+.control-help {
+  color: #a9acb5;
+  font-size: 0.8rem;
+}
+.segment-row.selected {
+  outline: 1px solid #53c18d;
+  outline-offset: 3px;
 }
 .timeline-playhead {
   background: #ff5f5f;
@@ -362,14 +460,6 @@ video {
   padding: 10px 0;
   border-top: 1px solid #30323a;
   border-bottom: 1px solid #30323a;
-}
-.editor-panel .controls button:nth-child(5),
-.editor-panel .controls button:nth-child(6),
-.editor-panel .controls button:nth-child(7) {
-  background: #b8791e;
-  border-color: #d59939;
-  color: #16110a;
-  font-weight: 650;
 }
 .editor-panel ol {
   margin: 14px 0;
@@ -451,10 +541,19 @@ ul {
   padding-left: 20px;
 }
 
+@media (min-width: 1051px) {
+  .task-panel {
+    position: sticky;
+    top: 16px;
+    max-height: calc(100vh - 32px);
+    overflow-y: auto;
+  }
+}
+
 @media (max-width: 1050px) {
   .app-shell {
     grid-template-columns: 220px minmax(0, 1fr);
-    grid-template-areas: "header header" "media editor" "project export" "settings detection";
+    grid-template-areas: "header header" "media editor" "media editor" "task task";
   }
   .media-panel {
     position: static;
@@ -464,25 +563,79 @@ ul {
   }
 }
 @media (max-width: 700px) {
+  body {
+    overflow-x: hidden;
+  }
   .app-shell {
+    width: 100%;
     padding: 8px;
-    grid-template-columns: 1fr;
-    grid-template-areas: "header" "media" "editor" "project" "export" "settings" "detection";
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "header" "media" "editor" "task";
     gap: 8px;
   }
   header,
-  section {
+  section,
+  .task-panel {
     padding: 12px;
+  }
+  button,
+  .media-list button,
+  .folder,
+  input,
+  select {
+    min-height: 44px;
+  }
+  .icon-button {
+    width: 44px;
+    height: 44px;
+  }
+  .media-panel.has-selection .change-video {
+    display: block;
+    padding: 4px 12px;
+  }
+  .media-panel.has-selection .current-video {
+    display: grid;
+    gap: 3px;
+    min-width: 0;
+    margin-bottom: 8px;
+  }
+  .media-panel.has-selection:not(.explorer-open) .file-tree {
+    display: none;
   }
   .app-header {
     align-items: flex-start;
     flex-direction: column;
     gap: 4px;
   }
+  .app-heading {
+    flex-wrap: wrap;
+    gap: 4px 12px;
+  }
   .timeline-canvas {
     height: 60px;
   }
   .timeline-visual {
     min-height: 62px;
+  }
+  .task-tabs {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .task-tabs button {
+    min-width: 0;
+    padding-inline: 4px;
+  }
+  .controls {
+    align-items: stretch;
+  }
+  .controls button,
+  .controls label {
+    min-height: 44px;
+  }
+  .controls label {
+    flex: 1 1 100%;
+  }
+  .controls label input {
+    width: 100%;
   }
 }

@@ -1,8 +1,9 @@
-import { For, Show } from "solid-js";
-import { formatTime } from "../preview/model";
+import { For, Show, createSignal } from "solid-js";
 import { useWorkspace } from "../app/WorkspaceContext";
+import { formatLibraryDuration, mediaSummary } from "./model";
 
 export function LibraryView() {
+  const [explorerOpen, setExplorerOpen] = createSignal(false);
   const {
     media,
     selected,
@@ -12,14 +13,24 @@ export function LibraryView() {
     loadingMore,
     refreshing,
     libraryMessage,
+    status,
     refreshMedia,
     loadFolder,
     chooseMedia,
   } = useWorkspace();
   return (
-    <section class="media-panel" aria-labelledby="media-heading">
+    <section
+      class="media-panel"
+      classList={{ "has-selection": Boolean(selected()), "explorer-open": explorerOpen() }}
+      aria-labelledby="media-heading"
+    >
       <div class="panel-heading">
-        <h2 id="media-heading">File explorer</h2>
+        <h2 id="media-heading">Media explorer</h2>
+        <Show when={selected()}>
+          <button class="change-video" onClick={() => setExplorerOpen((open) => !open)}>
+            {explorerOpen() ? "Close" : "Change video"}
+          </button>
+        </Show>
         <button
           class="icon-button"
           onClick={() => void refreshMedia()}
@@ -29,6 +40,14 @@ export function LibraryView() {
           ↻
         </button>
       </div>
+      <Show
+        when={
+          status().startsWith("Media refresh") ||
+          status() === "You are not allowed to refresh media."
+        }
+      >
+        <p role="status">{status()}</p>
+      </Show>
       <Show when={!selected()}>
         <section class="library-setup" aria-labelledby="library-setup-heading">
           <h3 id="library-setup-heading">Server media library</h3>
@@ -39,7 +58,17 @@ export function LibraryView() {
           <p role="status">{libraryMessage()}</p>
         </section>
       </Show>
-      <nav class="file-tree" aria-label="Media folders">
+      <Show when={selected()}>
+        {(item) => (
+          <div class="current-video" aria-label="Current video">
+            <strong>{item().name}</strong>
+            <span>
+              {formatLibraryDuration(item().durationMs)} · {mediaSummary(item())}
+            </span>
+          </div>
+        )}
+      </Show>
+      <nav class="file-tree" classList={{ "is-open": explorerOpen() }} aria-label="Media folders">
         <button class="folder" aria-current="page" onClick={() => void loadFolder()}>
           ⌄ Server media library
         </button>
@@ -64,11 +93,15 @@ export function LibraryView() {
                 <li>
                   <button
                     aria-pressed={selected()?.id === item.id ? "true" : "false"}
-                    onClick={() => chooseMedia(item)}
+                    aria-label={`Select ${item.name}`}
+                    onClick={() => {
+                      chooseMedia(item);
+                      setExplorerOpen(false);
+                    }}
                   >
-                    {item.name}
+                    <strong>{item.name}</strong>
                     <span>
-                      {formatTime(item.durationMs, item.durationMs)} · {item.container}
+                      {formatLibraryDuration(item.durationMs)} · {mediaSummary(item)}
                     </span>
                   </button>
                 </li>

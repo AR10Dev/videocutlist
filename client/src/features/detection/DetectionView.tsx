@@ -21,16 +21,25 @@ export function DetectionView() {
       <details open>
         <summary>Detection tools</summary>
         <p role="status">{detectionStatus() || "Review candidates before they change segments."}</p>
-        <div class="controls">
-          <button disabled={active()} onClick={() => void startDetection("silence")}>
-            Detect silence
-          </button>
-          <button disabled={active()} onClick={() => void startDetection("black")}>
-            Detect black frames
-          </button>
-          <button disabled={active()} onClick={() => void startDetection("scene")}>
-            Detect scene changes
-          </button>
+        <div class="detection-methods" aria-label="Detection methods">
+          <div>
+            <button disabled={active()} onClick={() => void startDetection("silence")}>
+              Detect silence
+            </button>
+            <p>Find quiet ranges that may separate usable clips.</p>
+          </div>
+          <div>
+            <button disabled={active()} onClick={() => void startDetection("black")}>
+              Detect black frames
+            </button>
+            <p>Find black frames that may mark transitions.</p>
+          </div>
+          <div>
+            <button disabled={active()} onClick={() => void startDetection("scene")}>
+              Detect scene changes
+            </button>
+            <p>Suggest boundaries where the picture changes.</p>
+          </div>
           <Show when={active()}>
             <button onClick={() => void cancelDetection()}>Cancel detection</button>
           </Show>

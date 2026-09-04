@@ -85,10 +85,11 @@ describe("MSE capability detection", () => {
 });
 
 describe("preview positions", () => {
-  it("formats clamped whole milliseconds at minute boundaries", () => {
-    expect(formatTime(59_999, 60_000)).toBe("0:59.999");
-    expect(formatTime(60_000, 60_000)).toBe("1:00.000");
-    expect(formatTime(60_001, 60_000)).toBe("1:00.000");
+  it("formats clamped whole milliseconds consistently through hours", () => {
+    expect(formatTime(59_999, 60_000)).toBe("00:59.999");
+    expect(formatTime(60_000, 60_000)).toBe("01:00.000");
+    expect(formatTime(60_001, 60_000)).toBe("01:00.000");
+    expect(formatTime(3_725_209, 4_000_000)).toBe("01:02:05.209");
   });
 
   it("maps watched preview time to media time and clamps it", () => {
