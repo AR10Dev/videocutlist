@@ -3,7 +3,8 @@ import { frameDuration } from "./frame";
 import { redoTimeline, undoTimeline } from "./timeline";
 import { TimelineCanvas } from "./TimelineCanvas";
 import { viewportScale } from "../preview/assets";
-import { canStreamPreview, formatTime, parseTimecode } from "../preview/model";
+import { formatTime, parseTimecode } from "../preview/model";
+import { PreviewPlayer } from "../preview/PreviewPlayer";
 import { useWorkspace } from "../app/WorkspaceContext";
 
 export function EditorView() {
@@ -138,28 +139,21 @@ export function EditorView() {
                 </p>
               )}
             </Show>
-            <Show when={previewStatus()}>{(message) => <p role="status">{message()}</p>}</Show>
-            <Show
-              when={canStreamPreview()}
-              fallback={
-                <p class="preview-unavailable" role="status">
-                  Preview is unavailable in this browser. Use the timeline controls to set markers
-                  manually.
-                </p>
-              }
-            >
-              <video
-                ref={(element) => {
-                  setVideo(element);
-                }}
-                muted={muted()}
-                aria-label="Preview player"
-                data-preview-offset={diagnostics()?.offsetMs ?? 0}
-                onTimeUpdate={(event) => syncPreviewPosition(event.currentTarget.currentTime)}
-                onSeeking={(event) => syncPreviewPosition(event.currentTarget.currentTime)}
-                onSeeked={(event) => syncPreviewPosition(event.currentTarget.currentTime)}
-              />
-            </Show>
+            <PreviewPlayer
+              selected={selected}
+              duration={duration}
+              playheadMs={playheadMs}
+              muted={muted}
+              previewStatus={previewStatus}
+              diagnostics={diagnostics}
+              setMuted={(value) => setMuted(value)}
+              saveSettings={saveSettings}
+              setVideo={setVideo}
+              syncPreviewPosition={syncPreviewPosition}
+              togglePlayback={togglePlayback}
+              updateTimeline={(changes) => updateTimeline(changes)}
+              markDirty={markDirty}
+            />
             <div
               class="timeline-visual"
               role="group"
@@ -232,35 +226,6 @@ export function EditorView() {
               {formatTime(present().outMs, duration())}
             </p>
             <div class="controls">
-              <button aria-keyshortcuts="Space" onClick={togglePlayback}>
-                Play / pause preview
-              </button>
-              <button
-                onClick={() => {
-                  const step = frameDuration(selected());
-                  updateTimeline({
-                    playheadMs: Math.max(0, playheadMs() - (step || 1000)),
-                  });
-                  markDirty();
-                }}
-                aria-keyshortcuts="ArrowLeft"
-              >
-                Previous frame
-              </button>
-              <button
-                onClick={() => {
-                  updateTimeline({
-                    playheadMs: Math.min(
-                      duration(),
-                      playheadMs() + (frameDuration(selected()) || 1000),
-                    ),
-                  });
-                  markDirty();
-                }}
-                aria-keyshortcuts="ArrowRight"
-              >
-                Next frame
-              </button>
               <button
                 disabled={!timeline().past.length}
                 onClick={() => {
@@ -380,19 +345,6 @@ export function EditorView() {
                 )}
               </For>
             </ol>
-            <label>
-              <input
-                type="checkbox"
-                checked={muted()}
-                onChange={(event) => {
-                  const value = event.currentTarget.checked;
-                  setMuted(value);
-                  saveSettings({ muted: value });
-                  markDirty();
-                }}
-              />{" "}
-              Mute preview
-            </label>
           </>
         )}
       </Show>
