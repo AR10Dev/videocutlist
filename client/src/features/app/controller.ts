@@ -92,6 +92,9 @@ export function createWorkspaceController() {
     addSegment,
     removeSegment,
     moveSegment,
+    updateSegment,
+    updateSegmentLabel,
+    splitActiveSegment,
   } = editorFeature;
   const queryClient = useQueryClient();
   const exportFeature = createExportController({
@@ -444,6 +447,9 @@ export function createWorkspaceController() {
     tracks,
     removeSegment,
     moveSegment,
+    updateSegment,
+    updateSegmentLabel,
+    splitActiveSegment,
     projects: projectsFeature,
     export: exportFeature,
     exportProject,

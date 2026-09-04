@@ -79,7 +79,11 @@ export function ExportView() {
             (destinationId() || "Not selected")}
         </p>
         <p>
-          <strong>Output</strong> {outputName()}
+          <strong>Expected outputs</strong>{" "}
+          {exportMode() === "merge" ? 1 : Math.max(1, selectedSegments().length)}
+        </p>
+        <p>
+          <strong>Filename preview</strong> <code>{outputName()}</code>
         </p>
       </div>
 
@@ -152,67 +156,73 @@ export function ExportView() {
         <summary>Export options</summary>
         <div class="option-fields">
           <label>
-            Mode
+            Output arrangement
             <select
+              aria-label="Output arrangement (Mode)"
               value={exportMode()}
               onChange={(event) =>
                 exportFeature.setMode(event.currentTarget.value as "merge" | "separate")
               }
             >
-              <option value="merge">Merge</option>
-              <option value="separate">Separate</option>
+              <option value="merge">Combine selected cuts</option>
+              <option value="separate">Export each selected cut separately</option>
             </select>
           </label>
           <label>
-            Selection
+            What to export
             <select
               value={exportSelection()}
               onChange={(event) =>
                 exportFeature.setSelection(event.currentTarget.value as "segments" | "gaps")
               }
             >
-              <option value="segments">Segments</option>
-              <option value="gaps">Gaps</option>
+              <option value="segments">Selected cuts</option>
+              <option value="gaps">Gaps between cuts</option>
             </select>
           </label>
           <fieldset>
-            <legend>Streams</legend>
+            <legend>Tracks</legend>
             <For each={tracks()}>
               {(track) => {
                 const checked = () =>
                   streamIndexes().length === 0 || streamIndexes().includes(track.index);
                 return (
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={checked()}
-                      onChange={(event) => {
-                        const all = streamIndexes().length
-                          ? streamIndexes()
-                          : tracks().map((item) => item.index);
-                        exportFeature.setStreams(
-                          event.currentTarget.checked
-                            ? [...new Set([...all, track.index])]
-                            : all.filter((index) => index !== track.index),
-                        );
-                      }}
-                    />{" "}
-                    {track.type === "video"
-                      ? "Video"
-                      : track.type === "audio"
-                        ? "Audio"
-                        : "Subtitle"}
-                    : {track.codec}
-                  </label>
+                  <div class="stream-option">
+                    <label class="stream-row">
+                      <input
+                        type="checkbox"
+                        checked={checked()}
+                        onChange={(event) => {
+                          const all = streamIndexes().length
+                            ? streamIndexes()
+                            : tracks().map((item) => item.index);
+                          exportFeature.setStreams(
+                            event.currentTarget.checked
+                              ? [...new Set([...all, track.index])]
+                              : all.filter((index) => index !== track.index),
+                          );
+                        }}
+                      />{" "}
+                      {track.type === "video"
+                        ? "Video"
+                        : track.type === "audio"
+                          ? "Audio"
+                          : "Subtitle"}
+                      : {track.codec}
+                    </label>
+                    <For each={(preflight()?.findings ?? []).filter((finding) => finding.streamIndex === track.index)}>
+                      {(finding) => <p role="status">{finding.message}</p>}
+                    </For>
+                  </div>
                 );
               }}
             </For>
-            <For each={preflight()?.findings ?? []}>
+            <For each={(preflight()?.findings ?? []).filter((finding) => finding.streamIndex === undefined)}>
               {(finding) => <p role="status">{finding.message}</p>}
             </For>
           </fieldset>
           <label>
-            Cut strategy
+            Processing
             <select
               value={cutStrategy()}
               onChange={(event) =>
@@ -221,8 +231,8 @@ export function ExportView() {
                 )
               }
             >
-              <option value="stream_copy_preferred">Stream copy preferred</option>
-              <option value="precise_reencode">Precise re-encode</option>
+              <option value="stream_copy_preferred">Fast copy</option>
+              <option value="precise_reencode">Precise encode</option>
               <option value="hybrid_smart_cut" disabled={hybridSmartCutKnownIneligible(selected())}>
                 Hybrid smart cut
                 {hybridSmartCutKnownIneligible(selected()) ? " (unavailable)" : ""}
@@ -230,7 +240,10 @@ export function ExportView() {
             </select>
           </label>
           <Show when={cutStrategy() === "stream_copy_preferred"}>
-            <p>Fast, keyframe-aligned cuts; boundaries may move to the nearest keyframe.</p>
+            <p>
+              Fast copy avoids re-encoding, but boundaries may move to nearby keyframes and are not
+              frame-exact.
+            </p>
           </Show>
           <label>
             Destination
@@ -239,21 +252,28 @@ export function ExportView() {
               onChange={(event) => exportFeature.setDestination(event.currentTarget.value)}
             >
               <For each={destinations()}>
-                {(destination) => (
-                  <option value={destination.id}>
-                    {destination.label} ({destination.retention ?? "durable"})
-                  </option>
-                )}
+                {(destination) => <option value={destination.id}>{destination.label}</option>}
               </For>
             </select>
           </label>
-          <label>
-            Filename template
-            <input
-              value={filenameTemplate()}
-              onInput={(event) => exportFeature.setTemplate(event.currentTarget.value)}
-            />
-          </label>
+          <p>
+            <strong>Retention</strong>{" "}
+            {destinations().find((destination) => destination.id === destinationId())?.retention ??
+              "Durable"}
+          </p>
+          <details>
+            <summary>Advanced naming</summary>
+            <label>
+              Filename template
+              <input
+                value={filenameTemplate()}
+                onInput={(event) => exportFeature.setTemplate(event.currentTarget.value)}
+              />
+            </label>
+            <p class="control-help">
+              Tokens: {"{source}"}, {"{segment}"}, {"{mode}"}, {"{ext}"}
+            </p>
+          </details>
         </div>
       </details>
 

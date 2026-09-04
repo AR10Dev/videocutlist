@@ -8,6 +8,7 @@ import {
   resetTimelineHistory,
   updateTimelinePlayback,
   undoTimeline,
+  visibleTimelineWindow,
   type TimelineSnapshot,
 } from "../src/features/editor/timeline";
 
@@ -58,5 +59,16 @@ describe("timeline history", () => {
     const reset = resetTimelineHistory({ ...initial, segments: [], zoom: 3 });
     expect(canUndoTimeline(reset)).toBe(false);
     expect(canRedoTimeline(reset)).toBe(false);
+  });
+
+  it("maps a scrolled viewport to its visible time window", () => {
+    expect(visibleTimelineWindow(500, 500, 2000, 8000)).toEqual({
+      startMs: 2000,
+      endMs: 4000,
+    });
+    expect(visibleTimelineWindow(1900, 500, 2000, 8000)).toEqual({
+      startMs: 7600,
+      endMs: 8000,
+    });
   });
 });

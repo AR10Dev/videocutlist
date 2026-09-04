@@ -1,7 +1,17 @@
 import { createSignal, type JSX } from "solid-js";
 import { Tooltip } from "@kobalte/core/tooltip";
 import { frameDuration } from "../editor/frame";
-import { Maximize2, Pause, Play, SkipBack, SkipForward, Volume2, VolumeX } from "lucide-solid";
+import {
+  ChevronsLeft,
+  ChevronsRight,
+  Maximize2,
+  Pause,
+  Play,
+  SkipBack,
+  SkipForward,
+  Volume2,
+  VolumeX,
+} from "lucide-solid";
 import { canStreamPreview, formatTime } from "./model";
 import { useWorkspace } from "../app/WorkspaceContext";
 
@@ -104,22 +114,31 @@ export function PreviewPlayer() {
         )}
       </div>
       <div class="preview-controls" aria-label="Preview controls">
+        <IconButton label="Go to start" onClick={() => workspace.updateTimeline({ playheadMs: 0 })}>
+          <ChevronsLeft size={18} aria-hidden="true" />
+        </IconButton>
+        <IconButton label="Previous frame" keyshortcuts="ArrowLeft" onClick={() => step(-1)}>
+          <SkipBack size={18} aria-hidden="true" />
+        </IconButton>
         <IconButton
           label={playing() ? "Pause preview" : "Play preview"}
           keyshortcuts="Space"
           onClick={togglePlayback}
         >
           {playing() ? (
-            <Pause size={18} aria-hidden="true" />
+            <Pause size={22} aria-hidden="true" />
           ) : (
-            <Play size={18} aria-hidden="true" />
+            <Play size={22} aria-hidden="true" />
           )}
-        </IconButton>
-        <IconButton label="Previous frame" keyshortcuts="ArrowLeft" onClick={() => step(-1)}>
-          <SkipBack size={18} aria-hidden="true" />
         </IconButton>
         <IconButton label="Next frame" keyshortcuts="ArrowRight" onClick={() => step(1)}>
           <SkipForward size={18} aria-hidden="true" />
+        </IconButton>
+        <IconButton
+          label="Go to end"
+          onClick={() => workspace.updateTimeline({ playheadMs: workspace.duration() })}
+        >
+          <ChevronsRight size={18} aria-hidden="true" />
         </IconButton>
         <span class="preview-time" aria-live="off">
           {formatTime(workspace.playheadMs(), workspace.duration())} /{" "}

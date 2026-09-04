@@ -83,9 +83,9 @@ test("export cancellation is isolated from a changed media context", async ({ pa
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   await page.getByRole("button", { name: "Set in" }).click();
   await page.getByRole("textbox", { name: "Timecode" }).fill("0:00.500");
-  await page.getByRole("button", { name: "Go to timecode" }).click();
+  await page.getByRole("textbox", { name: "Timecode" }).press("Enter");
   await page.getByRole("button", { name: "Set out" }).click();
-  await page.getByRole("button", { name: "Add segment" }).click();
+  await page.getByRole("button", { name: /Add cut/ }).click();
   await page.getByRole("tab", { name: "Project" }).click();
   await page.getByRole("button", { name: "Save project" }).click();
   await page.getByRole("tab", { name: "Export" }).click();

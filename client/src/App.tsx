@@ -32,8 +32,18 @@ export function App() {
     if (preference === "system") media.addEventListener("change", apply);
     onCleanup(() => media.removeEventListener("change", apply));
   });
-  const [activeTask, setActiveTask] = createSignal<"cuts" | "project" | "export" | "detection">("project");
-  createEffect(() => { if (selected()) setActiveTask("cuts"); });
+  const [activeTask, setActiveTask] = createSignal<"cuts" | "project" | "export" | "detection">(
+    "project",
+  );
+  let hadSelectedMedia = false;
+  createEffect(() => {
+    const hasSelectedMedia = Boolean(selected());
+    if (hasSelectedMedia && !hadSelectedMedia)
+      queueMicrotask(() => {
+        if (dirty()) setActiveTask("cuts");
+      });
+    hadSelectedMedia = hasSelectedMedia;
+  });
   const taskTabs = ["cuts", "project", "export", "detection"] as const;
   const moveTask = (current: (typeof taskTabs)[number], direction: number) => {
     const start = taskTabs.indexOf(current);
@@ -92,10 +102,17 @@ export function App() {
                     tabIndex={activeTask() === "cuts" ? 0 : -1}
                     onClick={() => setActiveTask("cuts")}
                     onKeyDown={(event) => {
-                      if (event.key === "ArrowRight" || event.key === "ArrowDown") { event.preventDefault(); moveTask("cuts", 1); }
-                      else if (event.key === "ArrowLeft" || event.key === "ArrowUp") { event.preventDefault(); moveTask("cuts", -1); }
+                      if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+                        event.preventDefault();
+                        moveTask("cuts", 1);
+                      } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+                        event.preventDefault();
+                        moveTask("cuts", -1);
+                      }
                     }}
-                  >Cuts</button>
+                  >
+                    Cuts
+                  </button>
                   <button
                     id="project-tab"
                     role="tab"
@@ -158,7 +175,14 @@ export function App() {
                     Detection
                   </button>
                 </div>
-                <div id="cuts-tabpanel" hidden={activeTask() !== "cuts"}><CutsView /></div>
+                <div
+                  id="cuts-tabpanel"
+                  role="tabpanel"
+                  aria-labelledby="cuts-tab"
+                  hidden={activeTask() !== "cuts"}
+                >
+                  <CutsView />
+                </div>
                 <div
                   id="project-tabpanel"
                   role="tabpanel"
