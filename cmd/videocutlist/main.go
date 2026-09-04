@@ -193,6 +193,9 @@ func run(ctx context.Context) error {
 	defer scheduler.Shutdown(context.Background())
 	if mediaService.Configured {
 		if _, err := mediaService.StartImport(ctx); err != nil && !errors.Is(err, jobqueue.ErrQueueFull) {
+			if ctx.Err() != nil {
+				return nil
+			}
 			return fmt.Errorf("start initial media scan: %w", err)
 		}
 	}
