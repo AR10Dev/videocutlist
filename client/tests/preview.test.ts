@@ -192,7 +192,10 @@ describe("preview streaming", () => {
     instances[0].dispatchEvent(new Event("sourceopen"));
     await vi.waitFor(() =>
       expect(errors).toHaveBeenCalledWith(
-        expect.objectContaining({ message: "Preview request failed. Try again." }),
+        expect.objectContaining({
+          message:
+            "Preview request failed. Try again. Timeline markers remain available for editing.",
+        }),
       ),
     );
 
@@ -209,7 +212,10 @@ describe("preview streaming", () => {
     instances[1].dispatchEvent(new Event("sourceopen"));
     await vi.waitFor(() =>
       expect(readErrors).toHaveBeenCalledWith(
-        expect.objectContaining({ message: "Preview data could not be read. Try again." }),
+        expect.objectContaining({
+          message:
+            "Preview data could not be read. Try again. Timeline markers remain available for editing.",
+        }),
       ),
     );
 
@@ -223,7 +229,10 @@ describe("preview streaming", () => {
     instances[2].dispatchEvent(new Event("sourceopen"));
     await vi.waitFor(() =>
       expect(appendErrors).toHaveBeenCalledWith(
-        expect.objectContaining({ message: "Preview data could not be played. Try again." }),
+        expect.objectContaining({
+          message:
+            "Preview data could not be played. Try again. Timeline markers remain available for editing.",
+        }),
       ),
     );
 
@@ -283,7 +292,10 @@ describe("preview streaming", () => {
     instances[1].dispatchEvent(new Event("sourceopen"));
     await vi.waitFor(() =>
       expect(bodyErrors).toHaveBeenCalledWith(
-        expect.objectContaining({ message: "Preview returned no playable data. Try again." }),
+        expect.objectContaining({
+          message:
+            "Preview returned no playable data. Try again. Timeline markers remain available for editing.",
+        }),
       ),
     );
   });

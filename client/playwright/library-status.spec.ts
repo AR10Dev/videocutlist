@@ -29,7 +29,7 @@ for (const [state, message, action] of statuses) {
       return route.fulfill({ status: 404 });
     });
     await page.goto("/");
-    const setup = page.getByRole("region", { name: "Server media library" });
+    const setup = page.getByRole("region", { name: "Media library status" });
     await expect(setup).toContainText(message);
     await expect(setup).toContainText(action);
     await expect(setup.getByRole("status")).toHaveCount(1);
@@ -54,7 +54,7 @@ test("shows one actionable loading message while status is pending", async ({ pa
     return route.fulfill({ status: 404 });
   });
   await page.goto("/");
-  const setup = page.getByRole("region", { name: "Server media library" });
+  const setup = page.getByRole("region", { name: "Media library status" });
   await expect(setup.getByRole("status")).toHaveText(
     "Checking the server media library… Refresh to check again.",
   );
@@ -113,7 +113,7 @@ test("browses folders, paginates within the active folder, and returns to root",
   await expect(page.getByRole("button", { name: "Select clip-1.mp4" })).toBeVisible();
   await page.getByRole("button", { name: "Load more" }).click();
   await expect(page.getByRole("button", { name: "Select clip-2.mp4" })).toBeVisible();
-  await page.getByRole("button", { name: /Server media library/ }).click();
+  await page.getByRole("button", { name: /All media/ }).click();
   await expect(page.getByRole("button", { name: "Select root.mp4" })).toBeVisible();
   expect(treeRequests).toEqual([
     "",

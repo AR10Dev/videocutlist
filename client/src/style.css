@@ -92,7 +92,7 @@ button.destructive:hover:not(:disabled) {
   margin: auto;
   padding: 16px;
   display: grid;
-  grid-template-columns: 248px minmax(0, 1fr) 310px;
+  grid-template-columns: 232px minmax(0, 1fr) 340px;
   grid-template-areas:
     "header header header"
     "media editor task";
@@ -191,6 +191,44 @@ section {
 }
 .settings-view {
   grid-column: 1 / -1;
+  width: min(100%, 920px);
+  margin-inline: auto;
+}
+.settings-view > section {
+  padding: 16px 0;
+  background: transparent;
+  border: 0;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+}
+.settings-view > section label,
+.option-fields > label {
+  display: grid;
+  gap: 4px;
+  align-content: start;
+}
+.settings-view > section > label {
+  margin-block: 10px;
+}
+.settings-view label:has(input[type="checkbox"]) {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.settings-view input[type="checkbox"] {
+  flex: none;
+}
+.server-settings details,
+.settings-diagnostics {
+  margin-top: 0;
+}
+.server-settings h4 {
+  margin: 16px 0 8px;
+}
+.task-panel section {
+  padding: 4px 0;
+  background: transparent;
+  border: 0;
 }
 .library-roots {
   display: grid;
@@ -950,15 +988,67 @@ fieldset {
 .editor-controls {
   border-color: var(--border);
 }
-.marking-controls button:first-child {
+.marking-controls button[aria-keyshortcuts="I"] {
   border-color: var(--color-primary);
-  color: var(--color-primary-content);
-  background: var(--color-primary);
 }
-.marking-controls button:nth-child(2) {
+.marking-controls button[aria-keyshortcuts="O"] {
   border-color: var(--color-secondary);
-  color: var(--color-secondary-content);
-  background: var(--color-secondary);
+}
+.selected-media-summary {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.selected-media-summary span,
+.marker-value {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.accessible-playhead {
+  width: 100%;
+  height: 12px;
+  margin: 4px 0 8px;
+  opacity: 0.55;
+}
+.shortcut-help {
+  font-size: 0.875rem;
+}
+.detection-methods {
+  display: grid;
+  gap: 8px;
+}
+.project-panel > ol,
+.export-items,
+.export-summary,
+.export-result {
+  margin-block: 12px;
+}
+.project-panel > ol > li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-block: 6px;
+  border-bottom: 1px solid var(--border);
+}
+.project-panel > ol > li > button:first-child {
+  min-width: 0;
+  margin-right: auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.export-summary p {
+  margin: 4px 0;
+}
+.export-state {
+  padding: 8px 0;
+  color: var(--text);
+}
+.option-fields {
+  display: grid;
+  gap: 12px;
+  padding-top: 8px;
 }
 .task-tabs button[aria-selected="true"] {
   color: var(--color-primary-content);

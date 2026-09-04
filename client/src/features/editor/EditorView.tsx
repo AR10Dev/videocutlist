@@ -40,7 +40,6 @@ export function EditorView() {
         <h2 id="timeline-heading" tabIndex={-1} class="card-title text-base">
           Timeline
         </h2>
-        <span class="badge badge-ghost">{present().segments.length} segments</span>
       </div>
       <Show
         when={selected()}
@@ -60,13 +59,11 @@ export function EditorView() {
       >
         {(item) => (
           <>
-            <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
-              <p class="m-0 truncate">
-                <strong>{item().name}</strong> · {formatTime(item().durationMs, duration())}
-              </p>
-              <span class="badge badge-outline">{formatTime(duration(), duration())}</span>
+            <div class="selected-media-summary" aria-label="Selected media">
+              <strong>{item().name}</strong>
+              <span>{formatTime(item().durationMs, duration())}</span>
             </div>
-            <p id="timeline-description">
+            <p id="timeline-description" class="sr-only">
               Playhead {formatTime(playheadMs(), duration())}. In marker{" "}
               {formatTime(present().inMs, duration())}. Out marker{" "}
               {formatTime(present().outMs, duration())}.{" "}
@@ -82,6 +79,7 @@ export function EditorView() {
               </div>
             )}
             <input
+              class="accessible-playhead"
               id="playhead"
               aria-label="Timeline playhead"
               aria-valuetext={`${formatTime(playheadMs(), duration())} of ${formatTime(duration(), duration())}`}
@@ -97,10 +95,6 @@ export function EditorView() {
                 markDirty();
               }}
             />
-            <p>
-              In: {formatTime(present().inMs, duration())} · Out:{" "}
-              {formatTime(present().outMs, duration())}
-            </p>
             <div
               class="editor-controls flex flex-wrap items-end gap-3"
               aria-label="Editing controls"
@@ -146,6 +140,7 @@ export function EditorView() {
                 class="control-group marking-controls flex flex-wrap items-center gap-2"
                 aria-label="Marking controls"
               >
+                <span class="marker-value">In: {formatTime(present().inMs, duration())}</span>
                 <button
                   class="btn btn-sm"
                   aria-keyshortcuts="I"
@@ -153,6 +148,7 @@ export function EditorView() {
                 >
                   <LocateFixed size={16} aria-hidden="true" /> Set in
                 </button>
+                <span class="marker-value">Out: {formatTime(present().outMs, duration())}</span>
                 <button
                   class="btn btn-sm"
                   aria-keyshortcuts="O"
@@ -209,15 +205,20 @@ export function EditorView() {
                 </div>
               </details>
             </div>
-            <p id="add-segment-help" class="control-help" role="status">
-              {present().inMs >= present().outMs
-                ? "Set a start before the end to add a segment."
-                : "Marker range is ready to add."}
-            </p>
-            <p class="control-help">
-              Keyboard: Space plays or pauses; arrows step frames; I/O set markers; Ctrl/Cmd+Z
-              undoes.
-            </p>
+            <Show when={present().inMs >= present().outMs}>
+              <p id="add-segment-help" class="control-help" role="status">
+                Set an in point before the out point to add a segment.
+              </p>
+            </Show>
+            <details class="shortcut-help">
+              <summary>Shortcuts</summary>
+              <p class="control-help">
+                Space plays or pauses; arrows step frames; I/O set markers; Ctrl/Cmd+Z undoes.
+              </p>
+            </details>
+            <Show when={present().segments.length === 0}>
+              <p class="empty-state">No segments yet.</p>
+            </Show>
             <ol aria-label="Selected segments">
               <For each={present().segments}>
                 {(segment, index) => (

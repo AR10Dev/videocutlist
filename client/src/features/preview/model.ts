@@ -148,7 +148,13 @@ export function streamPreview(
   const fail = (message: string) => {
     if (disposed || failed) return;
     failed = true;
-    onError(new Error(message));
+    onError(
+      new Error(
+        message.includes("not supported")
+          ? message
+          : `${message} Timeline markers remain available for editing.`,
+      ),
+    );
     clean();
   };
   const sourceError = () => fail("Preview data could not be played. Try again.");

@@ -13,8 +13,16 @@ import { applyAppearance } from "./features/settings/model";
 
 export function App() {
   const controller = createWorkspaceController();
-  const { selected, projectName, revision, dirty, settingsOpen, openSettings, appearance } =
-    controller;
+  const {
+    selected,
+    projectName,
+    revision,
+    dirty,
+    settingsOpen,
+    setSettingsOpen,
+    openSettings,
+    appearance,
+  } = controller;
   createEffect(() => {
     const preference = appearance();
     const media = window.matchMedia("(prefers-color-scheme: dark)");
@@ -43,22 +51,22 @@ export function App() {
           <div class="app-heading">
             <h1>VideoCutlist</h1>
             <div class="project-status" aria-label="Project status">
-              <strong>{revision() > 0 ? projectName() : "Unsaved project"}</strong>
+              <strong>{projectName()}</strong>
               <span role="status">
-                {revision() === 0 ? "Not saved" : dirty() ? "Unsaved changes" : "Saved"}
+                {revision() === 0 ? "Unsaved" : dirty() ? "Unsaved changes" : "Saved"}
               </span>
             </div>
           </div>
           <button
             class="settings-button"
             type="button"
-            aria-label="Settings"
+            aria-label={settingsOpen() ? "Back to editor" : "Settings"}
             aria-pressed={settingsOpen() ? "true" : "false"}
-            title="Settings"
-            onClick={() => void openSettings()}
+            title={settingsOpen() ? "Back to editor" : "Settings"}
+            onClick={() => (settingsOpen() ? setSettingsOpen(false) : void openSettings())}
           >
             <Settings size={20} aria-hidden="true" />
-            <span>Settings</span>
+            <span>{settingsOpen() ? "Back to editor" : "Settings"}</span>
           </button>
         </header>
         <Show
@@ -131,21 +139,30 @@ export function App() {
                     Detection
                   </button>
                 </div>
-                <Show when={activeTask() === "project"}>
-                  <div id="project-tabpanel" role="tabpanel" aria-labelledby="project-tab">
-                    <ProjectsView />
-                  </div>
-                </Show>
-                <Show when={activeTask() === "export"}>
-                  <div id="export-tabpanel" role="tabpanel" aria-labelledby="export-tab">
-                    <ExportView />
-                  </div>
-                </Show>
-                <Show when={activeTask() === "detection" && selected()}>
-                  <div id="detection-tabpanel" role="tabpanel" aria-labelledby="detection-tab">
-                    <DetectionView />
-                  </div>
-                </Show>
+                <div
+                  id="project-tabpanel"
+                  role="tabpanel"
+                  aria-labelledby="project-tab"
+                  hidden={activeTask() !== "project"}
+                >
+                  <ProjectsView />
+                </div>
+                <div
+                  id="export-tabpanel"
+                  role="tabpanel"
+                  aria-labelledby="export-tab"
+                  hidden={activeTask() !== "export"}
+                >
+                  <ExportView />
+                </div>
+                <div
+                  id="detection-tabpanel"
+                  role="tabpanel"
+                  aria-labelledby="detection-tab"
+                  hidden={activeTask() !== "detection"}
+                >
+                  <DetectionView />
+                </div>
                 <QueueView />
               </aside>
             </>

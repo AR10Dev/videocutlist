@@ -69,31 +69,23 @@ export function ProjectsView() {
                 >
                   {item.media.name}
                 </button>{" "}
-                <button
-                  aria-label={`Move ${item.media.name} up`}
-                  disabled={index() === 0}
-                  onClick={() => reorderProjectItem(item.id, -1)}
-                >
-                  Move up
-                </button>{" "}
-                <button
-                  aria-label={`Move ${item.media.name} down`}
-                  disabled={index() === projectItems().length - 1}
-                  onClick={() => reorderProjectItem(item.id, 1)}
-                >
-                  Move down
-                </button>{" "}
-                <button
-                  class="destructive"
-                  onClick={() => {
-                    if (
-                      item.timeline.present.segments.length &&
-                      !window.confirm(`Remove ${item.media.name} and its edits?`)
-                    )
-                      return;
-                    removeProjectItem(item.id);
-                  }}
-                >
+                <Show when={projectItems().length > 1}>
+                  <button
+                    aria-label={`Move ${item.media.name} up`}
+                    disabled={index() === 0}
+                    onClick={() => reorderProjectItem(item.id, -1)}
+                  >
+                    Move up
+                  </button>{" "}
+                  <button
+                    aria-label={`Move ${item.media.name} down`}
+                    disabled={index() === projectItems().length - 1}
+                    onClick={() => reorderProjectItem(item.id, 1)}
+                  >
+                    Move down
+                  </button>{" "}
+                </Show>
+                <button class="destructive" onClick={() => removeProjectItem(item.id)}>
                   Remove
                 </button>
               </li>
@@ -101,7 +93,7 @@ export function ProjectsView() {
           </For>
         </ol>
         <div class="controls">
-          <button class="primary" onClick={() => void projects.saveProject()}>
+          <button classList={{ primary: dirty() }} onClick={() => void projects.saveProject()}>
             Save project
           </button>
           <button onClick={projects.newProject}>New project</button>
@@ -114,13 +106,11 @@ export function ProjectsView() {
             Load project
           </button>
         </div>
-        <Show when={status()}>{(message) => <p role="status">{message()}</p>}</Show>
-        <Show when={dirty()}>
-          <p role="status">Save this project to keep your changes.</p>
+        <Show when={status() || (dirty() ? "Save the project to keep your changes." : "")}>
+          {(message) => <p role="status">{message()}</p>}
         </Show>
         <details>
           <summary>Interchange</summary>
-          <p>Import or export cut lists without changing the media library.</p>
           <button
             disabled={!selected()}
             onClick={() => {
@@ -144,10 +134,7 @@ export function ProjectsView() {
           >
             Download cut list
           </button>
-          <Show
-            when={selected()}
-            fallback={<p>Choose a video from File explorer to import a cut list.</p>}
-          >
+          <Show when={selected()} fallback={<p>Choose a video from Media to import a cut list.</p>}>
             <label>
               Import cut list{" "}
               <input
@@ -230,7 +217,9 @@ export function ProjectsView() {
               />
             </label>
           </Show>
-          <p>Save or load the selected video&apos;s project before exporting CSV or chapters.</p>
+          <Show when={dirty()}>
+            <p>Save the project before importing or exporting CSV or chapters.</p>
+          </Show>
           <button
             disabled={!selected() || dirty()}
             onClick={() =>

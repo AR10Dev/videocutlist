@@ -1,4 +1,4 @@
-import { createSignal, type JSX } from "solid-js";
+import { createSignal, Show, type JSX } from "solid-js";
 import { Tooltip } from "@kobalte/core/tooltip";
 import { frameDuration } from "../editor/frame";
 import { Maximize2, Pause, Play, SkipBack, SkipForward, Volume2, VolumeX } from "lucide-solid";
@@ -100,14 +100,15 @@ export function PreviewPlayer() {
           </p>
         )}
       </div>
-      <p class="preview-range" aria-label="Preview source range">
-        {workspace.diagnostics()
-          ? `Preview: ${formatTime(workspace.diagnostics()!.startMs, workspace.duration())} to ${formatTime(
-              workspace.diagnostics()!.startMs + workspace.diagnostics()!.durationMs,
-              workspace.duration(),
-            )}`
-          : "\u00a0"}
-      </p>
+      <Show when={workspace.previewStatus() && workspace.diagnostics()}>
+        <p class="preview-range" aria-label="Preview source range">
+          Previewing {formatTime(workspace.diagnostics()!.startMs, workspace.duration())} to{" "}
+          {formatTime(
+            workspace.diagnostics()!.startMs + workspace.diagnostics()!.durationMs,
+            workspace.duration(),
+          )}
+        </p>
+      </Show>
       <div class="preview-controls" aria-label="Preview controls">
         <IconButton
           label={playing() ? "Pause preview" : "Play preview"}

@@ -26,7 +26,7 @@ export function LibraryView() {
     >
       <div class="panel-heading">
         <h2 id="media-heading" tabIndex={-1}>
-          Media explorer
+          Media
         </h2>
         <Show when={selected()}>
           <button class="change-video" onClick={() => setExplorerOpen((open) => !open)}>
@@ -50,29 +50,14 @@ export function LibraryView() {
       >
         <p role="status">{status()}</p>
       </Show>
-      <Show when={!selected()}>
-        <section class="library-setup" aria-labelledby="library-setup-heading">
-          <h3 id="library-setup-heading">Server media library</h3>
-          <p>
-            VideoCutlist indexes videos mounted on the server; the browser does not upload or choose
-            a host folder.
-          </p>
+      <Show when={!selected() && media().length === 0}>
+        <div class="library-setup" role="region" aria-label="Media library status">
           <p role="status">{libraryMessage()}</p>
-        </section>
-      </Show>
-      <Show when={selected()}>
-        {(item) => (
-          <div class="current-video" aria-label="Current video">
-            <strong>{item().name}</strong>
-            <span>
-              {formatLibraryDuration(item().durationMs)} · {mediaSummary(item())}
-            </span>
-          </div>
-        )}
+        </div>
       </Show>
       <nav class="file-tree" classList={{ "is-open": explorerOpen() }} aria-label="Media folders">
         <button class="folder" aria-current="page" onClick={() => void loadFolder()}>
-          ⌄ Server media library
+          ⌄ All media
         </button>
         <div class="folder-contents">
           <Show when={folders().length}>
@@ -88,7 +73,9 @@ export function LibraryView() {
               </For>
             </ul>
           </Show>
-          <span class="folder-label">{activeFolder() ? "Videos in folder" : "Indexed videos"}</span>
+          <Show when={activeFolder()}>
+            <span class="folder-label">Videos in folder</span>
+          </Show>
           <ul class="media-list" aria-label="Media list">
             <For each={media()}>
               {(item) => (

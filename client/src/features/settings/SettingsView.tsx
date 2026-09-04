@@ -14,7 +14,6 @@ export function SettingsView() {
     setSettings,
     appearance,
     setAppearance,
-    setSettingsOpen,
     serverSettingsStatus,
     libraryRoots,
     settingsRevision,
@@ -38,13 +37,10 @@ export function SettingsView() {
     <section class="settings-view" aria-labelledby="settings-heading">
       <div class="panel-heading">
         <h2 id="settings-heading">Settings</h2>
-        <button type="button" onClick={() => setSettingsOpen(false)}>
-          Back to editor
-        </button>
       </div>
       <p>Browser-local preferences stay in this browser and do not change server configuration.</p>
       <section aria-labelledby="browser-settings-heading">
-        <h3 id="browser-settings-heading">Browser</h3>
+        <h3 id="browser-settings-heading">Preferences</h3>
         <label>
           Theme
           <select
@@ -74,7 +70,7 @@ export function SettingsView() {
               saveSettings({ muted: value });
             }}
           />{" "}
-          Mute preview by default (saved in this browser)
+          Mute previews
         </label>
         <button
           type="button"
@@ -91,7 +87,7 @@ export function SettingsView() {
         </button>
       </section>
       <section aria-labelledby="library-settings-heading">
-        <h3 id="library-settings-heading">Library</h3>
+        <h3 id="library-settings-heading">Media library</h3>
         <p>
           Media roots are deployment-managed. This browser only shows safe aliases and availability.
         </p>
@@ -120,16 +116,11 @@ export function SettingsView() {
             {rescanPending() ? "Rescanning…" : "Rescan library"}
           </button>
         </div>
-        <p class="settings-revision">Settings revision {settingsRevision()}</p>
       </section>
       <section aria-labelledby="exports-settings-heading">
-        <h3 id="exports-settings-heading">Exports</h3>
-        <p>
-          Source media is read-only. Exports are retained according to each destination policy;
-          cache data is disposable.
-        </p>
+        <h3 id="exports-settings-heading">Export defaults</h3>
         <label>
-          Cut strategy (saved in this browser)
+          Cut strategy
           <select
             value={cutStrategy()}
             onChange={(event) => {
@@ -144,7 +135,7 @@ export function SettingsView() {
           </select>
         </label>
         <label>
-          Filename template (saved in this browser)
+          Filename template
           <input
             value={filenameTemplate()}
             onInput={(event) => {
@@ -154,8 +145,11 @@ export function SettingsView() {
             }}
           />
         </label>
+      </section>
+      <section aria-labelledby="destinations-settings-heading">
+        <h3 id="destinations-settings-heading">Destinations</h3>
+        <p>Original media is never modified.</p>
         <Show when={runtimeSettings()?.destinations?.length}>
-          <h4>Destinations</h4>
           <ul>
             <For each={runtimeSettings()?.destinations}>
               {(destination) => (
@@ -192,7 +186,10 @@ export function SettingsView() {
                       }
                     />
                   </label>
-                  <span>{destination.kind} · deployment-managed location</span>
+                  <span>
+                    {destination.kind === "download" ? "Browser download" : "Saved export"} ·{" "}
+                    {destination.retention ?? "durable"}
+                  </span>
                 </li>
               )}
             </For>
@@ -200,167 +197,181 @@ export function SettingsView() {
           <button type="button" onClick={saveDestinations} disabled={settingsPending()}>
             {settingsPending() ? "Saving…" : "Save destination settings"}
           </button>
-          <p>
-            Destination roots are deployment-controlled and remain within configured export bases.
-          </p>
         </Show>
       </section>
-      <section aria-labelledby="processing-settings-heading">
-        <h3 id="processing-settings-heading">Processing</h3>
-        <p>Changes apply to the next job; running FFmpeg jobs are not reconfigured.</p>
-        <label>
-          Export concurrency{" "}
-          <input
-            type="number"
-            min="1"
-            value={runtimeSettings()?.exportLimit ?? ""}
-            onChange={(event) =>
-              void saveRuntimeSettings(
-                { exportLimit: event.currentTarget.valueAsNumber },
-                "Processing settings saved.",
-              )
-            }
-          />
-        </label>
-        <label>
-          Preview global concurrency{" "}
-          <input
-            type="number"
-            min="1"
-            value={runtimeSettings()?.previewGlobalLimit ?? ""}
-            onChange={(event) =>
-              void saveRuntimeSettings(
-                { previewGlobalLimit: event.currentTarget.valueAsNumber },
-                "Processing settings saved.",
-              )
-            }
-          />
-        </label>
-        <label>
-          Preview before (ms){" "}
-          <input
-            type="number"
-            min="1"
-            value={runtimeSettings()?.previewBeforeMs ?? ""}
-            onChange={(event) =>
-              void saveRuntimeSettings(
-                { previewBeforeMs: event.currentTarget.valueAsNumber },
-                "Processing settings saved.",
-              )
-            }
-          />
-        </label>
-        <label>
-          Preview after (ms){" "}
-          <input
-            type="number"
-            min="1"
-            value={runtimeSettings()?.previewAfterMs ?? ""}
-            onChange={(event) =>
-              void saveRuntimeSettings(
-                { previewAfterMs: event.currentTarget.valueAsNumber },
-                "Processing settings saved.",
-              )
-            }
-          />
-        </label>
-        <label>
-          Preview maximum window (ms){" "}
-          <input
-            type="number"
-            min="1"
-            value={runtimeSettings()?.previewMaxMs ?? ""}
-            onChange={(event) =>
-              void saveRuntimeSettings(
-                { previewMaxMs: event.currentTarget.valueAsNumber },
-                "Processing settings saved.",
-              )
-            }
-          />
-        </label>
-        <label>
-          Preview grid (ms){" "}
-          <input
-            type="number"
-            min="1"
-            value={runtimeSettings()?.previewGridMs ?? ""}
-            onChange={(event) =>
-              void saveRuntimeSettings(
-                { previewGridMs: event.currentTarget.valueAsNumber },
-                "Processing settings saved.",
-              )
-            }
-          />
-        </label>
-        <label>
-          Media scan file limit{" "}
-          <input
-            type="number"
-            min="1"
-            value={runtimeSettings()?.mediaMaxFiles ?? ""}
-            onChange={(event) =>
-              void saveRuntimeSettings(
-                { mediaMaxFiles: event.currentTarget.valueAsNumber },
-                "Processing settings saved.",
-              )
-            }
-          />
-        </label>
-        <label>
-          Media scan depth limit{" "}
-          <input
-            type="number"
-            min="1"
-            value={runtimeSettings()?.mediaMaxDepth ?? ""}
-            onChange={(event) =>
-              void saveRuntimeSettings(
-                { mediaMaxDepth: event.currentTarget.valueAsNumber },
-                "Processing settings saved.",
-              )
-            }
-          />
-        </label>
-        <label>
-          Disposable cache size (bytes){" "}
-          <input
-            type="number"
-            min="1"
-            value={runtimeSettings()?.cacheMaxBytes ?? ""}
-            onChange={(event) =>
-              void saveRuntimeSettings(
-                { cacheMaxBytes: event.currentTarget.valueAsNumber },
-                "Processing settings saved.",
-              )
-            }
-          />
-        </label>
-      </section>
-      <div aria-labelledby="about-settings-heading">
-        <h4 id="about-settings-heading">About / Diagnostics</h4>
-        <p>Preview request and cache diagnostics are kept out of the clipping workspace.</p>
+      <section class="server-settings" aria-labelledby="processing-settings-heading">
         <details>
-          <summary>Preview diagnostics</summary>
-          <dl>
-            <dt>MSE</dt>
-            <dd>{canStreamPreview() ? "supported" : "unsupported"}</dd>
-            <dt>Cache</dt>
-            <dd>{diagnostics()?.cache ?? "—"}</dd>
-            <dt>Request ID</dt>
-            <dd>{diagnostics()?.requestId ?? "—"}</dd>
-            <dt>Offset</dt>
-            <dd>{diagnostics() ? `${diagnostics()!.offsetMs} ms` : "—"}</dd>
-            <dt>Window</dt>
-            <dd>
-              {diagnostics()
-                ? `${diagnostics()!.startMs} ms / ${diagnostics()!.durationMs} ms`
-                : "—"}
-            </dd>
-            <dt>Response</dt>
-            <dd>{diagnostics() ? `${diagnostics()!.elapsedMs} ms` : "—"}</dd>
-          </dl>
+          <summary id="processing-settings-heading">Server processing</summary>
+          <p>Changes apply to future jobs; running jobs keep their current settings.</p>
+          <h4>Export</h4>
+          <label>
+            Export concurrency{" "}
+            <input
+              type="number"
+              min="1"
+              value={runtimeSettings()?.exportLimit ?? ""}
+              onChange={(event) =>
+                void saveRuntimeSettings(
+                  { exportLimit: event.currentTarget.valueAsNumber },
+                  "Processing settings saved.",
+                )
+              }
+            />
+          </label>
+          <h4>Preview</h4>
+          <label>
+            Preview global concurrency{" "}
+            <input
+              type="number"
+              min="1"
+              value={runtimeSettings()?.previewGlobalLimit ?? ""}
+              onChange={(event) =>
+                void saveRuntimeSettings(
+                  { previewGlobalLimit: event.currentTarget.valueAsNumber },
+                  "Processing settings saved.",
+                )
+              }
+            />
+          </label>
+          <label>
+            Preview before (seconds){" "}
+            <input
+              type="number"
+              min="0.001"
+              step="0.1"
+              value={
+                runtimeSettings()?.previewBeforeMs ? runtimeSettings()!.previewBeforeMs! / 1000 : ""
+              }
+              onChange={(event) =>
+                void saveRuntimeSettings(
+                  { previewBeforeMs: event.currentTarget.valueAsNumber * 1000 },
+                  "Processing settings saved.",
+                )
+              }
+            />
+          </label>
+          <label>
+            Preview after (seconds){" "}
+            <input
+              type="number"
+              min="0.001"
+              step="0.1"
+              value={
+                runtimeSettings()?.previewAfterMs ? runtimeSettings()!.previewAfterMs! / 1000 : ""
+              }
+              onChange={(event) =>
+                void saveRuntimeSettings(
+                  { previewAfterMs: event.currentTarget.valueAsNumber * 1000 },
+                  "Processing settings saved.",
+                )
+              }
+            />
+          </label>
+          <label>
+            Preview maximum window (seconds){" "}
+            <input
+              type="number"
+              min="0.001"
+              step="0.1"
+              value={runtimeSettings()?.previewMaxMs ? runtimeSettings()!.previewMaxMs! / 1000 : ""}
+              onChange={(event) =>
+                void saveRuntimeSettings(
+                  { previewMaxMs: event.currentTarget.valueAsNumber * 1000 },
+                  "Processing settings saved.",
+                )
+              }
+            />
+          </label>
+          <label>
+            Preview grid (seconds){" "}
+            <input
+              type="number"
+              min="0.001"
+              step="0.1"
+              value={
+                runtimeSettings()?.previewGridMs ? runtimeSettings()!.previewGridMs! / 1000 : ""
+              }
+              onChange={(event) =>
+                void saveRuntimeSettings(
+                  { previewGridMs: event.currentTarget.valueAsNumber * 1000 },
+                  "Processing settings saved.",
+                )
+              }
+            />
+          </label>
+          <h4>Library scan</h4>
+          <label>
+            Media scan file limit{" "}
+            <input
+              type="number"
+              min="1"
+              value={runtimeSettings()?.mediaMaxFiles ?? ""}
+              onChange={(event) =>
+                void saveRuntimeSettings(
+                  { mediaMaxFiles: event.currentTarget.valueAsNumber },
+                  "Processing settings saved.",
+                )
+              }
+            />
+          </label>
+          <label>
+            Media scan depth limit{" "}
+            <input
+              type="number"
+              min="1"
+              value={runtimeSettings()?.mediaMaxDepth ?? ""}
+              onChange={(event) =>
+                void saveRuntimeSettings(
+                  { mediaMaxDepth: event.currentTarget.valueAsNumber },
+                  "Processing settings saved.",
+                )
+              }
+            />
+          </label>
+          <h4>Cache</h4>
+          <label>
+            Disposable cache size (MB){" "}
+            <input
+              type="number"
+              min="1"
+              value={
+                runtimeSettings()?.cacheMaxBytes
+                  ? runtimeSettings()!.cacheMaxBytes! / 1_000_000
+                  : ""
+              }
+              onChange={(event) =>
+                void saveRuntimeSettings(
+                  { cacheMaxBytes: event.currentTarget.valueAsNumber * 1_000_000 },
+                  "Processing settings saved.",
+                )
+              }
+            />
+          </label>
         </details>
+      </section>
+      <details class="settings-diagnostics">
+        <summary>Diagnostics</summary>
+        <dl>
+          <dt>MSE</dt>
+          <dd>{canStreamPreview() ? "supported" : "unsupported"}</dd>
+          <dt>Cache</dt>
+          <dd>{diagnostics()?.cache ?? "—"}</dd>
+          <dt>Request ID</dt>
+          <dd>{diagnostics()?.requestId ?? "—"}</dd>
+          <dt>Offset</dt>
+          <dd>{diagnostics() ? `${diagnostics()!.offsetMs} ms` : "—"}</dd>
+          <dt>Window</dt>
+          <dd>
+            {diagnostics() ? `${diagnostics()!.startMs} ms / ${diagnostics()!.durationMs} ms` : "—"}
+          </dd>
+          <dt>Response</dt>
+          <dd>{diagnostics() ? `${diagnostics()!.elapsedMs} ms` : "—"}</dd>
+        </dl>
+        <p>Settings revision {settingsRevision()}</p>
+      </details>
+      <Show when={serverSettingsStatus() !== "Administrator settings loaded."}>
         <p role="status">{serverSettingsStatus()}</p>
-      </div>
+      </Show>
     </section>
   );
 }

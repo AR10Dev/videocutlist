@@ -89,8 +89,8 @@ test("export cancellation is isolated from a changed media context", async ({ pa
   await page.getByRole("tab", { name: "Project" }).click();
   await page.getByRole("button", { name: "Save project" }).click();
   await page.getByRole("tab", { name: "Export" }).click();
-  await expect(page.getByRole("button", { name: "Start export" })).toBeEnabled();
-  await page.getByRole("button", { name: "Start export" }).click();
+  await expect(page.getByRole("button", { name: "Export item" })).toBeEnabled();
+  await page.getByRole("button", { name: "Export item" }).click();
   await expect(page.getByRole("button", { name: "Cancel export" })).toBeVisible();
   await page.getByRole("button", { name: "Cancel export" }).click();
   await deleteSeen;
@@ -150,7 +150,7 @@ test("gates interchange exports until the project is persisted", async ({ page }
   await expect(page.getByRole("button", { name: "Export CSV" })).toBeDisabled();
   await expect(page.getByRole("button", { name: "Export chapters" })).toBeDisabled();
   await expect(
-    page.getByText("Save or load the selected video's project before exporting CSV or chapters."),
+    page.getByText("Save the project before importing or exporting CSV or chapters."),
   ).toBeVisible();
 
   await page.getByRole("button", { name: "Save project" }).click();
@@ -188,7 +188,6 @@ test("separates media selection from cut-list imports", async ({ page }) => {
   await page.getByRole("tab", { name: "Export" }).click();
   await expect(page.getByRole("heading", { name: "Export" })).toBeVisible();
   await page.getByRole("tab", { name: "Project" }).click();
-  await page.getByText("Interchange", { exact: true }).click();
   await expect(page.getByLabel("Import cut list")).toBeVisible();
   await expect(page.getByLabel("Import CSV or chapters")).toHaveCount(0);
 
