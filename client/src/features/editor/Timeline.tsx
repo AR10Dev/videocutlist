@@ -7,7 +7,7 @@ import { TimelineCanvas } from "./TimelineCanvas";
 import { timelineTimeFromPointer } from "./timeline";
 
 export function Timeline() {
-  const { duration, present, playheadMs, thumbnailURL, waveform, updateTimeline, setMarker } =
+  const { duration, present, playheadMs, thumbnailURL, waveform, updateTimeline, setMarker, activeSegmentIndex, setActiveSegmentIndex } =
     useWorkspace();
   const [dragTarget, setDragTarget] = createSignal<"playheadMs" | "inMs" | "outMs">();
   let timeline: HTMLDivElement | undefined;
@@ -37,8 +37,15 @@ export function Timeline() {
     if (timeline) animate(timeline, { scaleY: 1 }, { duration: 0.1 });
   };
 
+  const zoom = () => present().zoom;
   return (
     <div class="timeline-scroll" role="group" aria-label="Timeline lanes">
+      <div class="timeline-toolbar" aria-label="Timeline zoom controls">
+        <button type="button" class="btn btn-sm" aria-label="Zoom out" onClick={() => updateTimeline({ zoom: Math.max(1, zoom() / 2) })}>−</button>
+        <button type="button" class="btn btn-sm" aria-label="Fit timeline" onClick={() => updateTimeline({ zoom: 1 })}>Fit</button>
+        <span aria-label="Timeline zoom level">{zoom()}×</span>
+        <button type="button" class="btn btn-sm" aria-label="Zoom in" onClick={() => updateTimeline({ zoom: Math.min(16, zoom() * 2) })}>+</button>
+      </div>
       <div
         ref={(element) => (timeline = element)}
         class="timeline-visual"
@@ -61,8 +68,8 @@ export function Timeline() {
       >
         <div class="timeline-lane timeline-ruler" role="img" aria-label="Timeline ruler">
           <span>{formatTime(0, duration())}</span>
-          <span>{formatTime(duration() / 2, duration())}</span>
-          <span>{formatTime(duration(), duration())}</span>
+          <span>{formatTime(duration() / zoom() / 2, duration())}</span>
+          <span>{formatTime(duration() / zoom(), duration())}</span>
         </div>
         <div class="timeline-lane timeline-thumbnails" role="img" aria-label="Thumbnail lane">
           <TimelineCanvas thumbnailURL={thumbnailURL()} waveform={[]} lane="thumbnail" />
@@ -84,9 +91,12 @@ export function Timeline() {
             onClick={(event) => event.stopPropagation()}
           />
           <For each={present().segments}>
-            {(segment) => (
+            {(segment, index) => (
               <span
-                class="timeline-segment"
+                class={`timeline-segment ${activeSegmentIndex() === index() ? "is-active" : ""}`}
+                role="button"
+                aria-label={`Select cut ${index() + 1}`}
+                onClick={(event) => { event.stopPropagation(); setActiveSegmentIndex(index()); }}
                 style={{
                   left: `${(segment.startMs / duration()) * 100}%`,
                   width: `${((segment.endMs - segment.startMs) / duration()) * 100}%`,

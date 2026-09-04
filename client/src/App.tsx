@@ -1,6 +1,7 @@
 import { createEffect, createSignal, onCleanup, Show } from "solid-js";
 import { Settings } from "lucide-solid";
 import { DetectionView } from "./features/detection/DetectionView";
+import { CutsView } from "./features/editor/CutsView";
 import { EditorView } from "./features/editor/EditorView";
 import { ExportView } from "./features/export/ExportView";
 import { LibraryView } from "./features/media/LibraryView";
@@ -31,8 +32,9 @@ export function App() {
     if (preference === "system") media.addEventListener("change", apply);
     onCleanup(() => media.removeEventListener("change", apply));
   });
-  const [activeTask, setActiveTask] = createSignal<"project" | "export" | "detection">("project");
-  const taskTabs = ["project", "export", "detection"] as const;
+  const [activeTask, setActiveTask] = createSignal<"cuts" | "project" | "export" | "detection">("project");
+  createEffect(() => { if (selected()) setActiveTask("cuts"); });
+  const taskTabs = ["cuts", "project", "export", "detection"] as const;
   const moveTask = (current: (typeof taskTabs)[number], direction: number) => {
     const start = taskTabs.indexOf(current);
     for (let offset = 1; offset <= taskTabs.length; offset += 1) {
@@ -81,6 +83,19 @@ export function App() {
               <EditorView />
               <aside class="task-panel" aria-label="Workspace tasks">
                 <div class="task-tabs" role="tablist" aria-label="Workspace tasks">
+                  <button
+                    id="cuts-tab"
+                    role="tab"
+                    type="button"
+                    aria-selected={activeTask() === "cuts"}
+                    aria-controls="cuts-tabpanel"
+                    tabIndex={activeTask() === "cuts" ? 0 : -1}
+                    onClick={() => setActiveTask("cuts")}
+                    onKeyDown={(event) => {
+                      if (event.key === "ArrowRight" || event.key === "ArrowDown") { event.preventDefault(); moveTask("cuts", 1); }
+                      else if (event.key === "ArrowLeft" || event.key === "ArrowUp") { event.preventDefault(); moveTask("cuts", -1); }
+                    }}
+                  >Cuts</button>
                   <button
                     id="project-tab"
                     role="tab"
@@ -143,6 +158,7 @@ export function App() {
                     Detection
                   </button>
                 </div>
+                <div id="cuts-tabpanel" hidden={activeTask() !== "cuts"}><CutsView /></div>
                 <div
                   id="project-tabpanel"
                   role="tabpanel"

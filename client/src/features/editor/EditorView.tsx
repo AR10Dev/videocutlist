@@ -1,5 +1,5 @@
-import { createSignal, For, onCleanup, Show } from "solid-js";
-import { ArrowDown, ArrowUp, Clock3, LocateFixed, Plus, Redo2, Trash2, Undo2 } from "lucide-solid";
+import { createSignal, onCleanup, Show } from "solid-js";
+import { Clock3, LocateFixed, Plus, Redo2, Undo2 } from "lucide-solid";
 import { redoTimeline, undoTimeline } from "./timeline";
 import { Timeline } from "./Timeline";
 import { formatTime, parseTimecode } from "../preview/model";
@@ -26,8 +26,6 @@ export function EditorView() {
     setMarker,
     addSegment,
     duration,
-    removeSegment,
-    moveSegment,
   } = useWorkspace();
   const narrowViewport = window.matchMedia("(max-width: 700px)");
   const [secondaryOpen, setSecondaryOpen] = createSignal(!narrowViewport.matches);
@@ -140,7 +138,7 @@ export function EditorView() {
                 class="control-group marking-controls flex flex-wrap items-center gap-2"
                 aria-label="Marking controls"
               >
-                <span class="marker-value">In: {formatTime(present().inMs, duration())}</span>
+                <span class="marker-value">In: {present().inMs ? formatTime(present().inMs, duration()) : "Unset"}</span>
                 <button
                   class="btn btn-sm"
                   aria-keyshortcuts="I"
@@ -148,7 +146,7 @@ export function EditorView() {
                 >
                   <LocateFixed size={16} aria-hidden="true" /> Set in
                 </button>
-                <span class="marker-value">Out: {formatTime(present().outMs, duration())}</span>
+                <span class="marker-value">Out: {present().outMs ? formatTime(present().outMs, duration()) : "Unset"}</span>
                 <button
                   class="btn btn-sm"
                   aria-keyshortcuts="O"
@@ -162,7 +160,7 @@ export function EditorView() {
                   disabled={present().inMs >= present().outMs}
                   aria-describedby="add-segment-help"
                 >
-                  <Plus size={16} aria-hidden="true" /> Add segment
+                  <Plus size={16} aria-hidden="true" /> Add cut
                 </button>
               </div>
               <details
@@ -182,6 +180,14 @@ export function EditorView() {
                       value={timecode()}
                       placeholder="00:00.000"
                       onInput={(event) => setTimecode(event.currentTarget.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Escape") { setTimecode(formatTime(playheadMs(), duration())); event.currentTarget.blur(); }
+                        if (event.key === "Enter") {
+                          const value = parseTimecode(timecode());
+                          if (value === undefined || value > duration()) setStatus("Invalid timecode.");
+                          else { updateTimeline({ playheadMs: value }); event.currentTarget.blur(); }
+                        }
+                      }}
                     />
                   </label>
                   <button
@@ -193,7 +199,7 @@ export function EditorView() {
                       updateTimeline({ playheadMs: value });
                     }}
                   >
-                    Go to timecode
+                    Confirm timecode
                   </button>
                   <label>
                     Segment label{" "}
@@ -207,7 +213,7 @@ export function EditorView() {
             </div>
             <Show when={present().inMs >= present().outMs}>
               <p id="add-segment-help" class="control-help" role="status">
-                Set an in point before the out point to add a segment.
+                Set In, then Out, to add a cut.
               </p>
             </Show>
             <details class="shortcut-help">
@@ -216,54 +222,7 @@ export function EditorView() {
                 Space plays or pauses; arrows step frames; I/O set markers; Ctrl/Cmd+Z undoes.
               </p>
             </details>
-            <Show when={present().segments.length === 0}>
-              <p class="empty-state">No segments yet.</p>
-            </Show>
-            <ol aria-label="Selected segments">
-              <For each={present().segments}>
-                {(segment, index) => (
-                  <li class="segment-row" aria-label={`Segment ${index() + 1}`}>
-                    <span class="segment-order" aria-label="Order">
-                      {index() + 1}
-                    </span>{" "}
-                    <span class="segment-label">{segment.label ?? "Unlabelled"}</span>:{" "}
-                    <span class="segment-range" aria-label="Start and end">
-                      <span class="segment-start">{formatTime(segment.startMs, duration())}</span> –{" "}
-                      <span class="segment-end">{formatTime(segment.endMs, duration())}</span>
-                    </span>{" "}
-                    <span class="segment-duration" aria-label="Duration">
-                      {formatTime(segment.endMs - segment.startMs, duration())}
-                    </span>{" "}
-                    <span class="segment-actions" aria-label={`Actions for segment ${index() + 1}`}>
-                      <button
-                        class="btn btn-sm btn-square"
-                        title={`Move segment ${index() + 1} up`}
-                        aria-label={`Move segment ${index() + 1} up`}
-                        onClick={() => moveSegment(index(), -1)}
-                        disabled={index() === 0}
-                      >
-                        <ArrowUp size={16} aria-hidden="true" />
-                      </button>{" "}
-                      <button
-                        class="btn btn-sm btn-square"
-                        title={`Move segment ${index() + 1} down`}
-                        aria-label={`Move segment ${index() + 1} down`}
-                        onClick={() => moveSegment(index(), 1)}
-                        disabled={index() === present().segments.length - 1}
-                      >
-                        <ArrowDown size={16} aria-hidden="true" />
-                      </button>{" "}
-                      <button
-                        class="btn btn-sm btn-error btn-outline"
-                        onClick={() => removeSegment(index())}
-                      >
-                        <Trash2 size={16} aria-hidden="true" /> Remove segment
-                      </button>
-                    </span>
-                  </li>
-                )}
-              </For>
-            </ol>
+            <p class="control-help">Manage saved cuts in the Cuts task.</p>
           </>
         )}
       </Show>

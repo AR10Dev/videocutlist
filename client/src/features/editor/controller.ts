@@ -31,6 +31,7 @@ export function createEditorController(deps: {
 }) {
   const [segmentLabel, setSegmentLabel] = createSignal("");
   const [timecode, setTimecode] = createSignal("");
+  const [activeSegmentIndex, setActiveSegmentIndex] = createSignal<number>();
   const [timeline, setTimeline] = createSignal<TimelineHistory>(
     createTimelineHistory({ playheadMs: 0, inMs: 0, outMs: 0, segments: [], zoom: 1 }),
   );
@@ -68,7 +69,7 @@ export function createEditorController(deps: {
   };
   const addSegment = () => {
     const item = deps.selected();
-    if (!item) return;
+    if (!item || present().inMs >= present().outMs) return deps.setStatus("Set an in point before the out point.");
     const segment: Segment = {
       startMs: present().inMs,
       endMs: present().outMs,
@@ -78,6 +79,7 @@ export function createEditorController(deps: {
     const error = validateSegments(next, item.durationMs);
     if (error) return deps.setStatus(error);
     updateTimeline({ segments: next });
+    setActiveSegmentIndex(next.length - 1);
   };
   const removeSegment = (index: number) =>
     updateTimeline({ segments: removeSegments(present().segments, index) });
@@ -128,6 +130,8 @@ export function createEditorController(deps: {
     setTimecode,
     timeline,
     setTimeline,
+    activeSegmentIndex,
+    setActiveSegmentIndex,
     present,
     playheadMs,
     duration,

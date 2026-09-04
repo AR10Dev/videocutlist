@@ -1,4 +1,4 @@
-import { createSignal, Show, type JSX } from "solid-js";
+import { createSignal, type JSX } from "solid-js";
 import { Tooltip } from "@kobalte/core/tooltip";
 import { frameDuration } from "../editor/frame";
 import { Maximize2, Pause, Play, SkipBack, SkipForward, Volume2, VolumeX } from "lucide-solid";
@@ -103,15 +103,6 @@ export function PreviewPlayer() {
           </p>
         )}
       </div>
-      <Show when={workspace.previewStatus() && workspace.diagnostics()}>
-        <p class="preview-range" aria-label="Preview source range">
-          Previewing {formatTime(workspace.diagnostics()!.startMs, workspace.duration())} to{" "}
-          {formatTime(
-            workspace.diagnostics()!.startMs + workspace.diagnostics()!.durationMs,
-            workspace.duration(),
-          )}
-        </p>
-      </Show>
       <div class="preview-controls" aria-label="Preview controls">
         <IconButton
           label={playing() ? "Pause preview" : "Play preview"}
@@ -134,18 +125,6 @@ export function PreviewPlayer() {
           {formatTime(workspace.playheadMs(), workspace.duration())} /{" "}
           {formatTime(workspace.duration(), workspace.duration())}
         </span>
-        <input
-          type="range"
-          aria-label="Preview scrubber"
-          min="0"
-          max={workspace.duration()}
-          step="1"
-          value={workspace.playheadMs()}
-          onInput={(event) => {
-            workspace.updateTimeline({ playheadMs: Number(event.currentTarget.value) });
-            workspace.markDirty();
-          }}
-        />
         <IconButton
           label={workspace.muted() ? "Unmute preview" : "Mute preview"}
           pressed={workspace.muted()}
