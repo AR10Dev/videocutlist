@@ -565,7 +565,7 @@ video {
   z-index: 3;
   padding: 2px 6px;
   color: var(--color-neutral-content);
-  background: var(--surface)e8;
+  background: color-mix(in srgb, var(--surface) 90%, transparent);
   border-radius: 3px;
   font-size: 0.72rem;
   pointer-events: none;
@@ -1007,11 +1007,17 @@ fieldset {
   min-height: 44px;
 }
 .timeline-overlay::after,
-.timeline-in::before { background: var(--color-primary); }
+.timeline-in::before {
+  background: var(--color-primary);
+}
 .timeline-out::after,
 .timeline-out::before,
-.timeline-segment { background: var(--color-secondary); }
-.timeline-playhead::after { background: var(--color-error); }
+.timeline-segment {
+  background: var(--color-secondary);
+}
+.timeline-playhead::after {
+  background: var(--color-error);
+}
 button:focus-visible,
 input:focus-visible,
 select:focus-visible,
@@ -1021,7 +1027,9 @@ summary:focus-visible,
   outline-offset: 2px;
 }
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
+  *,
+  *::before,
+  *::after {
     animation: none !important;
     transition: none !important;
     scroll-behavior: auto !important;

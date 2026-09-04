@@ -249,7 +249,9 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
-test("desktop and narrow layouts keep the explorer and primary actions reachable", async ({ page }) => {
+test("desktop and narrow layouts keep the explorer and primary actions reachable", async ({
+  page,
+}) => {
   for (const width of [1280, 600]) {
     await page.setViewportSize({ width, height: 800 });
     await page.goto("/");
@@ -283,7 +285,10 @@ test("segment rows show values and support reorder and removal", async ({ page }
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   const playhead = page.getByLabel("Timeline playhead");
-  for (const [start, end] of [[100, 700], [800, 900]]) {
+  for (const [start, end] of [
+    [100, 700],
+    [800, 900],
+  ]) {
     await playhead.fill(String(start));
     await expect(playhead).toHaveValue(String(start));
     await page.getByRole("button", { name: "Set in" }).click();
