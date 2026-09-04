@@ -6,3 +6,6 @@ test-results/
 *.tmp
 *.partial
 /scripts/deploy-podman-local.sh
+
+# Opt-in natural-media fixture (downloaded, never committed)
+test/fixtures/real-media/

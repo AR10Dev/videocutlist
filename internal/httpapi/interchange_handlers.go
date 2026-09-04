@@ -51,6 +51,7 @@ func (s *Server) automation(w http.ResponseWriter, r *http.Request, id string) {
 	switch command.Action {
 	case "project.import":
 		if !validProjectID(command.ProjectID) || (command.Format != "csv" && command.Format != "chapters") || command.Input == "" {
+			httpx.Error(w, http.StatusUnprocessableEntity, "invalid_command", "Command is invalid.", id)
 			return
 		}
 		// Reuse the canonical HTTP interchange path and return only its opaque project ID.
@@ -88,6 +89,7 @@ func (s *Server) automation(w http.ResponseWriter, r *http.Request, id string) {
 		httpx.WriteJSON(w, http.StatusOK, map[string]string{"projectId": saved.ID})
 	case "project.export":
 		if !validProjectID(command.ProjectID) || (command.Format != "csv" && command.Format != "chapters") {
+			httpx.Error(w, http.StatusUnprocessableEntity, "invalid_command", "Command is invalid.", id)
 			return
 		}
 		project, err := s.config.Projects.Get(r.Context(), command.ProjectID)
@@ -113,6 +115,7 @@ func (s *Server) automation(w http.ResponseWriter, r *http.Request, id string) {
 		httpx.WriteJSON(w, http.StatusOK, map[string]string{"filename": "cutlist." + command.Format, "content": string(data)})
 	case "job.status":
 		if !validJobID(command.JobID) {
+			httpx.Error(w, http.StatusUnprocessableEntity, "invalid_command", "Command is invalid.", id)
 			return
 		}
 		job, err := s.config.Jobs.Get(r.Context(), command.JobID)

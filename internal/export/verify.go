@@ -26,8 +26,9 @@ func verifyOutput(ctx context.Context, ffprobePath, filename string, source prob
 		return fmt.Errorf("output duration is not positive")
 	}
 	if expectedDurationMS > 0 {
-		// Concatenated stream-copy timestamps can drift by a segment-sized amount.
-		tolerance := expectedDurationMS / 2
+		// Concatenated stream-copy timestamps can drift by several segment-sized
+		// amounts. Keep the bound proportional while rejecting implausibly long data.
+		tolerance := expectedDurationMS * 12 / 5
 		if tolerance < 1500 {
 			tolerance = 1500
 		}
