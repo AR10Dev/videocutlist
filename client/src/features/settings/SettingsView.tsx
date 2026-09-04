@@ -1,11 +1,13 @@
 import { For, Show } from "solid-js";
 import { canStreamPreview } from "../preview/model";
-import { defaultSettings, settingsKey, type AppSettings } from "./model";
+import { defaultSettings, settingsKey, type AppSettings, type Appearance } from "./model";
 import { useWorkspace } from "../app/WorkspaceContext";
 
 export function SettingsView() {
   const {
     setSettings,
+    appearance,
+    setAppearance,
     setSettingsOpen,
     serverSettingsStatus,
     libraryRoots,
@@ -35,6 +37,24 @@ export function SettingsView() {
         </button>
       </div>
       <p>Browser-local preferences stay in this browser and do not change server configuration.</p>
+      <section aria-labelledby="appearance-settings-heading">
+        <h3 id="appearance-settings-heading">Appearance</h3>
+        <label>
+          Theme
+          <select
+            value={appearance()}
+            onChange={(event) => {
+              const value = event.currentTarget.value as Appearance;
+              setAppearance(value);
+              saveSettings({ appearance: value });
+            }}
+          >
+            <option value="system">System</option>
+            <option value="dark">Dark</option>
+            <option value="light">Light</option>
+          </select>
+        </label>
+      </section>
       <section aria-labelledby="library-settings-heading">
         <h3 id="library-settings-heading">Library</h3>
         <p>

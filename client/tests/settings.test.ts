@@ -19,6 +19,7 @@ describe("settings", () => {
       filenameTemplate: "clip-{segment}.{ext}",
       cutStrategy: "precise_reencode",
       muted: true,
+      appearance: "system",
     });
   });
 });

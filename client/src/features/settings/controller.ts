@@ -1,7 +1,7 @@
 import { createSignal } from "solid-js";
 import type { ApiClient } from "../../api";
 import type { components } from "../../generated/api";
-import { settingsKey, storedSettings, type AppSettings } from "./model";
+import { settingsKey, storedSettings, type AppSettings, type Appearance } from "./model";
 
 type LibraryRoot = {
   alias: string;
@@ -14,6 +14,7 @@ type ServerSettings = components["schemas"]["SettingsResponse"];
 
 export function createSettingsController(api: ApiClient) {
   const [settings, setSettings] = createSignal(storedSettings(localStorage));
+  const [appearance, setAppearance] = createSignal<Appearance>(settings().appearance);
   const [settingsOpen, setSettingsOpen] = createSignal(false);
   const [serverSettingsStatus, setServerSettingsStatus] = createSignal("");
   const [libraryRoots, setLibraryRoots] = createSignal<LibraryRoot[]>([]);
@@ -25,6 +26,7 @@ export function createSettingsController(api: ApiClient) {
   const saveSettings = (changes: Partial<AppSettings>) => {
     const next = { ...settings(), ...changes };
     setSettings(next);
+    setAppearance(next.appearance);
     localStorage.setItem(settingsKey, JSON.stringify(next));
   };
   const loadServerSettings = async () => {
@@ -126,6 +128,8 @@ export function createSettingsController(api: ApiClient) {
   return {
     settings,
     setSettings,
+    appearance,
+    setAppearance,
     settingsOpen,
     setSettingsOpen,
     serverSettingsStatus,

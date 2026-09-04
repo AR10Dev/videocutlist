@@ -1,4 +1,4 @@
-import { createSignal, Show } from "solid-js";
+import { createEffect, createSignal, onCleanup, Show } from "solid-js";
 import { DetectionView } from "./features/detection/DetectionView";
 import { EditorView } from "./features/editor/EditorView";
 import { ExportView } from "./features/export/ExportView";
@@ -8,10 +8,20 @@ import { QueueView } from "./features/queue/QueueView";
 import { SettingsView } from "./features/settings/SettingsView";
 import { createWorkspaceController } from "./features/app/controller";
 import { WorkspaceProvider } from "./features/app/WorkspaceContext";
+import { applyAppearance } from "./features/settings/model";
 
 export function App() {
   const controller = createWorkspaceController();
-  const { selected, projectName, revision, dirty, settingsOpen, openSettings } = controller;
+  const { selected, projectName, revision, dirty, settingsOpen, openSettings, appearance } =
+    controller;
+  createEffect(() => {
+    const preference = appearance();
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const apply = () => applyAppearance(preference, media.matches);
+    apply();
+    if (preference === "system") media.addEventListener("change", apply);
+    onCleanup(() => media.removeEventListener("change", apply));
+  });
   const [activeTask, setActiveTask] = createSignal<"project" | "export" | "detection">("project");
   const taskTabs = ["project", "export", "detection"] as const;
   const moveTask = (current: (typeof taskTabs)[number], direction: number) => {
