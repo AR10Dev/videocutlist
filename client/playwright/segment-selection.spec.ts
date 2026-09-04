@@ -1706,7 +1706,17 @@ test("keeps motion reduced and overflow local at a narrow viewport", async ({ pa
       getComputedStyle(document.documentElement).getPropertyValue("--motion-panel").trim(),
     ),
   ).toBe("1ms");
-  await expect(page.getByRole("button", { name: "Add segment" })).toBeVisible();
+  const playhead = page.getByLabel("Timeline playhead");
+  await playhead.fill("100");
+  await page.getByRole("button", { name: "Set in" }).click();
+  await playhead.fill("700");
+  await page.getByRole("button", { name: "Set out" }).click();
+  await page.getByRole("button", { name: "Add segment" }).click();
+  await expect(
+    page.getByRole("listitem", { name: "Segment 1" }).getByRole("button", {
+      name: "Remove segment",
+    }),
+  ).toBeVisible();
   const moreActions = page.getByText("More editing actions", { exact: true });
   await expect(moreActions).toBeVisible();
   await moreActions.click();

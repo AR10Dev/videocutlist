@@ -871,6 +871,9 @@ fieldset {
     width: 44px;
     height: 44px;
   }
+  .segment-actions {
+    opacity: 1;
+  }
   .media-panel.has-selection .change-video {
     display: block;
     padding: 4px 12px;
