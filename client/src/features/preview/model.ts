@@ -110,6 +110,7 @@ export function streamPreview(
   request: () => Promise<Response>,
   onDiagnostics: (diagnostics: PreviewDiagnostics) => void,
   onError: (error: Error) => void,
+  shouldPlay: () => boolean = () => true,
 ): () => void {
   let mediaSource: MediaSource;
   try {
@@ -173,7 +174,7 @@ export function streamPreview(
     if (!disposed && !seekApplied) {
       seekApplied = true;
       video.currentTime = previewOffsetMs / 1000;
-      void video.play().catch(() => undefined);
+      if (shouldPlay()) void video.play().catch(() => undefined);
     }
     appendNext();
   };

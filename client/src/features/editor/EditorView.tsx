@@ -36,6 +36,7 @@ export function EditorView() {
     moveSegment,
     setVideo,
     togglePlayback,
+    pausePlayback,
   } = useWorkspace();
   const narrowViewport = window.matchMedia("(max-width: 700px)");
   const [secondaryOpen, setSecondaryOpen] = createSignal(!narrowViewport.matches);
@@ -113,6 +114,7 @@ export function EditorView() {
               setVideo={setVideo}
               syncPreviewPosition={syncPreviewPosition}
               togglePlayback={togglePlayback}
+              pausePlayback={pausePlayback}
               updateTimeline={(changes) => updateTimeline(changes)}
               markDirty={markDirty}
             />

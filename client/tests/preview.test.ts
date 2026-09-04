@@ -99,7 +99,7 @@ describe("preview positions", () => {
 });
 
 describe("preview streaming", () => {
-  it("seeks only after the first SourceBuffer append completes", async () => {
+  it("seeks after the first SourceBuffer append without overriding pause", async () => {
     class FakeBuffer extends EventTarget {
       updating = false;
       appendBuffer = vi.fn();
@@ -138,13 +138,13 @@ describe("preview streaming", () => {
       play: vi.fn(() => Promise.resolve()),
       removeAttribute: vi.fn(),
     } as unknown as HTMLVideoElement;
-    const stop = streamPreview(video, request, vi.fn(), vi.fn());
+    const stop = streamPreview(video, request, vi.fn(), vi.fn(), () => false);
     instances[0].dispatchEvent(new Event("sourceopen"));
     await vi.waitFor(() => expect(source.appendBuffer).toHaveBeenCalledOnce());
     expect(video.currentTime).toBe(0);
     source.dispatchEvent(new Event("updateend"));
     expect(video.currentTime).toBe(1.234);
-    expect(video.play).toHaveBeenCalledOnce();
+    expect(video.play).not.toHaveBeenCalled();
     expect(request).toHaveBeenCalledOnce();
     expect(fetch).not.toHaveBeenCalled();
     stop();

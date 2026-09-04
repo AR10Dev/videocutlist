@@ -1,6 +1,12 @@
 import { For, Show } from "solid-js";
 import { canStreamPreview } from "../preview/model";
-import { defaultSettings, settingsKey, type AppSettings, type Appearance } from "./model";
+import {
+  appearances,
+  defaultSettings,
+  settingsKey,
+  type AppSettings,
+  type Appearance,
+} from "./model";
 import { useWorkspace } from "../app/WorkspaceContext";
 
 export function SettingsView() {
@@ -49,9 +55,13 @@ export function SettingsView() {
               saveSettings({ appearance: value });
             }}
           >
-            <option value="system">System</option>
-            <option value="dark">Dark</option>
-            <option value="light">Light</option>
+            <For each={appearances}>
+              {(theme) => (
+                <option value={theme}>
+                  {theme === "cmyk" ? "CMYK" : theme[0].toUpperCase() + theme.slice(1)}
+                </option>
+              )}
+            </For>
           </select>
         </label>
       </section>

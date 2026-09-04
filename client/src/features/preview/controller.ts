@@ -31,6 +31,7 @@ export function createPreviewController(
   let previewRequest: AbortController | undefined;
   let cleanupPreview: (() => void) | undefined;
   let thumbnailObjectURL: string | undefined;
+  let shouldPlay = true;
 
   createEffect(() => {
     const item = dependencies.selected();
@@ -116,12 +117,13 @@ export function createPreviewController(
         (value) => {
           if (!request.signal.aborted) {
             setDiagnostics(value);
-            setPreviewStatus("Preview ready.");
+            setPreviewStatus("");
           }
         },
         (error) => {
           if (!request.signal.aborted) setPreviewStatus(error.message);
         },
+        () => shouldPlay,
       );
     }, 200);
     onCleanup(() => {
@@ -151,8 +153,13 @@ export function createPreviewController(
     video = element;
   };
   const togglePlayback = () => {
-    if (video?.paused) void video.play();
+    shouldPlay = Boolean(video?.paused);
+    if (shouldPlay) void video?.play();
     else video?.pause();
+  };
+  const pausePlayback = () => {
+    shouldPlay = false;
+    video?.pause();
   };
 
   return {
@@ -168,5 +175,6 @@ export function createPreviewController(
     syncPreviewPosition,
     setVideo,
     togglePlayback,
+    pausePlayback,
   };
 }

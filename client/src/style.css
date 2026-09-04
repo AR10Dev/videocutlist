@@ -1,5 +1,7 @@
 @import "tailwindcss";
-@plugin "daisyui";
+@plugin "daisyui" {
+  themes: all;
+}
 @plugin "daisyui/theme" {
   name: "dark";
   color-scheme: dark;
@@ -33,49 +35,18 @@
   }
 }
 
-:root,
-[data-theme="dark"] {
-  color-scheme: dark;
+:root {
   --motion-fast: 120ms;
   --motion-feedback: 180ms;
   --motion-panel: 240ms;
-  --surface: #101114;
-  --surface-raised: #1a1b20;
-  --text: #f5f5f5;
-  --text-muted: #b9bcc5;
+  --surface: var(--color-base-100);
+  --surface-raised: var(--color-base-200);
+  --text: var(--color-base-content);
+  --text-muted: color-mix(in srgb, var(--text) 65%, transparent);
+  --border: color-mix(in srgb, var(--text) 20%, transparent);
   font-family: Inter, ui-sans-serif, system-ui, sans-serif;
   background: var(--surface);
   color: var(--text);
-}
-
-[data-theme="light"] {
-  color-scheme: light;
-  --surface: #f4f5f7;
-  --surface-raised: #ffffff;
-  --text: #1b1d22;
-  --text-muted: #535762;
-  background: var(--surface);
-  color: var(--text);
-}
-
-[data-theme="light"] header,
-[data-theme="light"] section,
-[data-theme="light"] .task-panel {
-  background: var(--surface-raised);
-  border-color: #d6d9df;
-}
-[data-theme="light"] input,
-[data-theme="light"] select,
-[data-theme="light"] button {
-  background: #ffffff;
-  color: var(--text);
-  border-color: #b7bbc4;
-}
-[data-theme="light"] .project-status,
-[data-theme="light"] label,
-[data-theme="light"] h2,
-[data-theme="light"] details > summary {
-  color: var(--text-muted);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -766,6 +737,105 @@ legend {
 }
 ul {
   padding-left: 20px;
+}
+
+header,
+section,
+.task-panel,
+.editor-panel > section {
+  background: var(--surface-raised);
+  border-color: var(--border);
+  color: var(--text);
+}
+input,
+select,
+button {
+  color: var(--text);
+  background: var(--surface);
+  border-color: var(--border);
+}
+button:hover:not(:disabled),
+.folder:hover:not(:disabled) {
+  background: var(--color-base-300);
+  border-color: var(--border);
+}
+button[aria-pressed="true"],
+.media-list button[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--color-success) 25%, var(--surface));
+  border-color: var(--color-success);
+}
+button.primary {
+  background: color-mix(in srgb, var(--color-info) 40%, var(--surface));
+  border-color: var(--color-info);
+}
+button.primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-info) 55%, var(--surface));
+  border-color: var(--color-info);
+}
+button.destructive {
+  background: color-mix(in srgb, var(--color-error) 25%, var(--surface));
+  border-color: var(--color-error);
+}
+button.destructive:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-error) 40%, var(--surface));
+  border-color: var(--color-error);
+}
+.task-tabs button[aria-selected="true"] {
+  color: var(--color-primary);
+  border-color: var(--color-primary);
+}
+.field-error {
+  color: var(--color-error);
+}
+button:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline-color: var(--color-primary);
+}
+.project-status,
+.project-status span,
+.app-header p,
+.library-root span,
+.settings-revision,
+details > summary,
+.segment-duration,
+h2,
+label,
+.folder,
+.folder-label,
+.media-list span,
+.editor-panel > p:first-of-type,
+#timeline-description,
+.control-help,
+.editor-panel li,
+dt,
+legend,
+.export-panel p,
+.project-panel p,
+.detection-panel p {
+  color: var(--text-muted);
+}
+.library-root,
+details,
+.folder-contents,
+fieldset {
+  border-color: var(--border);
+}
+.timeline-overlay::after,
+.timeline-in::before,
+.timeline-out::before {
+  background: var(--color-primary);
+}
+.timeline-out::after,
+.timeline-out::before,
+.timeline-segment {
+  background: var(--color-secondary);
+}
+.timeline-playhead::after {
+  background: var(--color-error);
+}
+#playhead {
+  accent-color: var(--color-primary);
 }
 
 @media (min-width: 1051px) {

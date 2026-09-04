@@ -17,6 +17,7 @@ export interface PreviewPlayerProps {
   setVideo: (video: HTMLVideoElement) => void;
   syncPreviewPosition: (seconds: number) => void;
   togglePlayback: () => void;
+  pausePlayback: () => void;
   updateTimeline: (changes: { playheadMs: number }) => void;
   markDirty: () => void;
 }
@@ -62,7 +63,7 @@ export function PreviewPlayer(props: PreviewPlayerProps) {
     props.markDirty();
   };
   const togglePlayback = () => {
-    if (playing()) videoElement?.pause();
+    if (playing()) props.pausePlayback();
     else props.togglePlayback();
   };
   const fullscreen = () => {

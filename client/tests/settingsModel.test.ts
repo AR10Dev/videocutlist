@@ -3,8 +3,8 @@ import { defaultSettings, loadSettings } from "../src/features/settings/model";
 
 describe("appearance settings", () => {
   it("preserves valid appearance values and unrelated preferences", () => {
-    const settings = loadSettings({ ...defaultSettings, appearance: "light", muted: true });
-    expect(settings.appearance).toBe("light");
+    const settings = loadSettings({ ...defaultSettings, appearance: "dracula", muted: true });
+    expect(settings.appearance).toBe("dracula");
     expect(settings.muted).toBe(true);
   });
 
