@@ -1,4 +1,4 @@
-# Frozen Runtime Contracts — v2
+# Frozen runtime contracts - v2
 
 ## Settings scopes and administration
 
@@ -87,7 +87,8 @@ Failed authentication returns before application services run.
 
 ## Configuration
 
-All settings use environment variables:
+Environment variables configure deployment settings and seed runtime settings
+when the database is new:
 
 ```text
 VIDEOCUTLIST_LISTEN_ADDRESS=127.0.0.1
@@ -194,6 +195,6 @@ Structured JSON fields are: `request_id`, `media_id`,
 `spawn_to_first_byte_ms`, `total_job_ms`, `bytes_streamed`, `cancel_reason`,
 and `error_code`.
 
-Metrics use the exact names in the implementation prompt. Labels are restricted
-to bounded route templates, methods, status classes, cache state, cancellation
+Metric names are defined by the `/metrics` handler. Labels are restricted to
+bounded route templates, methods, status classes, cache state, cancellation
 reason, and encoder profile. Paths and unique IDs are never labels.

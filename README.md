@@ -67,8 +67,9 @@ See the [container deployment guide](docs/runbooks/containers.md).
 
 ```bash
 make client-install
-make check       # format, lint, tests, and build
-make smoke       # check plus architecture, deployment, and browser checks
+make check             # formatting check, lint, tests, and build
+make smoke             # check plus browser tests
+make test-real-media   # opt-in production process and FFmpeg verification
 ```
 
 See [Contributing](CONTRIBUTING.md) before opening a pull request.

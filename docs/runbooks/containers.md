@@ -29,8 +29,8 @@ sudo -u videocutlist find /srv/media -maxdepth 1 -type f -readable -print -quit
 ```
 
 Create writable, separate locations for the database and exports, and a
-a disposable location for previews. The service account needs write access only
- to those locations:
+disposable location for previews. The service account needs write access only
+to those locations:
 
 ```bash
 sudo install -d -o videocutlist -g videocutlist -m 0750 /var/lib/videocutlist/data

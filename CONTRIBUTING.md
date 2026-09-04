@@ -10,7 +10,7 @@ Thanks for helping improve VideoCutlist.
 
    ```bash
    make check
-   make smoke (requires Docker or Podman for container checks)
+   make smoke
    ```
 
 4. Do not commit media originals, previews, exports, caches, databases, secrets,
@@ -26,4 +26,6 @@ Thanks for helping improve VideoCutlist.
 - Publish incomplete cache and export files only through atomic rename.
 
 Please use a clear commit or pull-request title and include relevant test
-results. GitHub Actions runs the same repository checks for pull requests.
+results. GitHub Actions runs the same checks for pull requests. Run `make test-real-media`
+when changing production media workflows; its first run downloads the verified
+Sintel fixture.
