@@ -47,9 +47,15 @@
 * {
   box-sizing: border-box;
 }
+html,
+body,
+#root {
+  height: 100%;
+}
 body {
   margin: 0;
   min-width: 320px;
+  overflow: hidden;
 }
 button,
 input,
@@ -88,16 +94,15 @@ button.destructive:hover:not(:disabled) {
 
 .app-shell {
   width: min(100%, 1600px);
-  min-height: 100vh;
+  height: 100dvh;
   margin: auto;
   padding: 16px;
   display: grid;
-  grid-template-columns: 232px minmax(0, 1fr) 340px;
-  grid-template-areas:
-    "header header header"
-    "media editor task";
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-areas: "media editor task";
+  grid-template-rows: minmax(0, 1fr);
   gap: 12px;
-  align-items: start;
+  align-items: stretch;
 }
 
 header,
@@ -108,32 +113,48 @@ section {
   border-radius: 8px;
   padding: 16px;
 }
+.left-sidebar {
+  grid-area: media;
+  width: 280px;
+  min-width: 220px;
+  max-width: 440px;
+  min-height: 0;
+  overflow: auto;
+  resize: horizontal;
+  background: var(--surface-raised);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
 .app-header {
-  grid-area: header;
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
-  gap: 20px;
-  padding: 12px 16px;
+  gap: 8px;
+  padding: 10px 12px;
+  background: transparent;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
 }
 .app-heading {
   display: flex;
-  align-items: baseline;
-  gap: 18px;
+  align-items: center;
+  gap: 10px;
   min-width: 0;
+  overflow: hidden;
 }
 .app-header h1 {
-  font-size: 1.2rem;
+  flex: none;
+  font-size: 0.95rem;
   letter-spacing: -0.03em;
   margin: 0;
 }
 .project-status {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
+  display: grid;
   min-width: 0;
   color: var(--text-muted);
-  font-size: 0.875rem;
+  font-size: 0.72rem;
+  line-height: 1.25;
 }
 .project-status strong {
   overflow: hidden;
@@ -150,10 +171,10 @@ section {
   font-size: 0.875rem;
 }
 .media-panel {
-  grid-area: media;
-  position: sticky;
-  top: 16px;
   min-width: 0;
+  padding: 12px;
+  background: transparent;
+  border: 0;
 }
 .current-video,
 .change-video {
@@ -161,11 +182,19 @@ section {
 }
 .editor-panel {
   grid-area: editor;
+  display: block;
   min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
 }
 .task-panel {
   grid-area: task;
-  min-width: 0;
+  width: 340px;
+  min-width: 260px;
+  max-width: 480px;
+  min-height: 0;
+  overflow-y: auto;
+  resize: horizontal;
   background: var(--color-base-200);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -190,9 +219,10 @@ section {
   grid-area: detection;
 }
 .settings-view {
-  grid-column: 1 / -1;
+  grid-column: 2 / -1;
   width: min(100%, 920px);
   margin-inline: auto;
+  overflow-y: auto;
 }
 .settings-view > section {
   padding: 16px 0;
@@ -517,7 +547,7 @@ video {
   background: var(--color-base-100);
   border: 1px solid var(--border);
   border-radius: 4px;
-  cursor: ew-resize;
+  cursor: default;
   user-select: none;
   touch-action: none;
 }
@@ -611,6 +641,10 @@ video {
 .control-help {
   color: var(--text-muted);
   font-size: 0.8rem;
+}
+.timeline-in,
+.timeline-out {
+  cursor: ew-resize;
 }
 .timeline-playhead {
   z-index: 2;
@@ -856,18 +890,36 @@ fieldset {
 }
 
 @media (min-width: 1051px) {
+  .left-sidebar,
+  .editor-panel,
   .task-panel {
-    position: sticky;
-    top: 16px;
-    max-height: calc(100vh - 32px);
-    overflow-y: auto;
+    max-height: calc(100dvh - 32px);
   }
 }
 
 @media (max-width: 1050px) {
+  body {
+    overflow: auto;
+  }
   .app-shell {
+    height: auto;
+    min-height: 100vh;
     grid-template-columns: 220px minmax(0, 1fr);
-    grid-template-areas: "header header" "media editor" "media editor" "task task";
+    grid-template-areas: "media editor" "media editor" "task task";
+  }
+  .left-sidebar,
+  .task-panel {
+    resize: none;
+  }
+  .left-sidebar {
+    width: 220px;
+    overflow: visible;
+  }
+  .editor-panel {
+    overflow: visible;
+  }
+  .task-panel {
+    width: auto;
   }
   .media-panel {
     position: static;
@@ -884,8 +936,14 @@ fieldset {
     width: 100%;
     padding: 8px;
     grid-template-columns: minmax(0, 1fr);
-    grid-template-areas: "header" "media" "editor" "task";
+    grid-template-areas: "media" "editor" "task";
     gap: 8px;
+  }
+  .left-sidebar {
+    width: auto;
+  }
+  .settings-view {
+    grid-column: 1;
   }
   header,
   section,
@@ -916,14 +974,8 @@ fieldset {
   .media-panel.has-selection:not(.explorer-open) .file-tree {
     display: none;
   }
-  .app-header {
-    align-items: flex-start;
-    flex-direction: column;
-    gap: 4px;
-  }
   .app-heading {
-    flex-wrap: wrap;
-    gap: 4px 12px;
+    gap: 8px;
   }
   .timeline-visual {
     min-width: 420px;

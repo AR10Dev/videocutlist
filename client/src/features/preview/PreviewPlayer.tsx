@@ -38,6 +38,7 @@ export function PreviewPlayer() {
   const [volume, setVolume] = createSignal(1);
   const [playing, setPlaying] = createSignal(false);
   let videoElement: HTMLVideoElement | undefined;
+  let settlingSeek = false;
 
   const step = (direction: -1 | 1) => {
     const amount = frameDuration(workspace.selected()) || 1000;
@@ -83,9 +84,11 @@ export function PreviewPlayer() {
             onPlay={() => setPlaying(true)}
             onPause={() => setPlaying(false)}
             onEnded={() => setPlaying(false)}
-            onTimeUpdate={(event) => workspace.syncPreviewPosition(event.currentTarget.currentTime)}
-            onSeeking={(event) => workspace.syncPreviewPosition(event.currentTarget.currentTime)}
-            onSeeked={(event) => workspace.syncPreviewPosition(event.currentTarget.currentTime)}
+            onTimeUpdate={(event) => {
+              if (!settlingSeek) workspace.syncPreviewPosition(event.currentTarget.currentTime);
+            }}
+            onSeeking={() => (settlingSeek = true)}
+            onSeeked={() => (settlingSeek = false)}
           />
         ) : null}
         {!canStreamPreview() && (

@@ -262,6 +262,39 @@ test("desktop and narrow layouts keep the explorer and primary actions reachable
   }
 });
 
+test("desktop workbench fixes the viewport and lets both sidebars resize and scroll", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 600 });
+  await page.goto("/");
+  await page.getByRole("button", { name: /camera.mp4/ }).click();
+
+  const layout = await page.evaluate(() => {
+    const style = (selector: string) => getComputedStyle(document.querySelector(selector)!);
+    return {
+      documentFits: document.documentElement.scrollHeight === document.documentElement.clientHeight,
+      bodyOverflow: getComputedStyle(document.body).overflow,
+      leftResize: style(".left-sidebar").resize,
+      leftOverflow: style(".left-sidebar").overflowY,
+      rightResize: style(".task-panel").resize,
+      rightOverflow: style(".task-panel").overflowY,
+      timelineCursor: style(".timeline-visual").cursor,
+      markerCursor: style(".timeline-in").cursor,
+    };
+  });
+
+  expect(layout).toEqual({
+    documentFits: true,
+    bodyOverflow: "hidden",
+    leftResize: "horizontal",
+    leftOverflow: "auto",
+    rightResize: "horizontal",
+    rightOverflow: "auto",
+    timelineCursor: "default",
+    markerCursor: "ew-resize",
+  });
+});
+
 test("task tabs expose selection, association, and keyboard navigation", async ({ page }) => {
   await page.goto("/");
   const detection = page.getByRole("tab", { name: "Detection", exact: true });
@@ -778,6 +811,42 @@ test("shows a safe preview failure and maps markers from the watched preview", a
   });
   await page.getByRole("button", { name: "Set in" }).click();
   await expect(page.getByText("In: 00:01.500")).toBeVisible();
+});
+
+test("mutes in the browser without rebuilding the server preview", async ({ page }) => {
+  let previewRequests = 0;
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname.endsWith("/preview")) previewRequests += 1;
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await expect.poll(() => previewRequests).toBe(1);
+  await expect(page.getByText("Loading preview…")).not.toBeVisible();
+  const requestsBeforeMute = previewRequests;
+
+  await page.getByRole("button", { name: "Mute preview" }).click();
+  await expect(page.getByLabel("Preview player")).toHaveJSProperty("muted", true);
+  await page.waitForTimeout(300);
+
+  expect(previewRequests).toBe(requestsBeforeMute);
+});
+
+test("keeps an exact timeline seek while the paused preview settles", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: /camera.mp4/ }).click();
+  const playhead = page.getByLabel("Timeline playhead");
+  await playhead.fill("2000");
+  await expect(page.getByLabel("Preview player")).toHaveAttribute("data-preview-offset", "2000");
+
+  await page.getByLabel("Preview player").evaluate((video) => {
+    const player = video as HTMLVideoElement;
+    player.pause();
+    player.currentTime = 1.95;
+    player.dispatchEvent(new Event("seeking"));
+    player.dispatchEvent(new Event("seeked"));
+  });
+
+  await expect(playhead).toHaveValue("2000");
 });
 
 test("shows a safe preview request failure", async ({ page }) => {

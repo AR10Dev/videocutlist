@@ -47,33 +47,37 @@ export function App() {
   return (
     <WorkspaceProvider value={controller}>
       <main class="app-shell" aria-label="VideoCutlist segment selection">
-        <header class="app-header">
-          <div class="app-heading">
-            <h1>VideoCutlist</h1>
-            <div class="project-status" aria-label="Project status">
-              <strong>{projectName()}</strong>
-              <span role="status">
-                {revision() === 0 ? "Unsaved" : dirty() ? "Unsaved changes" : "Saved"}
-              </span>
+        <aside class="left-sidebar" aria-label="Media workspace">
+          <header class="app-header">
+            <div class="app-heading">
+              <h1>VideoCutlist</h1>
+              <div class="project-status" aria-label="Project status">
+                <strong>{projectName()}</strong>
+                <span role="status">
+                  {revision() === 0 ? "Unsaved" : dirty() ? "Unsaved changes" : "Saved"}
+                </span>
+              </div>
             </div>
-          </div>
-          <button
-            class="settings-button"
-            type="button"
-            aria-label={settingsOpen() ? "Back to editor" : "Settings"}
-            aria-pressed={settingsOpen() ? "true" : "false"}
-            title={settingsOpen() ? "Back to editor" : "Settings"}
-            onClick={() => (settingsOpen() ? setSettingsOpen(false) : void openSettings())}
-          >
-            <Settings size={20} aria-hidden="true" />
-            <span>{settingsOpen() ? "Back to editor" : "Settings"}</span>
-          </button>
-        </header>
+            <button
+              class="settings-button btn btn-sm btn-square"
+              type="button"
+              aria-label={settingsOpen() ? "Back to editor" : "Settings"}
+              aria-pressed={settingsOpen() ? "true" : "false"}
+              title={settingsOpen() ? "Back to editor" : "Settings"}
+              onClick={() => (settingsOpen() ? setSettingsOpen(false) : void openSettings())}
+            >
+              <Settings size={18} aria-hidden="true" />
+              <span class="sr-only">{settingsOpen() ? "Back to editor" : "Settings"}</span>
+            </button>
+          </header>
+          <Show when={!settingsOpen()}>
+            <LibraryView />
+          </Show>
+        </aside>
         <Show
           when={settingsOpen()}
           fallback={
             <>
-              <LibraryView />
               <EditorView />
               <aside class="task-panel" aria-label="Workspace tasks">
                 <div class="task-tabs" role="tablist" aria-label="Workspace tasks">

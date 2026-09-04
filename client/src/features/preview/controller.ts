@@ -15,7 +15,6 @@ export function createPreviewController(
   api: ApiClient,
   dependencies: {
     selected: Accessor<Media | undefined>;
-    muted: Accessor<boolean>;
     playheadMs: Accessor<number>;
     updatePlaybackPosition: (positionMs: number) => void;
   },
@@ -31,7 +30,7 @@ export function createPreviewController(
   let previewRequest: AbortController | undefined;
   let cleanupPreview: (() => void) | undefined;
   let thumbnailObjectURL: string | undefined;
-  let shouldPlay = true;
+  let shouldPlay = false;
 
   createEffect(() => {
     const item = dependencies.selected();
@@ -91,7 +90,6 @@ export function createPreviewController(
   createEffect(() => {
     const item = dependencies.selected();
     const position = previewCenterMs();
-    const isMuted = dependencies.muted();
     cleanupPreview?.();
     cleanupPreview = undefined;
     previewRequest?.abort();
@@ -105,7 +103,6 @@ export function createPreviewController(
         centerMs: String(Math.round(position)),
         beforeMs: "2000",
         afterMs: "6000",
-        mute: String(isMuted),
       });
       setPreviewStatus("Loading preview…");
       cleanupPreview = streamPreview(

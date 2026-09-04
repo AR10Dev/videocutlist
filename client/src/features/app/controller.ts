@@ -216,7 +216,6 @@ export function createWorkspaceController() {
   });
   const initializedPreviewFeature = createPreviewController(api, {
     selected,
-    muted,
     playheadMs,
     updatePlaybackPosition,
   });
