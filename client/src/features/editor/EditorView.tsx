@@ -37,7 +37,6 @@ export function EditorView() {
     setVideo,
     togglePlayback,
   } = useWorkspace();
-  const [selectedSegment, setSelectedSegment] = createSignal<number>();
   const narrowViewport = window.matchMedia("(max-width: 700px)");
   const [secondaryOpen, setSecondaryOpen] = createSignal(!narrowViewport.matches);
   const syncSecondaryControls = () => setSecondaryOpen(!narrowViewport.matches);
@@ -255,19 +254,7 @@ export function EditorView() {
             <ol aria-label="Selected segments">
               <For each={present().segments}>
                 {(segment, index) => (
-                  <li
-                    class={selectedSegment() === index() ? "segment-row selected" : "segment-row"}
-                  >
-                    <button
-                      type="button"
-                      aria-label={`Select segment ${index() + 1}`}
-                      aria-pressed={selectedSegment() === index()}
-                      onClick={() => {
-                        setSelectedSegment(index());
-                      }}
-                    >
-                      Select
-                    </button>
+                  <li class="segment-row">
                     <strong>Segment {index() + 1}</strong> · {segment.label ?? "Unlabelled"}:{" "}
                     <span>
                       {formatTime(segment.startMs, duration())} –{" "}

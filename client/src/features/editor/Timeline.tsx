@@ -10,7 +10,6 @@ export function Timeline() {
   const { duration, present, playheadMs, thumbnailURL, waveform, updateTimeline, setMarker } =
     useWorkspace();
   const [dragTarget, setDragTarget] = createSignal<"playheadMs" | "inMs" | "outMs">();
-  const [selectedSegment, setSelectedSegment] = createSignal<number>();
   let timeline: HTMLDivElement | undefined;
 
   const positionFromPointer = (
@@ -53,6 +52,7 @@ export function Timeline() {
         onPointerUp={finishSeek}
         onPointerCancel={finishSeek}
         role="slider"
+        tabIndex={0}
         aria-label="Timeline position"
         aria-valuemin="0"
         aria-valuemax={duration()}
@@ -84,14 +84,13 @@ export function Timeline() {
             onClick={(event) => event.stopPropagation()}
           />
           <For each={present().segments}>
-            {(segment, index) => (
+            {(segment) => (
               <span
-                class={`timeline-segment ${selectedSegment() === index() ? "selected" : ""}`}
+                class="timeline-segment"
                 style={{
                   left: `${(segment.startMs / duration()) * 100}%`,
                   width: `${((segment.endMs - segment.startMs) / duration()) * 100}%`,
                 }}
-                onPointerDown={() => setSelectedSegment(index())}
               />
             )}
           </For>

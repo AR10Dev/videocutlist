@@ -1472,8 +1472,6 @@ test("covers the responsive workspace and keyboard editing workflow", async ({ p
   await addSegment.focus();
   await page.keyboard.press("Enter");
   await expect(page.getByRole("list", { name: "Selected segments" })).toContainText("00:02.000");
-  await page.getByRole("button", { name: "Select segment 1" }).focus();
-  await page.keyboard.press("Enter");
   await page.getByRole("button", { name: "Save project" }).focus();
   await page.keyboard.press("Enter");
   await expect(projectStatus).toContainText("Untitled project");
