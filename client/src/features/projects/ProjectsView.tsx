@@ -31,7 +31,15 @@ export function ProjectsView() {
     projects,
   } = useWorkspace();
   return (
-    <Show when={selected()}>
+    <Show
+      when={selected()}
+      fallback={
+        <section class="project-panel" aria-labelledby="project-heading">
+          <h2 id="project-heading">Project</h2>
+          <p>Choose a video from the Media library to start a project.</p>
+        </section>
+      }
+    >
       <section class="project-panel" aria-labelledby="project-heading">
         <h2 id="project-heading">Project</h2>
         <details>

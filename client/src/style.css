@@ -84,27 +84,8 @@ button:disabled {
   cursor: not-allowed;
   opacity: 0.45;
 }
-button[aria-pressed="true"] {
-  border-color: #53c18d;
-  background: #203a33;
-}
-
 button.primary {
-  border-color: #6ea8fe;
-  background: #24518a;
   font-weight: 700;
-}
-button.primary:hover:not(:disabled) {
-  border-color: #9cc4ff;
-  background: #2d68ad;
-}
-button.destructive {
-  border-color: #b85c63;
-  background: #4a252b;
-}
-button.destructive:hover:not(:disabled) {
-  border-color: #ff9d9d;
-  background: #642f37;
 }
 
 .app-shell {
@@ -124,7 +105,6 @@ button.destructive:hover:not(:disabled) {
 header,
 section {
   min-width: 0;
-  background: #1a1b20;
   border: 1px solid #2b2d35;
   border-radius: 8px;
   padding: 16px;
@@ -187,7 +167,6 @@ section {
 .task-panel {
   grid-area: task;
   min-width: 0;
-  background: #1a1b20;
   border: 1px solid #2b2d35;
   border-radius: 8px;
   padding: 12px;
@@ -196,10 +175,6 @@ section {
   display: flex;
   gap: 4px;
   margin-bottom: 10px;
-}
-.task-tabs button[aria-selected="true"] {
-  color: #f4b23e;
-  border-bottom-color: #f4b23e;
 }
 .project-panel {
   grid-area: project;
@@ -277,6 +252,14 @@ details > summary {
   color: #a9acb5;
   white-space: nowrap;
 }
+.segment-actions {
+  opacity: 0;
+  transition: opacity var(--motion-fast) ease-out;
+}
+.segment-row:hover .segment-actions,
+.segment-row:focus-within .segment-actions {
+  opacity: 1;
+}
 
 h2 {
   margin: 0 0 14px;
@@ -327,7 +310,7 @@ button:hover:not(:disabled) {
 button:focus-visible,
 input:focus-visible,
 select:focus-visible {
-  outline: 2px solid #f4b23e;
+  outline: 2px solid var(--color-primary);
   outline-offset: 2px;
 }
 
@@ -781,8 +764,10 @@ button.destructive:hover:not(:disabled) {
   border-color: var(--color-error);
 }
 .task-tabs button[aria-selected="true"] {
-  color: var(--color-primary);
+  color: var(--color-primary-content);
+  background: var(--color-primary);
   border-color: var(--color-primary);
+  font-weight: 700;
 }
 .field-error {
   color: var(--color-error);

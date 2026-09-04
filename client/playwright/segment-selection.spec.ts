@@ -480,7 +480,10 @@ test("keeps the inspector contextual until media is selected", async ({ page }) 
   await page.goto("/");
 
   await expect(page.getByRole("button", { name: "Settings" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Project" })).not.toBeVisible();
+  await expect(page.getByRole("heading", { name: "Project" })).toBeVisible();
+  await expect(
+    page.getByText("Choose a video from the Media library to start a project."),
+  ).toBeVisible();
   await expect(page.getByRole("heading", { name: "Export", exact: true })).not.toBeVisible();
   await expect(page.getByRole("heading", { name: "Auto detection" })).not.toBeVisible();
   await expect(page.getByText("Default cut strategy")).not.toBeVisible();
@@ -1665,6 +1668,31 @@ test("persists appearance and recovers from invalid stored values", async ({ pag
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
   await page.getByRole("button", { name: "Settings" }).click();
   await expect(page.getByLabel("Theme")).toHaveValue("system");
+});
+
+test("covers theme contrast and selected task control states", async ({ page }) => {
+  await page.goto("/");
+  const projectTab = page.getByRole("tab", { name: "Project", exact: true });
+  await expect(projectTab).toHaveAttribute("aria-selected", "true");
+
+  await page.getByRole("button", { name: "Settings" }).click();
+  const theme = page.getByLabel("Theme");
+  await theme.selectOption("light");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await page.getByRole("button", { name: "Back to editor" }).click();
+  await expect(projectTab).toHaveCSS("font-weight", "700");
+  await projectTab.focus();
+  await expect(projectTab).toBeFocused();
+
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByLabel("Theme").selectOption("dark");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await page.getByRole("button", { name: "Back to editor" }).click();
+  await expect(projectTab).toHaveCSS("font-weight", "700");
+
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByLabel("Theme").selectOption("cupcake");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "cupcake");
 });
 
 test("keeps motion reduced and overflow local at a narrow viewport", async ({ page }) => {

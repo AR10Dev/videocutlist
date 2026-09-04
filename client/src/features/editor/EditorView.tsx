@@ -11,32 +11,23 @@ export function EditorView() {
     selected,
     setStatus,
     assetStatus,
-    previewStatus,
     segmentLabel,
     setSegmentLabel,
     timecode,
     setTimecode,
     setPreviewCenterMs,
-    muted,
-    setMuted,
-    diagnostics,
     timeline,
     setTimeline,
     playheadMs,
     present,
     markDirty,
-    saveSettings,
     updateTimeline,
     watchedPosition,
-    syncPreviewPosition,
     setMarker,
     addSegment,
     duration,
     removeSegment,
     moveSegment,
-    setVideo,
-    togglePlayback,
-    pausePlayback,
   } = useWorkspace();
   const narrowViewport = window.matchMedia("(max-width: 700px)");
   const [secondaryOpen, setSecondaryOpen] = createSignal(!narrowViewport.matches);
@@ -83,22 +74,7 @@ export function EditorView() {
                 ? `${present().segments.length} segment${present().segments.length === 1 ? "" : "s"} selected.`
                 : "No segments selected."}
             </p>
-            <PreviewPlayer
-              selected={selected}
-              duration={duration}
-              playheadMs={playheadMs}
-              muted={muted}
-              previewStatus={previewStatus}
-              diagnostics={diagnostics}
-              setMuted={(value) => setMuted(value)}
-              saveSettings={saveSettings}
-              setVideo={setVideo}
-              syncPreviewPosition={syncPreviewPosition}
-              togglePlayback={togglePlayback}
-              pausePlayback={pausePlayback}
-              updateTimeline={(changes) => updateTimeline(changes)}
-              markDirty={markDirty}
-            />
+            <PreviewPlayer />
             <Timeline />
             {assetStatus() && (
               <div class="alert alert-info py-2 mb-3" role="status">

@@ -1,26 +1,9 @@
-import { createSignal, type Accessor, type JSX } from "solid-js";
+import { createSignal, type JSX } from "solid-js";
 import { Tooltip } from "@kobalte/core/tooltip";
 import { frameDuration } from "../editor/frame";
 import { Maximize2, Pause, Play, SkipBack, SkipForward, Volume2, VolumeX } from "lucide-solid";
 import { canStreamPreview, formatTime } from "./model";
-import type { Media } from "./model";
-
-export interface PreviewPlayerProps {
-  selected: Accessor<Media | undefined>;
-  duration: Accessor<number>;
-  playheadMs: Accessor<number>;
-  muted: Accessor<boolean>;
-  previewStatus: Accessor<string>;
-  diagnostics: Accessor<{ startMs: number; durationMs: number; offsetMs: number } | undefined>;
-  setMuted: (muted: boolean) => void;
-  saveSettings: (settings: { muted: boolean }) => void;
-  setVideo: (video: HTMLVideoElement) => void;
-  syncPreviewPosition: (seconds: number) => void;
-  togglePlayback: () => void;
-  pausePlayback: () => void;
-  updateTimeline: (changes: { playheadMs: number }) => void;
-  markDirty: () => void;
-}
+import { useWorkspace } from "../app/WorkspaceContext";
 
 type IconButtonProps = {
   label: string;
@@ -49,22 +32,26 @@ function IconButton(props: IconButtonProps) {
   );
 }
 
-export function PreviewPlayer(props: PreviewPlayerProps) {
+export function PreviewPlayer() {
+  const workspace = useWorkspace();
   const [aspectRatio, setAspectRatio] = createSignal("16 / 9");
   const [volume, setVolume] = createSignal(1);
   const [playing, setPlaying] = createSignal(false);
   let videoElement: HTMLVideoElement | undefined;
 
   const step = (direction: -1 | 1) => {
-    const amount = frameDuration(props.selected()) || 1000;
-    props.updateTimeline({
-      playheadMs: Math.max(0, Math.min(props.duration(), props.playheadMs() + direction * amount)),
+    const amount = frameDuration(workspace.selected()) || 1000;
+    workspace.updateTimeline({
+      playheadMs: Math.max(
+        0,
+        Math.min(workspace.duration(), workspace.playheadMs() + direction * amount),
+      ),
     });
-    props.markDirty();
+    workspace.markDirty();
   };
   const togglePlayback = () => {
-    if (playing()) props.pausePlayback();
-    else props.togglePlayback();
+    if (playing()) workspace.pausePlayback();
+    else workspace.togglePlayback();
   };
   const fullscreen = () => {
     if (!document.fullscreenElement) void videoElement?.requestFullscreen?.();
@@ -82,23 +69,23 @@ export function PreviewPlayer(props: PreviewPlayerProps) {
           <video
             ref={(element) => {
               videoElement = element;
-              props.setVideo(element);
+              workspace.setVideo(element);
             }}
-            muted={props.muted()}
+            muted={workspace.muted()}
             aria-label="Preview player"
-            data-preview-offset={props.diagnostics()?.offsetMs ?? 0}
+            data-preview-offset={workspace.diagnostics()?.offsetMs ?? 0}
             onLoadedMetadata={(event) => {
               const { videoWidth, videoHeight } = event.currentTarget;
               if (videoWidth && videoHeight) setAspectRatio(`${videoWidth} / ${videoHeight}`);
             }}
-            onClick={props.togglePlayback}
+            onClick={workspace.togglePlayback}
             onDblClick={fullscreen}
             onPlay={() => setPlaying(true)}
             onPause={() => setPlaying(false)}
             onEnded={() => setPlaying(false)}
-            onTimeUpdate={(event) => props.syncPreviewPosition(event.currentTarget.currentTime)}
-            onSeeking={(event) => props.syncPreviewPosition(event.currentTarget.currentTime)}
-            onSeeked={(event) => props.syncPreviewPosition(event.currentTarget.currentTime)}
+            onTimeUpdate={(event) => workspace.syncPreviewPosition(event.currentTarget.currentTime)}
+            onSeeking={(event) => workspace.syncPreviewPosition(event.currentTarget.currentTime)}
+            onSeeked={(event) => workspace.syncPreviewPosition(event.currentTarget.currentTime)}
           />
         ) : null}
         {!canStreamPreview() && (
@@ -107,17 +94,17 @@ export function PreviewPlayer(props: PreviewPlayerProps) {
             manually.
           </p>
         )}
-        {props.previewStatus() && (
+        {workspace.previewStatus() && (
           <p class="preview-overlay" role="status">
-            {props.previewStatus()}
+            {workspace.previewStatus()}
           </p>
         )}
       </div>
       <p class="preview-range" aria-label="Preview source range">
-        {props.diagnostics()
-          ? `Preview: ${formatTime(props.diagnostics()!.startMs, props.duration())} to ${formatTime(
-              props.diagnostics()!.startMs + props.diagnostics()!.durationMs,
-              props.duration(),
+        {workspace.diagnostics()
+          ? `Preview: ${formatTime(workspace.diagnostics()!.startMs, workspace.duration())} to ${formatTime(
+              workspace.diagnostics()!.startMs + workspace.diagnostics()!.durationMs,
+              workspace.duration(),
             )}`
           : "\u00a0"}
       </p>
@@ -140,32 +127,32 @@ export function PreviewPlayer(props: PreviewPlayerProps) {
           <SkipForward size={18} aria-hidden="true" />
         </IconButton>
         <span class="preview-time" aria-live="off">
-          {formatTime(props.playheadMs(), props.duration())} /{" "}
-          {formatTime(props.duration(), props.duration())}
+          {formatTime(workspace.playheadMs(), workspace.duration())} /{" "}
+          {formatTime(workspace.duration(), workspace.duration())}
         </span>
         <input
           type="range"
           aria-label="Preview scrubber"
           min="0"
-          max={props.duration()}
+          max={workspace.duration()}
           step="1"
-          value={props.playheadMs()}
+          value={workspace.playheadMs()}
           onInput={(event) => {
-            props.updateTimeline({ playheadMs: Number(event.currentTarget.value) });
-            props.markDirty();
+            workspace.updateTimeline({ playheadMs: Number(event.currentTarget.value) });
+            workspace.markDirty();
           }}
         />
         <IconButton
-          label={props.muted() ? "Unmute preview" : "Mute preview"}
-          pressed={props.muted()}
+          label={workspace.muted() ? "Unmute preview" : "Mute preview"}
+          pressed={workspace.muted()}
           onClick={() => {
-            const muted = !props.muted();
-            props.setMuted(muted);
-            props.saveSettings({ muted });
-            props.markDirty();
+            const muted = !workspace.muted();
+            workspace.setMuted(muted);
+            workspace.saveSettings({ muted });
+            workspace.markDirty();
           }}
         >
-          {props.muted() ? (
+          {workspace.muted() ? (
             <VolumeX size={18} aria-hidden="true" />
           ) : (
             <Volume2 size={18} aria-hidden="true" />
