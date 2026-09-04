@@ -612,6 +612,22 @@ video {
   inset: 0 5px;
   background: #f4b23e;
 }
+.timeline-in::before,
+.timeline-out::before {
+  content: "";
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  left: 1px;
+  width: 10px;
+  height: 10px;
+  background: #f4b23e;
+  clip-path: polygon(0 0, 100% 0, 50% 100%);
+}
+.timeline-out::after,
+.timeline-out::before {
+  background: #53c18d;
+}
 .timeline-segment {
   width: auto;
   margin-left: 0;
@@ -663,6 +679,17 @@ video {
 }
 .editor-controls .control-group {
   min-height: 44px;
+}
+.secondary-controls {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+.secondary-controls > summary {
+  display: none;
+}
+.secondary-controls > .control-group {
+  display: flex;
 }
 .editor-controls button,
 .editor-controls input,
@@ -873,6 +900,17 @@ ul {
   }
   .editor-controls label {
     flex: 1 1 100%;
+  }
+  .secondary-controls {
+    flex: 1 1 100%;
+  }
+  .secondary-controls > summary {
+    display: list-item;
+    min-height: 44px;
+    padding: 12px 4px;
+  }
+  .secondary-controls:not([open]) > .control-group {
+    display: none;
   }
   .editor-controls label input {
     width: 100%;

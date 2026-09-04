@@ -1,6 +1,5 @@
-import { createSignal, For, Show } from "solid-js";
+import { createSignal, For, onCleanup, Show } from "solid-js";
 import { ArrowDown, ArrowUp, Clock3, LocateFixed, Plus, Redo2, Trash2, Undo2 } from "lucide-solid";
-import { frameDuration } from "./frame";
 import { redoTimeline, undoTimeline } from "./timeline";
 import { Timeline } from "./Timeline";
 import { formatTime, parseTimecode } from "../preview/model";
@@ -39,49 +38,13 @@ export function EditorView() {
     togglePlayback,
   } = useWorkspace();
   const [selectedSegment, setSelectedSegment] = createSignal<number>();
-  const handleKeyDown = (event: KeyboardEvent) => {
-    const target = event.target as HTMLElement;
-    if (target.matches("input, textarea, select, [contenteditable='true']")) return;
-    const key = event.key.toLowerCase();
-    if (key === "i" || key === "o") {
-      event.preventDefault();
-      setMarker(
-        key === "i" ? "inMs" : "outMs",
-        key === "i" ? watchedPosition() : Math.min(duration(), watchedPosition()),
-      );
-    } else if (key === " ") {
-      event.preventDefault();
-      togglePlayback();
-    } else if (key === "arrowleft" || key === "arrowright") {
-      event.preventDefault();
-      const step = frameDuration(selected()) || 1000;
-      updateTimeline({
-        playheadMs:
-          key === "arrowleft"
-            ? Math.max(0, playheadMs() - step)
-            : Math.min(duration(), playheadMs() + step),
-      });
-      markDirty();
-    } else if ((event.ctrlKey || event.metaKey) && key === "z") {
-      event.preventDefault();
-      const next = event.shiftKey ? redoTimeline(timeline()) : undoTimeline(timeline());
-      setTimeline(next);
-      setPreviewCenterMs(next.present.playheadMs);
-      markDirty();
-    } else if (event.ctrlKey && key === "y") {
-      event.preventDefault();
-      const next = redoTimeline(timeline());
-      setTimeline(next);
-      setPreviewCenterMs(next.present.playheadMs);
-      markDirty();
-    }
-  };
+  const narrowViewport = window.matchMedia("(max-width: 700px)");
+  const [secondaryOpen, setSecondaryOpen] = createSignal(!narrowViewport.matches);
+  const syncSecondaryControls = () => setSecondaryOpen(!narrowViewport.matches);
+  narrowViewport.addEventListener("change", syncSecondaryControls);
+  onCleanup(() => narrowViewport.removeEventListener("change", syncSecondaryControls));
   return (
-    <section
-      class="editor-panel card bg-base-200 shadow-sm"
-      aria-labelledby="timeline-heading"
-      onKeyDown={handleKeyDown}
-    >
+    <section class="editor-panel card bg-base-200 shadow-sm" aria-labelledby="timeline-heading">
       <div class="panel-heading">
         <h2 id="timeline-heading" tabIndex={-1} class="card-title text-base">
           Timeline
@@ -240,38 +203,45 @@ export function EditorView() {
                   <Plus size={16} aria-hidden="true" /> Add segment
                 </button>
               </div>
-              <div
-                class="control-group flex flex-wrap items-center gap-2"
-                aria-label="Segment details"
+              <details
+                class="secondary-controls"
+                open={secondaryOpen()}
+                onToggle={(event) => setSecondaryOpen(event.currentTarget.open)}
               >
-                <label class="input input-sm">
-                  <Clock3 size={16} aria-hidden="true" />
-                  <span class="sr-only">Timecode</span>{" "}
-                  <input
-                    value={timecode()}
-                    placeholder="00:00.000"
-                    onInput={(event) => setTimecode(event.currentTarget.value)}
-                  />
-                </label>
-                <button
-                  class="btn btn-sm"
-                  onClick={() => {
-                    const value = parseTimecode(timecode());
-                    if (value === undefined || value > duration())
-                      return setStatus("Invalid timecode.");
-                    updateTimeline({ playheadMs: value });
-                  }}
+                <summary>More editing actions</summary>
+                <div
+                  class="control-group flex flex-wrap items-center gap-2"
+                  aria-label="Segment details"
                 >
-                  Go to timecode
-                </button>
-                <label>
-                  Segment label{" "}
-                  <input
-                    value={segmentLabel()}
-                    onInput={(event) => setSegmentLabel(event.currentTarget.value)}
-                  />
-                </label>
-              </div>
+                  <label class="input input-sm">
+                    <Clock3 size={16} aria-hidden="true" />
+                    <span class="sr-only">Timecode</span>{" "}
+                    <input
+                      value={timecode()}
+                      placeholder="00:00.000"
+                      onInput={(event) => setTimecode(event.currentTarget.value)}
+                    />
+                  </label>
+                  <button
+                    class="btn btn-sm"
+                    onClick={() => {
+                      const value = parseTimecode(timecode());
+                      if (value === undefined || value > duration())
+                        return setStatus("Invalid timecode.");
+                      updateTimeline({ playheadMs: value });
+                    }}
+                  >
+                    Go to timecode
+                  </button>
+                  <label>
+                    Segment label{" "}
+                    <input
+                      value={segmentLabel()}
+                      onInput={(event) => setSegmentLabel(event.currentTarget.value)}
+                    />
+                  </label>
+                </div>
+              </details>
             </div>
             <p id="add-segment-help" class="control-help" role="status">
               {present().inMs >= present().outMs

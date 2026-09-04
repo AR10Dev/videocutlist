@@ -11,9 +11,7 @@ export interface PreviewPlayerProps {
   playheadMs: Accessor<number>;
   muted: Accessor<boolean>;
   previewStatus: Accessor<string>;
-  diagnostics: Accessor<
-    { startMs: number; durationMs: number; offsetMs: number } | undefined
-  >;
+  diagnostics: Accessor<{ startMs: number; durationMs: number; offsetMs: number } | undefined>;
   setMuted: (muted: boolean) => void;
   saveSettings: (settings: { muted: boolean }) => void;
   setVideo: (video: HTMLVideoElement) => void;

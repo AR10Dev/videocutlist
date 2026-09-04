@@ -1547,8 +1547,39 @@ test("keeps the preview stable and exposes familiar playback controls", async ({
     "true",
   );
   await page.getByRole("button", { name: "Next frame" }).click();
-  await expect(page.getByLabel("Timeline playhead")).not.toHaveValue("1000");
-  await expect(page.getByRole("button", { name: "Fullscreen preview" })).toBeVisible();
+  const nextFrame = Number(await page.getByLabel("Timeline playhead").inputValue());
+  expect(nextFrame).toBeGreaterThan(1000);
+  await page.getByRole("button", { name: "Previous frame" }).click();
+  await expect(page.getByLabel("Timeline playhead")).toHaveValue("1000");
+
+  await page.getByLabel("Preview scrubber").fill("3000");
+  await expect(page.getByLabel("Timeline playhead")).toHaveValue("3000");
+  await page.getByLabel("Preview volume").fill("0.35");
+  expect(await video.evaluate((element) => (element as HTMLVideoElement).volume)).toBe(0.35);
+
+  await video.evaluate((element) => {
+    (window as unknown as { fullscreenRequested: boolean }).fullscreenRequested = false;
+    element.requestFullscreen = async () => {
+      (window as unknown as { fullscreenRequested: boolean }).fullscreenRequested = true;
+    };
+  });
+  await page.getByRole("button", { name: "Fullscreen preview" }).click();
+  expect(
+    await page.evaluate(
+      () => (window as unknown as { fullscreenRequested: boolean }).fullscreenRequested,
+    ),
+  ).toBe(true);
+
+  await page.getByRole("heading", { name: "VideoCutlist" }).click();
+  await page.keyboard.press("ArrowRight");
+  expect(Number(await page.getByLabel("Timeline playhead").inputValue())).toBeGreaterThan(3000);
+  const shortcutPosition = await page.getByLabel("Timeline playhead").inputValue();
+  await page.getByLabel("Segment label").focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(page.getByLabel("Timeline playhead")).toHaveValue(shortcutPosition);
+  await page.getByRole("heading", { name: "VideoCutlist" }).click();
+  await page.keyboard.press("Space");
+  await expect(page.getByRole("button", { name: "Pause preview" })).toBeVisible();
 });
 
 test("renders separate timeline lanes and seeks through their shared interaction area", async ({
@@ -1580,6 +1611,39 @@ test("renders separate timeline lanes and seeks through their shared interaction
     .toBeGreaterThanOrEqual(2480);
   expect(Number(await timeline.getAttribute("aria-valuenow"))).toBeLessThanOrEqual(2520);
   expect(Number(await page.getByLabel("Timeline playhead").inputValue())).toBeLessThanOrEqual(2520);
+
+  const currentBounds = await timeline.boundingBox();
+  const playheadBounds = await page.locator(".timeline-playhead").boundingBox();
+  expect(currentBounds).not.toBeNull();
+  expect(playheadBounds).not.toBeNull();
+  expect(Math.abs(playheadBounds!.y - currentBounds!.y)).toBeLessThanOrEqual(1);
+  expect(Math.abs(playheadBounds!.height - currentBounds!.height)).toBeLessThanOrEqual(2);
+
+  const outMarker = page.locator(".timeline-out");
+  const outBounds = await outMarker.boundingBox();
+  expect(outBounds).not.toBeNull();
+  await page.mouse.move(outBounds!.x + outBounds!.width / 2, outBounds!.y + 8);
+  await page.mouse.down();
+  await page.mouse.move(currentBounds!.x + (currentBounds!.width * 4) / 5, currentBounds!.y + 8, {
+    steps: 3,
+  });
+  await page.mouse.up();
+  await expect(page.locator("#timeline-description")).toContainText(/Out marker 00:08\.0/);
+
+  await page.waitForTimeout(120);
+  const inMarker = page.locator(".timeline-in");
+  const markerBounds = await inMarker.boundingBox();
+  const settledBounds = await timeline.boundingBox();
+  expect(markerBounds).not.toBeNull();
+  expect(markerBounds!.width).toBeGreaterThanOrEqual(12);
+  expect(settledBounds).not.toBeNull();
+  await page.mouse.move(markerBounds!.x + markerBounds!.width / 2, markerBounds!.y + 8);
+  await page.mouse.down();
+  await page.mouse.move(settledBounds!.x + settledBounds!.width / 5, settledBounds!.y + 8, {
+    steps: 3,
+  });
+  await page.mouse.up();
+  await expect(page.locator("#timeline-description")).toContainText(/In marker 00:02\.0/);
 });
 
 test("persists appearance and recovers from invalid stored values", async ({ page }) => {
@@ -1617,6 +1681,10 @@ test("keeps motion reduced and overflow local at a narrow viewport", async ({ pa
     ),
   ).toBe("1ms");
   await expect(page.getByRole("button", { name: "Add segment" })).toBeVisible();
+  const moreActions = page.getByText("More editing actions", { exact: true });
+  await expect(moreActions).toBeVisible();
+  await moreActions.click();
+  await expect(page.getByLabel("Segment details")).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
   const timelineOverflow = await page.locator(".timeline-scroll").evaluate((element) => ({
     client: element.clientWidth,
