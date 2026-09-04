@@ -37,4 +37,12 @@ describe("appearance settings", () => {
     expect(appearances).toContain("light");
     expect(appearances).toContain("dark");
   });
+
+  it("resolves every selectable theme without falling back", () => {
+    for (const appearance of appearances) {
+      if (appearance === "system") continue;
+      expect(resolveAppearance(appearance, false)).toBe(appearance);
+      expect(resolveAppearance(appearance, true)).toBe(appearance);
+    }
+  });
 });

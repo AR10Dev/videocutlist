@@ -249,6 +249,90 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
+test("desktop and narrow layouts keep the explorer and primary actions reachable", async ({ page }) => {
+  for (const width of [1280, 600]) {
+    await page.setViewportSize({ width, height: 800 });
+    await page.goto("/");
+    await expect(page.getByRole("heading", { name: "Server media library" })).toBeVisible();
+    await page.getByRole("button", { name: /camera.mp4/ }).click();
+    await expect(page.getByRole("heading", { name: "Timeline" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Add segment" })).toBeVisible();
+  }
+});
+
+test("task tabs expose selection, association, and keyboard navigation", async ({ page }) => {
+  await page.goto("/");
+  const detection = page.getByRole("tab", { name: "Detection", exact: true });
+  await expect(detection).toBeDisabled();
+  await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await expect(detection).toBeEnabled();
+  const project = page.getByRole("tab", { name: "Project", exact: true });
+  const exportTab = page.getByRole("tab", { name: "Export", exact: true });
+  await expect(project).toHaveAttribute("aria-selected", "true");
+  await expect(project).toHaveAttribute("aria-controls", "project-tabpanel");
+  await project.press("ArrowRight");
+  await expect(exportTab).toBeFocused();
+  await expect(exportTab).toHaveAttribute("aria-selected", "true");
+  await exportTab.press("ArrowRight");
+  await expect(detection).toBeFocused();
+  await expect(detection).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tabpanel", { name: "Detection" })).toBeVisible();
+});
+
+test("segment rows show values and support reorder and removal", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: /camera.mp4/ }).click();
+  const playhead = page.getByLabel("Timeline playhead");
+  for (const [start, end] of [[100, 700], [800, 900]]) {
+    await playhead.fill(String(start));
+    await expect(playhead).toHaveValue(String(start));
+    await page.getByRole("button", { name: "Set in" }).click();
+    await playhead.fill(String(end));
+    await expect(playhead).toHaveValue(String(end));
+    await page.getByRole("button", { name: "Set out" }).click();
+    await page.getByRole("button", { name: "Add segment" }).click();
+  }
+  const rows = page.getByRole("list", { name: "Selected segments" }).getByRole("listitem");
+  await expect(rows).toHaveCount(2);
+  await expect(rows.nth(0)).toContainText("00:00.100");
+  await expect(rows.nth(0)).toContainText("00:00.700");
+  await rows.nth(1).getByRole("button", { name: "Move segment 2 up" }).click();
+  await expect(rows.nth(0)).toContainText("00:00.800");
+  await rows.nth(0).getByRole("button", { name: "Remove segment" }).click();
+  await expect(rows).toHaveCount(1);
+  await expect(rows.nth(0)).toContainText("00:00.100");
+});
+
+test("header distinguishes unsaved, dirty, and saved project states", async ({ page }) => {
+  await page.goto("/");
+  const status = page.locator("header").getByLabel("Project status");
+  await expect(status).toContainText("Unsaved project");
+  await expect(status).toContainText("Not saved");
+  await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await page.getByLabel("Timeline playhead").fill("100");
+  await page.getByRole("button", { name: "Set in" }).click();
+  await saveProject(page);
+  await expect(status).toContainText("Untitled project");
+  await expect(status).toContainText("Saved");
+  await page.getByLabel("Timeline playhead").fill("200");
+  await expect(status).toContainText("Unsaved changes");
+});
+
+test("browser theme selection persists and keeps focusable controls readable", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings" }).click();
+  const theme = page.getByLabel("Theme");
+  await theme.selectOption("cmyk");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "cmyk");
+  await page.reload();
+  await page.getByRole("button", { name: "Settings" }).click();
+  await expect(page.getByLabel("Theme")).toHaveValue("cmyk");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "cmyk");
+  await page.getByLabel("Theme").focus();
+  await expect(page.getByLabel("Theme")).toBeFocused();
+  await expect(page.getByRole("button", { name: "Back to editor" })).toBeVisible();
+});
+
 test("edits independent project items and submits a durable batch", async ({ page }) => {
   let savedBody: Record<string, unknown> | undefined;
   let exportBody: Record<string, unknown> | undefined;
