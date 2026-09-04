@@ -14,15 +14,21 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@kobalte/core": "0.13.13",
     "@tanstack/solid-query": "5.102.8",
+    "lucide-solid": "1.39.0",
+    "motion": "13.2.0",
     "solid-js": "1.9.15"
   },
   "devDependencies": {
     "@playwright/test": "1.58.2",
+    "@tailwindcss/vite": "4.3.3",
     "@types/node": "26.1.2",
+    "daisyui": "5.7.27",
     "openapi-typescript": "7.13.0",
     "oxfmt": "0.64.0",
     "oxlint": "1.79.0",
+    "tailwindcss": "4.3.3",
     "typescript": "6.0.3",
     "vite": "8.1.5",
     "vite-plugin-solid": "2.11.14",

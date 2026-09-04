@@ -301,16 +301,16 @@ test("edits independent project items and submits a durable batch", async ({ pag
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   await page.getByLabel("Timeline playhead").fill("100");
-  await page.getByRole("button", { name: "Set start" }).click();
+  await page.getByRole("button", { name: "Set in" }).click();
   await page.getByLabel("Timeline playhead").fill("700");
-  await page.getByRole("button", { name: "Set end" }).click();
+  await page.getByRole("button", { name: "Set out" }).click();
   await page.getByRole("button", { name: "Add segment" }).click();
 
   await page.getByRole("button", { name: /second.mp4/ }).click();
   await page.getByLabel("Timeline playhead").fill("200");
-  await page.getByRole("button", { name: "Set start" }).click();
+  await page.getByRole("button", { name: "Set in" }).click();
   await page.getByLabel("Timeline playhead").fill("800");
-  await page.getByRole("button", { name: "Set end" }).click();
+  await page.getByRole("button", { name: "Set out" }).click();
   await page.getByRole("button", { name: "Add segment" }).click();
 
   const projectItems = page.getByRole("list", { name: "Project media items" });
@@ -611,9 +611,9 @@ test("MVP browser behavior: list, metadata, settle, cancel, offset, markers, res
   await expect(page.getByLabel("Preview player")).toHaveAttribute("data-preview-offset", "2000"); // 6 returned offset is used
 
   await playhead.fill("100");
-  await page.getByRole("button", { name: "Set start" }).click();
+  await page.getByRole("button", { name: "Set in" }).click();
   await playhead.fill("700");
-  await page.getByRole("button", { name: "Set end" }).click();
+  await page.getByRole("button", { name: "Set out" }).click();
   await page.getByRole("button", { name: "Add segment" }).click();
   await expect(page.getByRole("list", { name: "Selected segments" })).toContainText("00:00.100");
   await expect(page.getByRole("list", { name: "Selected segments" })).toContainText("00:00.700");
@@ -640,7 +640,7 @@ test("keeps playback position, markers, and undo history synchronized", async ({
   });
   await expect(page.getByLabel("Timeline playhead")).toHaveValue("2500");
   await expect(page.getByRole("button", { name: "Undo" })).toBeDisabled();
-  await page.getByRole("button", { name: "Set start" }).click();
+  await page.getByRole("button", { name: "Set in" }).click();
   await expect(page.getByText("In: 00:02.500")).toBeVisible();
 });
 
@@ -673,7 +673,7 @@ test("shows a safe preview failure and maps markers from the watched preview", a
     player.currentTime = 0.5;
     player.dispatchEvent(new Event("timeupdate"));
   });
-  await page.getByRole("button", { name: "Set start" }).click();
+  await page.getByRole("button", { name: "Set in" }).click();
   await expect(page.getByText("In: 00:01.500")).toBeVisible();
 });
 
@@ -766,9 +766,9 @@ test("exports the saved segments, polls to a safe result, and shows warnings", a
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   await page.getByLabel("Timeline playhead").fill("100");
-  await page.getByRole("button", { name: "Set start" }).click();
+  await page.getByRole("button", { name: "Set in" }).click();
   await page.getByLabel("Timeline playhead").fill("700");
-  await page.getByRole("button", { name: "Set end" }).click();
+  await page.getByRole("button", { name: "Set out" }).click();
   await page.getByRole("button", { name: "Add segment" }).click();
   await saveProject(page);
   await openTask(page, "Export");
@@ -858,9 +858,9 @@ test("shows stable failed and capacity messages and permits retry", async ({ pag
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   await page.getByLabel("Timeline playhead").fill("100");
-  await page.getByRole("button", { name: "Set start" }).click();
+  await page.getByRole("button", { name: "Set in" }).click();
   await page.getByLabel("Timeline playhead").fill("700");
-  await page.getByRole("button", { name: "Set end" }).click();
+  await page.getByRole("button", { name: "Set out" }).click();
   await page.getByRole("button", { name: "Add segment" }).click();
   await saveProject(page);
   await openTask(page, "Export");
@@ -892,9 +892,9 @@ test("cancels an active export without showing a path", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   await page.getByLabel("Timeline playhead").fill("100");
-  await page.getByRole("button", { name: "Set start" }).click();
+  await page.getByRole("button", { name: "Set in" }).click();
   await page.getByLabel("Timeline playhead").fill("700");
-  await page.getByRole("button", { name: "Set end" }).click();
+  await page.getByRole("button", { name: "Set out" }).click();
   await page.getByRole("button", { name: "Add segment" }).click();
   await saveProject(page);
   await openTask(page, "Export");
@@ -969,9 +969,9 @@ test("delayed saves stay dirty and cannot launch obsolete exports", async ({ pag
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   await openTask(page, "Project");
   await page.getByLabel("Timeline playhead").fill("100");
-  await page.getByRole("button", { name: "Set start" }).click();
+  await page.getByRole("button", { name: "Set in" }).click();
   await page.getByLabel("Timeline playhead").fill("700");
-  await page.getByRole("button", { name: "Set end" }).click();
+  await page.getByRole("button", { name: "Set out" }).click();
   await page.getByRole("button", { name: "Add segment" }).click();
   await page.getByRole("button", { name: "Save project" }).click();
   await openTask(page, "Export");
@@ -1042,9 +1042,9 @@ test("a delayed old-project save stays silent after New and the new project save
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   await openTask(page, "Project");
   await page.getByLabel("Timeline playhead").fill("100");
-  await page.getByRole("button", { name: "Set start" }).click();
+  await page.getByRole("button", { name: "Set in" }).click();
   await page.getByLabel("Timeline playhead").fill("700");
-  await page.getByRole("button", { name: "Set end" }).click();
+  await page.getByRole("button", { name: "Set out" }).click();
   await page.getByRole("button", { name: "Add segment" }).click();
   await page.getByRole("button", { name: "Save project" }).click();
   await oldStart;
@@ -1052,9 +1052,9 @@ test("a delayed old-project save stays silent after New and the new project save
   await page.getByRole("button", { name: "New project" }).click();
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   await page.getByLabel("Timeline playhead").fill("100");
-  await page.getByRole("button", { name: "Set start" }).click();
+  await page.getByRole("button", { name: "Set in" }).click();
   await page.getByLabel("Timeline playhead").fill("700");
-  await page.getByRole("button", { name: "Set end" }).click();
+  await page.getByRole("button", { name: "Set out" }).click();
   await page.getByRole("button", { name: "Add segment" }).click();
   await page.getByRole("button", { name: "Save project" }).click();
   await newComplete;
@@ -1105,9 +1105,9 @@ test("unmounting a deferred export save cannot start export, poll, or remember a
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   await openTask(page, "Project");
   await page.getByLabel("Timeline playhead").fill("100");
-  await page.getByRole("button", { name: "Set start" }).click();
+  await page.getByRole("button", { name: "Set in" }).click();
   await page.getByLabel("Timeline playhead").fill("700");
-  await page.getByRole("button", { name: "Set end" }).click();
+  await page.getByRole("button", { name: "Set out" }).click();
   await page.getByRole("button", { name: "Add segment" }).click();
   await page.getByRole("button", { name: "Save project" }).click();
   await saveStart;
@@ -1219,9 +1219,9 @@ test("delayed cancellation cannot overwrite a replacement export", async ({ page
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   await page.getByLabel("Timeline playhead").fill("100");
-  await page.getByRole("button", { name: "Set start" }).click();
+  await page.getByRole("button", { name: "Set in" }).click();
   await page.getByLabel("Timeline playhead").fill("700");
-  await page.getByRole("button", { name: "Set end" }).click();
+  await page.getByRole("button", { name: "Set out" }).click();
   await page.getByRole("button", { name: "Add segment" }).click();
   await saveProject(page);
   await openTask(page, "Export");
@@ -1472,8 +1472,6 @@ test("covers the responsive workspace and keyboard editing workflow", async ({ p
   await addSegment.focus();
   await page.keyboard.press("Enter");
   await expect(page.getByRole("list", { name: "Selected segments" })).toContainText("00:02.000");
-  await page.getByRole("button", { name: "Select segment 1" }).focus();
-  await page.keyboard.press("Enter");
   await page.getByRole("button", { name: "Save project" }).focus();
   await page.keyboard.press("Enter");
   await expect(projectStatus).toContainText("Untitled project");
@@ -1509,4 +1507,186 @@ test("covers the responsive workspace and keyboard editing workflow", async ({ p
   await page.getByRole("button", { name: "Detect silence" }).focus();
   await page.keyboard.press("Enter");
   await expect(page.getByText("Detection running.")).toBeVisible();
+});
+
+test("keeps the preview stable and exposes familiar playback controls", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: /camera.mp4/ }).click();
+
+  const surface = page.locator(".preview-surface");
+  const initialBounds = await surface.boundingBox();
+  expect(initialBounds).not.toBeNull();
+
+  await page.getByLabel("Timeline playhead").evaluate((element) => {
+    const input = element as HTMLInputElement;
+    input.value = "1000";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await page.waitForTimeout(220);
+  await expect(page.getByText("Loading preview…")).toBeVisible();
+  expect(await surface.boundingBox()).toEqual(initialBounds);
+  await expect(page.getByText("Loading preview…")).not.toBeVisible();
+  expect(await surface.boundingBox()).toEqual(initialBounds);
+
+  const video = page.getByLabel("Preview player");
+  await video.evaluate((element) => {
+    const player = element as HTMLVideoElement;
+    player.play = async () => void player.dispatchEvent(new Event("play"));
+    player.pause = () => void player.dispatchEvent(new Event("pause"));
+  });
+  await video.click();
+  await expect(page.getByRole("button", { name: "Pause preview" })).toBeVisible();
+  await page.getByRole("button", { name: "Pause preview" }).click();
+  await expect(page.getByRole("button", { name: "Play preview" })).toBeVisible();
+
+  await page.getByRole("button", { name: "Mute preview" }).click();
+  await expect(page.getByRole("button", { name: "Unmute preview" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  await page.getByRole("button", { name: "Next frame" }).click();
+  const nextFrame = Number(await page.getByLabel("Timeline playhead").inputValue());
+  expect(nextFrame).toBeGreaterThan(1000);
+  await page.getByRole("button", { name: "Previous frame" }).click();
+  await expect(page.getByLabel("Timeline playhead")).toHaveValue("1000");
+
+  await page.getByLabel("Preview scrubber").fill("3000");
+  await expect(page.getByLabel("Timeline playhead")).toHaveValue("3000");
+  await page.getByLabel("Preview volume").fill("0.35");
+  expect(await video.evaluate((element) => (element as HTMLVideoElement).volume)).toBe(0.35);
+
+  await video.evaluate((element) => {
+    (window as unknown as { fullscreenRequested: boolean }).fullscreenRequested = false;
+    element.requestFullscreen = async () => {
+      (window as unknown as { fullscreenRequested: boolean }).fullscreenRequested = true;
+    };
+  });
+  await page.getByRole("button", { name: "Fullscreen preview" }).click();
+  expect(
+    await page.evaluate(
+      () => (window as unknown as { fullscreenRequested: boolean }).fullscreenRequested,
+    ),
+  ).toBe(true);
+
+  await page.getByRole("heading", { name: "VideoCutlist" }).click();
+  await page.keyboard.press("ArrowRight");
+  expect(Number(await page.getByLabel("Timeline playhead").inputValue())).toBeGreaterThan(3000);
+  const shortcutPosition = await page.getByLabel("Timeline playhead").inputValue();
+  await page.getByLabel("Segment label").focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(page.getByLabel("Timeline playhead")).toHaveValue(shortcutPosition);
+  await page.getByRole("heading", { name: "VideoCutlist" }).click();
+  await page.keyboard.press("Space");
+  await expect(page.getByRole("button", { name: "Pause preview" })).toBeVisible();
+});
+
+test("renders separate timeline lanes and seeks through their shared interaction area", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: /camera.mp4/ }).click();
+
+  const ruler = page.getByRole("img", { name: "Timeline ruler" });
+  const thumbnails = page.getByRole("img", { name: "Thumbnail lane" });
+  const waveform = page.getByRole("img", { name: "Waveform lane" });
+  const [rulerBounds, thumbnailBounds, waveformBounds] = await Promise.all([
+    ruler.boundingBox(),
+    thumbnails.boundingBox(),
+    waveform.boundingBox(),
+  ]);
+  expect(rulerBounds).not.toBeNull();
+  expect(thumbnailBounds).not.toBeNull();
+  expect(waveformBounds).not.toBeNull();
+  expect(rulerBounds!.y + rulerBounds!.height).toBeLessThanOrEqual(thumbnailBounds!.y);
+  expect(thumbnailBounds!.y + thumbnailBounds!.height).toBeLessThanOrEqual(waveformBounds!.y);
+
+  const timeline = page.getByRole("slider", { name: "Timeline position" });
+  const bounds = await timeline.boundingBox();
+  expect(bounds).not.toBeNull();
+  await timeline.click({ position: { x: bounds!.width / 4, y: bounds!.height / 2 } });
+  await expect
+    .poll(async () => Number(await timeline.getAttribute("aria-valuenow")))
+    .toBeGreaterThanOrEqual(2480);
+  expect(Number(await timeline.getAttribute("aria-valuenow"))).toBeLessThanOrEqual(2520);
+  expect(Number(await page.getByLabel("Timeline playhead").inputValue())).toBeLessThanOrEqual(2520);
+
+  const currentBounds = await timeline.boundingBox();
+  const playheadBounds = await page.locator(".timeline-playhead").boundingBox();
+  expect(currentBounds).not.toBeNull();
+  expect(playheadBounds).not.toBeNull();
+  expect(Math.abs(playheadBounds!.y - currentBounds!.y)).toBeLessThanOrEqual(1);
+  expect(Math.abs(playheadBounds!.height - currentBounds!.height)).toBeLessThanOrEqual(2);
+
+  const outMarker = page.locator(".timeline-out");
+  const outBounds = await outMarker.boundingBox();
+  expect(outBounds).not.toBeNull();
+  await page.mouse.move(outBounds!.x + outBounds!.width / 2, outBounds!.y + 8);
+  await page.mouse.down();
+  await page.mouse.move(currentBounds!.x + (currentBounds!.width * 4) / 5, currentBounds!.y + 8, {
+    steps: 3,
+  });
+  await page.mouse.up();
+  await expect(page.locator("#timeline-description")).toContainText(/Out marker 00:08\.0/);
+
+  await page.waitForTimeout(120);
+  const inMarker = page.locator(".timeline-in");
+  const markerBounds = await inMarker.boundingBox();
+  const settledBounds = await timeline.boundingBox();
+  expect(markerBounds).not.toBeNull();
+  expect(markerBounds!.width).toBeGreaterThanOrEqual(12);
+  expect(settledBounds).not.toBeNull();
+  await page.mouse.move(markerBounds!.x + markerBounds!.width / 2, markerBounds!.y + 8);
+  await page.mouse.down();
+  await page.mouse.move(settledBounds!.x + settledBounds!.width / 5, settledBounds!.y + 8, {
+    steps: 3,
+  });
+  await page.mouse.up();
+  await expect(page.locator("#timeline-description")).toContainText(/In marker 00:02\.0/);
+});
+
+test("persists appearance and recovers from invalid stored values", async ({ page }) => {
+  await page.emulateMedia({ colorScheme: "dark" });
+  await page.goto("/");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByLabel("Theme").selectOption("light");
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+
+  await page.evaluate(() =>
+    localStorage.setItem(
+      "videocutlist.settings.v1",
+      JSON.stringify({ appearance: "invalid", muted: true }),
+    ),
+  );
+  await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await page.getByRole("button", { name: "Settings" }).click();
+  await expect(page.getByLabel("Theme")).toHaveValue("system");
+});
+
+test("keeps motion reduced and overflow local at a narrow viewport", async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto("/");
+  await page.getByRole("button", { name: /camera.mp4/ }).click();
+
+  expect(
+    await page.evaluate(() =>
+      getComputedStyle(document.documentElement).getPropertyValue("--motion-panel").trim(),
+    ),
+  ).toBe("1ms");
+  await expect(page.getByRole("button", { name: "Add segment" })).toBeVisible();
+  const moreActions = page.getByText("More editing actions", { exact: true });
+  await expect(moreActions).toBeVisible();
+  await moreActions.click();
+  await expect(page.getByLabel("Segment details")).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
+  const timelineOverflow = await page.locator(".timeline-scroll").evaluate((element) => ({
+    client: element.clientWidth,
+    scroll: element.scrollWidth,
+  }));
+  expect(timelineOverflow.scroll).toBeGreaterThan(timelineOverflow.client);
 });

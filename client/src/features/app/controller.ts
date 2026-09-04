@@ -26,6 +26,8 @@ export function createWorkspaceController() {
   const {
     settings,
     setSettings,
+    appearance,
+    setAppearance,
     settingsOpen,
     setSettingsOpen,
     serverSettingsStatus,
@@ -358,6 +360,8 @@ export function createWorkspaceController() {
     waveform,
     setPreviewCenterMs,
     setSettings,
+    appearance,
+    setAppearance,
     settingsOpen,
     setSettingsOpen,
     serverSettingsStatus,

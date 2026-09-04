@@ -1,4 +1,5 @@
-import { createSignal, Show } from "solid-js";
+import { createEffect, createSignal, onCleanup, Show } from "solid-js";
+import { Settings } from "lucide-solid";
 import { DetectionView } from "./features/detection/DetectionView";
 import { EditorView } from "./features/editor/EditorView";
 import { ExportView } from "./features/export/ExportView";
@@ -8,10 +9,20 @@ import { QueueView } from "./features/queue/QueueView";
 import { SettingsView } from "./features/settings/SettingsView";
 import { createWorkspaceController } from "./features/app/controller";
 import { WorkspaceProvider } from "./features/app/WorkspaceContext";
+import { applyAppearance } from "./features/settings/model";
 
 export function App() {
   const controller = createWorkspaceController();
-  const { selected, projectName, revision, dirty, settingsOpen, openSettings } = controller;
+  const { selected, projectName, revision, dirty, settingsOpen, openSettings, appearance } =
+    controller;
+  createEffect(() => {
+    const preference = appearance();
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const apply = () => applyAppearance(preference, media.matches);
+    apply();
+    if (preference === "system") media.addEventListener("change", apply);
+    onCleanup(() => media.removeEventListener("change", apply));
+  });
   const [activeTask, setActiveTask] = createSignal<"project" | "export" | "detection">("project");
   const taskTabs = ["project", "export", "detection"] as const;
   const moveTask = (current: (typeof taskTabs)[number], direction: number) => {
@@ -44,9 +55,7 @@ export function App() {
             title="Settings"
             onClick={() => void openSettings()}
           >
-            <svg aria-hidden="true" viewBox="0 0 24 24" width="20" height="20">
-              <path d="m9.7 2-.4 2a8 8 0 0 0-1.8 1l-1.8-1-1.7 1.7 1 1.8a8 8 0 0 0-1 1.8l-2 .4v2.4l2 .4a8 8 0 0 0 1 1.8l-1 1.8 1.7 1.7 1.8-1a8 8 0 0 0 1.8 1l.4 2h2.4l.4-2a8 8 0 0 0 1.8-1l1.8 1 1.7-1.7-1-1.8a8 8 0 0 0 1-1.8l2-.4V9.7l-2-.4a8 8 0 0 0-1-1.8l1-1.8-1.7-1.7-1.8 1a8 8 0 0 0-1.8-1l-.4-2zM11 8a4 4 0 1 1 0 8 4 4 0 0 1 0-8" />
-            </svg>
+            <Settings size={20} aria-hidden="true" />
             <span>Settings</span>
           </button>
         </header>

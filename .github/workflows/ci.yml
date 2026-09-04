@@ -31,11 +31,13 @@ jobs:
                   cache: pnpm
                   cache-dependency-path: client/pnpm-lock.yaml
             - run: pnpm --dir client install --frozen-lockfile
-            - run: pnpm --dir client audit --audit-level high
+            - run: >-
+                  pnpm --dir client audit --audit-level high
+                  --ignore-registry-errors
             - run: make check
 
     e2e:
-        runs-on: ubuntu-latest
+        runs-on: ubuntu-24.04
         timeout-minutes: 30
         steps:
             - uses: actions/checkout@v7.0.1
@@ -48,6 +50,4 @@ jobs:
                   cache: pnpm
                   cache-dependency-path: client/pnpm-lock.yaml
             - run: pnpm --dir client install --frozen-lockfile
-            - run: pnpm --dir client exec playwright install-deps chromium
-            - run: pnpm --dir client exec playwright install --only-shell chromium
             - run: make e2e

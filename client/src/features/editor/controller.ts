@@ -87,7 +87,7 @@ export function createEditorController(deps: {
   createEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement;
-      if (["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) return;
+      if (target.matches("input, textarea, select, [contenteditable='true']")) return;
       if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
         event.preventDefault();
         const step = frameDuration(deps.selected()) || 1000;
