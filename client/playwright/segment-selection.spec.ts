@@ -557,7 +557,7 @@ test("explains server-mounted setup when the library is empty", async ({ page })
   await expect(page.getByText("No supported media was found.")).toBeVisible();
   await expect(page.getByText(/Mount supported media, then Refresh to index it/)).toBeVisible();
   await expect(page.getByText(/browser does not upload or choose a host folder/)).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Project" })).not.toBeVisible();
+  await expect(page.getByRole("heading", { name: "Project" })).toBeVisible();
 });
 
 test("keeps the inspector contextual until media is selected", async ({ page }) => {
