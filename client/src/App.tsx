@@ -11,7 +11,7 @@ import { WorkspaceProvider } from "./features/app/WorkspaceContext";
 
 export function App() {
   const controller = createWorkspaceController();
-  const { selected, projectName, dirty, settingsOpen, openSettings } = controller;
+  const { selected, projectName, revision, dirty, settingsOpen, openSettings } = controller;
   const [activeTask, setActiveTask] = createSignal<"project" | "export" | "detection">("project");
   const taskTabs = ["project", "export", "detection"] as const;
   const moveTask = (current: (typeof taskTabs)[number], direction: number) => {
@@ -32,8 +32,8 @@ export function App() {
           <div class="app-heading">
             <h1>VideoCutlist</h1>
             <div class="project-status" aria-label="Project status">
-              <strong>{selected() && !dirty() ? projectName() : "Unsaved project"}</strong>
-              <span>{dirty() ? "Unsaved" : "Saved"}</span>
+              <strong>{revision() > 0 ? projectName() : "Unsaved project"}</strong>
+              <span>{dirty() || revision() === 0 ? "Unsaved" : "Saved"}</span>
             </div>
           </div>
           <button

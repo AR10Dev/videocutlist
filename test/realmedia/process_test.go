@@ -171,7 +171,7 @@ func TestProductionProcessMediaAndDerivedAssets(t *testing.T) {
 	responseDone := make(chan *http.Response, 1)
 	go func() { response, _ := p.do(cancelledRequest); responseDone <- response }()
 	ffmpegPID := ffmpegDescendant(t, p)
-	started := true
+	started := false
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		if response := cacheTempFiles(root); len(response) > len(initialCacheFiles) {

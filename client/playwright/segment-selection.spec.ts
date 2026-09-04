@@ -1440,6 +1440,9 @@ test("covers the responsive workspace and keyboard editing workflow", async ({ p
 
   await page.setViewportSize({ width: 1024, height: 768 });
   await page.goto("/");
+  const projectStatus = page.getByLabel("Project status");
+  await expect(projectStatus).toContainText("Unsaved project");
+  await expect(projectStatus).toContainText("Unsaved");
   await page.getByRole("button", { name: /camera.mp4/ }).focus();
   await page.keyboard.press("Enter");
   await expect(page.getByText(/Preview: 00:00.000 to 00:08.000/)).toBeVisible();
@@ -1473,6 +1476,7 @@ test("covers the responsive workspace and keyboard editing workflow", async ({ p
   await page.keyboard.press("Enter");
   await page.getByRole("button", { name: "Save project" }).focus();
   await page.keyboard.press("Enter");
+  await expect(projectStatus).toContainText("Untitled project");
   await expect(page.getByText("Saved", { exact: true })).toBeVisible();
 
   await exportTab.focus();
