@@ -43,8 +43,8 @@ export function SettingsView() {
         </button>
       </div>
       <p>Browser-local preferences stay in this browser and do not change server configuration.</p>
-      <section aria-labelledby="appearance-settings-heading">
-        <h3 id="appearance-settings-heading">Appearance</h3>
+      <section aria-labelledby="browser-settings-heading">
+        <h3 id="browser-settings-heading">Browser</h3>
         <label>
           Theme
           <select
@@ -64,6 +64,31 @@ export function SettingsView() {
             </For>
           </select>
         </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={muted()}
+            onChange={(event) => {
+              const value = event.currentTarget.checked;
+              setMuted(value);
+              saveSettings({ muted: value });
+            }}
+          />{" "}
+          Mute preview by default (saved in this browser)
+        </label>
+        <button
+          type="button"
+          onClick={() => {
+            setSettings(defaultSettings);
+            setCutStrategy(defaultSettings.cutStrategy);
+            setFilenameTemplate(defaultSettings.filenameTemplate);
+            setMuted(defaultSettings.muted);
+            setAppearance(defaultSettings.appearance);
+            localStorage.setItem(settingsKey, JSON.stringify(defaultSettings));
+          }}
+        >
+          Reset browser preferences
+        </button>
       </section>
       <section aria-labelledby="library-settings-heading">
         <h3 id="library-settings-heading">Library</h3>
@@ -180,8 +205,8 @@ export function SettingsView() {
           </p>
         </Show>
       </section>
-      <section aria-labelledby="performance-settings-heading">
-        <h3 id="performance-settings-heading">Performance</h3>
+      <section aria-labelledby="processing-settings-heading">
+        <h3 id="processing-settings-heading">Processing</h3>
         <p>Changes apply to the next job; running FFmpeg jobs are not reconfigured.</p>
         <label>
           Export concurrency{" "}
@@ -192,7 +217,7 @@ export function SettingsView() {
             onChange={(event) =>
               void saveRuntimeSettings(
                 { exportLimit: event.currentTarget.valueAsNumber },
-                "Performance settings saved.",
+                "Processing settings saved.",
               )
             }
           />
@@ -206,7 +231,7 @@ export function SettingsView() {
             onChange={(event) =>
               void saveRuntimeSettings(
                 { previewGlobalLimit: event.currentTarget.valueAsNumber },
-                "Performance settings saved.",
+                "Processing settings saved.",
               )
             }
           />
@@ -220,7 +245,7 @@ export function SettingsView() {
             onChange={(event) =>
               void saveRuntimeSettings(
                 { previewBeforeMs: event.currentTarget.valueAsNumber },
-                "Performance settings saved.",
+                "Processing settings saved.",
               )
             }
           />
@@ -234,7 +259,7 @@ export function SettingsView() {
             onChange={(event) =>
               void saveRuntimeSettings(
                 { previewAfterMs: event.currentTarget.valueAsNumber },
-                "Performance settings saved.",
+                "Processing settings saved.",
               )
             }
           />
@@ -248,7 +273,7 @@ export function SettingsView() {
             onChange={(event) =>
               void saveRuntimeSettings(
                 { previewMaxMs: event.currentTarget.valueAsNumber },
-                "Performance settings saved.",
+                "Processing settings saved.",
               )
             }
           />
@@ -262,7 +287,7 @@ export function SettingsView() {
             onChange={(event) =>
               void saveRuntimeSettings(
                 { previewGridMs: event.currentTarget.valueAsNumber },
-                "Performance settings saved.",
+                "Processing settings saved.",
               )
             }
           />
@@ -276,7 +301,7 @@ export function SettingsView() {
             onChange={(event) =>
               void saveRuntimeSettings(
                 { mediaMaxFiles: event.currentTarget.valueAsNumber },
-                "Performance settings saved.",
+                "Processing settings saved.",
               )
             }
           />
@@ -290,7 +315,7 @@ export function SettingsView() {
             onChange={(event) =>
               void saveRuntimeSettings(
                 { mediaMaxDepth: event.currentTarget.valueAsNumber },
-                "Performance settings saved.",
+                "Processing settings saved.",
               )
             }
           />
@@ -304,42 +329,14 @@ export function SettingsView() {
             onChange={(event) =>
               void saveRuntimeSettings(
                 { cacheMaxBytes: event.currentTarget.valueAsNumber },
-                "Performance settings saved.",
+                "Processing settings saved.",
               )
             }
           />
         </label>
       </section>
-      <section aria-labelledby="editor-settings-heading">
-        <h3 id="editor-settings-heading">Editor</h3>
-        <label>
-          <input
-            type="checkbox"
-            checked={muted()}
-            onChange={(event) => {
-              const value = event.currentTarget.checked;
-              setMuted(value);
-              saveSettings({ muted: value });
-            }}
-          />{" "}
-          Mute preview by default (saved in this browser)
-        </label>
-        <button
-          type="button"
-          onClick={() => {
-            setSettings(defaultSettings);
-            setCutStrategy(defaultSettings.cutStrategy);
-            setFilenameTemplate(defaultSettings.filenameTemplate);
-            setMuted(defaultSettings.muted);
-            setAppearance(defaultSettings.appearance);
-            localStorage.setItem(settingsKey, JSON.stringify(defaultSettings));
-          }}
-        >
-          Reset browser preferences
-        </button>
-      </section>
-      <section aria-labelledby="about-settings-heading">
-        <h3 id="about-settings-heading">About / Diagnostics</h3>
+      <div aria-labelledby="about-settings-heading">
+        <h4 id="about-settings-heading">About / Diagnostics</h4>
         <p>Preview request and cache diagnostics are kept out of the clipping workspace.</p>
         <details>
           <summary>Preview diagnostics</summary>
@@ -363,7 +360,7 @@ export function SettingsView() {
           </dl>
         </details>
         <p role="status">{serverSettingsStatus()}</p>
-      </section>
+      </div>
     </section>
   );
 }
