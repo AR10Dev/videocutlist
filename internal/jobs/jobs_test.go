@@ -41,6 +41,10 @@ func TestUnifiedJobsTransitionsAndDerivedBatch(t *testing.T) {
 	if _, err = jobs.Create(ctx, store.Job{ID: "j_000000000002", BatchID: "b_000000000002", Kind: store.JobScan, RequestJSON: `{"root":"camera"}`}); err != nil {
 		t.Fatal(err)
 	}
+	batchIDs, err := jobs.ListBatchIDs(ctx, store.JobExport, 10)
+	if err != nil || len(batchIDs) != 1 || batchIDs[0] != job.BatchID {
+		t.Fatalf("export batch IDs = %v, %v", batchIDs, err)
+	}
 	if _, err = jobs.Create(ctx, store.Job{ID: "j_000000000003", BatchID: "b_000000000003", Kind: store.JobScan, ProjectID: "p", RequestJSON: `{}`}); err == nil {
 		t.Fatal("scan project reference accepted")
 	}

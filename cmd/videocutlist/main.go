@@ -186,16 +186,16 @@ func run(ctx context.Context) error {
 	batchExports.Scheduler = scheduler
 	mediaService.Scheduler, mediaService.UnifiedJobs = scheduler, unifiedJobs
 	detectionService.Scheduler, detectionService.UnifiedJobs = scheduler, unifiedJobs
-	if mediaService.Configured {
-		if _, err := mediaService.StartImport(ctx); err != nil {
-			return fmt.Errorf("start initial media scan: %w", err)
-		}
-	}
 	batchExports.RunSnapshot = func(ctx context.Context, jobID string, snapshot projects.ExportSnapshot) (string, error) {
 		return exportExecutor.ExecuteBatchSnapshot(ctx, jobID, snapshot)
 	}
 	scheduler.Start()
 	defer scheduler.Shutdown(context.Background())
+	if mediaService.Configured {
+		if _, err := mediaService.StartImport(ctx); err != nil && !errors.Is(err, jobqueue.ErrQueueFull) {
+			return fmt.Errorf("start initial media scan: %w", err)
+		}
+	}
 	jobService := projects.JobUseCase{Jobs: unifiedJobs}
 	authenticator, err := httpapi.NewAuthenticator(httpapi.AuthConfig{
 		Mode: cfg.AuthMode, BearerToken: cfg.BearerToken, ListenAddress: cfg.ListenAddress,

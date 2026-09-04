@@ -15,7 +15,8 @@ import (
 )
 
 func TestRunRecoversUnifiedJobsOnStartup(t *testing.T) {
-	databasePath := t.TempDir() + "/videocutlist.db"
+	directory := t.TempDir()
+	databasePath := directory + "/videocutlist.db"
 	db, err := store.OpenDatabase(context.Background(), databasePath)
 	if err != nil {
 		t.Fatal(err)
@@ -32,19 +33,25 @@ func TestRunRecoversUnifiedJobsOnStartup(t *testing.T) {
 	if _, err := jobs.Start(context.Background(), job.ID); err != nil {
 		t.Fatal(err)
 	}
+	for i := range 4 {
+		id := strconv.Itoa(i)
+		if _, err := jobs.Create(context.Background(), jobqueue.Job{ID: "j_queued000000" + id, BatchID: "b_queued000000" + id, Kind: jobqueue.JobScan, RequestJSON: `{}`}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	port := strconv.Itoa(listener.Addr().(*net.TCPAddr).Port)
 	listener.Close()
-	directory := t.TempDir()
 	t.Setenv("VIDEOCUTLIST_DATABASE_PATH", databasePath)
 	t.Setenv("VIDEOCUTLIST_CACHE_DIR", directory+"/cache")
 	t.Setenv("VIDEOCUTLIST_EXPORT_DIR", directory+"/exports")
-	t.Setenv("VIDEOCUTLIST_MEDIA_ROOTS_JSON", `{}`)
+	t.Setenv("VIDEOCUTLIST_MEDIA_ROOTS_JSON", `{"media":"`+directory+`"}`)
 	t.Setenv("VIDEOCUTLIST_LISTEN_ADDRESS", "127.0.0.1")
 	t.Setenv("VIDEOCUTLIST_PORT", port)
+	t.Setenv("VIDEOCUTLIST_EXPORT_LIMIT", "1")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := make(chan error, 1)

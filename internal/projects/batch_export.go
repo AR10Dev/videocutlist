@@ -174,7 +174,7 @@ func (b BatchExportUseCase) Get(ctx context.Context, batchID string) (Batch, err
 }
 
 func (b BatchExportUseCase) List(ctx context.Context, limit int) (BatchPage, error) {
-	ids, err := b.Jobs.ListBatchIDs(ctx, limit)
+	ids, err := b.Jobs.ListBatchIDs(ctx, jobqueue.JobExport, limit)
 	if err != nil {
 		return BatchPage{}, err
 	}

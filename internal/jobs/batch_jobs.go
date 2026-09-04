@@ -54,8 +54,8 @@ func (s *JobsStore) ListByBatch(ctx context.Context, batchID string) ([]Job, err
 	return result, nil
 }
 
-func (s *JobsStore) ListBatchIDs(ctx context.Context, limit int) ([]string, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT batch_id FROM jobs GROUP BY batch_id ORDER BY MAX(created_at) DESC, batch_id DESC LIMIT ?`, limit)
+func (s *JobsStore) ListBatchIDs(ctx context.Context, kind JobKind, limit int) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT batch_id FROM jobs WHERE kind=? GROUP BY batch_id ORDER BY MAX(created_at) DESC, batch_id DESC LIMIT ?`, kind, limit)
 	if err != nil {
 		return nil, err
 	}

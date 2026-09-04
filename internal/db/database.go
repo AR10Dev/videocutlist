@@ -260,6 +260,11 @@ func migrateLegacyIdentityColumns(ctx context.Context, db *sql.DB) error {
 		return err
 	}
 	defer tx.Rollback()
+	for _, index := range []string{"projects_owner_updated", "export_jobs_owner_updated", "detection_jobs_owner_updated"} {
+		if _, err := tx.ExecContext(ctx, `DROP INDEX IF EXISTS `+index); err != nil {
+			return fmt.Errorf("drop legacy index %s: %w", index, err)
+		}
+	}
 	for _, table := range []string{"media", "projects", "export_jobs", "detection_jobs", "jobs", "cache_entries", "runtime_settings"} {
 		for _, column := range []string{"owner_login", "principal", "role", "capability"} {
 			var present int
