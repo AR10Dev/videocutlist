@@ -1,5 +1,12 @@
 import type { Segment } from "../preview/model";
 
+export const timelineTimeFromPointer = (
+  clientX: number,
+  left: number,
+  width: number,
+  durationMs: number,
+) => (width > 0 ? Math.max(0, Math.min(durationMs, ((clientX - left) / width) * durationMs)) : 0);
+
 export type TimelineSnapshot = {
   playheadMs: number;
   inMs: number;

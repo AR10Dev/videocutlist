@@ -538,30 +538,55 @@ video {
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
 }
+.timeline-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  margin-top: 14px;
+}
 .timeline-visual {
   position: relative;
-  min-height: 82px;
-  max-width: 100%;
+  min-width: 420px;
+  max-width: none;
   overflow: hidden;
-  margin-top: 14px;
   background: #0d0e11;
   border: 1px solid #33353d;
   border-radius: 4px;
+  cursor: ew-resize;
+  user-select: none;
+  touch-action: none;
 }
-.timeline-canvas {
-  display: block;
+.timeline-lane {
+  position: relative;
   width: 100%;
-  height: 80px;
-  opacity: 0.82;
+  border-bottom: 1px solid #33353d;
 }
-.timeline-labels {
-  position: absolute;
-  inset: auto 6px 2px;
+.timeline-ruler {
+  height: 24px;
   display: flex;
+  align-items: center;
   justify-content: space-between;
+  padding: 0 6px;
   color: #e5e6ea;
   font-size: 0.68rem;
-  text-shadow: 0 1px 2px #000;
+}
+.timeline-thumbnails {
+  height: 64px;
+}
+.timeline-waveform {
+  height: 48px;
+  border-bottom: 0;
+}
+.timeline-canvas,
+.timeline-waveform-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  opacity: 0.82;
+}
+.timeline-overlays {
+  position: absolute;
+  inset: 0;
   pointer-events: none;
 }
 .timeline-overlay,
@@ -569,18 +594,45 @@ video {
   position: absolute;
   top: 0;
   bottom: 0;
-  width: 2px;
+  width: 12px;
+  margin-left: -6px;
+  background: transparent;
+  pointer-events: auto;
+}
+.timeline-overlay::after {
+  content: "";
+  position: absolute;
+  inset: 0 5px;
   background: #f4b23e;
-  pointer-events: none;
 }
 .timeline-segment {
   width: auto;
+  margin-left: 0;
   background: #53c18d;
   opacity: 0.38;
 }
 .timeline-segment.selected {
   opacity: 0.8;
   outline: 2px solid #f4b23e;
+}
+.timeline-playhead {
+  z-index: 2;
+}
+.timeline-playhead::after {
+  background: #ff5f5f;
+}
+.timeline-timecode {
+  position: absolute;
+  top: 4px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 3;
+  padding: 2px 6px;
+  color: #fff;
+  background: #111217e8;
+  border-radius: 3px;
+  font-size: 0.72rem;
+  pointer-events: none;
 }
 .control-help {
   color: #a9acb5;
@@ -765,11 +817,8 @@ ul {
     flex-wrap: wrap;
     gap: 4px 12px;
   }
-  .timeline-canvas {
-    height: 60px;
-  }
   .timeline-visual {
-    min-height: 62px;
+    min-width: 420px;
   }
   .task-tabs {
     display: grid;

@@ -1,6 +1,6 @@
 import { createEffect } from "solid-js";
 
-type Props = { thumbnailURL?: string; waveform: number[] };
+type Props = { thumbnailURL?: string; waveform: number[]; lane?: "thumbnail" | "waveform" };
 
 export function TimelineCanvas(props: Props) {
   let canvas: HTMLCanvasElement | undefined;
@@ -24,7 +24,7 @@ export function TimelineCanvas(props: Props) {
         context.fillRect(index * column, (bounds.height - height) / 2, Math.ceil(column), height);
       });
     };
-    if (!thumbnailURL) {
+    if (props.lane === "waveform" || !thumbnailURL) {
       drawWaveform();
       return;
     }
@@ -40,6 +40,10 @@ export function TimelineCanvas(props: Props) {
     draw(props.thumbnailURL, props.waveform);
   });
   return (
-    <canvas class="timeline-canvas" ref={(element) => (canvas = element)} aria-hidden="true" />
+    <canvas
+      class={props.lane === "waveform" ? "timeline-waveform-canvas" : "timeline-canvas"}
+      ref={(element) => (canvas = element)}
+      aria-hidden="true"
+    />
   );
 }

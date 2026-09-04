@@ -1,8 +1,7 @@
 import { createSignal, For, Show } from "solid-js";
 import { frameDuration } from "./frame";
 import { redoTimeline, undoTimeline } from "./timeline";
-import { TimelineCanvas } from "./TimelineCanvas";
-import { viewportScale } from "../preview/assets";
+import { Timeline } from "./Timeline";
 import { formatTime, parseTimecode } from "../preview/model";
 import { PreviewPlayer } from "../preview/PreviewPlayer";
 import { useWorkspace } from "../app/WorkspaceContext";
@@ -17,8 +16,6 @@ export function EditorView() {
     setSegmentLabel,
     timecode,
     setTimecode,
-    thumbnailURL,
-    waveform,
     setPreviewCenterMs,
     muted,
     setMuted,
@@ -154,56 +151,7 @@ export function EditorView() {
               updateTimeline={(changes) => updateTimeline(changes)}
               markDirty={markDirty}
             />
-            <div
-              class="timeline-visual"
-              role="group"
-              aria-labelledby="timeline-heading timeline-description"
-              style={{ width: `${viewportScale(present().zoom) * 100}%` }}
-            >
-              <TimelineCanvas thumbnailURL={thumbnailURL()} waveform={waveform()} />
-              <div class="timeline-labels" aria-hidden="true">
-                <span>{formatTime(0, duration())}</span>
-                <span>{formatTime(duration() / 2, duration())}</span>
-                <span>{formatTime(duration(), duration())}</span>
-              </div>
-              <span
-                class="timeline-overlay timeline-in"
-                style={{
-                  transform: `translateX(${(present().inMs / duration()) * 100}%)`,
-                }}
-                role="img"
-                aria-label="In marker"
-              />
-              <span
-                class="timeline-overlay timeline-out"
-                style={{
-                  transform: `translateX(${(present().outMs / duration()) * 100}%)`,
-                }}
-                role="img"
-                aria-label="Out marker"
-              />
-              <For each={present().segments}>
-                {(segment, index) => (
-                  <span
-                    class={`timeline-segment ${selectedSegment() === index() ? "selected" : ""}`}
-                    style={{
-                      left: `${(segment.startMs / duration()) * 100}%`,
-                      width: `${((segment.endMs - segment.startMs) / duration()) * 100}%`,
-                    }}
-                    role="img"
-                    aria-label={`Segment ${formatTime(segment.startMs, duration())} to ${formatTime(segment.endMs, duration())}`}
-                  />
-                )}
-              </For>
-              <span
-                role="img"
-                class="timeline-overlay timeline-playhead"
-                style={{
-                  transform: `translateX(${(playheadMs() / duration()) * 100}%)`,
-                }}
-                aria-label="Playhead"
-              />
-            </div>
+            <Timeline />
             {assetStatus() && <p role="status">{assetStatus()}</p>}
             <input
               id="playhead"
