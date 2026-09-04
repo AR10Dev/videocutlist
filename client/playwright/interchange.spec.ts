@@ -113,10 +113,9 @@ test("export cancellation is isolated from a changed media context", async ({ pa
 test("project interchange controls wait for media selection", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Choose a video to begin" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Preview" })).toBeDisabled();
-  await expect(page.getByRole("button", { name: "Timeline editing" })).toBeDisabled();
-  await expect(page.getByRole("button", { name: "Detection" })).toBeDisabled();
-  await expect(page.getByRole("button", { name: "Export" })).toBeDisabled();
+  await expect(page.getByRole("tab", { name: "Project", exact: true })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Export", exact: true })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Detection", exact: true })).toBeDisabled();
   await expect(
     page.getByText("Select a video from the Media library to unlock the editing workspace."),
   ).toBeVisible();
