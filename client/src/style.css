@@ -653,20 +653,53 @@ video {
   margin: 8px 0 14px;
 }
 
-.controls {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  align-items: center;
-}
-.controls button {
-  margin: 0;
-}
-.editor-panel .controls {
+.editor-controls {
   padding: 10px 0;
-  border-top: 1px solid #30323a;
-  border-bottom: 1px solid #30323a;
+  border-top: 1px solid color-mix(in srgb, var(--text-muted) 25%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--text-muted) 25%, transparent);
 }
+.editor-controls .control-group {
+  min-height: 44px;
+}
+.editor-controls button,
+.editor-controls input,
+.editor-controls select {
+  min-height: 44px;
+}
+.editor-controls .input {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.editor-controls .input input {
+  min-height: 32px;
+  border: 0;
+  outline: 0;
+  padding: 4px;
+}
+.editor-controls .input span:not(.sr-only) {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.editor-panel li button {
+  min-width: 44px;
+  min-height: 44px;
+}
+.editor-panel li .btn-error {
+  min-width: auto;
+}
+
 .editor-panel ol {
   margin: 14px 0;
   padding-left: 22px;
@@ -828,17 +861,17 @@ ul {
     min-width: 0;
     padding-inline: 4px;
   }
-  .controls {
+  .editor-controls {
     align-items: stretch;
   }
-  .controls button,
-  .controls label {
+  .editor-controls button,
+  .editor-controls label {
     min-height: 44px;
   }
-  .controls label {
+  .editor-controls label {
     flex: 1 1 100%;
   }
-  .controls label input {
+  .editor-controls label input {
     width: 100%;
   }
 }

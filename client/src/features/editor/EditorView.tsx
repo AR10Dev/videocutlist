@@ -1,4 +1,5 @@
 import { createSignal, For, Show } from "solid-js";
+import { ArrowDown, ArrowUp, Clock3, LocateFixed, Plus, Redo2, Trash2, Undo2 } from "lucide-solid";
 import { frameDuration } from "./frame";
 import { redoTimeline, undoTimeline } from "./timeline";
 import { Timeline } from "./Timeline";
@@ -76,10 +77,17 @@ export function EditorView() {
     }
   };
   return (
-    <section class="editor-panel" aria-labelledby="timeline-heading" onKeyDown={handleKeyDown}>
-      <h2 id="timeline-heading" tabIndex={-1}>
-        Timeline
-      </h2>
+    <section
+      class="editor-panel card bg-base-200 shadow-sm"
+      aria-labelledby="timeline-heading"
+      onKeyDown={handleKeyDown}
+    >
+      <div class="panel-heading">
+        <h2 id="timeline-heading" tabIndex={-1} class="card-title text-base">
+          Timeline
+        </h2>
+        <span class="badge badge-ghost">{present().segments.length} segments</span>
+      </div>
       <Show
         when={selected()}
         fallback={
@@ -117,9 +125,12 @@ export function EditorView() {
       >
         {(item) => (
           <>
-            <p>
-              <strong>{item().name}</strong> · {formatTime(item().durationMs, duration())}
-            </p>
+            <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+              <p class="m-0 truncate">
+                <strong>{item().name}</strong> · {formatTime(item().durationMs, duration())}
+              </p>
+              <span class="badge badge-outline">{formatTime(duration(), duration())}</span>
+            </div>
             <p id="timeline-description">
               Playhead {formatTime(playheadMs(), duration())}. In marker{" "}
               {formatTime(present().inMs, duration())}. Out marker{" "}
@@ -152,7 +163,11 @@ export function EditorView() {
               markDirty={markDirty}
             />
             <Timeline />
-            {assetStatus() && <p role="status">{assetStatus()}</p>}
+            {assetStatus() && (
+              <div class="alert alert-info py-2 mb-3" role="status">
+                {assetStatus()}
+              </div>
+            )}
             <input
               id="playhead"
               aria-label="Timeline playhead"
@@ -173,73 +188,98 @@ export function EditorView() {
               In: {formatTime(present().inMs, duration())} · Out:{" "}
               {formatTime(present().outMs, duration())}
             </p>
-            <div class="controls">
-              <button
-                disabled={!timeline().past.length}
-                onClick={() => {
-                  const next = undoTimeline(timeline());
-                  setTimeline(next);
-                  setPreviewCenterMs(next.present.playheadMs);
-                  markDirty();
-                }}
-                aria-keyshortcuts="Control+Z Meta+Z"
+            <div
+              class="editor-controls flex flex-wrap items-end gap-3"
+              aria-label="Editing controls"
+            >
+              <div class="control-group flex flex-wrap items-center gap-2" aria-label="History">
+                <button
+                  class="btn btn-sm btn-square"
+                  title="Undo"
+                  aria-label="Undo"
+                  disabled={!timeline().past.length}
+                  onClick={() => {
+                    const next = undoTimeline(timeline());
+                    setTimeline(next);
+                    setPreviewCenterMs(next.present.playheadMs);
+                    markDirty();
+                  }}
+                  aria-keyshortcuts="Control+Z Meta+Z"
+                >
+                  <Undo2 size={16} aria-hidden="true" />
+                  <span class="sr-only">Undo</span>
+                </button>
+                <button
+                  class="btn btn-sm btn-square"
+                  title="Redo"
+                  aria-label="Redo"
+                  disabled={!timeline().future.length}
+                  onClick={() => {
+                    const next = redoTimeline(timeline());
+                    setTimeline(next);
+                    setPreviewCenterMs(next.present.playheadMs);
+                    markDirty();
+                  }}
+                  aria-keyshortcuts="Control+Y Meta+Shift+Z"
+                >
+                  <Redo2 size={16} aria-hidden="true" />
+                  <span class="sr-only">Redo</span>
+                </button>
+                <button
+                  class="btn btn-sm"
+                  aria-keyshortcuts="I"
+                  onClick={() => setMarker("inMs", watchedPosition())}
+                >
+                  <LocateFixed size={16} aria-hidden="true" /> Set start
+                </button>
+                <button
+                  class="btn btn-sm"
+                  aria-keyshortcuts="O"
+                  onClick={() => setMarker("outMs", Math.min(duration(), watchedPosition()))}
+                >
+                  <LocateFixed size={16} aria-hidden="true" /> Set end
+                </button>
+                <button
+                  class="btn btn-sm btn-primary"
+                  onClick={addSegment}
+                  disabled={present().inMs >= present().outMs}
+                  aria-describedby="add-segment-help"
+                >
+                  <Plus size={16} aria-hidden="true" /> Add segment
+                </button>
+              </div>
+              <div
+                class="control-group flex flex-wrap items-center gap-2"
+                aria-label="Segment details"
               >
-                Undo
-              </button>
-              <button
-                disabled={!timeline().future.length}
-                onClick={() => {
-                  const next = redoTimeline(timeline());
-                  setTimeline(next);
-                  setPreviewCenterMs(next.present.playheadMs);
-                  markDirty();
-                }}
-                aria-keyshortcuts="Control+Y Meta+Shift+Z"
-              >
-                Redo
-              </button>
-              <button aria-keyshortcuts="I" onClick={() => setMarker("inMs", watchedPosition())}>
-                Set start
-              </button>
-              <button
-                aria-keyshortcuts="O"
-                onClick={() => setMarker("outMs", Math.min(duration(), watchedPosition()))}
-              >
-                Set end
-              </button>
-              <button
-                class="primary"
-                onClick={addSegment}
-                disabled={present().inMs >= present().outMs}
-                aria-describedby="add-segment-help"
-              >
-                Add segment
-              </button>
-              <label>
-                Timecode{" "}
-                <input
-                  value={timecode()}
-                  placeholder="00:00.000"
-                  onInput={(event) => setTimecode(event.currentTarget.value)}
-                />
-              </label>
-              <button
-                onClick={() => {
-                  const value = parseTimecode(timecode());
-                  if (value === undefined || value > duration())
-                    return setStatus("Invalid timecode.");
-                  updateTimeline({ playheadMs: value });
-                }}
-              >
-                Go to timecode
-              </button>
-              <label>
-                Segment label{" "}
-                <input
-                  value={segmentLabel()}
-                  onInput={(event) => setSegmentLabel(event.currentTarget.value)}
-                />
-              </label>
+                <label class="input input-sm">
+                  <Clock3 size={16} aria-hidden="true" />
+                  <span class="sr-only">Timecode</span>{" "}
+                  <input
+                    value={timecode()}
+                    placeholder="00:00.000"
+                    onInput={(event) => setTimecode(event.currentTarget.value)}
+                  />
+                </label>
+                <button
+                  class="btn btn-sm"
+                  onClick={() => {
+                    const value = parseTimecode(timecode());
+                    if (value === undefined || value > duration())
+                      return setStatus("Invalid timecode.");
+                    updateTimeline({ playheadMs: value });
+                  }}
+                >
+                  Go to timecode
+                </button>
+                <label>
+                  Segment label{" "}
+                  <input
+                    value={segmentLabel()}
+                    onInput={(event) => setSegmentLabel(event.currentTarget.value)}
+                  />
+                </label>
+              </div>
             </div>
             <p id="add-segment-help" class="control-help" role="status">
               {present().inMs >= present().outMs
@@ -275,20 +315,29 @@ export function EditorView() {
                       ({formatTime(segment.endMs - segment.startMs, duration())} duration)
                     </span>{" "}
                     <button
+                      class="btn btn-sm btn-square"
+                      title={`Move segment ${index() + 1} up`}
                       aria-label={`Move segment ${index() + 1} up`}
                       onClick={() => moveSegment(index(), -1)}
                       disabled={index() === 0}
                     >
-                      Move up
+                      <ArrowUp size={16} aria-hidden="true" />
                     </button>{" "}
                     <button
+                      class="btn btn-sm btn-square"
+                      title={`Move segment ${index() + 1} down`}
                       aria-label={`Move segment ${index() + 1} down`}
                       onClick={() => moveSegment(index(), 1)}
                       disabled={index() === present().segments.length - 1}
                     >
-                      Move down
+                      <ArrowDown size={16} aria-hidden="true" />
                     </button>{" "}
-                    <button onClick={() => removeSegment(index())}>Remove segment</button>
+                    <button
+                      class="btn btn-sm btn-error btn-outline"
+                      onClick={() => removeSegment(index())}
+                    >
+                      <Trash2 size={16} aria-hidden="true" /> Remove segment
+                    </button>
                   </li>
                 )}
               </For>
