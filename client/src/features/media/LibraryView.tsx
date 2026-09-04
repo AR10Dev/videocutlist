@@ -25,7 +25,9 @@ export function LibraryView() {
       aria-labelledby="media-heading"
     >
       <div class="panel-heading">
-        <h2 id="media-heading">Media explorer</h2>
+        <h2 id="media-heading" tabIndex={-1}>
+          Media explorer
+        </h2>
         <Show when={selected()}>
           <button class="change-video" onClick={() => setExplorerOpen((open) => !open)}>
             {explorerOpen() ? "Close" : "Change video"}

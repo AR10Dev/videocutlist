@@ -57,32 +57,13 @@ export function EditorView() {
           <section class="editor-onboarding" aria-labelledby="editor-onboarding-heading">
             <h3 id="editor-onboarding-heading">Choose a video to begin</h3>
             <p>Select a video from the Media library to unlock the editing workspace.</p>
-            <div class="locked-workflows" aria-label="Editor workflows">
-              <p>
-                <button disabled title="Select a video before opening preview.">
-                  Preview
-                </button>{" "}
-                Select a video first.
-              </p>
-              <p>
-                <button disabled title="Select a video before editing the timeline.">
-                  Timeline editing
-                </button>{" "}
-                Select a video first.
-              </p>
-              <p>
-                <button disabled title="Select a video before running detection.">
-                  Detection
-                </button>{" "}
-                Select a video first.
-              </p>
-              <p>
-                <button disabled title="Select a video before exporting.">
-                  Export
-                </button>{" "}
-                Select a video first.
-              </p>
-            </div>
+            <button
+              class="btn btn-primary"
+              type="button"
+              onClick={() => document.getElementById("media-heading")?.focus()}
+            >
+              Choose a video
+            </button>
           </section>
         }
       >
@@ -148,7 +129,10 @@ export function EditorView() {
               class="editor-controls flex flex-wrap items-end gap-3"
               aria-label="Editing controls"
             >
-              <div class="control-group flex flex-wrap items-center gap-2" aria-label="History">
+              <div
+                class="control-group history-controls flex flex-wrap items-center gap-2"
+                aria-label="History"
+              >
                 <button
                   class="btn btn-sm btn-square"
                   title="Undo"
@@ -181,6 +165,11 @@ export function EditorView() {
                   <Redo2 size={16} aria-hidden="true" />
                   <span class="sr-only">Redo</span>
                 </button>
+              </div>
+              <div
+                class="control-group marking-controls flex flex-wrap items-center gap-2"
+                aria-label="Marking controls"
+              >
                 <button
                   class="btn btn-sm"
                   aria-keyshortcuts="I"
@@ -256,39 +245,44 @@ export function EditorView() {
             <ol aria-label="Selected segments">
               <For each={present().segments}>
                 {(segment, index) => (
-                  <li class="segment-row">
-                    <strong>Segment {index() + 1}</strong> · {segment.label ?? "Unlabelled"}:{" "}
-                    <span>
-                      {formatTime(segment.startMs, duration())} –{" "}
-                      {formatTime(segment.endMs, duration())}
+                  <li class="segment-row" aria-label={`Segment ${index() + 1}`}>
+                    <span class="segment-order" aria-label="Order">
+                      {index() + 1}
                     </span>{" "}
-                    <span class="segment-duration">
-                      ({formatTime(segment.endMs - segment.startMs, duration())} duration)
+                    <span class="segment-label">{segment.label ?? "Unlabelled"}</span>:{" "}
+                    <span class="segment-range" aria-label="Start and end">
+                      <span class="segment-start">{formatTime(segment.startMs, duration())}</span> –{" "}
+                      <span class="segment-end">{formatTime(segment.endMs, duration())}</span>
                     </span>{" "}
-                    <button
-                      class="btn btn-sm btn-square"
-                      title={`Move segment ${index() + 1} up`}
-                      aria-label={`Move segment ${index() + 1} up`}
-                      onClick={() => moveSegment(index(), -1)}
-                      disabled={index() === 0}
-                    >
-                      <ArrowUp size={16} aria-hidden="true" />
-                    </button>{" "}
-                    <button
-                      class="btn btn-sm btn-square"
-                      title={`Move segment ${index() + 1} down`}
-                      aria-label={`Move segment ${index() + 1} down`}
-                      onClick={() => moveSegment(index(), 1)}
-                      disabled={index() === present().segments.length - 1}
-                    >
-                      <ArrowDown size={16} aria-hidden="true" />
-                    </button>{" "}
-                    <button
-                      class="btn btn-sm btn-error btn-outline"
-                      onClick={() => removeSegment(index())}
-                    >
-                      <Trash2 size={16} aria-hidden="true" /> Remove segment
-                    </button>
+                    <span class="segment-duration" aria-label="Duration">
+                      {formatTime(segment.endMs - segment.startMs, duration())}
+                    </span>{" "}
+                    <span class="segment-actions" aria-label={`Actions for segment ${index() + 1}`}>
+                      <button
+                        class="btn btn-sm btn-square"
+                        title={`Move segment ${index() + 1} up`}
+                        aria-label={`Move segment ${index() + 1} up`}
+                        onClick={() => moveSegment(index(), -1)}
+                        disabled={index() === 0}
+                      >
+                        <ArrowUp size={16} aria-hidden="true" />
+                      </button>{" "}
+                      <button
+                        class="btn btn-sm btn-square"
+                        title={`Move segment ${index() + 1} down`}
+                        aria-label={`Move segment ${index() + 1} down`}
+                        onClick={() => moveSegment(index(), 1)}
+                        disabled={index() === present().segments.length - 1}
+                      >
+                        <ArrowDown size={16} aria-hidden="true" />
+                      </button>{" "}
+                      <button
+                        class="btn btn-sm btn-error btn-outline"
+                        onClick={() => removeSegment(index())}
+                      >
+                        <Trash2 size={16} aria-hidden="true" /> Remove segment
+                      </button>
+                    </span>
                   </li>
                 )}
               </For>

@@ -44,7 +44,9 @@ export function App() {
             <h1>VideoCutlist</h1>
             <div class="project-status" aria-label="Project status">
               <strong>{revision() > 0 ? projectName() : "Unsaved project"}</strong>
-              <span>{dirty() || revision() === 0 ? "Unsaved" : "Saved"}</span>
+              <span role="status">
+                {revision() === 0 ? "Not saved" : dirty() ? "Unsaved changes" : "Saved"}
+              </span>
             </div>
           </div>
           <button
