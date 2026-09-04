@@ -321,6 +321,7 @@ export function SettingsView() {
             setCutStrategy(defaultSettings.cutStrategy);
             setFilenameTemplate(defaultSettings.filenameTemplate);
             setMuted(defaultSettings.muted);
+            setAppearance(defaultSettings.appearance);
             localStorage.setItem(settingsKey, JSON.stringify(defaultSettings));
           }}
         >

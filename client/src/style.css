@@ -302,9 +302,6 @@ section {
   align-items: center;
   gap: 6px;
 }
-.settings-button svg {
-  fill: currentColor;
-}
 .app-shell > * {
   min-width: 0;
 }
@@ -534,6 +531,16 @@ video {
 .preview-controls input[aria-label="Preview scrubber"] {
   flex: 1;
 }
+.tooltip-content {
+  z-index: 50;
+  padding: 5px 8px;
+  color: #fff;
+  background: #090a0c;
+  border: 1px solid #41444e;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  animation: fade-in var(--motion-fast) ease-out;
+}
 .preview-time {
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
@@ -615,9 +622,6 @@ video {
   opacity: 0.8;
   outline: 2px solid #f4b23e;
 }
-.timeline-playhead {
-  z-index: 2;
-}
 .timeline-playhead::after {
   background: #ff5f5f;
 }
@@ -643,7 +647,6 @@ video {
   outline-offset: 3px;
 }
 .timeline-playhead {
-  background: #ff5f5f;
   z-index: 2;
 }
 #playhead {

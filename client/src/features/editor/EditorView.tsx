@@ -139,14 +139,6 @@ export function EditorView() {
                 ? `${present().segments.length} segment${present().segments.length === 1 ? "" : "s"} selected.`
                 : "No segments selected."}
             </p>
-            <Show when={diagnostics()}>
-              {(info) => (
-                <p class="preview-range" aria-label="Preview source range">
-                  Preview: {formatTime(info().startMs, duration())} to{" "}
-                  {formatTime(info().startMs + info().durationMs, duration())}
-                </p>
-              )}
-            </Show>
             <PreviewPlayer
               selected={selected}
               duration={duration}
@@ -230,14 +222,14 @@ export function EditorView() {
                   aria-keyshortcuts="I"
                   onClick={() => setMarker("inMs", watchedPosition())}
                 >
-                  <LocateFixed size={16} aria-hidden="true" /> Set start
+                  <LocateFixed size={16} aria-hidden="true" /> Set in
                 </button>
                 <button
                   class="btn btn-sm"
                   aria-keyshortcuts="O"
                   onClick={() => setMarker("outMs", Math.min(duration(), watchedPosition()))}
                 >
-                  <LocateFixed size={16} aria-hidden="true" /> Set end
+                  <LocateFixed size={16} aria-hidden="true" /> Set out
                 </button>
                 <button
                   class="btn btn-sm btn-primary"

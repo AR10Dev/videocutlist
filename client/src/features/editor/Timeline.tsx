@@ -1,4 +1,5 @@
 import { createSignal, For } from "solid-js";
+import { animate } from "motion";
 import { viewportScale } from "../preview/assets";
 import { formatTime } from "../preview/model";
 import { useWorkspace } from "../app/WorkspaceContext";
@@ -12,7 +13,7 @@ export function Timeline() {
   const [selectedSegment, setSelectedSegment] = createSignal<number>();
   let timeline: HTMLDivElement | undefined;
 
-  const positionFromPointer = (event: PointerEvent) => {
+  const positionFromPointer = (event: { clientX: number }) => {
     if (!timeline) return;
     const bounds = timeline.getBoundingClientRect();
     updateTimeline({
@@ -24,17 +25,22 @@ export function Timeline() {
     timeline?.setPointerCapture(event.pointerId);
     setDragging(true);
     positionFromPointer(event);
+    if (timeline && !window.matchMedia("(prefers-reduced-motion: reduce)").matches)
+      animate(timeline, { scaleY: 0.985 }, { duration: 0.1 });
   };
   const finishSeek = () => {
     setDragging(false);
     markDirty();
+    if (timeline) animate(timeline, { scaleY: 1 }, { duration: 0.1 });
   };
 
   return (
-    <div class="timeline-scroll" ref={(element) => (timeline = element)}>
+    <div class="timeline-scroll" role="group" aria-label="Timeline lanes">
       <div
+        ref={(element) => (timeline = element)}
         class="timeline-visual"
         style={{ width: `${viewportScale(present().zoom) * 100}%` }}
+        onClick={positionFromPointer}
         onPointerDown={startSeek}
         onPointerMove={(event) => dragging() && positionFromPointer(event)}
         onPointerUp={finishSeek}
@@ -46,15 +52,15 @@ export function Timeline() {
         aria-valuenow={playheadMs()}
         aria-valuetext={`${formatTime(playheadMs(), duration())} of ${formatTime(duration(), duration())}`}
       >
-        <div class="timeline-lane timeline-ruler" aria-hidden="true">
+        <div class="timeline-lane timeline-ruler" role="img" aria-label="Timeline ruler">
           <span>{formatTime(0, duration())}</span>
           <span>{formatTime(duration() / 2, duration())}</span>
           <span>{formatTime(duration(), duration())}</span>
         </div>
-        <div class="timeline-lane timeline-thumbnails">
+        <div class="timeline-lane timeline-thumbnails" role="img" aria-label="Thumbnail lane">
           <TimelineCanvas thumbnailURL={thumbnailURL()} waveform={[]} lane="thumbnail" />
         </div>
-        <div class="timeline-lane timeline-waveform">
+        <div class="timeline-lane timeline-waveform" role="img" aria-label="Waveform lane">
           <TimelineCanvas waveform={waveform()} lane="waveform" />
         </div>
         <div class="timeline-overlays" aria-hidden="true">
