@@ -23,7 +23,7 @@ export interface PreviewPlayerProps {
 export function PreviewPlayer(props: PreviewPlayerProps) {
   const [aspectRatio, setAspectRatio] = createSignal("16 / 9");
   const [volume, setVolume] = createSignal(1);
-  let shell: HTMLDivElement | undefined;
+  let videoElement: HTMLVideoElement | undefined;
 
   const step = (direction: -1 | 1) => {
     const amount = frameDuration(props.selected()) || 1000;
@@ -33,22 +33,23 @@ export function PreviewPlayer(props: PreviewPlayerProps) {
     props.markDirty();
   };
   const fullscreen = () => {
-    const target = shell?.querySelector("video") ?? shell;
-    if (!document.fullscreenElement) void target?.requestFullscreen?.();
+    if (!document.fullscreenElement) void videoElement?.requestFullscreen?.();
     else void document.exitFullscreen?.();
   };
   const setVolumeValue = (value: number) => {
     setVolume(value);
-    const video = shell?.querySelector("video");
-    if (video) video.volume = value;
+    if (videoElement) videoElement.volume = value;
   };
 
   return (
-    <div class="preview-player" ref={shell}>
+    <div class="preview-player">
       <div class="preview-surface" style={`aspect-ratio: ${aspectRatio()};`}>
         {canStreamPreview() ? (
           <video
-            ref={(element) => props.setVideo(element)}
+            ref={(element) => {
+              videoElement = element;
+              props.setVideo(element);
+            }}
             muted={props.muted()}
             aria-label="Preview player"
             data-preview-offset={props.diagnostics()?.startMs ?? 0}
@@ -69,20 +70,43 @@ export function PreviewPlayer(props: PreviewPlayerProps) {
             manually.
           </p>
         )}
-        {props.previewStatus() && <p class="preview-overlay" role="status">{props.previewStatus()}</p>}
+        {props.previewStatus() && (
+          <p class="preview-overlay" role="status">
+            {props.previewStatus()}
+          </p>
+        )}
       </div>
       <div class="preview-controls" aria-label="Preview controls">
-        <button type="button" aria-label="Play / pause preview" title="Play / pause preview" aria-keyshortcuts="Space" onClick={props.togglePlayback}>
+        <button
+          type="button"
+          aria-label="Play / pause preview"
+          title="Play / pause preview"
+          aria-keyshortcuts="Space"
+          onClick={props.togglePlayback}
+        >
           <Play size={18} aria-hidden="true" />
         </button>
-        <button type="button" aria-label="Previous frame" title="Previous frame" aria-keyshortcuts="ArrowLeft" onClick={() => step(-1)}>
+        <button
+          type="button"
+          aria-label="Previous frame"
+          title="Previous frame"
+          aria-keyshortcuts="ArrowLeft"
+          onClick={() => step(-1)}
+        >
           <SkipBack size={18} aria-hidden="true" />
         </button>
-        <button type="button" aria-label="Next frame" title="Next frame" aria-keyshortcuts="ArrowRight" onClick={() => step(1)}>
+        <button
+          type="button"
+          aria-label="Next frame"
+          title="Next frame"
+          aria-keyshortcuts="ArrowRight"
+          onClick={() => step(1)}
+        >
           <SkipForward size={18} aria-hidden="true" />
         </button>
         <span class="preview-time" aria-live="off">
-          {formatTime(props.playheadMs(), props.duration())} / {formatTime(props.duration(), props.duration())}
+          {formatTime(props.playheadMs(), props.duration())} /{" "}
+          {formatTime(props.duration(), props.duration())}
         </span>
         <input
           type="range"
@@ -108,7 +132,11 @@ export function PreviewPlayer(props: PreviewPlayerProps) {
             props.markDirty();
           }}
         >
-          {props.muted() ? <VolumeX size={18} aria-hidden="true" /> : <Volume2 size={18} aria-hidden="true" />}
+          {props.muted() ? (
+            <VolumeX size={18} aria-hidden="true" />
+          ) : (
+            <Volume2 size={18} aria-hidden="true" />
+          )}
         </button>
         <input
           type="range"
@@ -119,7 +147,12 @@ export function PreviewPlayer(props: PreviewPlayerProps) {
           value={volume()}
           onInput={(event) => setVolumeValue(Number(event.currentTarget.value))}
         />
-        <button type="button" aria-label="Fullscreen preview" title="Fullscreen preview" onClick={fullscreen}>
+        <button
+          type="button"
+          aria-label="Fullscreen preview"
+          title="Fullscreen preview"
+          onClick={fullscreen}
+        >
           <Maximize2 size={18} aria-hidden="true" />
         </button>
       </div>
