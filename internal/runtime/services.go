@@ -164,31 +164,108 @@ func NewExportExecutor(jobs *jobqueue.JobsStore, scanner *index.Scanner, media *
 	return ExportExecutor{Jobs: jobs, Scanner: scanner, Media: media, Service: service}
 }
 func (e ExportExecutor) Preflight(ctx context.Context, _ string, project projects.Project, input projects.ExportInput) (projects.ExportPreflight, error) {
-	if len(project.Items) != 1 {
-		return projects.ExportPreflight{}, errors.New("preflight requires one project item")
-	}
-	source, _, err := e.Scanner.Open(ctx, e.Media, project.Items[0].MediaID)
+	items, err := preflightItems(project, input.ItemIDs)
 	if err != nil {
 		return projects.ExportPreflight{}, err
 	}
-	defer source.Close()
-	file, ok := source.(*os.File)
-	if !ok {
-		return projects.ExportPreflight{}, errors.New("media source is not a file")
+	if e.Scanner == nil || e.Media == nil {
+		return projects.ExportPreflight{}, errors.New("preflight media dependencies are required")
 	}
 	service := e.Service
 	if e.Settings != nil {
 		applyRuntimeSettings(&service, e.Settings.Snapshot())
 	}
-	result, err := service.Preflight(ctx, file, exporter.Request{Mode: input.Mode, Selection: input.Selection, StreamIndexes: input.StreamIndexes, CutStrategy: input.CutStrategy, Container: input.Container, DestinationID: input.DestinationID, FilenameTemplate: input.FilenameTemplate})
-	if err != nil {
-		return projects.ExportPreflight{}, err
+	result := projects.ExportPreflight{Allowed: true}
+	useInput := len(input.ItemIDs) == 0 && len(items) == 1
+	for _, item := range items {
+		source, media, err := e.Scanner.Open(ctx, e.Media, item.MediaID)
+		if err != nil {
+			return projects.ExportPreflight{}, err
+		}
+		file, ok := source.(*os.File)
+		if !ok {
+			_ = source.Close()
+			return projects.ExportPreflight{}, errors.New("media source is not a file")
+		}
+		request := preflightRequest(item, input, useInput)
+		preflight, preflightErr := service.Preflight(ctx, file, request)
+		closeErr := source.Close()
+		if preflightErr != nil {
+			return projects.ExportPreflight{}, preflightErr
+		}
+		if closeErr != nil {
+			return projects.ExportPreflight{}, closeErr
+		}
+		if !preflight.Allowed {
+			result.Allowed = false
+		}
+		for _, stream := range preflight.Selection {
+			if !containsStreamIndex(result.Selection, stream) {
+				result.Selection = append(result.Selection, stream)
+			}
+		}
+		for _, finding := range preflight.Findings {
+			message := finding.Message
+			if len(items) > 1 {
+				message = media.Name + ": " + message
+			}
+			result.Findings = append(result.Findings, projects.ExportFinding{
+				Severity: finding.Severity, Code: finding.Code, Message: message, StreamIndex: finding.StreamIndex,
+			})
+		}
 	}
-	findings := make([]projects.ExportFinding, len(result.Findings))
-	for i, finding := range result.Findings {
-		findings[i] = projects.ExportFinding{Severity: finding.Severity, Code: finding.Code, Message: finding.Message, StreamIndex: finding.StreamIndex}
+	return result, nil
+}
+
+func preflightItems(project projects.Project, itemIDs []string) ([]model.ProjectItem, error) {
+	if len(itemIDs) == 0 {
+		return append([]model.ProjectItem(nil), project.Items...), nil
 	}
-	return projects.ExportPreflight{Allowed: result.Allowed, Selection: result.Selection, Findings: findings}, nil
+	requested := make(map[string]struct{}, len(itemIDs))
+	for _, id := range itemIDs {
+		if id == "" {
+			return nil, errors.New("preflight item ID is required")
+		}
+		if _, exists := requested[id]; exists {
+			return nil, fmt.Errorf("preflight item %q is duplicated", id)
+		}
+		requested[id] = struct{}{}
+	}
+	items := make([]model.ProjectItem, 0, len(itemIDs))
+	for _, item := range project.Items {
+		if _, ok := requested[item.ID]; ok {
+			items = append(items, item)
+		}
+	}
+	if len(items) != len(requested) {
+		return nil, errors.New("preflight item is not in the project")
+	}
+	return items, nil
+}
+
+func preflightRequest(item model.ProjectItem, input projects.ExportInput, useInput bool) exporter.Request {
+	options := item.ExportOptions
+	if useInput {
+		return exporter.Request{
+			Mode: input.Mode, Selection: input.Selection, StreamIndexes: input.StreamIndexes,
+			CutStrategy: input.CutStrategy, Container: input.Container,
+			DestinationID: input.DestinationID, FilenameTemplate: input.FilenameTemplate,
+		}
+	}
+	return exporter.Request{
+		Mode: options.Mode, Selection: options.Selection, StreamIndexes: options.StreamIndexes,
+		CutStrategy: options.CutStrategy, Container: options.Container,
+		DestinationID: options.DestinationID, FilenameTemplate: options.FilenameTemplate,
+	}
+}
+
+func containsStreamIndex(indexes []int, target int) bool {
+	for _, index := range indexes {
+		if index == target {
+			return true
+		}
+	}
+	return false
 }
 
 func (e ExportExecutor) Download(ctx context.Context, jobID string, position int) (io.ReadCloser, string, error) {

@@ -20,16 +20,35 @@ function BatchCard(props: {
   cancelChildJob: (id: string) => Promise<unknown>;
   retryChildJob: (id: string) => Promise<unknown>;
 }) {
-  const outputs = () => props.batch.jobs.flatMap((job) => outputNames(job));
+  const completedJobs = () => props.batch.jobs.filter((job) => job.state === "succeeded");
+  const outputs = () => completedJobs().flatMap((job) => outputNames(job));
+  const warnings = () => [...new Set(props.batch.jobs.flatMap((job) => job.warnings ?? []))];
+  const destinationLabel = (job: Job) =>
+    props.destinations().find((destination) => destination.id === job.result?.destinationId)
+      ?.label ?? "the configured server destination";
+  const destinationsForBatch = () => [
+    ...new Set(
+      completedJobs()
+        .filter((job) => job.result?.destinationKind)
+        .map((job) => destinationLabel(job)),
+    ),
+  ];
+  const serverDestinations = () => [
+    ...new Set(
+      completedJobs()
+        .filter(
+          (job) =>
+            job.result?.destinationKind !== undefined && job.result.destinationKind !== "download",
+        )
+        .map((job) => destinationLabel(job)),
+    ),
+  ];
   const downloadable = () =>
     outputs().length > 1 &&
     props.batch.jobs.some((job) => outputNames(job).length > 0) &&
     props.batch.jobs.every(
       (job) => job.state === "succeeded" && job.result?.destinationKind === "download",
     );
-  const destinationLabel = (job: Job) =>
-    props.destinations().find((destination) => destination.id === job.result?.destinationId)
-      ?.label ?? "the configured server destination";
 
   return (
     <article class="card card-border card-sm" aria-label={`Export batch ${props.ordinal}`}>
@@ -55,61 +74,71 @@ function BatchCard(props: {
             </button>
           </div>
         </Show>
-        <Show when={downloadable()}>
-          <BatchDownload batchId={props.batch.batchId} outputCount={outputs().length} />
+        <Show when={props.batch.state === "succeeded"}>
+          <div class="export-completion" aria-label="Export completion summary">
+            <p role="status">
+              {outputs().length} clip{outputs().length === 1 ? "" : "s"} ready.
+            </p>
+            <Show when={destinationsForBatch().length > 0}>
+              <p>Destination: {destinationsForBatch().join(", ")}</p>
+            </Show>
+            <For each={serverDestinations()}>
+              {(destination) => <p role="status">Clips created in {destination}.</p>}
+            </For>
+            <For each={warnings()}>{(warning) => <p role="status">Warning: {warning}</p>}</For>
+            <Show when={downloadable()}>
+              <BatchDownload batchId={props.batch.batchId} outputCount={outputs().length} />
+            </Show>
+            <For each={completedJobs().filter((job) => job.result?.destinationKind === "download")}>
+              {(job) => (
+                <For each={outputNames(job)}>
+                  {(name, position) => (
+                    <OutputDownload jobId={job.id} position={position()} name={name} />
+                  )}
+                </For>
+              )}
+            </For>
+          </div>
         </Show>
-        <ul class="list" aria-label="Export batch jobs">
-          <For each={props.batch.jobs}>
-            {(job) => (
-              <li class="list-row">
-                <span>
-                  {job.type} · {job.mediaLabel ?? job.projectItemId ?? "media"} · {job.state}
-                  {job.progress !== undefined ? ` · ${Math.round(job.progress * 100)}%` : ""}
-                  {job.errorCode ? ` · ${job.errorCode}` : ""}
-                  {job.warnings?.length ? ` · ${job.warnings.join(", ")}` : ""}
-                  {job.result?.outputName ? ` · ${job.result.outputName}` : ""}
-                  {job.result?.outputNames?.length ? ` · ${job.result.outputNames.join(", ")}` : ""}
-                </span>
-                <Show
-                  when={job.state === "succeeded" && job.result?.destinationKind === "download"}
-                >
-                  <For each={outputNames(job)}>
-                    {(name, position) => (
-                      <OutputDownload jobId={job.id} position={position()} name={name} />
-                    )}
-                  </For>
-                </Show>
-                <Show
-                  when={
-                    job.state === "succeeded" &&
-                    job.result?.destinationKind !== undefined &&
-                    job.result.destinationKind !== "download"
-                  }
-                >
-                  <p role="status">Clips created in {destinationLabel(job)}.</p>
-                </Show>
-                <Show when={job.state === "queued" || job.state === "running"}>
-                  <button
-                    class="btn btn-ghost btn-sm"
-                    type="button"
-                    onClick={() => void props.cancelChildJob(job.id)}
-                  >
-                    Cancel job
-                  </button>
-                </Show>
-                <Show when={job.state === "failed" && job.type === "export"}>
-                  <button
-                    class="btn btn-ghost btn-sm"
-                    type="button"
-                    onClick={() => void props.retryChildJob(job.id)}
-                  >
-                    Retry
-                  </button>
-                </Show>
-              </li>
-            )}
-          </For>
-        </ul>
+        <details>
+          <summary>Job details</summary>
+          <ul class="list" aria-label="Export batch jobs">
+            <For each={props.batch.jobs}>
+              {(job) => (
+                <li class="list-row">
+                  <span>
+                    {job.type} · {job.mediaLabel ?? job.projectItemId ?? "media"} · {job.state}
+                    {job.progress !== undefined ? ` · ${Math.round(job.progress * 100)}%` : ""}
+                    {job.errorCode ? ` · ${job.errorCode}` : ""}
+                    {job.warnings?.length ? ` · ${job.warnings.join(", ")}` : ""}
+                    {job.result?.outputName ? ` · ${job.result.outputName}` : ""}
+                    {job.result?.outputNames?.length
+                      ? ` · ${job.result.outputNames.join(", ")}`
+                      : ""}
+                  </span>
+                  <Show when={job.state === "queued" || job.state === "running"}>
+                    <button
+                      class="btn btn-ghost btn-sm"
+                      type="button"
+                      onClick={() => void props.cancelChildJob(job.id)}
+                    >
+                      Cancel job
+                    </button>
+                  </Show>
+                  <Show when={job.state === "failed" && job.type === "export"}>
+                    <button
+                      class="btn btn-ghost btn-sm"
+                      type="button"
+                      onClick={() => void props.retryChildJob(job.id)}
+                    >
+                      Retry
+                    </button>
+                  </Show>
+                </li>
+              )}
+            </For>
+          </ul>
+        </details>
       </div>
     </article>
   );

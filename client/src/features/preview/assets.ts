@@ -4,7 +4,7 @@ export type WaveformAsset = AssetRange & { peaks: number[] };
 
 export const maxAssetDurationMs = 120_000;
 
-export function visibleAssetRange(viewport: AssetViewport, mediaDurationMs: number): AssetRange {
+function normalizedViewport(viewport: AssetViewport, mediaDurationMs: number): AssetRange {
   const duration = Math.max(1, Math.round(Number.isFinite(mediaDurationMs) ? mediaDurationMs : 1));
   const start = Math.max(
     0,
@@ -14,10 +14,26 @@ export function visibleAssetRange(viewport: AssetViewport, mediaDurationMs: numb
     start + 1,
     Math.min(duration, Math.round(Number.isFinite(viewport.endMs) ? viewport.endMs : duration)),
   );
-  return {
-    startMs: start,
-    durationMs: Math.max(1, Math.min(maxAssetDurationMs, end - start)),
-  };
+  return { startMs: start, durationMs: end - start };
+}
+
+/** Returns the complete visible interval; requests may need to be tiled. */
+export function visibleAssetRange(viewport: AssetViewport, mediaDurationMs: number): AssetRange {
+  return normalizedViewport(viewport, mediaDurationMs);
+}
+
+/** Splits a visible interval into request-sized ranges without losing coverage. */
+export function visibleAssetRanges(viewport: AssetViewport, mediaDurationMs: number): AssetRange[] {
+  const visible = normalizedViewport(viewport, mediaDurationMs);
+  const ranges: AssetRange[] = [];
+  let startMs = visible.startMs;
+  const endMs = visible.startMs + visible.durationMs;
+  while (startMs < endMs) {
+    const durationMs = Math.min(maxAssetDurationMs, endMs - startMs);
+    ranges.push({ startMs, durationMs });
+    startMs += durationMs;
+  }
+  return ranges;
 }
 
 export function normalizePeaks(value: unknown): number[] {

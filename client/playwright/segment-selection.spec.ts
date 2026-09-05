@@ -1113,6 +1113,69 @@ test("renews whole-media playback without dirtying viewing state and honors paus
   expect(new URL(previewRequests[1]).searchParams.get("centerMs")).toBe("7250");
 });
 
+test("ignores a stale renewal response after a manual seek", async ({ page }) => {
+  const previewRequests: string[] = [];
+  let renewalStartedResolve!: () => void;
+  const renewalStarted = new Promise<void>((resolve) => {
+    renewalStartedResolve = resolve;
+  });
+  let releaseRenewal!: () => void;
+  const renewalReleased = new Promise<void>((resolve) => {
+    releaseRenewal = resolve;
+  });
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname.endsWith("/preview")) previewRequests.push(request.url());
+  });
+  await page.route(`${apiOrigin}/api/v1/media/${media.id}/preview**`, async (route) => {
+    const url = new URL(route.request().url());
+    const center = url.searchParams.get("centerMs") ?? "0";
+    if (center === "7250") {
+      renewalStartedResolve();
+      await renewalReleased;
+    }
+    return route.fulfill({
+      headers: {
+        "content-type": "video/mp4",
+        "Access-Control-Expose-Headers":
+          "X-Preview-Start, X-Preview-Duration, X-Preview-Offset, X-Preview-Cache, X-Request-ID",
+        "X-Preview-Start": "0",
+        "X-Preview-Duration": "8000",
+        "X-Preview-Offset": center,
+        "X-Preview-Cache": "hit",
+        "X-Request-ID": `preview-${center}`,
+      },
+      body: "fragment",
+    });
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: /camera.mp4/ }).click();
+  const video = page.getByLabel("Preview player");
+  await video.evaluate((element) => {
+    const player = element as HTMLVideoElement;
+    player.play = () => Promise.resolve();
+    player.pause = () => undefined;
+  });
+  await expect.poll(() => previewRequests.length).toBe(1);
+  await page.getByRole("button", { name: "Play preview" }).click();
+  await video.evaluate((element) => {
+    const player = element as HTMLVideoElement;
+    player.currentTime = 7.25;
+    player.dispatchEvent(new Event("timeupdate"));
+  });
+  await renewalStarted;
+  const playhead = page.getByLabel("Timeline playhead");
+  await playhead.fill("3000");
+  await expect
+    .poll(() =>
+      previewRequests.some((request) => new URL(request).searchParams.get("centerMs") === "3000"),
+    )
+    .toBeTruthy();
+  releaseRenewal();
+  await expect(video).toHaveAttribute("data-preview-offset", "3000");
+  await expect(playhead).toHaveValue("3000");
+  expect(new URL(previewRequests.at(-1)!).searchParams.get("centerMs")).toBe("3000");
+});
+
 test("stops whole-media playback at media duration after the final window", async ({ page }) => {
   const previewRequests: string[] = [];
   page.on("request", (request) => {

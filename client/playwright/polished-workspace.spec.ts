@@ -265,7 +265,7 @@ test("queue exposes every completed output and authenticated batch downloads", a
   const queue = page.getByRole("region", { name: "Export queue" });
   await expect(queue.getByRole("link")).toHaveCount(2);
   await expect(queue.getByText("Completed history (1)", { exact: true })).toBeVisible();
-  await expect(queue.locator("details")).not.toHaveAttribute("open", "");
+  await expect(queue.locator("details.collapse")).not.toHaveAttribute("open", "");
   await expect(queue.getByRole("button", { name: "Download all clips" })).toBeVisible();
   const archiveDownload = page.waitForEvent("download");
   await queue.getByRole("button", { name: "Download all clips" }).click();

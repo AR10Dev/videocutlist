@@ -29,6 +29,11 @@ async function addSegment(page: Page, start = 100, end = 700) {
   await page.getByRole("button", { name: /Add cut \(Add segment\)/ }).click();
 }
 
+async function openMediaChooser(page: Page) {
+  const change = page.getByRole("button", { name: "Change video" });
+  if (await change.isVisible()) await change.click();
+}
+
 async function openExport(page: Page) {
   await page.getByRole("tab", { name: "Export", exact: true }).click();
   await expect(page.getByRole("button", { name: "Create clips" })).toBeVisible();
@@ -123,6 +128,61 @@ test("Create clips saves a dirty revision before fresh preflight and batch submi
       expect.objectContaining({ exportOptions: expect.objectContaining({ mode: "separate" }) }),
     ]),
   );
+});
+
+test("multi-item Create clips preflights every selected item before submission", async ({
+  page,
+}) => {
+  const calls: string[] = [];
+  const preflightItems: string[][] = [];
+  let exports = 0;
+  page.on("request", (request) => {
+    const path = new URL(request.url()).pathname;
+    if (request.method() === "PUT" && /^\/api\/v1\/projects\/[^/]+$/.test(path)) {
+      calls.push("save");
+    } else if (path.endsWith("/exports/preflight")) {
+      calls.push("preflight");
+      const body = request.postDataJSON() as { itemIds?: string[] };
+      preflightItems.push(body.itemIds ?? []);
+    } else if (path.endsWith("/exports")) {
+      calls.push("export");
+      exports += 1;
+    }
+  });
+  await page.route(`${origin}/api/v1/projects/*/exports/preflight`, (route) =>
+    route.fulfill({
+      json: {
+        allowed: false,
+        selection: [],
+        findings: [
+          {
+            severity: "blocked",
+            code: "unsupported_stream",
+            message: "One selected item has an unsupported stream.",
+          },
+        ],
+      },
+    }),
+  );
+  await page.goto("/");
+  await page.getByRole("button", { name: "Select camera.mp4" }).click();
+  await addToProject(page);
+  await addSegment(page);
+  await openMediaChooser(page);
+  await page.getByRole("button", { name: "Select second.mp4" }).click();
+  await addToProject(page);
+  await addSegment(page);
+  await openExport(page);
+  await page.getByRole("button", { name: "Select all" }).click();
+  const create = page.getByRole("button", { name: "Create clips" });
+  await create.click();
+  await page.getByText("Export options", { exact: true }).click();
+  await expect(page.getByText("One selected item has an unsupported stream.")).toBeVisible();
+  await expect(create).toBeDisabled();
+  expect(calls).toEqual(["save", "preflight"]);
+  expect(preflightItems).toHaveLength(1);
+  expect(preflightItems[0]).toHaveLength(2);
+  expect(exports).toBe(0);
 });
 
 test("save failures stop Create clips and leave it retryable", async ({ page }) => {

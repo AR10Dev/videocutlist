@@ -163,7 +163,10 @@ export function createExportController(deps: {
     deps.revision();
     const destination = destinationId();
     const template = filenameTemplate();
-    if (!item || !deps.projectItems().some((entry) => entry.media.id === item.id)) {
+    const itemIDs = selectedExportItems();
+    const currentItem = deps.projectItems().find((entry) => entry.media.id === item?.id);
+    const preflightItemIDs = itemIDs.length ? itemIDs : currentItem ? [currentItem.id] : [];
+    if (!item || !currentItem || preflightItemIDs.length === 0) {
       cancelPreflight();
       setPreflight();
       setPreflightPending(false);
@@ -176,12 +179,16 @@ export function createExportController(deps: {
       if (!workflowActive) setPreflightPending(false);
       return;
     }
-    if (deps.projectItems().length > 1) {
-      cancelPreflight();
-      setPreflight({ allowed: true, selection: [], findings: [] });
-      setPreflightPending(false);
-      return;
-    }
+    const input = {
+      mode,
+      selection,
+      streamIndexes: indexes,
+      cutStrategy: strategy,
+      container: "mkv" as const,
+      destinationId: destination,
+      filenameTemplate: template,
+      itemIds: [...preflightItemIDs],
+    };
     cancelPreflight();
     setPreflightPending(true);
     const version = preflightVersion;
@@ -192,12 +199,7 @@ export function createExportController(deps: {
         const response = await preflightRequest(
           deps.api,
           currentProjectID,
-          mode,
-          selection,
-          indexes,
-          strategy,
-          destination,
-          template,
+          input,
           controller.signal,
         );
         if (version !== preflightVersion) return;
@@ -315,39 +317,32 @@ export function createExportController(deps: {
         stopForStaleContext();
         return;
       }
-      if (items.length === 1) {
-        setExportStatus("Checking export requirements…");
-        const response = await preflightRequest(
-          deps.api,
-          context.projectId,
-          context.input.mode,
-          context.input.selection,
-          context.input.streamIndexes,
-          context.input.cutStrategy,
-          context.input.destinationId,
-          context.input.filenameTemplate,
-          controller.signal,
-        );
-        if (!workflowCurrent()) {
-          stopForStaleContext();
-          return;
-        }
-        if (!response.ok) {
-          setPreflight();
-          setExportStatus("Export preflight failed. Try again.");
-          return;
-        }
-        const fresh = (await response.json()) as components["schemas"]["ExportPreflight"];
-        if (!workflowCurrent()) {
-          stopForStaleContext();
-          return;
-        }
-        setPreflight(fresh);
-        if (!fresh.allowed) {
-          setExportStatus("");
-          return;
-        }
-      } else setPreflight({ allowed: true, selection: [], findings: [] });
+      setExportStatus("Checking export requirements…");
+      const preflightResponse = await preflightRequest(
+        deps.api,
+        context.projectId,
+        { ...context.input, itemIds: [...itemIDs] },
+        controller.signal,
+      );
+      if (!workflowCurrent()) {
+        stopForStaleContext();
+        return;
+      }
+      if (!preflightResponse.ok) {
+        setPreflight();
+        setExportStatus("Export preflight failed. Try again.");
+        return;
+      }
+      const fresh = (await preflightResponse.json()) as components["schemas"]["ExportPreflight"];
+      if (!workflowCurrent()) {
+        stopForStaleContext();
+        return;
+      }
+      setPreflight(fresh);
+      if (!fresh.allowed) {
+        setExportStatus("");
+        return;
+      }
 
       if (!workflowCurrent()) {
         stopForStaleContext();
@@ -548,26 +543,13 @@ export function createExportController(deps: {
 function preflightRequest(
   api: ApiClient,
   projectId: string,
-  mode: string,
-  selection: string,
-  streamIndexes: number[],
-  cutStrategy: string,
-  destinationId: string,
-  filenameTemplate: string,
+  input: components["schemas"]["ExportInput"],
   signal?: AbortSignal,
 ) {
   return api.request(`projects/${encodeURIComponent(projectId)}/exports/preflight`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      mode,
-      selection,
-      streamIndexes,
-      cutStrategy,
-      container: "mkv",
-      destinationId,
-      filenameTemplate,
-    }),
+    body: JSON.stringify(input),
     signal,
   });
 }

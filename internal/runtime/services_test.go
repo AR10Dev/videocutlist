@@ -19,7 +19,42 @@ import (
 	"videocutlist/internal/library/media/probe"
 	"videocutlist/internal/preview/ffmpeg"
 	"videocutlist/internal/projects"
+	"videocutlist/internal/projects/model"
 )
+
+func TestPreflightItemsSelectsProjectItemsInDocumentOrder(t *testing.T) {
+	project := projects.Project{Document: model.Document{Items: []model.ProjectItem{
+		{ID: "i_first"},
+		{ID: "i_second"},
+	}}}
+	items, err := preflightItems(project, []string{"i_second", "i_first"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 2 || items[0].ID != "i_first" || items[1].ID != "i_second" {
+		t.Fatalf("selected items = %#v", items)
+	}
+	if _, err := preflightItems(project, []string{"i_first", "i_first"}); err == nil {
+		t.Fatal("duplicate item selection was accepted")
+	}
+	if _, err := preflightItems(project, []string{"i_missing"}); err == nil {
+		t.Fatal("unknown item selection was accepted")
+	}
+}
+
+func TestPreflightRequestUsesPersistedOptionsForSelectedItems(t *testing.T) {
+	item := model.ProjectItem{ExportOptions: model.ExportOptions{
+		Mode: "separate", Selection: "gaps", CutStrategy: "precise_reencode", Container: "mkv",
+		DestinationID: "archive", FilenameTemplate: "saved-{segment}.{ext}", StreamIndexes: []int{1},
+	}}
+	request := preflightRequest(item, projects.ExportInput{
+		Mode: "merge", Selection: "segments", CutStrategy: "stream_copy_preferred", Container: "mkv",
+		DestinationID: "download", FilenameTemplate: "request-{segment}.{ext}", StreamIndexes: []int{0},
+	}, false)
+	if request.Mode != "separate" || request.Selection != "gaps" || request.CutStrategy != "precise_reencode" || request.DestinationID != "archive" || len(request.StreamIndexes) != 1 || request.StreamIndexes[0] != 1 {
+		t.Fatalf("preflight request = %#v", request)
+	}
+}
 
 func TestMediaAPIShapeHidesStorageAndProviderMetadata(t *testing.T) {
 	item := index.Media{

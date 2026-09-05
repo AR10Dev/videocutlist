@@ -177,8 +177,8 @@ export function ExportView() {
             Boolean(emptyItem()) ||
             exportPending() ||
             exportActive() ||
-            (projectItems().length === 1 && preflightPending()) ||
-            (projectItems().length === 1 && Boolean(preflight() && !preflight()!.allowed))
+            preflightPending() ||
+            Boolean(preflight() && !preflight()!.allowed)
           }
           onClick={() => void exportProject()}
         >
