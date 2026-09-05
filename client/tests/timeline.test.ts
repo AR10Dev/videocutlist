@@ -6,6 +6,7 @@ import {
   editTimeline,
   redoTimeline,
   resetTimelineHistory,
+  updateTimelineDraft,
   updateTimelinePlayback,
   updateTimelineView,
   undoTimeline,
@@ -35,6 +36,15 @@ describe("timeline history", () => {
     expect(undone.present).toEqual(initial);
     expect(canRedoTimeline(undone)).toBe(true);
     expect(redoTimeline(undone).present).toEqual(changed.present);
+  });
+
+  it("clears draft boundaries without adding a durable edit", () => {
+    const history = editTimeline(createTimelineHistory(initial), { inMs: 200, outMs: 800 });
+    const cleared = updateTimelineDraft(history, { inMs: undefined, outMs: undefined });
+    expect(cleared.present.inMs).toBeUndefined();
+    expect(cleared.present.outMs).toBeUndefined();
+    expect(cleared.past).toEqual(history.past);
+    expect(cleared.future).toEqual(history.future);
   });
 
   it("updates playback and view state without creating undo history", () => {

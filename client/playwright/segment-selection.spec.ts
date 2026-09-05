@@ -348,6 +348,101 @@ test("segment rows show values and support reorder and removal", async ({ page }
   await expect(rows.nth(0)).toContainText("00:00.100");
 });
 
+test("keyboard editing keeps drafts separate from active cuts and is discoverable", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: /camera.mp4/ }).click();
+  const playhead = page.getByLabel("Timeline playhead");
+  const create = async (start: number, end: number) => {
+    await playhead.fill(String(start));
+    await page.locator("body").press("i");
+    await playhead.fill(String(end));
+    await page.locator("body").press("o");
+    await page.locator("body").press("c");
+  };
+
+  await create(100, 700);
+  await page.keyboard.press("Escape");
+  await create(800, 900);
+  const rows = page.getByRole("list", { name: "Selected cuts" }).getByRole("listitem");
+  await expect(rows).toHaveCount(2);
+
+  await rows.nth(0).getByRole("button", { name: "Select cut 1" }).click();
+  await playhead.fill("400");
+  await page.keyboard.press("i");
+  await expect(page.getByLabel("In point")).toHaveValue("00:00.400");
+  await playhead.fill("850");
+  await page.keyboard.press("o");
+  await expect(page.getByText(/overlap another cut/)).toBeVisible();
+
+  await playhead.fill("500");
+  await page.keyboard.press("b");
+  await expect(rows).toHaveCount(3);
+  await page.keyboard.press("Delete");
+  await expect(rows).toHaveCount(2);
+  await page.keyboard.press("Control+z");
+  await expect(rows).toHaveCount(3);
+  await page.keyboard.press("Control+y");
+  await expect(rows).toHaveCount(2);
+
+  await page.keyboard.press("Shift+/");
+  await expect(page.getByRole("heading", { name: "Keyboard shortcuts" })).toBeVisible();
+  await expect(page.getByText("Preview selected segments", { exact: false })).toHaveCount(0);
+  await page.getByRole("button", { name: "Close", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Keyboard shortcuts" })).toHaveCount(0);
+});
+
+test("active, looping, and ordered segment preview use bounded modes", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: /camera.mp4/ }).click();
+  const playhead = page.getByLabel("Timeline playhead");
+  const create = async (start: number, end: number) => {
+    await playhead.fill(String(start));
+    await page.locator("body").press("i");
+    await playhead.fill(String(end));
+    await page.locator("body").press("o");
+    await page.locator("body").press("c");
+  };
+  await create(100, 700);
+  await page.keyboard.press("Escape");
+  await create(800, 1200);
+
+  const video = page.getByLabel("Preview player");
+  await video.evaluate((element) => {
+    const player = element as HTMLVideoElement;
+    player.play = () => Promise.resolve();
+    player.pause = () => undefined;
+  });
+  const firstRow = page.getByRole("list", { name: "Selected cuts" }).getByRole("listitem").nth(0);
+  await firstRow.getByRole("button", { name: "Play cut 1" }).click();
+  await expect(video).toHaveAttribute("data-playback-mode", "active-segment");
+  await expect(video).toHaveAttribute("data-playback-intent", "playing");
+  await expect(video).toHaveAttribute("data-preview-offset", "100");
+  await video.evaluate((element) => {
+    const player = element as HTMLVideoElement;
+    player.currentTime = 0.7;
+    player.dispatchEvent(new Event("timeupdate"));
+  });
+  await expect(playhead).toHaveValue("700");
+  await expect(video).toHaveAttribute("data-playback-intent", "paused");
+
+  await firstRow.getByRole("button", { name: "Loop cut 1" }).click();
+  await expect(video).toHaveAttribute("data-playback-mode", "active-segment-loop");
+  await expect(video).toHaveAttribute("data-preview-offset", "100");
+  await video.evaluate((element) => {
+    const player = element as HTMLVideoElement;
+    player.currentTime = 0.7;
+    player.dispatchEvent(new Event("timeupdate"));
+  });
+  await expect(playhead).toHaveValue("100");
+  await expect(video).toHaveAttribute("data-playback-intent", "playing");
+
+  await page.getByRole("button", { name: "Preview selected segments" }).click();
+  await expect(video).toHaveAttribute("data-playback-mode", "ordered-segments");
+  await expect(video).toHaveAttribute("data-playback-intent", "playing");
+});
+
 test("header distinguishes unsaved, dirty, and saved project states", async ({ page }) => {
   await page.goto("/");
   const status = page.locator("header").getByLabel("Project status");

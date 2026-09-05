@@ -65,6 +65,7 @@ export function createWorkspaceController() {
     setDirty(true);
   };
   const previewRef: { current?: ReturnType<typeof createPreviewController> } = {};
+  const exportRef: { current?: ReturnType<typeof createExportController> } = {};
   const editorFeature = createEditorController({
     selected,
     setStatus,
@@ -72,6 +73,9 @@ export function createWorkspaceController() {
     setPreviewCenterMs: (ms) => previewRef.current?.setPreviewCenterMs(ms),
     watchedPosition: () => previewRef.current?.watchedPosition() ?? editorFeature.playheadMs(),
     togglePlayback: () => previewRef.current?.togglePlayback(),
+    playActiveSegment: (loop) => previewRef.current?.playActiveSegment(loop),
+    playOrderedSegments: () => previewRef.current?.playOrderedSegments(),
+    createClips: () => exportRef.current?.exportProject(),
   });
   const {
     segmentLabel,
@@ -82,6 +86,12 @@ export function createWorkspaceController() {
     setTimeline,
     activeSegmentIndex,
     setActiveSegmentIndex,
+    activeSegment,
+    editingActive,
+    editingInMs,
+    editingOutMs,
+    shortcutHelpOpen,
+    setShortcutHelpOpen,
     present,
     playheadMs,
     duration,
@@ -222,6 +232,8 @@ export function createWorkspaceController() {
   const initializedPreviewFeature = createPreviewController(api, {
     selected,
     playheadMs,
+    activeSegment,
+    segments: () => present().segments,
     updatePlaybackPosition,
   });
   const {
@@ -242,6 +254,7 @@ export function createWorkspaceController() {
     pausePlayback,
   } = initializedPreviewFeature;
   previewRef.current = initializedPreviewFeature;
+  exportRef.current = exportFeature;
   const chooseMedia = (item: Media) => {
     clearDetectionContext();
     const items = editableItems();
@@ -429,6 +442,12 @@ export function createWorkspaceController() {
     setTimeline,
     activeSegmentIndex,
     setActiveSegmentIndex,
+    activeSegment,
+    editingActive,
+    editingInMs,
+    editingOutMs,
+    shortcutHelpOpen,
+    setShortcutHelpOpen,
     playheadMs,
     editableItems,
     activateItem,
@@ -472,6 +491,10 @@ export function createWorkspaceController() {
     setVideo,
     togglePlayback,
     pausePlayback,
+    playActiveSegment: initializedPreviewFeature.playActiveSegment,
+    playOrderedSegments: initializedPreviewFeature.playOrderedSegments,
+    undo: editorFeature.undo,
+    redo: editorFeature.redo,
   };
 }
 

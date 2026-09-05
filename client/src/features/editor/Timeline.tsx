@@ -210,7 +210,7 @@ export function Timeline() {
             <TimelineCanvas waveform={workspace.waveform()} lane="waveform" />
           </div>
           <div class="timeline-overlays">
-            <Show when={workspace.present().inMs !== undefined}>
+            <Show when={!workspace.editingActive() && workspace.present().inMs !== undefined}>
               <span
                 class="timeline-overlay timeline-in"
                 aria-label="In marker"
@@ -223,7 +223,7 @@ export function Timeline() {
                 onPointerUp={finishDrag}
               />
             </Show>
-            <Show when={workspace.present().outMs !== undefined}>
+            <Show when={!workspace.editingActive() && workspace.present().outMs !== undefined}>
               <span
                 class="timeline-overlay timeline-out"
                 aria-label="Out marker"

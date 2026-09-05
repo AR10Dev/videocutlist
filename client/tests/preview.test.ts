@@ -4,6 +4,7 @@ import {
   formatTime,
   hybridSmartCutKnownIneligible,
   previewMime,
+  previewRange,
   streamPreview,
   validateSegments,
   watchedMediaPosition,
@@ -81,6 +82,35 @@ describe("MSE capability detection", () => {
     vi.stubGlobal("MediaSource", { isTypeSupported });
     expect(canStreamPreview()).toBe(true);
     expect(isTypeSupported).toHaveBeenCalledWith(previewMime);
+  });
+});
+
+describe("bounded playback ranges", () => {
+  const segments = [
+    { startMs: 4_000, endMs: 5_000 },
+    { startMs: 900, endMs: 2_100 },
+  ];
+
+  it("uses exact active segment boundaries for once and loop modes", () => {
+    expect(previewRange("active-segment", 10_000, segments[0])).toEqual({
+      startMs: 4_000,
+      endMs: 5_000,
+    });
+    expect(previewRange("active-segment-loop", 10_000, segments[0])).toEqual({
+      startMs: 4_000,
+      endMs: 5_000,
+    });
+  });
+
+  it("keeps ordered preview in project segment order and falls back safely", () => {
+    expect(previewRange("ordered-segments", 10_000, undefined, segments, 1)).toEqual({
+      startMs: 900,
+      endMs: 2_100,
+    });
+    expect(previewRange("ordered-segments", 10_000, undefined, [], 0)).toEqual({
+      startMs: 0,
+      endMs: 10_000,
+    });
   });
 });
 

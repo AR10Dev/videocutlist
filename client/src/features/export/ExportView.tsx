@@ -157,6 +157,9 @@ export function ExportView() {
       </Show>
 
       <div class="controls export-actions">
+        <span class="shortcut-help" aria-label="Create clips shortcut">
+          Create clips <kbd class="kbd kbd-xs">E</kbd>
+        </span>
         <button
           class="btn btn-primary btn-sm"
           disabled={

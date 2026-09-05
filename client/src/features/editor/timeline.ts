@@ -71,6 +71,15 @@ export const updateTimelinePlayback = (
   present: { ...history.present, playheadMs },
 });
 
+/** Draft boundary changes are browser editing state, not durable timeline edits. */
+export const updateTimelineDraft = (
+  history: TimelineHistory,
+  changes: Pick<TimelineSnapshot, "inMs" | "outMs">,
+): TimelineHistory => ({
+  ...history,
+  present: { ...history.present, ...changes },
+});
+
 export const updateTimelineView = (
   history: TimelineHistory,
   changes: Partial<Pick<TimelineSnapshot, "playheadMs" | "zoom">>,

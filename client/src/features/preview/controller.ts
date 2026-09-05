@@ -5,10 +5,12 @@ import { normalizePeaks } from "./assets";
 import {
   canStreamPreview,
   clampMediaPosition,
+  previewRange,
   streamPreview,
   watchedMediaPosition,
   type PreviewDiagnostics,
   type PreviewPlaybackMode,
+  type Segment,
 } from "./model";
 
 type Media = components["schemas"]["Media"];
@@ -18,6 +20,8 @@ export function createPreviewController(
   dependencies: {
     selected: Accessor<Media | undefined>;
     playheadMs: Accessor<number>;
+    activeSegment: Accessor<Segment | undefined>;
+    segments: Accessor<Segment[]>;
     updatePlaybackPosition: (positionMs: number) => void;
   },
 ) {
@@ -39,13 +43,16 @@ export function createPreviewController(
   let selectedMediaId: string | undefined;
   const previewRenewalLeadMs = 1000;
   const [playbackIntent, setPlaybackIntent] = createSignal(false);
-  const playbackMode = (): PreviewPlaybackMode => "whole-media";
+  const [playbackMode, setPlaybackMode] = createSignal<PreviewPlaybackMode>("whole-media");
+  const [orderedSegmentIndex, setOrderedSegmentIndex] = createSignal(0);
 
   createEffect(() => {
     const item = dependencies.selected();
     if (item?.id !== selectedMediaId) {
       selectedMediaId = item?.id;
       setPlaybackIntent(false);
+      setPlaybackMode("whole-media");
+      setOrderedSegmentIndex(0);
       video()?.pause();
     }
     assetRequest?.abort();
@@ -160,12 +167,64 @@ export function createPreviewController(
   });
 
   const watchedPosition = () => dependencies.playheadMs();
+  const orderedSegments = () => dependencies.segments().slice();
+  const playbackBounds = (item: Media) =>
+    previewRange(
+      playbackMode(),
+      item.durationMs,
+      dependencies.activeSegment(),
+      orderedSegments(),
+      orderedSegmentIndex(),
+    );
+  const restartPreview = (positionMs: number) => {
+    setPreviewCenterMs(positionMs);
+    setPreviewReload((value) => value + 1);
+  };
+  const stopAtBoundary = (positionMs: number) => {
+    const item = dependencies.selected();
+    const info = diagnostics();
+    const player = video();
+    const position = item ? clampMediaPosition(positionMs, item.durationMs) : positionMs;
+    if (player && info) {
+      player.pause();
+      player.currentTime = Math.max(0, position - info.startMs) / 1000;
+    }
+    dependencies.updatePlaybackPosition(position);
+    setPlaybackIntent(false);
+  };
+  const advancePlayback = (positionMs: number) => {
+    const item = dependencies.selected();
+    if (!item || !playbackIntent()) return;
+    const bounds = playbackBounds(item);
+    if (positionMs < bounds.endMs) return;
+    const mode = playbackMode();
+    if (mode === "active-segment-loop") {
+      dependencies.updatePlaybackPosition(bounds.startMs);
+      restartPreview(bounds.startMs);
+      return;
+    }
+    if (mode === "ordered-segments") {
+      const segments = orderedSegments();
+      const nextIndex = orderedSegmentIndex() + 1;
+      if (nextIndex < segments.length) {
+        setOrderedSegmentIndex(nextIndex);
+        dependencies.updatePlaybackPosition(segments[nextIndex].startMs);
+        restartPreview(segments[nextIndex].startMs);
+        return;
+      }
+    }
+    stopAtBoundary(bounds.endMs);
+  };
   const requestRenewal = (positionMs: number, force = false) => {
     const item = dependencies.selected();
     const info = diagnostics();
     if (!item || !info || !playbackIntent() || info.durationMs <= 0) return false;
     const position = clampMediaPosition(positionMs, item.durationMs);
-    if (position >= item.durationMs) return false;
+    const bounds = playbackBounds(item);
+    if (position >= bounds.endMs) {
+      advancePlayback(position);
+      return false;
+    }
     const windowEnd = Math.min(item.durationMs, info.startMs + info.durationMs);
     if (!force && windowEnd - position > previewRenewalLeadMs) return false;
     if (renewalGeneration === previewGeneration) return true;
@@ -178,6 +237,13 @@ export function createPreviewController(
     const info = diagnostics();
     if (!item || !info) return;
     const position = watchedMediaPosition(info.startMs, currentTime, item.durationMs);
+    if (playbackIntent()) {
+      const bounds = playbackBounds(item);
+      if (position >= bounds.endMs) {
+        advancePlayback(position);
+        return;
+      }
+    }
     dependencies.updatePlaybackPosition(position);
     if (playbackIntent()) requestRenewal(position);
   };
@@ -190,18 +256,62 @@ export function createPreviewController(
     }
     if (!info) return;
     const position = watchedMediaPosition(info.startMs, currentTime, item.durationMs);
+    if (playbackIntent()) {
+      const bounds = playbackBounds(item);
+      if (position >= bounds.endMs) {
+        advancePlayback(position);
+        return;
+      }
+    }
     dependencies.updatePlaybackPosition(position);
-    if (!playbackIntent()) return;
-    if (position >= item.durationMs || !requestRenewal(position, true)) setPlaybackIntent(false);
+    if (!playbackIntent() || !requestRenewal(position, true)) setPlaybackIntent(false);
+  };
+  const startPlayback = (mode: PreviewPlaybackMode, positionMs: number) => {
+    setPlaybackMode(mode);
+    setPlaybackIntent(true);
+    dependencies.updatePlaybackPosition(positionMs);
+    restartPreview(positionMs);
+  };
+  const playActiveSegment = (loop: boolean) => {
+    const segment = dependencies.activeSegment();
+    if (!segment) {
+      setPreviewStatus("Select a cut to play it.");
+      return;
+    }
+    startPlayback(loop ? "active-segment-loop" : "active-segment", segment.startMs);
+  };
+  const playOrderedSegments = () => {
+    const segments = orderedSegments();
+    if (!segments.length) {
+      setPreviewStatus("Add a cut before previewing the selected cuts.");
+      return;
+    }
+    setOrderedSegmentIndex(0);
+    startPlayback("ordered-segments", segments[0].startMs);
   };
   const togglePlayback = () => {
     const player = video();
     const nextIntent = !playbackIntent();
-    setPlaybackIntent(nextIntent);
     if (!nextIntent) {
+      setPlaybackIntent(false);
       player?.pause();
       return;
     }
+    const item = dependencies.selected();
+    if (item && playbackMode() !== "whole-media") {
+      const bounds = playbackBounds(item);
+      const position = watchedPosition();
+      if (position < bounds.startMs || position >= bounds.endMs) {
+        if (playbackMode() === "active-segment" || playbackMode() === "active-segment-loop") {
+          playActiveSegment(playbackMode() === "active-segment-loop");
+        } else {
+          const segment = orderedSegments()[orderedSegmentIndex()];
+          if (segment) startPlayback("ordered-segments", segment.startMs);
+        }
+        return;
+      }
+    }
+    setPlaybackIntent(true);
     if (!diagnostics() && previewStatus().includes("Try again."))
       setPreviewReload((value) => value + 1);
     void player?.play().catch(() => {
@@ -233,5 +343,7 @@ export function createPreviewController(
     setVideo,
     togglePlayback,
     pausePlayback,
+    playActiveSegment,
+    playOrderedSegments,
   };
 }

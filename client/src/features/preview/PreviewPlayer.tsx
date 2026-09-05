@@ -1,11 +1,13 @@
-import { createSignal, onCleanup, type JSX } from "solid-js";
+import { createSignal, onCleanup, Show, type JSX } from "solid-js";
 import { Tooltip } from "@kobalte/core/tooltip";
 import { frameDuration } from "../editor/frame";
 import {
   ChevronsLeft,
   ChevronsRight,
+  List,
   Pause,
   Play,
+  Repeat2,
   SkipBack,
   SkipForward,
   Volume2,
@@ -36,6 +38,11 @@ function IconButton(props: IconButtonProps) {
         disabled={props.disabled}
       >
         {props.children}
+        <Show when={props.keyshortcuts}>
+          <kbd class="kbd kbd-xs control-key" aria-hidden="true">
+            {props.keyshortcuts}
+          </kbd>
+        </Show>
       </Tooltip.Trigger>
       <Tooltip.Portal>
         <Tooltip.Content class="tooltip-content">{props.label}</Tooltip.Content>
@@ -133,10 +140,21 @@ export function PreviewPlayer(props: { timeline: JSX.Element; controls: JSX.Elem
       <div class="edit-deck">
         <div class="control-rail" role="toolbar" aria-label="Editor controls">
           <div class="preview-controls" aria-label="Playback and audio controls">
+            <span class="sr-only" role="status" aria-live="polite">
+              {workspace.playbackIntent()
+                ? workspace.playbackMode() === "whole-media"
+                  ? "Playing whole media"
+                  : workspace.playbackMode() === "ordered-segments"
+                    ? "Playing selected segments in order"
+                    : workspace.playbackMode() === "active-segment-loop"
+                      ? "Looping active segment"
+                      : "Playing active segment"
+                : "Preview paused"}
+            </span>
             <IconButton label="Previous cut" onClick={() => jumpToCut(-1)}>
               <ChevronsLeft size={18} aria-hidden="true" />
             </IconButton>
-            <IconButton label="Previous frame" keyshortcuts="ArrowLeft" onClick={() => step(-1)}>
+            <IconButton label="Previous frame (comma)" keyshortcuts="," onClick={() => step(-1)}>
               <SkipBack size={18} aria-hidden="true" />
             </IconButton>
             <IconButton
@@ -151,11 +169,36 @@ export function PreviewPlayer(props: { timeline: JSX.Element; controls: JSX.Elem
                 <Play size={22} aria-hidden="true" />
               )}
             </IconButton>
-            <IconButton label="Next frame" keyshortcuts="ArrowRight" onClick={() => step(1)}>
+            <IconButton label="Next frame (period)" keyshortcuts="." onClick={() => step(1)}>
               <SkipForward size={18} aria-hidden="true" />
             </IconButton>
             <IconButton label="Next cut" onClick={() => jumpToCut(1)}>
               <ChevronsRight size={18} aria-hidden="true" />
+            </IconButton>
+            <IconButton
+              label="Play active segment"
+              keyshortcuts="P"
+              disabled={!workspace.activeSegment() || !canStreamPreview()}
+              onClick={() => workspace.playActiveSegment(false)}
+            >
+              <Play size={18} aria-hidden="true" />
+            </IconButton>
+            <IconButton
+              label="Loop active segment"
+              keyshortcuts="L"
+              pressed={workspace.playbackMode() === "active-segment-loop"}
+              disabled={!workspace.activeSegment() || !canStreamPreview()}
+              onClick={() => workspace.playActiveSegment(true)}
+            >
+              <Repeat2 size={18} aria-hidden="true" />
+            </IconButton>
+            <IconButton
+              label="Preview selected segments"
+              keyshortcuts="R"
+              disabled={!workspace.present().segments.length || !canStreamPreview()}
+              onClick={workspace.playOrderedSegments}
+            >
+              <List size={18} aria-hidden="true" />
             </IconButton>
             <IconButton
               label={workspace.muted() ? "Unmute preview" : "Mute preview"}

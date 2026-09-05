@@ -55,7 +55,31 @@ export type PreviewDiagnostics = {
   elapsedMs: number;
 };
 
-export type PreviewPlaybackMode = "whole-media";
+export type PreviewPlaybackMode =
+  | "whole-media"
+  | "active-segment"
+  | "active-segment-loop"
+  | "ordered-segments";
+
+export type PreviewRange = { startMs: number; endMs: number };
+
+export const previewRange = (
+  mode: PreviewPlaybackMode,
+  durationMs: number,
+  activeSegment?: Segment,
+  segments: Segment[] = [],
+  orderedIndex = 0,
+): PreviewRange => {
+  if (mode === "whole-media") return { startMs: 0, endMs: durationMs };
+  if (mode === "active-segment" || mode === "active-segment-loop")
+    return activeSegment
+      ? { startMs: activeSegment.startMs, endMs: activeSegment.endMs }
+      : { startMs: 0, endMs: durationMs };
+  const segment = segments[orderedIndex];
+  return segment
+    ? { startMs: segment.startMs, endMs: segment.endMs }
+    : { startMs: 0, endMs: durationMs };
+};
 
 export const previewMime = 'video/mp4; codecs="avc1.42E01E, mp4a.40.2"';
 
