@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -66,7 +67,7 @@ func (s *RuntimeSettingsState) Snapshot() RuntimeSettings {
 	for alias, path := range s.settings.MediaRoots {
 		settings.MediaRoots[alias] = path
 	}
-	settings.Destinations = append([]RuntimeDestination(nil), s.settings.Destinations...)
+	settings.Destinations = slices.Clone(s.settings.Destinations)
 	return settings
 }
 

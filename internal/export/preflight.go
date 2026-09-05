@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"sort"
+	"slices"
 
 	"videocutlist/internal/library/media/probe"
 )
@@ -24,7 +24,7 @@ type PreflightResult struct {
 // Preflight is the single export stream policy. Empty selection deterministically
 // chooses video, audio, and subtitle streams; data and attachments never pass.
 func Preflight(request Request, metadata probe.Metadata) PreflightResult {
-	result := PreflightResult{Selection: append([]int(nil), request.StreamIndexes...)}
+	result := PreflightResult{Selection: slices.Clone(request.StreamIndexes)}
 	if request.Selection == "" {
 		request.Selection = "segments"
 	}
@@ -123,6 +123,6 @@ func sortedIndexes(streams []probe.Stream) []int {
 	for _, s := range streams {
 		out = append(out, s.Index)
 	}
-	sort.Ints(out)
+	slices.Sort(out)
 	return out
 }

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
+	"slices"
 	"sync"
 	"time"
 
@@ -484,7 +485,7 @@ func jobResult(record jobqueue.Job) Job {
 	job := Job{ID: record.ID, Type: "export", State: string(record.State), Progress: progress, CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt}
 	var request ExportInput
 	if json.Unmarshal([]byte(record.RequestJSON), &request) == nil {
-		job.Strategy, job.Mode, job.Selection, job.SelectedStreams = request.CutStrategy, request.Mode, request.Selection, append([]int(nil), request.StreamIndexes...)
+		job.Strategy, job.Mode, job.Selection, job.SelectedStreams = request.CutStrategy, request.Mode, request.Selection, slices.Clone(request.StreamIndexes)
 	}
 	if record.State == jobqueue.JobFailed && record.ErrorCode.Valid {
 		value := record.ErrorCode.String

@@ -10,7 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -343,7 +343,7 @@ func (s *Store) evictLocked() error {
 	if err != nil {
 		return err
 	}
-	sort.Slice(files, func(i, j int) bool { return files[i].info.ModTime().Before(files[j].info.ModTime()) })
+	slices.SortFunc(files, func(a, b cacheFile) int { return a.info.ModTime().Compare(b.info.ModTime()) })
 	for _, file := range files {
 		if total <= s.max {
 			return nil

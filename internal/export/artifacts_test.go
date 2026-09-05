@@ -154,19 +154,17 @@ func TestArtifactStoreJobIsolationAndExpiry(t *testing.T) {
 	store.Put("job-two", []Artifact{{Path: second, Name: "two.mkv", Kind: KindDownload, Expires: now.Add(time.Hour)}})
 	var wg sync.WaitGroup
 	for _, job := range []string{"job-one", "job-two"} {
-		wg.Add(1)
-		go func(id string) {
-			defer wg.Done()
-			file, artifact, err := store.Open(id, 0, now)
+		wg.Go(func() {
+			file, artifact, err := store.Open(job, 0, now)
 			if err != nil {
 				t.Error(err)
 				return
 			}
 			defer file.Close()
-			if artifact.Name != id[len("job-"):]+".mkv" {
-				t.Errorf("job %s opened %s", id, artifact.Name)
+			if artifact.Name != job[len("job-"):]+".mkv" {
+				t.Errorf("job %s opened %s", job, artifact.Name)
 			}
-		}(job)
+		})
 	}
 	wg.Wait()
 	if _, _, err := store.Open("job-one", 0, now.Add(2*time.Hour)); err == nil {

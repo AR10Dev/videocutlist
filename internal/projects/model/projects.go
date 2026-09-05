@@ -1,11 +1,12 @@
 package model
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"math"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 	"unicode/utf8"
 )
@@ -45,7 +46,7 @@ type ProjectItem struct {
 	MediaID       string        `json:"mediaId"`
 	Segments      []Segment     `json:"segments"`
 	EditorState   *UIState      `json:"editorState,omitempty"`
-	ExportOptions ExportOptions `json:"exportOptions,omitempty"`
+	ExportOptions ExportOptions `json:"exportOptions,omitzero"`
 }
 
 // Document is the editable project payload; revision belongs to its envelope.
@@ -131,8 +132,8 @@ func validateExportOptions(options ExportOptions) error {
 }
 
 func validateSegments(segments []Segment, durationMS int64) error {
-	ordered := append([]Segment(nil), segments...)
-	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].StartMS < ordered[j].StartMS })
+	ordered := slices.Clone(segments)
+	slices.SortStableFunc(ordered, func(a, b Segment) int { return cmp.Compare(a.StartMS, b.StartMS) })
 	var previousEnd int64
 	for i, segment := range ordered {
 		if segment.StartMS < 0 || segment.StartMS >= segment.EndMS || (durationMS >= 0 && segment.EndMS > durationMS) {

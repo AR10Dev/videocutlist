@@ -123,9 +123,8 @@ func (s *Scheduler) Start() {
 		return
 	}
 	s.started = true
-	s.done.Add(s.config.WorkerLimit)
 	for range s.config.WorkerLimit {
-		go s.worker()
+		s.done.Go(s.worker)
 	}
 	s.mu.Unlock()
 	s.signal()
@@ -195,7 +194,6 @@ func (s *Scheduler) Cancel(ctx context.Context, id string) (Job, error) {
 }
 
 func (s *Scheduler) worker() {
-	defer s.done.Done()
 	for {
 		select {
 		case <-s.stop:

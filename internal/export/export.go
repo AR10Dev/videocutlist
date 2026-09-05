@@ -3,6 +3,7 @@ package export
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -15,7 +16,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -123,7 +123,7 @@ func (s Service) Run(ctx context.Context, source *os.File, document model.Docume
 	if len(document.Items) != 1 {
 		return Result{}, fmt.Errorf("%w: export requires one project item", ErrInvalidRequest)
 	}
-	segments := append([]model.Segment(nil), document.Items[0].Segments...)
+	segments := slices.Clone(document.Items[0].Segments)
 	if request.Selection == "gaps" {
 		segments = selectedSegments(document.Items[0].Segments, request.Selection, metadata.DurationMS)
 	}
@@ -610,10 +610,10 @@ func validateStreamIndexes(indexes []int, streams []probe.Stream) error {
 
 func selectedSegments(segments []model.Segment, selection string, duration int64) []model.Segment {
 	if selection == "segments" {
-		return append([]model.Segment(nil), segments...)
+		return slices.Clone(segments)
 	}
-	ordered := append([]model.Segment(nil), segments...)
-	sort.Slice(ordered, func(i, j int) bool { return ordered[i].StartMS < ordered[j].StartMS })
+	ordered := slices.Clone(segments)
+	slices.SortFunc(ordered, func(a, b model.Segment) int { return cmp.Compare(a.StartMS, b.StartMS) })
 	var gaps []model.Segment
 	cursor := int64(0)
 	for _, segment := range ordered {

@@ -112,23 +112,20 @@ func TestSchedulerConcurrentSubmitClaimAndCancel(t *testing.T) {
 	scheduler.Start()
 	first := Job{ID: "j_000000000072", BatchID: "b_000000000072", Kind: JobScan, RequestJSON: `{}`}
 	second := Job{ID: "j_000000000073", BatchID: "b_000000000073", Kind: JobScan, RequestJSON: `{}`}
-	if _, err := scheduler.Submit(context.Background(), []Job{first}); err != nil {
+	if _, err := scheduler.Submit(t.Context(), []Job{first}); err != nil {
 		t.Fatal(err)
 	}
 	<-entered
 	var group sync.WaitGroup
-	group.Add(2)
 	errs := make(chan error, 2)
-	go func() {
-		defer group.Done()
-		_, err := scheduler.Cancel(context.Background(), first.ID)
+	group.Go(func() {
+		_, err := scheduler.Cancel(t.Context(), first.ID)
 		errs <- err
-	}()
-	go func() {
-		defer group.Done()
-		_, err := scheduler.Submit(context.Background(), []Job{second})
+	})
+	group.Go(func() {
+		_, err := scheduler.Submit(t.Context(), []Job{second})
 		errs <- err
-	}()
+	})
 	group.Wait()
 	close(errs)
 	close(release)
@@ -139,20 +136,20 @@ func TestSchedulerConcurrentSubmitClaimAndCancel(t *testing.T) {
 	}
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
-		stored, err := jobs.Get(context.Background(), second.ID)
+		stored, err := jobs.Get(t.Context(), second.ID)
 		if err == nil && stored.State == JobSucceeded {
 			break
 		}
 		time.Sleep(time.Millisecond)
 	}
-	if err := scheduler.Shutdown(context.Background()); err != nil {
+	if err := scheduler.Shutdown(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	firstStored, err := jobs.Get(context.Background(), first.ID)
+	firstStored, err := jobs.Get(t.Context(), first.ID)
 	if err != nil || firstStored.State != JobCancelled {
 		t.Fatalf("first = %#v, err = %v", firstStored, err)
 	}
-	secondStored, err := jobs.Get(context.Background(), second.ID)
+	secondStored, err := jobs.Get(t.Context(), second.ID)
 	if err != nil || secondStored.State != JobSucceeded {
 		t.Fatalf("second = %#v, err = %v", secondStored, err)
 	}

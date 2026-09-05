@@ -10,7 +10,7 @@ import (
 	"math"
 	"os"
 	"os/exec"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -247,7 +247,7 @@ func normalize(data []byte) (Metadata, error) {
 				disposition = append(disposition, name)
 			}
 		}
-		sort.Strings(disposition)
+		slices.Sort(disposition)
 		result.Streams = append(result.Streams, Stream{Index: stream.Index, Type: stream.Type, Codec: stream.Codec, Language: stream.Tags.Language, Disposition: disposition, Width: stream.Width, Height: stream.Height, AvgFrameRate: stream.AvgFrameRate, Channels: stream.Channels})
 		switch stream.Type {
 		case "video":

@@ -2,6 +2,7 @@
 package index
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -9,10 +10,11 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 
@@ -196,7 +198,7 @@ func (s *Scanner) Scan(ctx context.Context, alias string) ([]Record, error) {
 	if err != nil {
 		return nil, fmt.Errorf("scan media root %q: %w", alias, err)
 	}
-	sort.Slice(records, func(i, j int) bool { return records[i].ID < records[j].ID })
+	slices.SortFunc(records, func(a, b Record) int { return cmp.Compare(a.ID, b.ID) })
 	return records, nil
 }
 
@@ -371,12 +373,8 @@ func (s *Scanner) Refresh(ctx context.Context, catalog Catalog) error {
 		return errors.New("media catalog is required")
 	}
 	s.mu.Lock()
-	aliases := make([]string, 0, len(s.roots))
-	for alias := range s.roots {
-		aliases = append(aliases, alias)
-	}
+	aliases := slices.Sorted(maps.Keys(s.roots))
 	s.mu.Unlock()
-	sort.Strings(aliases)
 	var firstErr error
 	for _, alias := range aliases {
 		s.setRootStatus(alias, RootStatus{State: "scanning"})
