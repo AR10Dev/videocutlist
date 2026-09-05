@@ -100,8 +100,12 @@ export function createEditorController(deps: {
     const current = present().segments;
     const next = moveSegments(current, index, direction);
     updateTimeline({ segments: next });
-    if (next !== current && activeSegmentIndex() === index)
-      setActiveSegmentIndex(index + direction);
+    if (next !== current) {
+      const active = activeSegmentIndex();
+      const target = index + direction;
+      if (active === index) setActiveSegmentIndex(target);
+      else if (active === target) setActiveSegmentIndex(index);
+    }
   };
   const updateSegment = (
     index: number,

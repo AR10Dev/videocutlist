@@ -1,11 +1,10 @@
-import { createSignal, For, Show } from "solid-js";
-import { ArrowDown, ArrowUp, Copy, CornerDownLeft, CornerDownRight, Trash2 } from "lucide-solid";
+import { For, Show } from "solid-js";
+import { ArrowDown, ArrowUp, CornerDownLeft, CornerDownRight, Trash2 } from "lucide-solid";
 import { formatTime } from "../preview/model";
 import { useWorkspace } from "../app/WorkspaceContext";
 
 export function CutsView() {
   const workspace = useWorkspace();
-  const [draggedIndex, setDraggedIndex] = createSignal<number>();
   const select = (index: number, boundary?: "start" | "end") => {
     workspace.setActiveSegmentIndex(index);
     const segment = workspace.present().segments[index];
@@ -14,30 +13,6 @@ export function CutsView() {
         playheadMs: boundary === "start" ? segment.startMs : segment.endMs,
       });
   };
-  const duplicate = (index: number) => {
-    const segments = workspace.present().segments;
-    const segment = segments[index];
-    if (!segment) return;
-    workspace.updateTimeline({
-      segments: [
-        ...segments.slice(0, index + 1),
-        { ...segment, label: segment.label ? `${segment.label} copy` : undefined },
-        ...segments.slice(index + 1),
-      ],
-    });
-    workspace.setActiveSegmentIndex(index + 1);
-  };
-  const dropAt = (index: number) => {
-    const from = draggedIndex();
-    setDraggedIndex();
-    if (from === undefined || from === index) return;
-    const segments = [...workspace.present().segments];
-    const [segment] = segments.splice(from, 1);
-    segments.splice(index, 0, segment);
-    workspace.updateTimeline({ segments });
-    workspace.setActiveSegmentIndex(index);
-  };
-
   return (
     <section class="cuts-panel" role="region" aria-labelledby="cuts-tab">
       <header class="task-heading">
@@ -67,10 +42,6 @@ export function CutsView() {
               <li
                 class={`cut-row ${workspace.activeSegmentIndex() === index() ? "is-active" : ""}`}
                 aria-label={`Cut ${index() + 1} (Segment ${index() + 1})`}
-                draggable="true"
-                onDragStart={() => setDraggedIndex(index())}
-                onDragOver={(event) => event.preventDefault()}
-                onDrop={() => dropAt(index())}
               >
                 <button
                   class="cut-select"
@@ -128,13 +99,6 @@ export function CutsView() {
                     onClick={() => workspace.moveSegment(index(), 1)}
                   >
                     <ArrowDown size={14} aria-hidden="true" />
-                  </button>
-                  <button
-                    class="btn btn-sm btn-square"
-                    aria-label={`Duplicate cut ${index() + 1}`}
-                    onClick={() => duplicate(index())}
-                  >
-                    <Copy size={14} aria-hidden="true" />
                   </button>
                   <button
                     class="btn btn-sm btn-square btn-error"

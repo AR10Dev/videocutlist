@@ -89,181 +89,176 @@ export function EditorView() {
                 ? `${workspace.present().segments.length} cuts selected.`
                 : "No cuts selected."}
             </p>
-            <PreviewPlayer />
-            <Timeline />
-            <input
-              class="accessible-playhead"
-              aria-label="Timeline playhead"
-              aria-valuetext={`${formatTime(workspace.playheadMs(), workspace.duration())} of ${formatTime(workspace.duration(), workspace.duration())}`}
-              type="range"
-              min="0"
-              max={workspace.duration()}
-              step="1"
-              value={workspace.playheadMs()}
-              onInput={(event) =>
-                workspace.updateTimeline({ playheadMs: Number(event.currentTarget.value) })
+            <PreviewPlayer
+              timeline={<Timeline />}
+              controls={
+                <>
+                  <Show when={workspace.assetStatus()}>
+                    {(message) => (
+                      <div class="alert alert-info py-2 mb-3" role="status">
+                        {message()}
+                      </div>
+                    )}
+                  </Show>
+                  <div class="editor-controls flex flex-wrap items-end gap-3">
+                    <div
+                      class="control-group history-controls flex flex-wrap items-center gap-2"
+                      aria-label="History"
+                    >
+                      <button
+                        class="btn btn-sm btn-square"
+                        title="Undo"
+                        aria-label="Undo"
+                        disabled={!workspace.timeline().past.length}
+                        onClick={() => {
+                          const next = undoTimeline(workspace.timeline());
+                          workspace.setTimeline(next);
+                          workspace.setPreviewCenterMs(next.present.playheadMs);
+                          workspace.markDirty();
+                        }}
+                        aria-keyshortcuts="Control+Z Meta+Z"
+                      >
+                        <Undo2 size={16} aria-hidden="true" />
+                      </button>
+                      <button
+                        class="btn btn-sm btn-square"
+                        title="Redo"
+                        aria-label="Redo"
+                        disabled={!workspace.timeline().future.length}
+                        onClick={() => {
+                          const next = redoTimeline(workspace.timeline());
+                          workspace.setTimeline(next);
+                          workspace.setPreviewCenterMs(next.present.playheadMs);
+                          workspace.markDirty();
+                        }}
+                        aria-keyshortcuts="Control+Y Meta+Shift+Z"
+                      >
+                        <Redo2 size={16} aria-hidden="true" />
+                      </button>
+                    </div>
+                    <label class="input input-sm primary-timecode">
+                      <Clock3 size={16} aria-hidden="true" />
+                      <span class="sr-only">Current timecode</span>
+                      <input
+                        aria-label="Timecode"
+                        value={
+                          workspace.timecode() ||
+                          formatTime(workspace.playheadMs(), workspace.duration())
+                        }
+                        onFocus={(event) => {
+                          workspace.setTimecode(
+                            formatTime(workspace.playheadMs(), workspace.duration()),
+                          );
+                          event.currentTarget.select();
+                        }}
+                        onInput={(event) => workspace.setTimecode(event.currentTarget.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Escape") {
+                            workspace.setTimecode("");
+                            event.currentTarget.blur();
+                          } else if (event.key === "Enter") confirmTimecode(event.currentTarget);
+                        }}
+                      />
+                    </label>
+                    <div
+                      class="control-group marking-controls flex flex-wrap items-center gap-2"
+                      aria-label="Marking controls"
+                    >
+                      <label class="marker-value">
+                        In:{" "}
+                        <input
+                          aria-label="In point"
+                          placeholder="Unset"
+                          value={
+                            workspace.present().inMs === undefined
+                              ? ""
+                              : formatTime(workspace.present().inMs!, workspace.duration())
+                          }
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") confirmBoundary("inMs", event.currentTarget);
+                            if (event.key === "Escape") event.currentTarget.blur();
+                          }}
+                        />
+                      </label>
+                      <button
+                        class="btn btn-sm"
+                        aria-keyshortcuts="I"
+                        onClick={() => workspace.setMarker("inMs", workspace.watchedPosition())}
+                      >
+                        <LocateFixed size={16} aria-hidden="true" /> Set in
+                      </button>
+                      <label class="marker-value">
+                        Out:{" "}
+                        <input
+                          aria-label="Out point"
+                          placeholder="Unset"
+                          value={
+                            workspace.present().outMs === undefined
+                              ? ""
+                              : formatTime(workspace.present().outMs!, workspace.duration())
+                          }
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter")
+                              confirmBoundary("outMs", event.currentTarget);
+                            if (event.key === "Escape") event.currentTarget.blur();
+                          }}
+                        />
+                      </label>
+                      <button
+                        class="btn btn-sm"
+                        aria-keyshortcuts="O"
+                        onClick={() =>
+                          workspace.setMarker(
+                            "outMs",
+                            Math.min(workspace.duration(), workspace.watchedPosition()),
+                          )
+                        }
+                      >
+                        <LocateFixed size={16} aria-hidden="true" /> Set out
+                      </button>
+                      <button
+                        class="btn btn-sm btn-primary"
+                        aria-label="Add cut (Add segment)"
+                        onClick={workspace.addSegment}
+                        disabled={!validRange()}
+                        aria-describedby="add-segment-help"
+                      >
+                        <Plus size={16} aria-hidden="true" /> Add cut
+                      </button>
+                    </div>
+                    <details
+                      class="secondary-controls"
+                      open={secondaryOpen()}
+                      onToggle={(event) => setSecondaryOpen(event.currentTarget.open)}
+                    >
+                      <summary>More editing actions</summary>
+                      <div
+                        class="control-group flex flex-wrap items-center gap-2"
+                        aria-label="Cut details"
+                      >
+                        <label>
+                          Segment label{" "}
+                          <input
+                            value={workspace.segmentLabel()}
+                            onInput={(event) =>
+                              workspace.setSegmentLabel(event.currentTarget.value)
+                            }
+                          />
+                        </label>
+                        <button
+                          class="btn btn-sm"
+                          disabled={workspace.activeSegmentIndex() === undefined}
+                          onClick={workspace.splitActiveSegment}
+                          aria-keyshortcuts="B"
+                        >
+                          Split active cut
+                        </button>
+                      </div>
+                    </details>
+                  </div>
+                </>
               }
             />
-            <Show when={workspace.assetStatus()}>
-              {(message) => (
-                <div class="alert alert-info py-2 mb-3" role="status">
-                  {message()}
-                </div>
-              )}
-            </Show>
-            <div
-              class="editor-controls flex flex-wrap items-end gap-3"
-              aria-label="Editing controls"
-            >
-              <div
-                class="control-group history-controls flex flex-wrap items-center gap-2"
-                aria-label="History"
-              >
-                <button
-                  class="btn btn-sm btn-square"
-                  title="Undo"
-                  aria-label="Undo"
-                  disabled={!workspace.timeline().past.length}
-                  onClick={() => {
-                    const next = undoTimeline(workspace.timeline());
-                    workspace.setTimeline(next);
-                    workspace.setPreviewCenterMs(next.present.playheadMs);
-                    workspace.markDirty();
-                  }}
-                  aria-keyshortcuts="Control+Z Meta+Z"
-                >
-                  <Undo2 size={16} aria-hidden="true" />
-                </button>
-                <button
-                  class="btn btn-sm btn-square"
-                  title="Redo"
-                  aria-label="Redo"
-                  disabled={!workspace.timeline().future.length}
-                  onClick={() => {
-                    const next = redoTimeline(workspace.timeline());
-                    workspace.setTimeline(next);
-                    workspace.setPreviewCenterMs(next.present.playheadMs);
-                    workspace.markDirty();
-                  }}
-                  aria-keyshortcuts="Control+Y Meta+Shift+Z"
-                >
-                  <Redo2 size={16} aria-hidden="true" />
-                </button>
-              </div>
-              <label class="input input-sm primary-timecode">
-                <Clock3 size={16} aria-hidden="true" />
-                <span class="sr-only">Current timecode</span>
-                <input
-                  aria-label="Timecode"
-                  value={
-                    workspace.timecode() || formatTime(workspace.playheadMs(), workspace.duration())
-                  }
-                  onFocus={(event) => {
-                    workspace.setTimecode(formatTime(workspace.playheadMs(), workspace.duration()));
-                    event.currentTarget.select();
-                  }}
-                  onInput={(event) => workspace.setTimecode(event.currentTarget.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Escape") {
-                      workspace.setTimecode("");
-                      event.currentTarget.blur();
-                    } else if (event.key === "Enter") confirmTimecode(event.currentTarget);
-                  }}
-                />
-              </label>
-              <div
-                class="control-group marking-controls flex flex-wrap items-center gap-2"
-                aria-label="Marking controls"
-              >
-                <label class="marker-value">
-                  In:{" "}
-                  <input
-                    aria-label="In point"
-                    placeholder="Unset"
-                    value={
-                      workspace.present().inMs === undefined
-                        ? ""
-                        : formatTime(workspace.present().inMs!, workspace.duration())
-                    }
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") confirmBoundary("inMs", event.currentTarget);
-                      if (event.key === "Escape") event.currentTarget.blur();
-                    }}
-                  />
-                </label>
-                <button
-                  class="btn btn-sm"
-                  aria-keyshortcuts="I"
-                  onClick={() => workspace.setMarker("inMs", workspace.watchedPosition())}
-                >
-                  <LocateFixed size={16} aria-hidden="true" /> Set in
-                </button>
-                <label class="marker-value">
-                  Out:{" "}
-                  <input
-                    aria-label="Out point"
-                    placeholder="Unset"
-                    value={
-                      workspace.present().outMs === undefined
-                        ? ""
-                        : formatTime(workspace.present().outMs!, workspace.duration())
-                    }
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") confirmBoundary("outMs", event.currentTarget);
-                      if (event.key === "Escape") event.currentTarget.blur();
-                    }}
-                  />
-                </label>
-                <button
-                  class="btn btn-sm"
-                  aria-keyshortcuts="O"
-                  onClick={() =>
-                    workspace.setMarker(
-                      "outMs",
-                      Math.min(workspace.duration(), workspace.watchedPosition()),
-                    )
-                  }
-                >
-                  <LocateFixed size={16} aria-hidden="true" /> Set out
-                </button>
-                <button
-                  class="btn btn-sm btn-primary"
-                  aria-label="Add cut (Add segment)"
-                  onClick={workspace.addSegment}
-                  disabled={!validRange()}
-                  aria-describedby="add-segment-help"
-                >
-                  <Plus size={16} aria-hidden="true" /> Add cut
-                </button>
-              </div>
-              <details
-                class="secondary-controls"
-                open={secondaryOpen()}
-                onToggle={(event) => setSecondaryOpen(event.currentTarget.open)}
-              >
-                <summary>More editing actions</summary>
-                <div
-                  class="control-group flex flex-wrap items-center gap-2"
-                  aria-label="Cut details"
-                >
-                  <label>
-                    Segment label{" "}
-                    <input
-                      value={workspace.segmentLabel()}
-                      onInput={(event) => workspace.setSegmentLabel(event.currentTarget.value)}
-                    />
-                  </label>
-                  <button
-                    class="btn btn-sm"
-                    disabled={workspace.activeSegmentIndex() === undefined}
-                    onClick={workspace.splitActiveSegment}
-                    aria-keyshortcuts="B"
-                  >
-                    Split active cut
-                  </button>
-                </div>
-              </details>
-            </div>
             <p id="add-segment-help" class="control-help" role="status">
               {guidance()}
             </p>

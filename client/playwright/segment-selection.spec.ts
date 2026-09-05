@@ -1795,15 +1795,13 @@ test("renders separate timeline lanes and seeks through their shared interaction
   expect(rulerBounds!.y + rulerBounds!.height).toBeLessThanOrEqual(thumbnailBounds!.y);
   expect(thumbnailBounds!.y + thumbnailBounds!.height).toBeLessThanOrEqual(waveformBounds!.y);
 
-  const timeline = page.getByRole("slider", { name: "Timeline position" });
+  const timeline = page.locator(".timeline-visual");
+  const playhead = page.getByLabel("Timeline playhead");
   const bounds = await timeline.boundingBox();
   expect(bounds).not.toBeNull();
   await timeline.click({ position: { x: bounds!.width / 4, y: bounds!.height / 2 } });
-  await expect
-    .poll(async () => Number(await timeline.getAttribute("aria-valuenow")))
-    .toBeGreaterThanOrEqual(2480);
-  expect(Number(await timeline.getAttribute("aria-valuenow"))).toBeLessThanOrEqual(2520);
-  expect(Number(await page.getByLabel("Timeline playhead").inputValue())).toBeLessThanOrEqual(2520);
+  await expect.poll(async () => Number(await playhead.inputValue())).toBeGreaterThanOrEqual(2480);
+  expect(Number(await playhead.inputValue())).toBeLessThanOrEqual(2520);
 
   const currentBounds = await timeline.boundingBox();
   const playheadBounds = await page.locator(".timeline-playhead").boundingBox();
@@ -1863,11 +1861,21 @@ test("adds, selects, splits, and safely removes cuts with the redesigned control
     "aria-pressed",
     "true",
   );
+  const startHandle = page.getByRole("slider", { name: "Resize cut 1 start" });
+  const originalStart = Number(await startHandle.getAttribute("aria-valuenow"));
+  await startHandle.press("ArrowRight");
+  expect(Number(await startHandle.getAttribute("aria-valuenow"))).toBeGreaterThan(originalStart);
+  await startHandle.press("ArrowLeft");
 
   await page.getByLabel("Timeline playhead").fill("2000");
   await page.getByRole("heading", { name: "Timeline" }).focus();
   await page.keyboard.press("b");
   await expect(cuts).toHaveCount(2);
+  await page.getByRole("button", { name: /Move cut 1 down/ }).click();
+  await expect(cuts.first().getByRole("button", { name: "Select cut 1" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
   await page.getByLabel("Label cut 2").focus();
   await page.keyboard.press("Backspace");
   await expect(cuts).toHaveCount(2);
@@ -1877,7 +1885,8 @@ test("adds, selects, splits, and safely removes cuts with the redesigned control
 
   await page.getByRole("button", { name: "Zoom in" }).click();
   await expect(page.getByLabel("Timeline zoom level")).toHaveText("2×");
-  await page.getByRole("button", { name: "Fit timeline" }).click();
+  await expect(page.getByRole("button", { name: "Fit timeline" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Zoom out" }).click();
   await expect(page.getByLabel("Timeline zoom level")).toHaveText("1×");
   await openTask(page, "Export");
   await page.getByText("Export options", { exact: true }).click();

@@ -16,10 +16,10 @@ describe("settings", () => {
         muted: true,
       }),
     ).toEqual({
+      ...defaultSettings,
       filenameTemplate: "clip-{segment}.{ext}",
       cutStrategy: "precise_reencode",
       muted: true,
-      appearance: "system",
     });
   });
 });

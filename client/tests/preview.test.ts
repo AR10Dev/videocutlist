@@ -99,10 +99,18 @@ describe("preview positions", () => {
 });
 
 describe("preview streaming", () => {
-  it("seeks after the first SourceBuffer append without overriding pause", async () => {
+  it("waits until the requested offset is buffered before seeking without overriding pause", async () => {
+    let bufferedEnd = 0;
     class FakeBuffer extends EventTarget {
       updating = false;
       appendBuffer = vi.fn();
+      buffered = {
+        get length() {
+          return bufferedEnd > 0 ? 1 : 0;
+        },
+        start: () => 0,
+        end: () => bufferedEnd,
+      };
     }
     const source = new FakeBuffer();
     const instances: EventTarget[] = [];
@@ -142,6 +150,9 @@ describe("preview streaming", () => {
     instances[0].dispatchEvent(new Event("sourceopen"));
     await vi.waitFor(() => expect(source.appendBuffer).toHaveBeenCalledOnce());
     expect(video.currentTime).toBe(0);
+    source.dispatchEvent(new Event("updateend"));
+    expect(video.currentTime).toBe(0);
+    bufferedEnd = 3;
     source.dispatchEvent(new Event("updateend"));
     expect(video.currentTime).toBe(1.234);
     expect(video.play).not.toHaveBeenCalled();

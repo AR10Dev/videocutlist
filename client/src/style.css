@@ -500,11 +500,17 @@ video {
   border-radius: 4px;
   text-align: center;
 }
+.edit-deck {
+  margin-top: 8px;
+  padding: 8px 0;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
 .preview-controls {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 8px;
-  margin-top: 8px;
   flex-wrap: wrap;
 }
 .preview-controls button {
@@ -515,9 +521,6 @@ video {
 }
 .preview-controls input[type="range"] {
   min-width: 90px;
-}
-.preview-controls input[aria-label="Preview scrubber"] {
-  flex: 1;
 }
 .tooltip-content {
   z-index: 50;
@@ -550,6 +553,18 @@ video {
   cursor: default;
   user-select: none;
   touch-action: none;
+}
+.timeline-playhead-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  pointer-events: none;
+}
+.timeline-visual:has(.timeline-playhead-input:focus-visible) {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
 }
 .timeline-lane {
   position: relative;
@@ -662,9 +677,7 @@ video {
 }
 
 .editor-controls {
-  padding: 10px 0;
-  border-top: 1px solid color-mix(in srgb, var(--text-muted) 25%, transparent);
-  border-bottom: 1px solid color-mix(in srgb, var(--text-muted) 25%, transparent);
+  padding-top: 10px;
 }
 .editor-controls .control-group {
   min-height: 44px;
@@ -1046,12 +1059,6 @@ fieldset {
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
-}
-.accessible-playhead {
-  width: 100%;
-  height: 12px;
-  margin: 4px 0 8px;
-  opacity: 0.55;
 }
 .shortcut-help {
   font-size: 0.875rem;

@@ -2,6 +2,7 @@ import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
 import { animate } from "motion";
 import { viewportScale } from "../preview/assets";
 import { formatTime } from "../preview/model";
+import { frameDuration } from "./frame";
 import { useWorkspace } from "../app/WorkspaceContext";
 import { TimelineCanvas } from "./TimelineCanvas";
 import { timelineTimeFromPointer, visibleTimelineWindow } from "./timeline";
@@ -15,9 +16,6 @@ export function Timeline() {
   const workspace = useWorkspace();
   const [dragTarget, setDragTarget] = createSignal<DragTarget>();
   const [hoverMs, setHoverMs] = createSignal<number>();
-  const [showThumbnails, setShowThumbnails] = createSignal(true);
-  const [showWaveform, setShowWaveform] = createSignal(true);
-  const [followPlayback, setFollowPlayback] = createSignal(false);
   const [visibleWindow, setVisibleWindow] = createSignal({
     startMs: 0,
     endMs: workspace.duration(),
@@ -126,13 +124,6 @@ export function Timeline() {
     globalThis.removeEventListener("mouseup", finishDrag);
   });
 
-  createEffect(() => {
-    if (!followPlayback() || !scroller || !timeline || workspace.present().zoom <= 1) return;
-    const x = (workspace.playheadMs() / workspace.duration()) * timeline.clientWidth;
-    if (x < scroller.scrollLeft || x > scroller.scrollLeft + scroller.clientWidth)
-      scroller.scrollLeft = Math.max(0, x - scroller.clientWidth / 2);
-  });
-
   const zoom = () => workspace.present().zoom;
   return (
     <div class="timeline-wrap">
@@ -146,14 +137,6 @@ export function Timeline() {
         >
           −
         </button>
-        <button
-          type="button"
-          class="btn btn-sm"
-          aria-label="Fit timeline"
-          onClick={() => setZoom(1)}
-        >
-          Fit
-        </button>
         <span aria-label="Timeline zoom level">{zoom()}×</span>
         <button
           type="button"
@@ -164,30 +147,6 @@ export function Timeline() {
         >
           +
         </button>
-        <label>
-          <input
-            type="checkbox"
-            checked={showThumbnails()}
-            onChange={(event) => setShowThumbnails(event.currentTarget.checked)}
-          />{" "}
-          Thumbnails
-        </label>
-        <label>
-          <input
-            type="checkbox"
-            checked={showWaveform()}
-            onChange={(event) => setShowWaveform(event.currentTarget.checked)}
-          />{" "}
-          Waveform
-        </label>
-        <label>
-          <input
-            type="checkbox"
-            checked={followPlayback()}
-            onChange={(event) => setFollowPlayback(event.currentTarget.checked)}
-          />{" "}
-          Follow
-        </label>
       </div>
       <div
         ref={(element) => (scroller = element)}
@@ -223,22 +182,21 @@ export function Timeline() {
           onPointerLeave={() => !dragTarget() && setHoverMs()}
           onPointerUp={finishDrag}
           onPointerCancel={finishDrag}
-          onKeyDown={(event) => {
-            if (event.key === "Home" || event.key === "End") {
-              event.preventDefault();
-              workspace.updateTimeline({
-                playheadMs: event.key === "Home" ? 0 : workspace.duration(),
-              });
-            }
-          }}
-          role="slider"
-          tabIndex={0}
-          aria-label="Timeline position"
-          aria-valuemin="0"
-          aria-valuemax={workspace.duration()}
-          aria-valuenow={workspace.playheadMs()}
-          aria-valuetext={`${formatTime(workspace.playheadMs(), workspace.duration())} of ${formatTime(workspace.duration(), workspace.duration())}`}
         >
+          <input
+            class="timeline-playhead-input"
+            aria-label="Timeline playhead"
+            aria-describedby="timeline-description"
+            aria-valuetext={`${formatTime(workspace.playheadMs(), workspace.duration())} of ${formatTime(workspace.duration(), workspace.duration())}`}
+            type="range"
+            min="0"
+            max={workspace.duration()}
+            step="1"
+            value={workspace.playheadMs()}
+            onInput={(event) =>
+              workspace.updateTimeline({ playheadMs: Number(event.currentTarget.value) })
+            }
+          />
           <div class="timeline-lane timeline-ruler" role="img" aria-label="Timeline ruler">
             <span>{formatTime(visibleWindow().startMs, workspace.duration())}</span>
             <span>
@@ -249,20 +207,16 @@ export function Timeline() {
             </span>
             <span>{formatTime(visibleWindow().endMs, workspace.duration())}</span>
           </div>
-          <Show when={showThumbnails()}>
-            <div class="timeline-lane timeline-thumbnails" role="img" aria-label="Thumbnail lane">
-              <TimelineCanvas
-                thumbnailURL={workspace.thumbnailURL()}
-                waveform={[]}
-                lane="thumbnail"
-              />
-            </div>
-          </Show>
-          <Show when={showWaveform()}>
-            <div class="timeline-lane timeline-waveform" role="img" aria-label="Waveform lane">
-              <TimelineCanvas waveform={workspace.waveform()} lane="waveform" />
-            </div>
-          </Show>
+          <div class="timeline-lane timeline-thumbnails" role="img" aria-label="Thumbnail lane">
+            <TimelineCanvas
+              thumbnailURL={workspace.thumbnailURL()}
+              waveform={[]}
+              lane="thumbnail"
+            />
+          </div>
+          <div class="timeline-lane timeline-waveform" role="img" aria-label="Waveform lane">
+            <TimelineCanvas waveform={workspace.waveform()} lane="waveform" />
+          </div>
           <div class="timeline-overlays">
             <Show when={workspace.present().inMs !== undefined}>
               <span
@@ -302,8 +256,20 @@ export function Timeline() {
                     workspace.setActiveSegmentIndex(index());
                   }}
                   onKeyDown={(event) => {
-                    if (event.key === "Enter" || event.key === " ")
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
                       workspace.setActiveSegmentIndex(index());
+                    } else if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+                      event.preventDefault();
+                      event.stopPropagation();
+                      workspace.setActiveSegmentIndex(index());
+                      workspace.updateSegment(index(), {
+                        startMs:
+                          segment.startMs +
+                          (event.key === "ArrowLeft" ? -1 : 1) *
+                            (frameDuration(workspace.selected()) || 1000),
+                      });
+                    }
                   }}
                   onPointerDown={(event) => {
                     workspace.setActiveSegmentIndex(index());
@@ -324,14 +290,48 @@ export function Timeline() {
                   <Show when={workspace.activeSegmentIndex() === index()}>
                     <span
                       class="cut-handle cut-handle-start"
+                      role="slider"
+                      tabIndex={0}
                       aria-label={`Resize cut ${index() + 1} start`}
+                      aria-valuemin="0"
+                      aria-valuemax={segment.endMs - 1}
+                      aria-valuenow={segment.startMs}
+                      onKeyDown={(event) => {
+                        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+                        event.preventDefault();
+                        event.stopPropagation();
+                        workspace.updateSegment(index(), {
+                          boundary: "start",
+                          valueMs:
+                            segment.startMs +
+                            (event.key === "ArrowLeft" ? -1 : 1) *
+                              (frameDuration(workspace.selected()) || 1000),
+                        });
+                      }}
                       onPointerDown={(event) =>
                         beginDrag({ kind: "segment-start", index: index() }, event)
                       }
                     />
                     <span
                       class="cut-handle cut-handle-end"
+                      role="slider"
+                      tabIndex={0}
                       aria-label={`Resize cut ${index() + 1} end`}
+                      aria-valuemin={segment.startMs + 1}
+                      aria-valuemax={workspace.duration()}
+                      aria-valuenow={segment.endMs}
+                      onKeyDown={(event) => {
+                        if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+                        event.preventDefault();
+                        event.stopPropagation();
+                        workspace.updateSegment(index(), {
+                          boundary: "end",
+                          valueMs:
+                            segment.endMs +
+                            (event.key === "ArrowLeft" ? -1 : 1) *
+                              (frameDuration(workspace.selected()) || 1000),
+                        });
+                      }}
                       onPointerDown={(event) =>
                         beginDrag({ kind: "segment-end", index: index() }, event)
                       }

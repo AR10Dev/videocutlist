@@ -210,14 +210,22 @@ export function ExportView() {
                           : "Subtitle"}
                       : {track.codec}
                     </label>
-                    <For each={(preflight()?.findings ?? []).filter((finding) => finding.streamIndex === track.index)}>
+                    <For
+                      each={(preflight()?.findings ?? []).filter(
+                        (finding) => finding.streamIndex === track.index,
+                      )}
+                    >
                       {(finding) => <p role="status">{finding.message}</p>}
                     </For>
                   </div>
                 );
               }}
             </For>
-            <For each={(preflight()?.findings ?? []).filter((finding) => finding.streamIndex === undefined)}>
+            <For
+              each={(preflight()?.findings ?? []).filter(
+                (finding) => finding.streamIndex === undefined,
+              )}
+            >
               {(finding) => <p role="status">{finding.message}</p>}
             </For>
           </fieldset>
