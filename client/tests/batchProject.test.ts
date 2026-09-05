@@ -18,6 +18,11 @@ const media = (id: string, name: string): components["schemas"]["Media"] => ({
 });
 
 describe("batch project items", () => {
+  it("defaults new items to separate clips and carries a remembered destination", () => {
+    const item = createProjectItem(media("m_first", "first.mp4"), "archive");
+    expect(item.exportOptions).toMatchObject({ mode: "separate", destinationId: "archive" });
+  });
+
   it("round-trips independent editor and export state", () => {
     const first = createProjectItem(media("m_first", "first.mp4"));
     first.timeline.present.playheadMs = 500;

@@ -17,6 +17,8 @@ export function ExportView() {
     batchId,
     exportRevision,
     exportStatus,
+    exportPending,
+    destinationStatus,
     exportMode,
     exportSelection,
     cutStrategy,
@@ -57,9 +59,7 @@ export function ExportView() {
     if (!selected()) return "Choose a video before exporting.";
     if (!selectedExportItems().length) return "Select at least one project item.";
     const needsSegment = Boolean(emptyItem());
-    if (needsSegment && dirty()) return "Add a segment and save the project before exporting.";
-    if (needsSegment) return "Add a segment before exporting.";
-    if (dirty()) return "Save the project before exporting.";
+    if (needsSegment) return "Add a segment before creating clips.";
     if (preflightPending()) return "Checking export requirements…";
     if (preflight() && !preflight()!.allowed) {
       const finding = preflight()!.findings[0];
@@ -96,6 +96,14 @@ export function ExportView() {
       </div>
 
       <Show when={blocker()}>
+        {(message) => (
+          <p class="export-state" role="status">
+            {message()}
+          </p>
+        )}
+      </Show>
+
+      <Show when={destinationStatus()}>
         {(message) => (
           <p class="export-state" role="status">
             {message()}
@@ -164,18 +172,16 @@ export function ExportView() {
           class="btn btn-primary btn-sm"
           disabled={
             !selected() ||
-            dirty() ||
             !selectedExportItems().length ||
             Boolean(emptyItem()) ||
+            exportPending() ||
             exportActive() ||
             (projectItems().length === 1 && preflightPending()) ||
-            (projectItems().length === 1 && !preflight()?.allowed)
+            (projectItems().length === 1 && Boolean(preflight() && !preflight()!.allowed))
           }
           onClick={() => void exportProject()}
         >
-          {selectedExportItems().length === 1
-            ? "Export item"
-            : `Export ${selectedExportItems().length} items`}
+          Create clips
         </button>
         <Show when={exportActive()}>
           <button class="btn btn-ghost btn-sm" onClick={() => void cancelExport()}>

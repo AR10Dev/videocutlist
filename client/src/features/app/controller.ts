@@ -15,6 +15,7 @@ import { createSettingsController } from "../settings/controller";
 import { createLibraryController } from "../media/controller";
 import { createProjectsController } from "../projects/controller";
 import { createExportController } from "../export/controller";
+import { lastDestinationId } from "../export/destination";
 import { createEditorController } from "../editor/controller";
 type Media = components["schemas"]["Media"];
 const api = createApiClient(resolveBrowserConfiguration());
@@ -115,7 +116,10 @@ export function createWorkspaceController() {
     revision,
     dirty,
     setDirty,
+    editorVersion: () => editorVersion,
+    status,
     projectItems,
+    editableItems: () => editableItems(),
     segments: () => timeline().present.segments,
     tracks: () => tracks(),
     saveProject: () => projectsFeature.saveProject(),
@@ -147,6 +151,8 @@ export function createWorkspaceController() {
     setFilenameTemplate,
     preflight,
     preflightPending,
+    exportPending,
+    destinationStatus,
     exportProject,
     cancelExport,
     cancelBatch,
@@ -265,7 +271,7 @@ export function createWorkspaceController() {
       setStatus(`Selected ${item.name}.`);
       return;
     }
-    const added = createProjectItem(item);
+    const added = createProjectItem(item, lastDestinationId());
     setProjectItems([...items, added]);
     setSelectedExportItems((ids) => [...ids, added.id]);
     activateItem(added);
@@ -433,6 +439,8 @@ export function createWorkspaceController() {
     setFilenameTemplate,
     preflight,
     preflightPending,
+    exportPending,
+    destinationStatus,
     detectionJob,
     detectionStatus,
     setDetectionStatus,

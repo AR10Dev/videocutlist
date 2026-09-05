@@ -9,6 +9,7 @@ import { abortAndClear, cancellationIsCurrent } from "../queue/cancellation";
 import { exportFailureMessage } from "../queue/jobUi";
 import { jobPollInterval } from "../queue/jobPolling";
 import { parseBatchExportSubmission } from "./queueResponse";
+import { destinationIsConfigured, lastDestinationId, rememberDestination } from "./destination";
 
 type Media = components["schemas"]["Media"];
 type Destination = components["schemas"]["Destination"];
@@ -30,7 +31,10 @@ export function createExportController(deps: {
   revision: Accessor<number>;
   dirty: Accessor<boolean>;
   setDirty: Setter<boolean>;
+  editorVersion: Accessor<number>;
+  status: Accessor<string>;
   projectItems: Accessor<EditableProjectItem[]>;
+  editableItems: Accessor<EditableProjectItem[]>;
   segments: Accessor<Segment[]>;
   tracks: Accessor<Track[]>;
   saveProject: () => Promise<components["schemas"]["Project"] | undefined>;
@@ -50,16 +54,29 @@ export function createExportController(deps: {
   const [cutStrategy, setCutStrategy] = createSignal(deps.settings().cutStrategy);
   const [streamIndexes, setStreamIndexes] = createSignal<number[]>([]);
   const [destinations, setDestinations] = createSignal<Destination[]>([]);
-  const [destinationId, setDestinationId] = createSignal("download");
+  const [destinationId, setDestinationId] = createSignal(lastDestinationId() ?? "download");
+  const [destinationStatus, setDestinationStatus] = createSignal("");
   const [filenameTemplate, setFilenameTemplate] = createSignal(deps.settings().filenameTemplate);
   const [preflight, setPreflight] = createSignal<components["schemas"]["ExportPreflight"]>();
   const [preflightPending, setPreflightPending] = createSignal(false);
+  const [exportPending, setExportPending] = createSignal(false);
   let exportTimer: number | undefined;
   let exportRequest = 0;
+  let workflowRequest = 0;
   let preflightVersion = 0;
+  let preflightController: AbortController | undefined;
+  let workflowController: AbortController | undefined;
   let exportController: AbortController | undefined;
   let exportCancellationController: AbortController | undefined;
+  let workflowActive = false;
   const invalidatedTerminalJobs = new Set<string>();
+  const cancelPreflight = () => {
+    preflightController?.abort();
+    preflightController = undefined;
+    if (exportTimer) window.clearTimeout(exportTimer);
+    exportTimer = undefined;
+    preflightVersion++;
+  };
 
   const batchProgressQuery = useBatchQuery(deps.api, batchId);
   const batchListQuery = useBatchListQuery(deps.api);
@@ -121,10 +138,20 @@ export function createExportController(deps: {
   void deps.api.request("destinations").then(async (response) => {
     if (!response.ok) return;
     const value = (await response.json()) as { destinations?: Destination[] };
-    const items = Array.isArray(value.destinations) ? value.destinations : [];
-    setDestinations(items);
-    if (items.length && !items.some((item) => item.id === destinationId()))
-      setDestinationId(items[0].id);
+    setDestinations(Array.isArray(value.destinations) ? value.destinations : []);
+  });
+  createEffect(() => {
+    const configured = destinations();
+    const current = destinationId();
+    if (!configured.length) return;
+    if (!destinationIsConfigured(current, configured)) {
+      const fallback = configured[0];
+      setDestinationId(fallback.id);
+      rememberDestination(fallback.id);
+      setDestinationStatus("Remembered destination is unavailable. Using " + fallback.label + ".");
+      return;
+    }
+    rememberDestination(current);
   });
   createEffect(() => {
     const item = deps.selected();
@@ -137,53 +164,70 @@ export function createExportController(deps: {
     const destination = destinationId();
     const template = filenameTemplate();
     if (!item) {
+      cancelPreflight();
       setPreflight();
       setPreflightPending(false);
       return;
     }
     deps.tracks();
+    if (workflowActive || deps.dirty()) {
+      cancelPreflight();
+      setPreflight();
+      if (!workflowActive) setPreflightPending(false);
+      return;
+    }
     if (deps.projectItems().length > 1) {
+      cancelPreflight();
       setPreflight({ allowed: true, selection: [], findings: [] });
       setPreflightPending(false);
       return;
     }
-    if (exportTimer) window.clearTimeout(exportTimer);
-    deps.dirty();
+    cancelPreflight();
     setPreflightPending(true);
-    const version = ++preflightVersion;
+    const version = preflightVersion;
+    const controller = new AbortController();
+    preflightController = controller;
     exportTimer = window.setTimeout(async () => {
       try {
-        const response = await deps.api.request(
-          `projects/${encodeURIComponent(currentProjectID)}/exports/preflight`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              mode,
-              selection,
-              streamIndexes: indexes,
-              cutStrategy: strategy,
-              container: "mkv",
-              destinationId: destination,
-              filenameTemplate: template,
-            }),
-          },
+        const response = await preflightRequest(
+          deps.api,
+          currentProjectID,
+          mode,
+          selection,
+          indexes,
+          strategy,
+          destination,
+          template,
+          controller.signal,
         );
         if (version !== preflightVersion) return;
-        setPreflight(response.ok ? await response.json() : blockedPreflight());
+        if (!response.ok) {
+          setPreflight();
+          setExportStatus("Export preflight failed. Try again.");
+        } else setPreflight((await response.json()) as components["schemas"]["ExportPreflight"]);
       } catch {
-        if (version === preflightVersion) setPreflight(blockedPreflight());
+        if (version === preflightVersion && !controller.signal.aborted) {
+          setPreflight();
+          setExportStatus("Export preflight failed. Try again.");
+        }
       }
-      if (version === preflightVersion) setPreflightPending(false);
+      if (version === preflightVersion) {
+        setPreflightPending(false);
+        if (preflightController === controller) preflightController = undefined;
+      }
     }, 250);
   });
 
   const clearExportContext = () => {
+    workflowController?.abort();
+    workflowController = undefined;
+    workflowRequest++;
+    workflowActive = false;
+    setExportPending(false);
+    cancelPreflight();
     exportController = abortAndClear(exportController);
     exportCancellationController = abortAndClear(exportCancellationController);
     exportRequest++;
-    if (exportTimer) window.clearTimeout(exportTimer);
-    exportTimer = undefined;
     setExportJob();
     setBatchJobs([]);
     setBatchId();
@@ -191,88 +235,184 @@ export function createExportController(deps: {
     setExportStatus("");
   };
   const exportProject = async () => {
-    if (preflightPending() && !deps.dirty()) return;
-    if (!selectedExportItems().length)
-      return void setExportStatus("Select at least one project item.");
-    if (deps.dirty()) {
-      if (!(await deps.saveProject())) return;
-      if (deps.projectItems().length === 1) {
+    if (exportPending() || ["queued", "running"].includes(exportJob()?.state ?? "")) return;
+    const itemIDs = [...selectedExportItems()];
+    const items = deps.editableItems();
+    if (!itemIDs.length) return void setExportStatus("Select at least one project item.");
+    const selectedItems = items.filter((item) => itemIDs.includes(item.id));
+    if (
+      selectedItems.length !== itemIDs.length ||
+      selectedItems.some((item) => item.timeline.present.segments.length === 0)
+    )
+      return void setExportStatus(
+        "Add a segment to each selected project item before creating clips.",
+      );
+
+    workflowActive = true;
+    const request = ++workflowRequest;
+    const submissionRequest = ++exportRequest;
+    const controller = new AbortController();
+    workflowController = controller;
+    const context = {
+      projectId: deps.projectId(),
+      mediaId: deps.selected()?.id,
+      editorVersion: deps.editorVersion(),
+      revision: deps.revision(),
+      itemIDs,
+      input: {
+        mode: exportMode(),
+        selection: exportSelection(),
+        streamIndexes: [...streamIndexes()],
+        cutStrategy: cutStrategy(),
+        container: "mkv" as const,
+        destinationId: destinationId(),
+        filenameTemplate: filenameTemplate(),
+        itemIds:
+          itemIDs.length === items.length &&
+          itemIDs.every((id) => items.some((item) => item.id === id))
+            ? undefined
+            : itemIDs,
+      },
+    };
+    const editorContextCurrent = () =>
+      context.projectId === deps.projectId() &&
+      context.mediaId === deps.selected()?.id &&
+      context.editorVersion === deps.editorVersion() &&
+      context.itemIDs.length === selectedExportItems().length &&
+      context.itemIDs.every((id, index) => selectedExportItems()[index] === id);
+    const workflowCurrent = () =>
+      request === workflowRequest &&
+      submissionRequest === exportRequest &&
+      !controller.signal.aborted &&
+      editorContextCurrent();
+    const stopForStaleContext = () => {
+      if (request === workflowRequest && !controller.signal.aborted)
+        setExportStatus("Create clips stopped because the project changed. Save again and retry.");
+    };
+    let savedRevision = context.revision;
+    let submitted = false;
+    cancelPreflight();
+    setPreflight();
+    setPreflightPending(true);
+    setExportPending(true);
+    setExportStatus(deps.dirty() ? "Saving project…" : "Checking export requirements…");
+    try {
+      if (deps.dirty()) {
+        const saved = await deps.saveProject();
+        if (!saved) {
+          if (workflowCurrent())
+            setExportStatus(deps.status() || "Project could not be saved. Try again.");
+          else stopForStaleContext();
+          return;
+        }
+        if (!workflowCurrent()) {
+          stopForStaleContext();
+          return;
+        }
+        savedRevision = saved.revision;
+      }
+      if (!workflowCurrent()) {
+        stopForStaleContext();
+        return;
+      }
+      if (items.length === 1) {
+        setExportStatus("Checking export requirements…");
         const response = await preflightRequest(
           deps.api,
-          deps.projectId(),
-          exportMode(),
-          exportSelection(),
-          streamIndexes(),
-          cutStrategy(),
-          destinationId(),
-          filenameTemplate(),
+          context.projectId,
+          context.input.mode,
+          context.input.selection,
+          context.input.streamIndexes,
+          context.input.cutStrategy,
+          context.input.destinationId,
+          context.input.filenameTemplate,
+          controller.signal,
         );
-        if (!response.ok) return void setExportStatus("Export preflight failed.");
+        if (!workflowCurrent()) {
+          stopForStaleContext();
+          return;
+        }
+        if (!response.ok) {
+          setPreflight();
+          setExportStatus("Export preflight failed. Try again.");
+          return;
+        }
         const fresh = (await response.json()) as components["schemas"]["ExportPreflight"];
+        if (!workflowCurrent()) {
+          stopForStaleContext();
+          return;
+        }
         setPreflight(fresh);
-        setPreflightPending(false);
-        if (!fresh.allowed) return;
+        if (!fresh.allowed) {
+          setExportStatus("");
+          return;
+        }
+      } else setPreflight({ allowed: true, selection: [], findings: [] });
+
+      if (!workflowCurrent()) {
+        stopForStaleContext();
+        return;
       }
-    } else if (deps.projectItems().length === 1 && !preflight()?.allowed) return;
-    const request = ++exportRequest;
-    const controller = new AbortController();
-    exportController = controller;
-    if (exportTimer) clearTimeout(exportTimer);
-    setExportStatus("Starting export…");
-    try {
+      setExportStatus("Creating clips…");
+      exportController = controller;
       const response = await deps.api.request(
-        `projects/${encodeURIComponent(deps.projectId())}/exports`,
+        `projects/${encodeURIComponent(context.projectId)}/exports`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            mode: exportMode(),
-            selection: exportSelection(),
-            streamIndexes: streamIndexes(),
-            cutStrategy: cutStrategy(),
-            container: "mkv",
-            destinationId: destinationId(),
-            filenameTemplate: filenameTemplate(),
-            itemIds:
-              selectedExportItems().length === deps.projectItems().length
-                ? undefined
-                : selectedExportItems(),
-          }),
+          body: JSON.stringify(context.input),
           signal: controller.signal,
         },
       );
-      if (controller.signal.aborted || request !== exportRequest) return;
-      if (!response.ok)
-        return void setExportStatus(
+      if (!workflowCurrent()) {
+        stopForStaleContext();
+        return;
+      }
+      if (!response.ok) {
+        setExportStatus(
           response.status === 429
             ? "Export capacity is busy. Try again shortly."
             : "Export could not be started. Try again.",
         );
+        return;
+      }
       const submission = parseBatchExportSubmission(await response.json());
-      if (controller.signal.aborted || request !== exportRequest) return;
+      if (!workflowCurrent()) {
+        stopForStaleContext();
+        return;
+      }
       setBatchId(submission.batchId);
-      setExportRevision(deps.revision());
+      setExportRevision(savedRevision);
       setBatchJobs(submission.jobs);
-      setBatches((items) => [
+      setBatches((current) => [
         {
           batchId: submission.batchId,
-          projectId: deps.projectId(),
-          projectRevision: deps.revision(),
+          projectId: context.projectId,
+          projectRevision: savedRevision,
           state: "queued",
           progress: 0,
           jobs: submission.jobs,
         },
-        ...items.filter((batch) => batch.batchId !== submission.batchId),
+        ...current.filter((batch) => batch.batchId !== submission.batchId),
       ]);
       void deps.queryClient.invalidateQueries({ queryKey: ["batches"] });
       const job = submission.jobs[0];
       if (job) setExportJob(job);
       setExportStatus(job?.state === "queued" ? "Export queued." : "Export running.");
+      submitted = true;
     } catch (error) {
-      if (!controller.signal.aborted && request === exportRequest)
+      if (!controller.signal.aborted && request === workflowRequest)
         setExportStatus(
           error instanceof Error ? error.message : "Export could not be started. Try again.",
         );
+    } finally {
+      if (request === workflowRequest) {
+        workflowActive = false;
+        workflowController = undefined;
+        setExportPending(false);
+        setPreflightPending(false);
+        if (!submitted && exportController === controller) exportController = undefined;
+      }
     }
   };
   const cancelExport = async () => {
@@ -358,6 +498,8 @@ export function createExportController(deps: {
     setFilenameTemplate,
     preflight,
     preflightPending,
+    exportPending,
+    destinationStatus,
     clearExportContext,
     exportProject,
     cancelExport,
@@ -382,6 +524,10 @@ export function createExportController(deps: {
     },
     setDestination: (value: string) => {
       setDestinationId(value);
+      if (destinationIsConfigured(value, destinations())) {
+        rememberDestination(value);
+        setDestinationStatus("");
+      }
       deps.markDirty();
       deps.setDirty(true);
     },
@@ -399,15 +545,6 @@ export function createExportController(deps: {
   };
 }
 
-function blockedPreflight(): components["schemas"]["ExportPreflight"] {
-  return {
-    allowed: false,
-    selection: [],
-    findings: [
-      { severity: "blocked", code: "preflight_failed", message: "Export preflight failed." },
-    ],
-  };
-}
 function preflightRequest(
   api: ApiClient,
   projectId: string,
@@ -417,6 +554,7 @@ function preflightRequest(
   cutStrategy: string,
   destinationId: string,
   filenameTemplate: string,
+  signal?: AbortSignal,
 ) {
   return api.request(`projects/${encodeURIComponent(projectId)}/exports/preflight`, {
     method: "POST",
@@ -430,6 +568,7 @@ function preflightRequest(
       destinationId,
       filenameTemplate,
     }),
+    signal,
   });
 }
 function useBatchQuery(api: ApiClient, batchId: Accessor<string | undefined>) {

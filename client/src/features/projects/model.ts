@@ -16,7 +16,7 @@ export type EditableProjectItem = {
 
 export const newProjectItemId = () => `i_${crypto.randomUUID().replaceAll("-", "").slice(0, 24)}`;
 
-export const createProjectItem = (media: Media): EditableProjectItem => ({
+export const createProjectItem = (media: Media, destinationId?: string): EditableProjectItem => ({
   id: newProjectItemId(),
   media,
   timeline: createTimelineHistory({
@@ -26,10 +26,11 @@ export const createProjectItem = (media: Media): EditableProjectItem => ({
   }),
   muted: false,
   exportOptions: {
-    mode: "merge",
+    mode: "separate",
     selection: "segments",
     cutStrategy: "stream_copy_preferred",
     container: "mkv",
+    ...(destinationId ? { destinationId } : {}),
   },
 });
 
