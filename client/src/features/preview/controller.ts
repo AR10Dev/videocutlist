@@ -48,6 +48,8 @@ export function createPreviewController(
   const [playbackIntent, setPlaybackIntent] = createSignal(false);
   const [playbackMode, setPlaybackMode] = createSignal<PreviewPlaybackMode>("whole-media");
   const [orderedSegmentIndex, setOrderedSegmentIndex] = createSignal(0);
+  // Candidate review uses the same bounded playback mode without changing the durable timeline.
+  const [boundedSegment, setBoundedSegment] = createSignal<Segment>();
 
   createEffect(() => {
     const item = dependencies.selected();
@@ -56,6 +58,7 @@ export function createPreviewController(
       setPlaybackIntent(false);
       setPlaybackMode("whole-media");
       setOrderedSegmentIndex(0);
+      setBoundedSegment();
       video()?.pause();
     }
     setPreviewStatus("");
@@ -184,13 +187,13 @@ export function createPreviewController(
     previewRange(
       playbackMode(),
       item.durationMs,
-      dependencies.activeSegment(),
+      boundedSegment() ?? dependencies.activeSegment(),
       orderedSegments(),
       orderedSegmentIndex(),
     );
   const restartPreview = (positionMs: number) => {
     setPreviewCenterMs(positionMs);
-    setPreviewReload((value) => value + 1);
+    setPreviewReload((value: number) => value + 1);
   };
   const stopAtBoundary = (positionMs: number) => {
     const item = dependencies.selected();
@@ -278,11 +281,35 @@ export function createPreviewController(
     dependencies.updatePlaybackPosition(position);
     if (!playbackIntent() || !requestRenewal(position, true)) setPlaybackIntent(false);
   };
-  const startPlayback = (mode: PreviewPlaybackMode, positionMs: number) => {
+  const startPlayback = (mode: PreviewPlaybackMode, positionMs: number, segment?: Segment) => {
     setPlaybackMode(mode);
+    setBoundedSegment(
+      mode === "active-segment" || mode === "active-segment-loop" ? segment : undefined,
+    );
     setPlaybackIntent(true);
     dependencies.updatePlaybackPosition(positionMs);
     restartPreview(positionMs);
+  };
+  const playSegment = (segment: Segment, loop = false) => {
+    const item = dependencies.selected();
+    if (!canStreamPreview()) {
+      setPreviewStatus(
+        "Preview is unavailable in this browser. Use the timeline controls instead.",
+      );
+      return;
+    }
+    if (
+      !item ||
+      !Number.isInteger(segment.startMs) ||
+      !Number.isInteger(segment.endMs) ||
+      segment.startMs < 0 ||
+      segment.startMs >= segment.endMs ||
+      segment.endMs > item.durationMs
+    ) {
+      setPreviewStatus("That candidate has invalid playback bounds.");
+      return;
+    }
+    startPlayback(loop ? "active-segment-loop" : "active-segment", segment.startMs, segment);
   };
   const playActiveSegment = (loop: boolean) => {
     const segment = dependencies.activeSegment();
@@ -290,7 +317,7 @@ export function createPreviewController(
       setPreviewStatus("Select a cut to play it.");
       return;
     }
-    startPlayback(loop ? "active-segment-loop" : "active-segment", segment.startMs);
+    playSegment(segment, loop);
   };
   const playOrderedSegments = () => {
     const segments = orderedSegments();
@@ -315,7 +342,8 @@ export function createPreviewController(
       const position = watchedPosition();
       if (position < bounds.startMs || position >= bounds.endMs) {
         if (playbackMode() === "active-segment" || playbackMode() === "active-segment-loop") {
-          playActiveSegment(playbackMode() === "active-segment-loop");
+          const segment = boundedSegment() ?? dependencies.activeSegment();
+          if (segment) playSegment(segment, playbackMode() === "active-segment-loop");
         } else {
           const segment = orderedSegments()[orderedSegmentIndex()];
           if (segment) startPlayback("ordered-segments", segment.startMs);
@@ -325,7 +353,7 @@ export function createPreviewController(
     }
     setPlaybackIntent(true);
     if (!diagnostics() && previewStatus().includes("Try again."))
-      setPreviewReload((value) => value + 1);
+      setPreviewReload((value: number) => value + 1);
     void player?.play().catch(() => {
       if (playbackIntent() && diagnostics()) {
         setPlaybackIntent(false);
@@ -358,5 +386,6 @@ export function createPreviewController(
     pausePlayback,
     playActiveSegment,
     playOrderedSegments,
+    playSegment,
   };
 }

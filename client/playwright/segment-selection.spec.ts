@@ -731,29 +731,87 @@ test("keeps the inspector contextual until media is selected", async ({ page }) 
   await expect(page.getByRole("tab", { name: "Detection", exact: true })).toBeVisible();
 });
 
-test("detection polls, presents candidates, and supports reject and accept", async ({ page }) => {
+test("detection polls, previews, and supports sequential keyboard review", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await page.getByRole("button", { name: "Add to project" }).click();
   await openTask(page, "Detection");
   await page.getByRole("button", { name: "Find silence" }).click();
   await expect(page.getByText("Detection running.")).toBeVisible();
   await expect(page.getByText(/1 candidates found/)).toBeVisible();
+  await page.getByRole("button", { name: "Preview candidate 1" }).click();
+  await expect(page.getByLabel("Preview player")).toHaveAttribute(
+    "data-playback-mode",
+    "active-segment",
+  );
+  await expect(page.getByLabel("Preview player")).toHaveAttribute("data-preview-offset", "1000");
   await page.getByRole("button", { name: "Dismiss" }).click();
   await expect(page.getByText("Candidate dismissed.")).toBeVisible();
   await page.getByRole("button", { name: "Find silence" }).click();
   await expect(page.getByText(/1 candidates found/)).toBeVisible();
-  await page
-    .getByLabel("Detection candidates")
-    .getByRole("button", { name: "Add segment" })
-    .click();
+  await page.getByLabel("Detection candidates").getByRole("listitem").focus();
+  await page.keyboard.press("a");
   await expect(page.getByText("Candidate accepted; save the project to persist it.")).toBeVisible();
   await openTask(page, "Cuts");
   await expect(page.getByText(/1 selected/)).toBeVisible();
 });
 
+test("bulk detection acceptance skips unsafe candidates and undoes as one edit", async ({
+  page,
+}) => {
+  await page.route(`${apiOrigin}/api/v1/projects/*/detections`, (route) => {
+    const projectId = new URL(route.request().url()).pathname.split("/")[4];
+    const candidate = (id: string, startMs: number, endMs: number, projectRevision = 1) => ({
+      id,
+      mediaId: media.id,
+      projectId,
+      projectRevision,
+      startMs,
+      endMs,
+      source: "scene",
+      confidence: 0.9,
+    });
+    return route.fulfill({
+      status: 202,
+      json: {
+        id: "j_detection-review",
+        type: "detection",
+        state: "succeeded",
+        mediaId: media.id,
+        projectId,
+        projectRevision: 1,
+        kind: "scene",
+        candidates: [
+          candidate("c_review-valid-1", 1000, 1500),
+          candidate("c_review-valid-2", 2000, 2500),
+          candidate("c_review-overlap", 1200, 1600),
+          candidate("c_review-stale", 3000, 3500, 0),
+          candidate("c_review-invalid", 4000, 11000),
+        ],
+      },
+    });
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await page.getByRole("button", { name: "Add to project" }).click();
+  await openTask(page, "Detection");
+  await page.getByRole("button", { name: "Split into scenes" }).click();
+  await expect(page.getByText(/5 candidates found/)).toBeVisible();
+  await page.once("dialog", (dialog) => void dialog.accept());
+  await page.getByRole("button", { name: "Accept all valid" }).click();
+  await expect(
+    page.getByText(/Accepted 2 candidates; skipped 1 stale, 1 invalid, 1 overlapping/),
+  ).toBeVisible();
+  await openTask(page, "Cuts");
+  await expect(page.getByText(/2 selected/)).toBeVisible();
+  await page.getByRole("button", { name: "Undo" }).click();
+  await expect(page.getByText(/0 selected/)).toBeVisible();
+});
+
 test("detection can be cancelled and reports failed jobs", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await page.getByRole("button", { name: "Add to project" }).click();
   await openTask(page, "Detection");
   await page.getByRole("button", { name: "Find silence" }).click();
   await expect(page.getByRole("button", { name: "Cancel detection" })).toBeVisible();
@@ -801,6 +859,7 @@ test("clears detection results when media context changes", async ({ page }) => 
   });
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await page.getByRole("button", { name: "Add to project" }).click();
   await openTask(page, "Detection");
   await page.getByRole("button", { name: "Find silence" }).click();
   await expect(page.getByRole("button", { name: "Cancel detection" })).toBeVisible();

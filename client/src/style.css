@@ -701,6 +701,38 @@
     display: grid;
     gap: 8px;
   }
+  .detection-review {
+    display: grid;
+    gap: 8px;
+  }
+  .detection-review h3 {
+    margin: 0;
+  }
+  .detection-review ol {
+    display: grid;
+    gap: 8px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .detection-review li {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    padding: 8px;
+    border: 1px solid var(--panel-border);
+    border-radius: 6px;
+  }
+  .detection-review li > span {
+    flex: 1 1 100%;
+    font-size: 0.8rem;
+    font-variant-numeric: tabular-nums;
+  }
+  .detection-review li:focus-visible {
+    outline: 2px solid var(--color-warning);
+    outline-offset: 2px;
+  }
   .detection-panel > p:empty {
     display: none;
   }

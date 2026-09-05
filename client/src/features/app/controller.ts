@@ -280,6 +280,7 @@ export function createWorkspaceController() {
     setVideo,
     togglePlayback,
     pausePlayback,
+    playSegment,
   } = initializedPreviewFeature;
   previewRef.current = initializedPreviewFeature;
   exportRef.current = exportFeature;
@@ -372,6 +373,10 @@ export function createWorkspaceController() {
     saveProject: () => projectsFeature.saveProject(),
     updateSegments: (segments) => updateTimeline({ segments }),
     markDirty,
+    setExportSelection: (selection) => {
+      if (exportSelection() !== selection) exportFeature.setSelection(selection);
+    },
+    onSegmentsAccepted: () => selectActiveExportItem.current?.(),
   });
   const {
     detectionJob,
@@ -383,6 +388,8 @@ export function createWorkspaceController() {
     startDetection,
     cancelDetection,
     acceptDetection,
+    rejectDetection,
+    bulkAcceptDetection,
   } = detectionFeature;
   const projectsFeature = createProjectsController({
     api,
@@ -552,11 +559,14 @@ export function createWorkspaceController() {
     startDetection,
     cancelDetection,
     acceptDetection,
+    rejectDetection,
+    bulkAcceptDetection,
     setVideo,
     togglePlayback,
     pausePlayback,
     playActiveSegment: initializedPreviewFeature.playActiveSegment,
     playOrderedSegments: initializedPreviewFeature.playOrderedSegments,
+    playDetectionCandidate: playSegment,
     undo: editorFeature.undo,
     redo: editorFeature.redo,
   };

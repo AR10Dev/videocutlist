@@ -206,6 +206,15 @@ export function App() {
                   <kbd class="kbd kbd-sm">E</kbd> Create clips
                 </span>
                 <span>
+                  <kbd class="kbd kbd-sm">A</kbd> / <kbd class="kbd kbd-sm">Y</kbd> Accept detection
+                  candidate
+                </span>
+                <span>
+                  <kbd class="kbd kbd-sm">R</kbd> / <kbd class="kbd kbd-sm">X</kbd> /{" "}
+                  <kbd class="kbd kbd-sm">N</kbd> / <kbd class="kbd kbd-sm">Delete</kbd> /{" "}
+                  <kbd class="kbd kbd-sm">Backspace</kbd> Reject detection candidate
+                </span>
+                <span>
                   <kbd class="kbd kbd-sm">Shift+/</kbd> Open this reference
                 </span>
                 <span>
