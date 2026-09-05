@@ -1,11 +1,12 @@
 import { For, Show } from "solid-js";
 import { useWorkspace } from "../app/WorkspaceContext";
+import { OutputDownload } from "../export/OutputDownload";
 
 export function QueueView() {
   const { batches, cancelBatch, cancelChildJob, retryChildJob } = useWorkspace();
   return (
     <Show when={batches().length > 0}>
-      <section class="queue-panel flex flex-col gap-4 p-4" aria-labelledby="queue-heading">
+      <section class="queue-panel" aria-labelledby="queue-heading">
         <h2 id="queue-heading">Export queue</h2>
         <For each={batches()}>
           {(batch, index) => (
@@ -34,6 +35,22 @@ export function QueueView() {
                       {job.result?.outputNames?.length
                         ? ` · ${job.result.outputNames.join(", ")}`
                         : ""}{" "}
+                      <Show
+                        when={
+                          job.state === "succeeded" && job.result?.destinationKind === "download"
+                        }
+                      >
+                        <For
+                          each={
+                            job.result?.outputNames ??
+                            (job.result?.outputName ? [job.result.outputName] : [])
+                          }
+                        >
+                          {(name, position) => (
+                            <OutputDownload jobId={job.id} position={position()} name={name} />
+                          )}
+                        </For>
+                      </Show>
                       <Show when={job.state === "queued" || job.state === "running"}>
                         <button
                           class="btn btn-ghost btn-sm"

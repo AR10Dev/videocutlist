@@ -61,9 +61,15 @@ export const clampMediaPosition = (positionMs: number, durationMs: number) =>
   Math.max(0, Math.min(durationMs, Math.round(Number.isFinite(positionMs) ? positionMs : 0)));
 
 export const parseTimecode = (value: string) => {
-  const match = /^(\d+):(\d{2})\.(\d{3})$/.exec(value.trim());
-  if (!match || Number(match[2]) > 59) return undefined;
-  return Number(match[1]) * 60000 + Number(match[2]) * 1000 + Number(match[3]);
+  const match = /^(?:(\d+):)?(\d+):(\d{2})\.(\d{3})$/.exec(value.trim());
+  if (!match || Number(match[3]) > 59 || (match[1] !== undefined && Number(match[2]) > 59))
+    return undefined;
+  const ms =
+    Number(match[1] ?? 0) * 3600000 +
+    Number(match[2]) * 60000 +
+    Number(match[3]) * 1000 +
+    Number(match[4]);
+  return Number.isSafeInteger(ms) ? ms : undefined;
 };
 
 export const formatTime = (positionMs: number, durationMs: number) => {

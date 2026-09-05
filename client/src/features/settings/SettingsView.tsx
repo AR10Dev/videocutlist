@@ -63,7 +63,7 @@ export function SettingsView() {
         </label>
         <label>
           <input
-            class="input input-bordered input-sm mt-1 w-full"
+            class="checkbox checkbox-sm"
             type="checkbox"
             checked={muted()}
             onChange={(event) => {
@@ -156,220 +156,236 @@ export function SettingsView() {
         <h3 id="destinations-settings-heading">Destinations</h3>
         <p>Original media is never modified.</p>
         <Show when={runtimeSettings()?.destinations?.length}>
-          <ul>
-            <For each={runtimeSettings()?.destinations}>
-              {(destination) => (
-                <li>
-                  <label>
-                    Name
-                    <input
-                      class="input input-bordered input-sm mt-1 w-full"
-                      value={destination.label}
-                      onChange={(event) =>
-                        updateDestination(destination.id, { label: event.currentTarget.value })
-                      }
-                    />
-                  </label>
-                  <label>
-                    Description
-                    <input
-                      class="input input-bordered input-sm mt-1 w-full"
-                      value={destination.description ?? ""}
-                      onChange={(event) =>
-                        updateDestination(destination.id, {
-                          description: event.currentTarget.value,
-                        })
-                      }
-                    />
-                  </label>
-                  <label>
-                    Retention
-                    <input
-                      class="input input-bordered input-sm mt-1 w-full"
-                      value={destination.retention ?? ""}
-                      placeholder="for example 30d"
-                      onChange={(event) =>
-                        updateDestination(destination.id, {
-                          retention: event.currentTarget.value,
-                        })
-                      }
-                    />
-                  </label>
-                  <span>
-                    {destination.kind === "download" ? "Browser download" : "Saved export"} ·{" "}
-                    {destination.retention ?? "durable"}
-                  </span>
-                </li>
-              )}
-            </For>
-          </ul>
-          <button
-            class="btn btn-ghost btn-sm"
-            type="button"
-            onClick={saveDestinations}
+          <fieldset
+            class="fieldset border-0 p-0"
             disabled={settingsPending()}
+            aria-label="Destination settings"
           >
-            {settingsPending() ? "Saving…" : "Save destination settings"}
-          </button>
+            <ul>
+              <For each={runtimeSettings()?.destinations}>
+                {(destination) => (
+                  <li>
+                    <label>
+                      Name
+                      <input
+                        class="input input-bordered input-sm mt-1 w-full"
+                        value={destination.label}
+                        onChange={(event) =>
+                          updateDestination(destination.id, { label: event.currentTarget.value })
+                        }
+                      />
+                    </label>
+                    <label>
+                      Description
+                      <input
+                        class="input input-bordered input-sm mt-1 w-full"
+                        value={destination.description ?? ""}
+                        onChange={(event) =>
+                          updateDestination(destination.id, {
+                            description: event.currentTarget.value,
+                          })
+                        }
+                      />
+                    </label>
+                    <label>
+                      Retention
+                      <input
+                        class="input input-bordered input-sm mt-1 w-full"
+                        value={destination.retention ?? ""}
+                        placeholder="for example 30d"
+                        onChange={(event) =>
+                          updateDestination(destination.id, {
+                            retention: event.currentTarget.value,
+                          })
+                        }
+                      />
+                    </label>
+                    <span>
+                      {destination.kind === "download" ? "Browser download" : "Saved export"} ·{" "}
+                      {destination.retention ?? "durable"}
+                    </span>
+                  </li>
+                )}
+              </For>
+            </ul>
+            <button
+              class="btn btn-ghost btn-sm"
+              type="button"
+              onClick={saveDestinations}
+              disabled={settingsPending()}
+            >
+              {settingsPending() ? "Saving…" : "Save destination settings"}
+            </button>
+          </fieldset>
         </Show>
       </section>
       <section class="server-settings" aria-labelledby="processing-settings-heading">
         <details>
           <summary id="processing-settings-heading">Server processing</summary>
           <p>Changes apply to future jobs; running jobs keep their current settings.</p>
-          <h4>Export</h4>
-          <label>
-            Export concurrency{" "}
-            <input
-              class="input input-bordered input-sm mt-1 w-full"
-              type="number"
-              min="1"
-              value={runtimeSettings()?.exportLimit ?? ""}
-              onChange={(event) =>
-                void saveRuntimeSettings(
-                  { exportLimit: event.currentTarget.valueAsNumber },
-                  "Processing settings saved.",
-                )
-              }
-            />
-          </label>
-          <h4>Preview</h4>
-          <label>
-            Preview global concurrency{" "}
-            <input
-              class="input input-bordered input-sm mt-1 w-full"
-              type="number"
-              min="1"
-              value={runtimeSettings()?.previewGlobalLimit ?? ""}
-              onChange={(event) =>
-                void saveRuntimeSettings(
-                  { previewGlobalLimit: event.currentTarget.valueAsNumber },
-                  "Processing settings saved.",
-                )
-              }
-            />
-          </label>
-          <label>
-            Preview before (seconds){" "}
-            <input
-              class="input input-bordered input-sm mt-1 w-full"
-              type="number"
-              min="0.001"
-              step="0.1"
-              value={
-                runtimeSettings()?.previewBeforeMs ? runtimeSettings()!.previewBeforeMs! / 1000 : ""
-              }
-              onChange={(event) =>
-                void saveRuntimeSettings(
-                  { previewBeforeMs: event.currentTarget.valueAsNumber * 1000 },
-                  "Processing settings saved.",
-                )
-              }
-            />
-          </label>
-          <label>
-            Preview after (seconds){" "}
-            <input
-              class="input input-bordered input-sm mt-1 w-full"
-              type="number"
-              min="0.001"
-              step="0.1"
-              value={
-                runtimeSettings()?.previewAfterMs ? runtimeSettings()!.previewAfterMs! / 1000 : ""
-              }
-              onChange={(event) =>
-                void saveRuntimeSettings(
-                  { previewAfterMs: event.currentTarget.valueAsNumber * 1000 },
-                  "Processing settings saved.",
-                )
-              }
-            />
-          </label>
-          <label>
-            Preview maximum window (seconds){" "}
-            <input
-              class="input input-bordered input-sm mt-1 w-full"
-              type="number"
-              min="0.001"
-              step="0.1"
-              value={runtimeSettings()?.previewMaxMs ? runtimeSettings()!.previewMaxMs! / 1000 : ""}
-              onChange={(event) =>
-                void saveRuntimeSettings(
-                  { previewMaxMs: event.currentTarget.valueAsNumber * 1000 },
-                  "Processing settings saved.",
-                )
-              }
-            />
-          </label>
-          <label>
-            Preview grid (seconds){" "}
-            <input
-              class="input input-bordered input-sm mt-1 w-full"
-              type="number"
-              min="0.001"
-              step="0.1"
-              value={
-                runtimeSettings()?.previewGridMs ? runtimeSettings()!.previewGridMs! / 1000 : ""
-              }
-              onChange={(event) =>
-                void saveRuntimeSettings(
-                  { previewGridMs: event.currentTarget.valueAsNumber * 1000 },
-                  "Processing settings saved.",
-                )
-              }
-            />
-          </label>
-          <h4>Library scan</h4>
-          <label>
-            Media scan file limit{" "}
-            <input
-              class="input input-bordered input-sm mt-1 w-full"
-              type="number"
-              min="1"
-              value={runtimeSettings()?.mediaMaxFiles ?? ""}
-              onChange={(event) =>
-                void saveRuntimeSettings(
-                  { mediaMaxFiles: event.currentTarget.valueAsNumber },
-                  "Processing settings saved.",
-                )
-              }
-            />
-          </label>
-          <label>
-            Media scan depth limit{" "}
-            <input
-              class="input input-bordered input-sm mt-1 w-full"
-              type="number"
-              min="1"
-              value={runtimeSettings()?.mediaMaxDepth ?? ""}
-              onChange={(event) =>
-                void saveRuntimeSettings(
-                  { mediaMaxDepth: event.currentTarget.valueAsNumber },
-                  "Processing settings saved.",
-                )
-              }
-            />
-          </label>
-          <h4>Cache</h4>
-          <label>
-            Disposable cache size (MB){" "}
-            <input
-              class="input input-bordered input-sm mt-1 w-full"
-              type="number"
-              min="1"
-              value={
-                runtimeSettings()?.cacheMaxBytes
-                  ? runtimeSettings()!.cacheMaxBytes! / 1_000_000
-                  : ""
-              }
-              onChange={(event) =>
-                void saveRuntimeSettings(
-                  { cacheMaxBytes: event.currentTarget.valueAsNumber * 1_000_000 },
-                  "Processing settings saved.",
-                )
-              }
-            />
-          </label>
+          <fieldset
+            class="fieldset border-0 p-0"
+            disabled={settingsPending() || !runtimeSettings()}
+            aria-label="Server processing limits"
+          >
+            <h4>Export</h4>
+            <label>
+              Export concurrency{" "}
+              <input
+                class="input input-bordered input-sm mt-1 w-full"
+                type="number"
+                min="1"
+                value={runtimeSettings()?.exportLimit ?? ""}
+                onChange={(event) =>
+                  void saveRuntimeSettings(
+                    { exportLimit: event.currentTarget.valueAsNumber },
+                    "Processing settings saved.",
+                  )
+                }
+              />
+            </label>
+            <h4>Preview</h4>
+            <label>
+              Preview global concurrency{" "}
+              <input
+                class="input input-bordered input-sm mt-1 w-full"
+                type="number"
+                min="1"
+                value={runtimeSettings()?.previewGlobalLimit ?? ""}
+                onChange={(event) =>
+                  void saveRuntimeSettings(
+                    { previewGlobalLimit: event.currentTarget.valueAsNumber },
+                    "Processing settings saved.",
+                  )
+                }
+              />
+            </label>
+            <label>
+              Preview before (seconds){" "}
+              <input
+                class="input input-bordered input-sm mt-1 w-full"
+                type="number"
+                min="0.001"
+                step="0.1"
+                value={
+                  runtimeSettings()?.previewBeforeMs
+                    ? runtimeSettings()!.previewBeforeMs! / 1000
+                    : ""
+                }
+                onChange={(event) =>
+                  void saveRuntimeSettings(
+                    { previewBeforeMs: event.currentTarget.valueAsNumber * 1000 },
+                    "Processing settings saved.",
+                  )
+                }
+              />
+            </label>
+            <label>
+              Preview after (seconds){" "}
+              <input
+                class="input input-bordered input-sm mt-1 w-full"
+                type="number"
+                min="0.001"
+                step="0.1"
+                value={
+                  runtimeSettings()?.previewAfterMs ? runtimeSettings()!.previewAfterMs! / 1000 : ""
+                }
+                onChange={(event) =>
+                  void saveRuntimeSettings(
+                    { previewAfterMs: event.currentTarget.valueAsNumber * 1000 },
+                    "Processing settings saved.",
+                  )
+                }
+              />
+            </label>
+            <label>
+              Preview maximum window (seconds){" "}
+              <input
+                class="input input-bordered input-sm mt-1 w-full"
+                type="number"
+                min="0.001"
+                step="0.1"
+                value={
+                  runtimeSettings()?.previewMaxMs ? runtimeSettings()!.previewMaxMs! / 1000 : ""
+                }
+                onChange={(event) =>
+                  void saveRuntimeSettings(
+                    { previewMaxMs: event.currentTarget.valueAsNumber * 1000 },
+                    "Processing settings saved.",
+                  )
+                }
+              />
+            </label>
+            <label>
+              Preview grid (seconds){" "}
+              <input
+                class="input input-bordered input-sm mt-1 w-full"
+                type="number"
+                min="0.001"
+                step="0.1"
+                value={
+                  runtimeSettings()?.previewGridMs ? runtimeSettings()!.previewGridMs! / 1000 : ""
+                }
+                onChange={(event) =>
+                  void saveRuntimeSettings(
+                    { previewGridMs: event.currentTarget.valueAsNumber * 1000 },
+                    "Processing settings saved.",
+                  )
+                }
+              />
+            </label>
+            <h4>Library scan</h4>
+            <label>
+              Media scan file limit{" "}
+              <input
+                class="input input-bordered input-sm mt-1 w-full"
+                type="number"
+                min="1"
+                value={runtimeSettings()?.mediaMaxFiles ?? ""}
+                onChange={(event) =>
+                  void saveRuntimeSettings(
+                    { mediaMaxFiles: event.currentTarget.valueAsNumber },
+                    "Processing settings saved.",
+                  )
+                }
+              />
+            </label>
+            <label>
+              Media scan depth limit{" "}
+              <input
+                class="input input-bordered input-sm mt-1 w-full"
+                type="number"
+                min="1"
+                value={runtimeSettings()?.mediaMaxDepth ?? ""}
+                onChange={(event) =>
+                  void saveRuntimeSettings(
+                    { mediaMaxDepth: event.currentTarget.valueAsNumber },
+                    "Processing settings saved.",
+                  )
+                }
+              />
+            </label>
+            <h4>Cache</h4>
+            <label>
+              Disposable cache size (MB){" "}
+              <input
+                class="input input-bordered input-sm mt-1 w-full"
+                type="number"
+                min="1"
+                value={
+                  runtimeSettings()?.cacheMaxBytes
+                    ? runtimeSettings()!.cacheMaxBytes! / 1_000_000
+                    : ""
+                }
+                onChange={(event) =>
+                  void saveRuntimeSettings(
+                    { cacheMaxBytes: event.currentTarget.valueAsNumber * 1_000_000 },
+                    "Processing settings saved.",
+                  )
+                }
+              />
+            </label>
+          </fieldset>
         </details>
       </section>
       <details class="settings-diagnostics">

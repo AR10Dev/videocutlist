@@ -87,8 +87,10 @@ export function App() {
             >
               ☰
             </button>
-            <strong class="text-base">VideoCutList</strong>
-            <span class="project-status">
+            <h1 class="text-base font-bold" tabIndex={-1}>
+              VideoCutList
+            </h1>
+            <span class="project-status" aria-label="Project status">
               <strong>{projectName()}</strong>
               <span role="status">
                 {revision() === 0 ? "Unsaved" : dirty() ? "Unsaved changes" : "Saved"}
@@ -123,13 +125,14 @@ export function App() {
               onClick={() => (settingsOpen() ? setSettingsOpen(false) : void openSettings())}
             >
               <Settings size={16} />
-              <span class="hidden sm:inline">Settings</span>
+              <span class="hidden sm:inline">{settingsOpen() ? "Back to editor" : "Settings"}</span>
             </button>
             <button
               class="btn btn-primary btn-sm"
               type="button"
               onClick={() => {
                 setSettingsOpen(false);
+                setTasksOpen(true);
                 setActiveTask("export");
               }}
             >
@@ -147,13 +150,15 @@ export function App() {
           </div>
         </header>
         <aside
-          class="left-sidebar drawer"
-          classList={{ "drawer-open": mediaOpen(), "is-collapsed": !mediaOpen() }}
+          class="left-sidebar"
+          classList={{ "is-collapsed": !mediaOpen() }}
           aria-label="Media workspace"
         >
           <header class="app-header">
             <div class="app-heading">
-              <h2 id="media-heading">Media</h2>
+              <h2 id="media-heading" tabIndex={-1}>
+                Media
+              </h2>
             </div>
           </header>
           <Show when={!settingsOpen()}>
@@ -164,15 +169,27 @@ export function App() {
           when={settingsOpen()}
           fallback={
             <>
-              <EditorView />
+              <EditorView
+                onChooseMedia={() => {
+                  setMediaOpen(true);
+                  requestAnimationFrame(() => {
+                    const target =
+                      document.querySelector<HTMLElement>(".media-list button") ??
+                      document.getElementById("media-heading");
+                    target?.focus();
+                    target?.scrollIntoView({ block: "nearest" });
+                  });
+                }}
+              />
               <aside
                 class="task-panel"
                 classList={{ "is-collapsed": !tasksOpen() }}
                 aria-label="Workspace tasks"
               >
-                <div class="task-tabs" role="tablist" aria-label="Workspace tasks">
+                <div class="task-tabs tabs" role="tablist" aria-label="Workspace tasks">
                   <button
                     id="cuts-tab"
+                    class="tab"
                     role="tab"
                     type="button"
                     aria-selected={activeTask() === "cuts"}
@@ -193,6 +210,7 @@ export function App() {
                   </button>
                   <button
                     id="project-tab"
+                    class="tab"
                     role="tab"
                     type="button"
                     aria-selected={activeTask() === "project"}
@@ -213,6 +231,7 @@ export function App() {
                   </button>
                   <button
                     id="export-tab"
+                    class="tab"
                     role="tab"
                     type="button"
                     aria-selected={activeTask() === "export"}
@@ -233,6 +252,7 @@ export function App() {
                   </button>
                   <button
                     id="detection-tab"
+                    class="tab"
                     role="tab"
                     type="button"
                     aria-selected={activeTask() === "detection"}

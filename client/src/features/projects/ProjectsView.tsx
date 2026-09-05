@@ -1,9 +1,11 @@
 import { For, Show } from "solid-js";
+import type { components } from "../../generated/api";
 import { createApiClient, resolveBrowserConfiguration, validInterchangeFileSize } from "../../api";
 import { validateSegments, type Segment } from "../preview/model";
 import { serializeProjectItem } from "./model";
 import { parseProjectJson, projectJson } from "./lifecycle";
 import { useWorkspace } from "../app/WorkspaceContext";
+import { ProjectBrowser } from "./ProjectBrowser";
 
 const api = createApiClient(resolveBrowserConfiguration());
 
@@ -34,13 +36,17 @@ export function ProjectsView() {
     <Show
       when={selected()}
       fallback={
-        <section class="project-panel flex flex-col gap-4 p-4" aria-labelledby="project-heading">
+        <section class="project-panel" aria-labelledby="project-heading">
           <h2 id="project-heading">Project</h2>
           <p>Choose a video from the Media library to start a project.</p>
+          <ProjectBrowser />
+          <Show when={status().startsWith("Project") || status().startsWith("Media request")}>
+            <p role="status">{status()}</p>
+          </Show>
         </section>
       }
     >
-      <section class="project-panel flex flex-col gap-4 p-4" aria-labelledby="project-heading">
+      <section class="project-panel" aria-labelledby="project-heading">
         <h2 id="project-heading">Project</h2>
         <details>
           <summary>Project details</summary>
@@ -60,7 +66,7 @@ export function ProjectsView() {
             }}
           />
         </label>
-        <ol class="menu menu-sm rounded-box bg-base-200 p-2" aria-label="Project media items">
+        <ol class="project-items" aria-label="Project media items">
           <For each={projectItems()}>
             {(item, index) => (
               <li>
@@ -156,10 +162,19 @@ export function ProjectsView() {
                 onChange={(event) => {
                   const file = event.currentTarget.files?.[0];
                   if (!file) return;
+                  if (!validInterchangeFileSize(file.size)) {
+                    setStatus("Cut list exceeds the 1 MiB limit.");
+                    return;
+                  }
                   void file
                     .text()
                     .then((text) => {
                       const imported = parseProjectJson(text);
+                      if (imported.schemaVersion === 2) {
+                        return projects.importProject(
+                          imported as components["schemas"]["ProjectInput"],
+                        );
+                      }
                       if (!selected() || imported.mediaId !== selected()!.id)
                         throw new Error("Select the cut list's media before importing.");
                       const segments = imported.segments as Segment[];
@@ -273,6 +288,7 @@ export function ProjectsView() {
             Export chapters
           </button>
         </details>
+        <ProjectBrowser />
         <Show when={recent().length > 0}>
           <h3>Recent projects</h3>
           <ul>

@@ -1,9 +1,8 @@
-import { For, Show } from "solid-js";
+import { createSignal, For, Show } from "solid-js";
 import { formatTime, hybridSmartCutKnownIneligible } from "../preview/model";
 import { useWorkspace } from "../app/WorkspaceContext";
-import { createApiClient, resolveBrowserConfiguration } from "../../api";
-
-const api = createApiClient(resolveBrowserConfiguration());
+import { OutputDownload } from "./OutputDownload";
+import { summarizeExports } from "./summary";
 
 export function ExportView() {
   const {
@@ -28,28 +27,36 @@ export function ExportView() {
     preflight,
     preflightPending,
     export: exportFeature,
-    duration,
     tracks,
     exportProject,
     cancelExport,
+    projects,
+    status,
   } = useWorkspace();
+  const [saving, setSaving] = createSignal(false);
+  const [saveError, setSaveError] = createSignal("");
+  const save = async () => {
+    if (saving()) return;
+    setSaving(true);
+    setSaveError("");
+    try {
+      if (!(await projects.saveProject()))
+        setSaveError(status() || "Project could not be saved. Try again.");
+    } finally {
+      setSaving(false);
+    }
+  };
 
-  const outputName = () =>
-    filenameTemplate()
-      .replaceAll("{ext}", "mkv")
-      .replaceAll("{segment}", "1")
-      .replaceAll("{mode}", exportMode()) || "Server default";
-  const selectedSegments = () =>
-    editableItems()
-      .filter((item) => selectedExportItems().includes(item.id))
-      .flatMap((item) => item.timeline.present.segments);
-  const totalDuration = () =>
-    selectedSegments().reduce((total, segment) => total + segment.endMs - segment.startMs, 0);
+  const summary = () =>
+    summarizeExports(editableItems().filter((item) => selectedExportItems().includes(item.id)));
+  const selectedSegments = () => summary().flatMap((item) => item.ranges);
+  const totalDuration = () => summary().reduce((total, item) => total + item.duration, 0);
+  const emptyItem = () => summary().find((item) => item.outputs === 0);
   const blocker = () => {
     if (exportStatus()) return exportStatus();
     if (!selected()) return "Choose a video before exporting.";
     if (!selectedExportItems().length) return "Select at least one project item.";
-    const needsSegment = projectItems().length === 1 && !selectedSegments().length;
+    const needsSegment = Boolean(emptyItem());
     if (needsSegment && dirty()) return "Add a segment and save the project before exporting.";
     if (needsSegment) return "Add a segment before exporting.";
     if (dirty()) return "Save the project before exporting.";
@@ -64,14 +71,14 @@ export function ExportView() {
   const exportActive = () => exportJob()?.state === "queued" || exportJob()?.state === "running";
 
   return (
-    <section class="export-panel flex flex-col gap-4 p-4" aria-labelledby="export-heading">
+    <section class="export-panel" aria-labelledby="export-heading">
       <h2 id="export-heading">Export</h2>
 
       <div class="export-summary" aria-label="Export summary">
         <p>
           {selectedExportItems().length} item{selectedExportItems().length === 1 ? "" : "s"} ·{" "}
           {selectedSegments().length} segment{selectedSegments().length === 1 ? "" : "s"} ·{" "}
-          {formatTime(totalDuration(), duration())}
+          {formatTime(totalDuration(), totalDuration())}
         </p>
         <p>
           <strong>Destination</strong>{" "}
@@ -80,10 +87,11 @@ export function ExportView() {
         </p>
         <p>
           <strong>Expected outputs</strong>{" "}
-          {exportMode() === "merge" ? 1 : Math.max(1, selectedSegments().length)}
+          {summary().reduce((total, item) => total + item.outputs, 0)}
         </p>
         <p>
-          <strong>Filename preview</strong> <code>{outputName()}</code>
+          <strong>Filename preview</strong>{" "}
+          <code>{summary()[0]?.filename ?? "No output selected"}</code>
         </p>
       </div>
 
@@ -95,7 +103,19 @@ export function ExportView() {
         )}
       </Show>
 
+      <Show when={dirty() && selected()}>
+        <button class="btn btn-sm" disabled={saving()} onClick={() => void save()}>
+          Save project
+        </button>
+      </Show>
+      <Show when={saveError()}>
+        <p role="alert">{saveError()}</p>
+      </Show>
       <Show when={projectItems().length > 1}>
+        <p>
+          Each item uses its own saved export options. Select an item in Project to edit its options
+          below.
+        </p>
         <fieldset class="export-items">
           <legend>Project items</legend>
           <For each={projectItems()}>
@@ -143,7 +163,8 @@ export function ExportView() {
             !selected() ||
             dirty() ||
             !selectedExportItems().length ||
-            (projectItems().length === 1 && !selectedSegments().length) ||
+            Boolean(emptyItem()) ||
+            exportActive() ||
             (projectItems().length === 1 && preflightPending()) ||
             (projectItems().length === 1 && !preflight()?.allowed)
           }
@@ -192,6 +213,10 @@ export function ExportView() {
           </label>
           <fieldset>
             <legend>Tracks</legend>
+            <p>
+              Keep at least one track selected. An automatic selection includes all supported
+              tracks.
+            </p>
             <For each={tracks()}>
               {(track) => {
                 const checked = () =>
@@ -200,9 +225,10 @@ export function ExportView() {
                   <div class="stream-option">
                     <label class="stream-row">
                       <input
-                        class="input input-bordered input-sm mt-1 w-full"
+                        class="checkbox checkbox-sm"
                         type="checkbox"
                         checked={checked()}
+                        disabled={checked() && (streamIndexes().length || tracks().length) === 1}
                         onChange={(event) => {
                           const all = streamIndexes().length
                             ? streamIndexes()
@@ -332,15 +358,12 @@ export function ExportView() {
                 (exportJob()!.result!.outputName ? [exportJob()!.result!.outputName] : [])
               }
             >
-              {(_, position) => (
-                <a
-                  href={api.url(
-                    `jobs/${encodeURIComponent(exportJob()!.id)}/outputs/${position()}`,
-                  )}
-                  download=""
-                >
-                  Download output {position() + 1}
-                </a>
+              {(name, position) => (
+                <OutputDownload
+                  jobId={exportJob()!.id}
+                  position={position()}
+                  name={name ?? `output-${position() + 1}.mkv`}
+                />
               )}
             </For>
           </Show>

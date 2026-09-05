@@ -1,19 +1,19 @@
 import { Show } from "solid-js";
 import { Clock3, LocateFixed, Maximize2, Minus, Plus, ZoomIn, ZoomOut } from "lucide-solid";
 import { Timeline } from "./Timeline";
-import { formatTime, parseTimecode } from "../preview/model";
+import { canStreamPreview, formatTime, parseTimecode } from "../preview/model";
 import { PreviewPlayer } from "../preview/PreviewPlayer";
 import { useWorkspace } from "../app/WorkspaceContext";
 
-export function EditorView() {
+export function EditorView(props: { onChooseMedia: () => void }) {
   const workspace = useWorkspace();
   const confirmTimecode = (input: HTMLInputElement) => {
     const value = parseTimecode(input.value);
     if (value === undefined || value > workspace.duration()) {
-      workspace.setStatus("Enter a valid timecode within this video.");
+      workspace.setEditorStatus("Enter a valid timecode within this video.");
       return;
     }
-    workspace.setTimecode(formatTime(value, workspace.duration()));
+    workspace.setTimecode("");
     workspace.updateTimeline({ playheadMs: value });
     input.blur();
   };
@@ -22,7 +22,7 @@ export function EditorView() {
     const other = kind === "inMs" ? workspace.present().outMs : workspace.present().inMs;
     const validOrder = other === undefined || (kind === "inMs" ? value! < other : value! > other);
     if (value === undefined || value > workspace.duration() || !validOrder) {
-      workspace.setStatus("In must be before Out and both must be within the video.");
+      workspace.setEditorStatus("In must be before Out and both must be within the video.");
       return;
     }
     workspace.setMarker(kind, value);
@@ -40,9 +40,9 @@ export function EditorView() {
   };
 
   return (
-    <section class="editor-panel card bg-base-200 shadow-sm" aria-labelledby="timeline-heading">
+    <section class="editor-panel" aria-labelledby="timeline-heading">
       <div class="panel-heading">
-        <h2 id="timeline-heading" tabIndex={-1} class="card-title text-base">
+        <h2 id="timeline-heading" tabIndex={-1} class="text-base">
           Timeline
         </h2>
       </div>
@@ -52,11 +52,7 @@ export function EditorView() {
           <section class="editor-onboarding" aria-labelledby="editor-onboarding-heading">
             <h3 id="editor-onboarding-heading">Choose a video to begin</h3>
             <p>Select a video from the Media library to unlock the editing workspace.</p>
-            <button
-              class="btn btn-primary"
-              type="button"
-              onClick={() => document.getElementById("media-heading")?.focus()}
-            >
+            <button class="btn btn-primary" type="button" onClick={props.onChooseMedia}>
               Choose a video
             </button>
           </section>
@@ -109,6 +105,7 @@ export function EditorView() {
                         event.currentTarget.select();
                       }}
                       onInput={(event) => workspace.setTimecode(event.currentTarget.value)}
+                      onBlur={() => workspace.setTimecode("")}
                       onKeyDown={(event) => {
                         if (event.key === "Escape") {
                           workspace.setTimecode("");
@@ -127,6 +124,7 @@ export function EditorView() {
                     <label class="marker-value">
                       In:{" "}
                       <input
+                        class="input input-sm"
                         aria-label="In point"
                         placeholder="Unset"
                         value={
@@ -150,6 +148,7 @@ export function EditorView() {
                     <label class="marker-value">
                       Out:{" "}
                       <input
+                        class="input input-sm"
                         aria-label="Out point"
                         placeholder="Unset"
                         value={
@@ -227,10 +226,17 @@ export function EditorView() {
                     <button
                       class="btn btn-sm btn-square"
                       aria-label="Fullscreen preview"
+                      disabled={!canStreamPreview() || !document.fullscreenEnabled}
                       onClick={() => {
                         const video = document.querySelector<HTMLVideoElement>("video");
-                        if (!document.fullscreenElement) void video?.requestFullscreen?.();
-                        else void document.exitFullscreen?.();
+                        const request = !document.fullscreenElement
+                          ? video?.requestFullscreen?.()
+                          : document.exitFullscreen?.();
+                        void request?.catch(() =>
+                          workspace.setEditorStatus(
+                            "Fullscreen is unavailable. Check your browser permissions.",
+                          ),
+                        );
                       }}
                     >
                       <Maximize2 size={16} aria-hidden="true" />
@@ -239,7 +245,12 @@ export function EditorView() {
                 </div>
               }
             />
-            <p id="add-segment-help" class="sr-only" role="status">
+            <Show when={workspace.editorStatus()}>
+              <p class="control-help" role="alert">
+                {workspace.editorStatus()}
+              </p>
+            </Show>
+            <p id="add-segment-help" class="control-help mt-2" role="status">
               {guidance()}
             </p>
           </>
