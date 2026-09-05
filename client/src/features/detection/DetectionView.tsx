@@ -16,21 +16,35 @@ export function DetectionView() {
   } = useWorkspace();
   const active = () => detectionJob()?.state === "queued" || detectionJob()?.state === "running";
   return (
-    <section class="detection-panel" aria-labelledby="detection-heading">
+    <section class="detection-panel flex flex-col gap-4 p-4" aria-labelledby="detection-heading">
       <h2 id="detection-heading">Detection</h2>
       <p role="status">{detectionStatus()}</p>
       <div class="detection-methods" aria-label="Detection methods">
-        <button disabled={active()} onClick={() => void startDetection("silence")}>
+        <button
+          class="btn btn-ghost btn-sm"
+          disabled={active()}
+          onClick={() => void startDetection("silence")}
+        >
           Find silence
         </button>
-        <button disabled={active()} onClick={() => void startDetection("black")}>
+        <button
+          class="btn btn-ghost btn-sm"
+          disabled={active()}
+          onClick={() => void startDetection("black")}
+        >
           Find black frames
         </button>
-        <button disabled={active()} onClick={() => void startDetection("scene")}>
+        <button
+          class="btn btn-ghost btn-sm"
+          disabled={active()}
+          onClick={() => void startDetection("scene")}
+        >
           Find scene changes
         </button>
         <Show when={active()}>
-          <button onClick={() => void cancelDetection()}>Cancel detection</button>
+          <button class="btn btn-ghost btn-sm" onClick={() => void cancelDetection()}>
+            Cancel detection
+          </button>
         </Show>
       </div>
       <Show when={detectionCandidates().length > 0}>
@@ -40,8 +54,12 @@ export function DetectionView() {
               <li>
                 {candidate.source} · {formatTime(candidate.startMs, duration())}–
                 {formatTime(candidate.endMs, duration())} · {Math.round(candidate.confidence * 100)}
-                % <button onClick={() => acceptDetection(candidate)}>Add segment</button>{" "}
+                %{" "}
+                <button class="btn btn-ghost btn-sm" onClick={() => acceptDetection(candidate)}>
+                  Add segment
+                </button>{" "}
                 <button
+                  class="btn btn-ghost btn-sm"
                   onClick={() => {
                     setDetectionCandidates(
                       detectionCandidates().filter((item) => item.id !== candidate.id),
