@@ -279,6 +279,25 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/batches/{batchId}/download": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        batchId: string;
+      };
+      cookie?: never;
+    };
+    /** Download all completed browser outputs as an archive */
+    get: operations["downloadBatchOutputs"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/projects/{projectId}/exports/preflight": {
     parameters: {
       query?: never;
@@ -1146,6 +1165,29 @@ export interface operations {
           [name: string]: unknown;
         };
         content?: never;
+      };
+      404: components["responses"]["Error"];
+    };
+  };
+  downloadBatchOutputs: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        batchId: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Authenticated ZIP archive of verified browser-download outputs */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/zip": string;
+        };
       };
       404: components["responses"]["Error"];
     };

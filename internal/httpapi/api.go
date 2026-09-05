@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"log"
 	"net/http"
 	"strconv"
@@ -115,6 +116,9 @@ type BatchExportService interface {
 	List(context.Context, int) (projects.BatchPage, error)
 	Retry(context.Context, string) (projects.Batch, error)
 	Cancel(context.Context, string) error
+}
+type BatchDownloadService interface {
+	DownloadBatch(context.Context, string) (io.ReadCloser, string, error)
 }
 
 type Config struct {
@@ -312,6 +316,9 @@ func (s *Server) dispatch(writer http.ResponseWriter, request *http.Request, id 
 	case routeDownloadOutput:
 		s.downloadOutput(writer, request, r.id, id)
 		return "/api/v1/jobs/{jobId}/outputs/{position}", ""
+	case routeDownloadBatch:
+		s.downloadBatch(writer, request, r.id, id)
+		return "/api/v1/batches/{batchId}/download", ""
 	case routeCancelJob:
 		s.cancelJob(writer, request, r.id, id)
 		return "/api/v1/jobs/{jobId}", ""

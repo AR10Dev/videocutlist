@@ -1,6 +1,7 @@
 import { createSignal, For, Show } from "solid-js";
 import { formatTime, hybridSmartCutKnownIneligible } from "../preview/model";
 import { useWorkspace } from "../app/WorkspaceContext";
+import { BatchDownload } from "./BatchDownload";
 import { OutputDownload } from "./OutputDownload";
 import { summarizeExports } from "./summary";
 
@@ -361,6 +362,25 @@ export function ExportView() {
               exportJob()!.result!.destinationKind === "download"
             }
           >
+            <Show
+              when={
+                batchId() &&
+                (
+                  exportJob()!.result!.outputNames ??
+                  (exportJob()!.result!.outputName ? [exportJob()!.result!.outputName] : [])
+                ).length > 1
+              }
+            >
+              <BatchDownload
+                batchId={batchId()!}
+                outputCount={
+                  (
+                    exportJob()!.result!.outputNames ??
+                    (exportJob()!.result!.outputName ? [exportJob()!.result!.outputName] : [])
+                  ).length
+                }
+              />
+            </Show>
             <For
               each={
                 exportJob()!.result!.outputNames ??
@@ -375,6 +395,20 @@ export function ExportView() {
                 />
               )}
             </For>
+          </Show>
+          <Show
+            when={
+              exportJob()!.state === "succeeded" &&
+              exportJob()!.result!.destinationKind !== undefined &&
+              exportJob()!.result!.destinationKind !== "download"
+            }
+          >
+            <p role="status">
+              Clips created in{" "}
+              {destinations().find((item) => item.id === exportJob()!.result!.destinationId)
+                ?.label ?? "the configured server destination"}
+              .
+            </p>
           </Show>
           <div aria-label="Export warnings">
             <For each={exportJob()!.warnings ?? []}>

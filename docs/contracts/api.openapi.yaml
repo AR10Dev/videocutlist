@@ -362,6 +362,28 @@ paths:
           description: Batch cancellation requested
         "404":
           $ref: "#/components/responses/Error"
+  /batches/{batchId}/download:
+    parameters:
+      - name: batchId
+        in: path
+        required: true
+        schema:
+          type: string
+          pattern: ^b_[A-Za-z0-9_-]{12,64}$
+    get:
+      summary: Download all completed browser outputs as an archive
+      operationId: downloadBatchOutputs
+      responses:
+        "200":
+          description: >-
+            Authenticated ZIP archive of verified browser-download outputs
+          content:
+            application/zip:
+              schema:
+                type: string
+                format: binary
+        "404":
+          $ref: "#/components/responses/Error"
   /projects/{projectId}/exports/preflight:
     parameters:
       - $ref: "#/components/parameters/ProjectId"
@@ -564,11 +586,11 @@ components:
       type: object
       required: [id, label, kind]
       properties:
-        id: { type: string }
-        label: { type: string }
-        description: { type: string }
-        kind: { type: string, enum: [download, archive, source_adjacent] }
-        retention: { type: string }
+        id: {type: string}
+        label: {type: string}
+        description: {type: string}
+        kind: {type: string, enum: [download, archive, source_adjacent]}
+        retention: {type: string}
     RuntimeSettings:
       type: object
       additionalProperties: false
@@ -908,31 +930,31 @@ components:
         - source
         - confidence
       properties:
-        id: { type: string }
-        mediaId: { type: string }
-        projectId: { type: string }
-        projectRevision: { type: integer }
-        startMs: { type: integer }
-        endMs: { type: integer }
-        source: { type: string, enum: [silence, black, scene] }
-        confidence: { type: number }
+        id: {type: string}
+        mediaId: {type: string}
+        projectId: {type: string}
+        projectRevision: {type: integer}
+        startMs: {type: integer}
+        endMs: {type: integer}
+        source: {type: string, enum: [silence, black, scene]}
+        confidence: {type: number}
     DetectionJob:
       type: object
       required: [id, type, state, mediaId, projectId, projectRevision, kind]
       properties:
-        id: { type: string }
-        type: { type: string, enum: [detection] }
+        id: {type: string}
+        type: {type: string, enum: [detection]}
         state:
           type: string
           enum: [queued, running, succeeded, failed, cancelled]
-        mediaId: { type: string }
-        projectId: { type: string }
-        projectRevision: { type: integer }
-        kind: { type: string, enum: [silence, black, scene] }
+        mediaId: {type: string}
+        projectId: {type: string}
+        projectRevision: {type: integer}
+        kind: {type: string, enum: [silence, black, scene]}
         candidates:
           type: array
-          items: { $ref: "#/components/schemas/DetectionCandidate" }
-        errorCode: { type: string }
+          items: {$ref: "#/components/schemas/DetectionCandidate"}
+        errorCode: {type: string}
     ExportInput:
       type: object
       additionalProperties: false

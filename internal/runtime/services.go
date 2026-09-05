@@ -2,6 +2,7 @@
 package runtime
 
 import (
+	"archive/zip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"videocutlist/internal/db"
@@ -193,30 +195,17 @@ func (e ExportExecutor) Download(ctx context.Context, jobID string, position int
 	if e.Service.Artifacts == nil || e.Jobs == nil {
 		return nil, "", jobqueue.ErrJobNotFound
 	}
-	var resultJSON string
-	job, err := e.Jobs.Get(ctx, jobID)
-	if err == nil && job.Kind == jobqueue.JobExport && job.State == jobqueue.JobSucceeded && job.ResultJSON.Valid {
-		resultJSON = job.ResultJSON.String
-	}
 	var result exporter.Result
-	if resultJSON == "" || json.Unmarshal([]byte(resultJSON), &result) != nil || result.DestinationKind == exporter.KindSourceAdjacent {
+	job, err := e.Jobs.Get(ctx, jobID)
+	if err != nil || job.Kind != jobqueue.JobExport || job.State != jobqueue.JobSucceeded || !job.ResultJSON.Valid || json.Unmarshal([]byte(job.ResultJSON.String), &result) != nil {
 		return nil, "", jobqueue.ErrJobNotFound
 	}
-	destination := exporter.Destination{ID: "download", Kind: exporter.KindDownload, Root: e.Service.OutputDir}
-	for _, candidate := range e.Service.Destinations {
-		if candidate.ID == result.DestinationID {
-			destination = candidate
-			break
-		}
-	}
-	if destination.Root == "" {
+	destination, ok := e.destinationForResult(result)
+	if !ok || result.RetainUntil.IsZero() {
 		return nil, "", jobqueue.ErrJobNotFound
 	}
-	names := result.OutputNames
-	if result.OutputName != "" {
-		names = []string{result.OutputName}
-	}
-	if position < 0 || position >= len(names) {
+	names, ok := resultOutputNames(result)
+	if !ok || position < 0 || position >= len(names) {
 		return nil, "", jobqueue.ErrJobNotFound
 	}
 	values := make([]exporter.Artifact, len(names))
@@ -229,6 +218,304 @@ func (e ExportExecutor) Download(ctx context.Context, jobID string, position int
 		return nil, "", err
 	}
 	return file, artifact.Name, nil
+}
+
+const (
+	maxBatchArchiveOutputs = 1000
+	maxBatchArchiveBytes   = int64(4 << 30)
+)
+
+type batchArchiveOutput struct {
+	jobID    string
+	name     string
+	position int
+}
+
+// DownloadBatch prepares a verified ZIP from completed browser-download outputs.
+// The archive is linked into place only after every entry and the ZIP directory
+// have been validated; cancellation removes the unpublished temporary file.
+func (e ExportExecutor) DownloadBatch(ctx context.Context, batchID string) (io.ReadCloser, string, error) {
+	if e.Service.Artifacts == nil || e.Jobs == nil {
+		return nil, "", jobqueue.ErrJobNotFound
+	}
+	if file, artifact, err := e.Service.Artifacts.Open(batchID, 0, time.Now().UTC()); err == nil {
+		return file, artifact.Name, nil
+	}
+	jobs, err := e.Jobs.ListByBatch(ctx, batchID)
+	if err != nil {
+		return nil, "", err
+	}
+	outputs := make([]batchArchiveOutput, 0)
+	var expires time.Time
+	archiveRoot := ""
+	for _, job := range jobs {
+		if err := ctx.Err(); err != nil {
+			return nil, "", err
+		}
+		if job.Kind != jobqueue.JobExport || job.State != jobqueue.JobSucceeded || !job.ResultJSON.Valid {
+			return nil, "", jobqueue.ErrJobNotFound
+		}
+		var result exporter.Result
+		if json.Unmarshal([]byte(job.ResultJSON.String), &result) != nil || result.DestinationKind != exporter.KindDownload || result.RetainUntil.IsZero() {
+			return nil, "", jobqueue.ErrJobNotFound
+		}
+		destination, ok := e.destinationForResult(result)
+		if !ok {
+			return nil, "", jobqueue.ErrJobNotFound
+		}
+		if archiveRoot == "" {
+			archiveRoot = destination.Root
+		}
+		names, ok := resultOutputNames(result)
+		if !ok || len(names) == 0 || len(outputs)+len(names) > maxBatchArchiveOutputs {
+			return nil, "", exporter.ErrOutputUnavailable
+		}
+		if expires.IsZero() || result.RetainUntil.Before(expires) {
+			expires = result.RetainUntil
+		}
+		for position, name := range names {
+			outputs = append(outputs, batchArchiveOutput{jobID: job.ID, name: name, position: position})
+		}
+	}
+	if len(outputs) == 0 || archiveRoot == "" || !expires.After(time.Now().UTC()) {
+		return nil, "", exporter.ErrOutputUnavailable
+	}
+	return e.prepareBatchArchive(ctx, batchID, archiveRoot, outputs, expires)
+}
+
+func (e ExportExecutor) prepareBatchArchive(ctx context.Context, batchID, archiveRoot string, outputs []batchArchiveOutput, expires time.Time) (io.ReadCloser, string, error) {
+	temporary, err := os.CreateTemp(archiveRoot, ".videocutlist-batch-*.zip")
+	if err != nil {
+		return nil, "", exporter.ErrOutputUnavailable
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	archiveWriter := zip.NewWriter(temporary)
+	usedNames := make(map[string]int, len(outputs))
+	var total int64
+	for _, output := range outputs {
+		if err := ctx.Err(); err != nil {
+			_ = archiveWriter.Close()
+			_ = temporary.Close()
+			return nil, "", err
+		}
+		file, name, err := e.Download(ctx, output.jobID, output.position)
+		if err != nil {
+			_ = archiveWriter.Close()
+			_ = temporary.Close()
+			return nil, "", exporter.ErrOutputUnavailable
+		}
+		info, statOK := file.(interface{ Stat() (os.FileInfo, error) })
+		if !statOK {
+			_ = file.Close()
+			_ = archiveWriter.Close()
+			_ = temporary.Close()
+			return nil, "", exporter.ErrOutputUnavailable
+		}
+		fileInfo, statErr := info.Stat()
+		if statErr != nil || fileInfo.Size() < 0 || fileInfo.Size() > maxBatchArchiveBytes-total {
+			_ = file.Close()
+			_ = archiveWriter.Close()
+			_ = temporary.Close()
+			return nil, "", exporter.ErrOutputUnavailable
+		}
+		entryName := uniqueBatchArchiveName(name, usedNames)
+		header := &zip.FileHeader{Name: entryName, Method: zip.Store, UncompressedSize64: uint64(fileInfo.Size())}
+		entry, err := archiveWriter.CreateHeader(header)
+		if err == nil {
+			var copied int64
+			copied, err = io.Copy(entry, contextReader{ctx: ctx, reader: file})
+			if err == nil && copied != fileInfo.Size() {
+				err = exporter.ErrOutputUnavailable
+			}
+			total += copied
+		}
+		closeErr := file.Close()
+		if err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			_ = archiveWriter.Close()
+			_ = temporary.Close()
+			return nil, "", err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		_ = archiveWriter.Close()
+		_ = temporary.Close()
+		return nil, "", err
+	}
+	if err := archiveWriter.Close(); err != nil {
+		_ = temporary.Close()
+		return nil, "", exporter.ErrOutputUnavailable
+	}
+	if err := temporary.Sync(); err != nil {
+		_ = temporary.Close()
+		return nil, "", exporter.ErrOutputUnavailable
+	}
+	if err := temporary.Close(); err != nil {
+		return nil, "", exporter.ErrOutputUnavailable
+	}
+	if err := validateBatchArchive(ctx, temporaryPath, len(outputs), total); err != nil {
+		return nil, "", err
+	}
+	name, path, err := publishBatchArchive(temporaryPath, archiveRoot, batchID)
+	if err != nil {
+		return nil, "", err
+	}
+	e.Service.Artifacts.Put(batchID, []exporter.Artifact{{Path: path, Name: name, Kind: exporter.KindDownload, Expires: expires}})
+	file, artifact, err := e.Service.Artifacts.Open(batchID, 0, time.Now().UTC())
+	if err != nil {
+		_ = os.Remove(path)
+		return nil, "", err
+	}
+	return file, artifact.Name, nil
+}
+
+func validateBatchArchive(ctx context.Context, path string, count int, expectedBytes int64) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return exporter.ErrOutputUnavailable
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() == 0 || info.Size() > maxBatchArchiveBytes {
+		return exporter.ErrOutputUnavailable
+	}
+	archive, err := zip.NewReader(file, info.Size())
+	if err != nil || len(archive.File) != count {
+		return exporter.ErrOutputUnavailable
+	}
+	var total int64
+	for _, entry := range archive.File {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if !validBatchArchiveName(entry.Name) || entry.FileInfo().IsDir() || entry.UncompressedSize64 > uint64(maxBatchArchiveBytes-total) {
+			return exporter.ErrOutputUnavailable
+		}
+		reader, err := entry.Open()
+		if err != nil {
+			return exporter.ErrOutputUnavailable
+		}
+		copied, copyErr := io.Copy(io.Discard, contextReader{ctx: ctx, reader: reader})
+		closeErr := reader.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		if closeErr != nil || copied != int64(entry.UncompressedSize64) {
+			return exporter.ErrOutputUnavailable
+		}
+		total += copied
+	}
+	if total != expectedBytes {
+		return exporter.ErrOutputUnavailable
+	}
+	return nil
+}
+
+func publishBatchArchive(temporaryPath, archiveRoot, batchID string) (string, string, error) {
+	token := "batch"
+	if validBatchArchiveToken(batchID) {
+		token = batchID
+	}
+	for attempt := range 100 {
+		name := "videocutlist-clips-" + token + ".zip"
+		if attempt > 0 {
+			name = fmt.Sprintf("videocutlist-clips-%s-%d.zip", token, attempt)
+		}
+		path := filepath.Join(archiveRoot, name)
+		if err := os.Link(temporaryPath, path); err == nil {
+			return name, path, nil
+		} else if !errors.Is(err, os.ErrExist) {
+			return "", "", exporter.ErrOutputUnavailable
+		}
+	}
+	return "", "", exporter.ErrOutputUnavailable
+}
+
+func uniqueBatchArchiveName(name string, used map[string]int) string {
+	count := used[name]
+	used[name] = count + 1
+	if count == 0 {
+		return name
+	}
+	extension := filepath.Ext(name)
+	stem := strings.TrimSuffix(name, extension)
+	for suffix := count + 1; ; suffix++ {
+		candidate := fmt.Sprintf("%s-%d%s", stem, suffix, extension)
+		if used[candidate] == 0 {
+			used[candidate] = 1
+			return candidate
+		}
+	}
+}
+
+func validBatchArchiveName(name string) bool {
+	if name == "" || name == "." || name == ".." || len(name) > 255 || filepath.Base(name) != name {
+		return false
+	}
+	for _, r := range name {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '.' || r == '-' || r == '_') {
+			return false
+		}
+	}
+	return true
+}
+
+func validBatchArchiveToken(value string) bool {
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '-' || r == '_') {
+			return false
+		}
+	}
+	return true
+}
+
+type contextReader struct {
+	ctx    context.Context
+	reader io.Reader
+}
+
+func (r contextReader) Read(p []byte) (int, error) {
+	select {
+	case <-r.ctx.Done():
+		return 0, r.ctx.Err()
+	default:
+		return r.reader.Read(p)
+	}
+}
+
+func (e ExportExecutor) destinationForResult(result exporter.Result) (exporter.Destination, bool) {
+	destination := exporter.Destination{ID: "download", Kind: exporter.KindDownload, Root: e.Service.OutputDir}
+	for _, candidate := range e.Service.Destinations {
+		if candidate.ID == result.DestinationID {
+			destination = candidate
+			break
+		}
+	}
+	return destination, destination.Root != "" && destination.Kind == result.DestinationKind && result.DestinationKind == exporter.KindDownload
+}
+
+func resultOutputNames(result exporter.Result) ([]string, bool) {
+	if result.OutputName != "" {
+		if len(result.OutputNames) != 0 || !validBatchArchiveName(result.OutputName) {
+			return nil, false
+		}
+		return []string{result.OutputName}, true
+	}
+	if len(result.OutputNames) == 0 || len(result.OutputNames) > maxBatchArchiveOutputs {
+		return nil, false
+	}
+	for _, name := range result.OutputNames {
+		if !validBatchArchiveName(name) {
+			return nil, false
+		}
+	}
+	return result.OutputNames, true
 }
 
 func (e ExportExecutor) ExecuteBatchSnapshot(ctx context.Context, id string, snapshot projects.ExportSnapshot) (string, error) {

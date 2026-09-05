@@ -45,6 +45,7 @@ func TestParseRoute(t *testing.T) {
 		{"job delete", http.MethodDelete, "/api/v1/jobs/" + job, routeCancelJob, job},
 		{"job retry", http.MethodPost, "/api/v1/jobs/" + job + "/retry", routeRetryJob, job},
 		{"batch list", http.MethodGet, "/api/v1/batches", routeListBatches, ""},
+		{"batch download", http.MethodGet, "/api/v1/batches/" + batch + "/download", routeDownloadBatch, batch},
 		{"batch get", http.MethodGet, "/api/v1/batches/" + batch, routeGetBatch, batch},
 		{"batch delete", http.MethodDelete, "/api/v1/batches/" + batch, routeCancelBatch, batch},
 	}
@@ -95,6 +96,7 @@ func TestRouteCoverageInventory(t *testing.T) {
 		{http.MethodPost, "/api/v1/jobs/" + job + "/retry", routeRetryJob},
 		{http.MethodGet, "/api/v1/jobs/" + job + "/outputs/0", routeDownloadOutput},
 		{http.MethodGet, "/api/v1/batches", routeListBatches},
+		{http.MethodGet, "/api/v1/batches/" + batch + "/download", routeDownloadBatch},
 		{http.MethodGet, "/api/v1/batches/" + batch, routeGetBatch},
 		{http.MethodDelete, "/api/v1/batches/" + batch, routeCancelBatch},
 		{http.MethodPost, "/api/v1/automation", routeAutomation},
