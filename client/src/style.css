@@ -57,40 +57,6 @@ body {
   min-width: 320px;
   overflow: hidden;
 }
-button,
-input,
-select {
-  font: inherit;
-}
-button {
-  cursor: pointer;
-}
-button:disabled {
-  cursor: not-allowed;
-  opacity: 0.45;
-}
-button[aria-pressed="true"] {
-  border-color: var(--color-secondary);
-  background: color-mix(in srgb, var(--color-secondary) 25%, var(--surface));
-}
-
-button.primary {
-  border-color: var(--color-info);
-  background: color-mix(in srgb, var(--color-info) 40%, var(--surface));
-  font-weight: 700;
-}
-button.primary:hover:not(:disabled) {
-  border-color: var(--color-info);
-  background: color-mix(in srgb, var(--color-info) 55%, var(--surface));
-}
-button.destructive {
-  border-color: var(--color-error);
-  background: color-mix(in srgb, var(--color-error) 25%, var(--surface));
-}
-button.destructive:hover:not(:disabled) {
-  border-color: var(--color-error-content);
-  background: color-mix(in srgb, var(--color-error) 40%, var(--surface));
-}
 
 .app-shell {
   width: min(100%, 1600px);
@@ -99,20 +65,12 @@ button.destructive:hover:not(:disabled) {
   padding: 16px;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
-  grid-template-areas: "media editor task";
-  grid-template-rows: minmax(0, 1fr);
-  gap: 12px;
+  grid-template-areas: "header header header" "media editor task";
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 8px;
   align-items: stretch;
 }
 
-header,
-section {
-  min-width: 0;
-  background: var(--color-base-200);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 16px;
-}
 .left-sidebar {
   grid-area: media;
   width: 280px;
@@ -124,6 +82,14 @@ section {
   background: var(--surface-raised);
   border: 1px solid var(--border);
   border-radius: 8px;
+}
+.app-navbar {
+  grid-area: header;
+  min-height: 48px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--color-base-200);
 }
 .app-header {
   display: flex;
@@ -186,6 +152,23 @@ section {
   min-width: 0;
   min-height: 0;
   overflow-y: auto;
+}
+.left-sidebar.is-collapsed {
+  width: 48px;
+  min-width: 48px;
+  overflow: hidden;
+}
+.left-sidebar.is-collapsed .media-panel {
+  display: none;
+}
+.task-panel.is-collapsed {
+  width: 48px;
+  min-width: 48px;
+  overflow: hidden;
+  padding: 8px;
+}
+.task-panel.is-collapsed > * {
+  display: none;
 }
 .task-panel {
   grid-area: task;
@@ -346,30 +329,10 @@ label {
   color: var(--text-muted);
   font-size: 0.875rem;
 }
-input,
-select {
-  min-width: 0;
-  color: inherit;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 6px 8px;
-}
 input[type="file"] {
   width: 100%;
   max-width: 100%;
   padding: 4px;
-}
-button {
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: var(--color-base-100);
-  color: var(--color-base-content);
-  padding: 6px 9px;
-}
-button:hover:not(:disabled) {
-  background: var(--color-base-300);
-  border-color: var(--border);
 }
 button:focus-visible,
 input:focus-visible,
@@ -501,10 +464,21 @@ video {
   text-align: center;
 }
 .edit-deck {
-  margin-top: 8px;
-  padding: 8px 0;
+  margin-top: 4px;
+  padding: 4px 0;
   border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
+}
+.control-rail {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  min-height: 48px;
+}
+.editor-controls {
+  display: contents;
 }
 .preview-controls {
   display: flex;
@@ -947,16 +921,14 @@ fieldset {
   .settings-view {
     grid-column: 1;
   }
-  header,
-  section,
+  .editor-panel,
   .task-panel {
     padding: 12px;
   }
-  button,
   .media-list button,
   .folder,
-  input,
-  select {
+  .editor-controls input,
+  .editor-controls button {
     min-height: 44px;
   }
   .icon-button {
@@ -991,17 +963,7 @@ fieldset {
     padding-inline: 4px;
   }
   .editor-controls {
-    align-items: stretch;
-  }
-  .editor-controls button,
-  .editor-controls label {
-    min-height: 44px;
-  }
-  .editor-controls label {
-    flex: 1 1 100%;
-  }
-  .secondary-controls {
-    flex: 1 1 100%;
+    align-items: center;
   }
   .secondary-controls > summary {
     display: list-item;

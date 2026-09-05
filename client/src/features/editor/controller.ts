@@ -141,10 +141,24 @@ export function createEditorController(deps: {
   createEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement;
-      if (target.matches("input, textarea, select, [contenteditable='true']")) return;
-      if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+      if (
+        target.matches(
+          "input, textarea, select, [contenteditable='true'], [role='menu'], [role='dialog'], dialog",
+        )
+      )
+        return;
+      if (event.key === "," || event.key === ".") {
         event.preventDefault();
         const step = frameDuration(deps.selected()) || 1000;
+        updateTimeline({
+          playheadMs: Math.max(
+            0,
+            Math.min(duration(), playheadMs() + (event.key === "," ? -step : step)),
+          ),
+        });
+      } else if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+        event.preventDefault();
+        const step = 1000;
         updateTimeline({
           playheadMs: Math.max(
             0,
@@ -157,6 +171,11 @@ export function createEditorController(deps: {
       } else if (event.key.toLowerCase() === "i" || event.key.toLowerCase() === "o") {
         event.preventDefault();
         setMarker(event.key.toLowerCase() === "i" ? "inMs" : "outMs", deps.watchedPosition());
+      } else if (event.key.toLowerCase() === "c") {
+        event.preventDefault();
+        const range = present();
+        if (range.inMs !== undefined && range.outMs !== undefined && range.inMs < range.outMs)
+          addSegment();
       } else if (event.key.toLowerCase() === "b") {
         event.preventDefault();
         splitActiveSegment();
