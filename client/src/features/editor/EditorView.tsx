@@ -1,6 +1,5 @@
-import { createSignal, onCleanup, Show } from "solid-js";
-import { Clock3, LocateFixed, Plus, Redo2, Undo2 } from "lucide-solid";
-import { redoTimeline, undoTimeline } from "./timeline";
+import { Show } from "solid-js";
+import { Clock3, LocateFixed, Maximize2, Minus, Plus, ZoomIn, ZoomOut } from "lucide-solid";
 import { Timeline } from "./Timeline";
 import { formatTime, parseTimecode } from "../preview/model";
 import { PreviewPlayer } from "../preview/PreviewPlayer";
@@ -8,12 +7,6 @@ import { useWorkspace } from "../app/WorkspaceContext";
 
 export function EditorView() {
   const workspace = useWorkspace();
-  const narrowViewport = globalThis.matchMedia("(max-width: 700px)");
-  const [secondaryOpen, setSecondaryOpen] = createSignal(!narrowViewport.matches);
-  const syncSecondaryControls = () => setSecondaryOpen(!narrowViewport.matches);
-  narrowViewport.addEventListener("change", syncSecondaryControls);
-  onCleanup(() => narrowViewport.removeEventListener("change", syncSecondaryControls));
-
   const confirmTimecode = (input: HTMLInputElement) => {
     const value = parseTimecode(input.value);
     if (value === undefined || value > workspace.duration()) {
@@ -101,41 +94,6 @@ export function EditorView() {
                     )}
                   </Show>
                   <div class="editor-controls flex flex-wrap items-end gap-3">
-                    <div
-                      class="control-group history-controls flex flex-wrap items-center gap-2"
-                      aria-label="History"
-                    >
-                      <button
-                        class="btn btn-sm btn-square"
-                        title="Undo"
-                        aria-label="Undo"
-                        disabled={!workspace.timeline().past.length}
-                        onClick={() => {
-                          const next = undoTimeline(workspace.timeline());
-                          workspace.setTimeline(next);
-                          workspace.setPreviewCenterMs(next.present.playheadMs);
-                          workspace.markDirty();
-                        }}
-                        aria-keyshortcuts="Control+Z Meta+Z"
-                      >
-                        <Undo2 size={16} aria-hidden="true" />
-                      </button>
-                      <button
-                        class="btn btn-sm btn-square"
-                        title="Redo"
-                        aria-label="Redo"
-                        disabled={!workspace.timeline().future.length}
-                        onClick={() => {
-                          const next = redoTimeline(workspace.timeline());
-                          workspace.setTimeline(next);
-                          workspace.setPreviewCenterMs(next.present.playheadMs);
-                          workspace.markDirty();
-                        }}
-                        aria-keyshortcuts="Control+Y Meta+Shift+Z"
-                      >
-                        <Redo2 size={16} aria-hidden="true" />
-                      </button>
-                    </div>
                     <label class="input input-sm primary-timecode">
                       <Clock3 size={16} aria-hidden="true" />
                       <span class="sr-only">Current timecode</span>
@@ -162,7 +120,7 @@ export function EditorView() {
                     </label>
                     <div
                       class="control-group marking-controls flex flex-wrap items-center gap-2"
-                      aria-label="Marking controls"
+                      aria-label="Cutting"
                     >
                       <label class="marker-value">
                         In:{" "}
@@ -219,6 +177,7 @@ export function EditorView() {
                       <button
                         class="btn btn-sm btn-primary"
                         aria-label="Add cut (Add segment)"
+                        aria-keyshortcuts="C"
                         onClick={workspace.addSegment}
                         disabled={!validRange()}
                         aria-describedby="add-segment-help"
@@ -226,50 +185,55 @@ export function EditorView() {
                         <Plus size={16} aria-hidden="true" /> Add cut
                       </button>
                     </div>
-                    <details
-                      class="secondary-controls"
-                      open={secondaryOpen()}
-                      onToggle={(event) => setSecondaryOpen(event.currentTarget.open)}
+                    <div
+                      class="control-group view-controls flex items-center gap-1"
+                      aria-label="View"
                     >
-                      <summary>More editing actions</summary>
-                      <div
-                        class="control-group flex flex-wrap items-center gap-2"
-                        aria-label="Cut details"
+                      <button
+                        class="btn btn-sm btn-square"
+                        aria-label="Zoom out"
+                        onClick={() =>
+                          globalThis.dispatchEvent(
+                            new CustomEvent("timeline-zoom", { detail: 0.5 }),
+                          )
+                        }
                       >
-                        <label>
-                          Segment label{" "}
-                          <input
-                            value={workspace.segmentLabel()}
-                            onInput={(event) =>
-                              workspace.setSegmentLabel(event.currentTarget.value)
-                            }
-                          />
-                        </label>
-                        <button
-                          class="btn btn-sm"
-                          disabled={workspace.activeSegmentIndex() === undefined}
-                          onClick={workspace.splitActiveSegment}
-                          aria-keyshortcuts="B"
-                        >
-                          Split active cut
-                        </button>
-                      </div>
-                    </details>
+                        <ZoomOut size={16} />
+                      </button>
+                      <span aria-label="Timeline zoom level">{workspace.present().zoom}×</span>
+                      <button
+                        class="btn btn-sm btn-square"
+                        aria-label="Zoom in"
+                        onClick={() =>
+                          globalThis.dispatchEvent(new CustomEvent("timeline-zoom", { detail: 2 }))
+                        }
+                      >
+                        <ZoomIn size={16} />
+                      </button>
+                      <button
+                        class="btn btn-sm"
+                        aria-label="Fit timeline"
+                        onClick={() => globalThis.dispatchEvent(new Event("timeline-fit"))}
+                      >
+                        <Minus size={14} /> Fit
+                      </button>
+                      <button
+                        class="btn btn-sm btn-square"
+                        aria-label="Fullscreen preview"
+                        onClick={() =>
+                          document.querySelector<HTMLVideoElement>("video")?.requestFullscreen()
+                        }
+                      >
+                        <Maximize2 size={16} />
+                      </button>
+                    </div>
                   </div>
                 </>
               }
             />
-            <p id="add-segment-help" class="control-help" role="status">
+            <p id="add-segment-help" class="sr-only" role="status">
               {guidance()}
             </p>
-            <details class="shortcut-help">
-              <summary>Shortcuts</summary>
-              <p class="control-help">
-                Space plays or pauses; arrows step frames; I/O set markers; B splits; Delete removes
-                the active cut; Ctrl/Cmd+Z undoes.
-              </p>
-            </details>
-            <p class="control-help">Manage saved cuts in the Cuts task.</p>
           </>
         )}
       </Show>

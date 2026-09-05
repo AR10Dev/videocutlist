@@ -113,73 +113,75 @@ export function PreviewPlayer(props: { timeline: JSX.Element; controls: JSX.Elem
           </p>
         )}
       </div>
-      {props.timeline}
       <div class="edit-deck" aria-label="Editing controls">
-        <div class="preview-controls" aria-label="Preview controls">
-          <IconButton
-            label="Go to start"
-            onClick={() => workspace.updateTimeline({ playheadMs: 0 })}
-          >
-            <ChevronsLeft size={18} aria-hidden="true" />
-          </IconButton>
-          <IconButton label="Previous frame" keyshortcuts="ArrowLeft" onClick={() => step(-1)}>
-            <SkipBack size={18} aria-hidden="true" />
-          </IconButton>
-          <IconButton
-            label={playing() ? "Pause preview" : "Play preview"}
-            keyshortcuts="Space"
-            onClick={togglePlayback}
-          >
-            {playing() ? (
-              <Pause size={22} aria-hidden="true" />
-            ) : (
-              <Play size={22} aria-hidden="true" />
-            )}
-          </IconButton>
-          <IconButton label="Next frame" keyshortcuts="ArrowRight" onClick={() => step(1)}>
-            <SkipForward size={18} aria-hidden="true" />
-          </IconButton>
-          <IconButton
-            label="Go to end"
-            onClick={() => workspace.updateTimeline({ playheadMs: workspace.duration() })}
-          >
-            <ChevronsRight size={18} aria-hidden="true" />
-          </IconButton>
-          <span class="preview-time" aria-live="off">
-            {formatTime(workspace.playheadMs(), workspace.duration())} /{" "}
-            {formatTime(workspace.duration(), workspace.duration())}
-          </span>
-          <IconButton
-            label={workspace.muted() ? "Unmute preview" : "Mute preview"}
-            pressed={workspace.muted()}
-            onClick={() => {
-              const muted = !workspace.muted();
-              workspace.setMuted(muted);
-              workspace.saveSettings({ muted });
-              workspace.markDirty();
-            }}
-          >
-            {workspace.muted() ? (
-              <VolumeX size={18} aria-hidden="true" />
-            ) : (
-              <Volume2 size={18} aria-hidden="true" />
-            )}
-          </IconButton>
-          <input
-            type="range"
-            aria-label="Preview volume"
-            min="0"
-            max="1"
-            step="0.05"
-            value={volume()}
-            onInput={(event) => setVolumeValue(Number(event.currentTarget.value))}
-          />
-          <IconButton label="Fullscreen preview" onClick={fullscreen}>
-            <Maximize2 size={18} aria-hidden="true" />
-          </IconButton>
+        <div class="control-rail" aria-label="Editor controls">
+          <div class="preview-controls" aria-label="Playback and audio controls">
+            <IconButton
+              label="Go to start"
+              onClick={() => workspace.updateTimeline({ playheadMs: 0 })}
+            >
+              <ChevronsLeft size={18} aria-hidden="true" />
+            </IconButton>
+            <IconButton label="Previous frame" keyshortcuts="ArrowLeft" onClick={() => step(-1)}>
+              <SkipBack size={18} aria-hidden="true" />
+            </IconButton>
+            <IconButton
+              label={playing() ? "Pause preview" : "Play preview"}
+              keyshortcuts="Space"
+              onClick={togglePlayback}
+            >
+              {playing() ? (
+                <Pause size={22} aria-hidden="true" />
+              ) : (
+                <Play size={22} aria-hidden="true" />
+              )}
+            </IconButton>
+            <IconButton label="Next frame" keyshortcuts="ArrowRight" onClick={() => step(1)}>
+              <SkipForward size={18} aria-hidden="true" />
+            </IconButton>
+            <IconButton
+              label="Go to end"
+              onClick={() => workspace.updateTimeline({ playheadMs: workspace.duration() })}
+            >
+              <ChevronsRight size={18} aria-hidden="true" />
+            </IconButton>
+            <span class="preview-time" aria-live="off">
+              {formatTime(workspace.playheadMs(), workspace.duration())} /{" "}
+              {formatTime(workspace.duration(), workspace.duration())}
+            </span>
+            <IconButton
+              label={workspace.muted() ? "Unmute preview" : "Mute preview"}
+              pressed={workspace.muted()}
+              onClick={() => {
+                const muted = !workspace.muted();
+                workspace.setMuted(muted);
+                workspace.saveSettings({ muted });
+                workspace.markDirty();
+              }}
+            >
+              {workspace.muted() ? (
+                <VolumeX size={18} aria-hidden="true" />
+              ) : (
+                <Volume2 size={18} aria-hidden="true" />
+              )}
+            </IconButton>
+            <input
+              type="range"
+              aria-label="Preview volume"
+              min="0"
+              max="1"
+              step="0.05"
+              value={volume()}
+              onInput={(event) => setVolumeValue(Number(event.currentTarget.value))}
+            />
+            <IconButton label="Fullscreen preview" onClick={fullscreen}>
+              <Maximize2 size={18} aria-hidden="true" />
+            </IconButton>
+          </div>
+          {props.controls}
         </div>
-        {props.controls}
       </div>
+      {props.timeline}
     </div>
   );
 }

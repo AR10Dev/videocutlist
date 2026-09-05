@@ -104,7 +104,20 @@ export function Timeline() {
       updateWindow();
     });
   };
-
+  const onZoom = (event: Event) => setZoom(zoom() * (event as CustomEvent<number>).detail);
+  const onFit = () => {
+    workspace.updateTimeline({ zoom: 1 });
+    requestAnimationFrame(() => {
+      if (scroller) scroller.scrollLeft = 0;
+      updateWindow();
+    });
+  };
+  globalThis.addEventListener("timeline-zoom", onZoom);
+  globalThis.addEventListener("timeline-fit", onFit);
+  onCleanup(() => {
+    globalThis.removeEventListener("timeline-zoom", onZoom);
+    globalThis.removeEventListener("timeline-fit", onFit);
+  });
   createEffect(() => {
     setVisibleWindow({ startMs: 0, endMs: workspace.duration() / workspace.present().zoom });
     requestAnimationFrame(updateWindow);
@@ -127,27 +140,6 @@ export function Timeline() {
   const zoom = () => workspace.present().zoom;
   return (
     <div class="timeline-wrap">
-      <div class="timeline-toolbar" aria-label="Timeline controls">
-        <button
-          type="button"
-          class="btn btn-sm"
-          aria-label="Zoom out"
-          disabled={zoom() <= 1}
-          onClick={() => setZoom(zoom() / 2)}
-        >
-          −
-        </button>
-        <span aria-label="Timeline zoom level">{zoom()}×</span>
-        <button
-          type="button"
-          class="btn btn-sm"
-          aria-label="Zoom in"
-          disabled={zoom() >= 16}
-          onClick={() => setZoom(zoom() * 2)}
-        >
-          +
-        </button>
-      </div>
       <div
         ref={(element) => (scroller = element)}
         class="timeline-scroll"

@@ -29,12 +29,16 @@ export function LibraryView() {
           Media
         </h2>
         <Show when={selected()}>
-          <button class="change-video" onClick={() => setExplorerOpen((open) => !open)}>
+          <button
+            class="change-video btn btn-ghost btn-sm"
+            onClick={() => setExplorerOpen((open) => !open)}
+          >
             {explorerOpen() ? "Close" : "Change video"}
           </button>
         </Show>
         <button
-          class="icon-button"
+          class="icon-button btn btn-ghost btn-square btn-sm"
+          title="Refresh media library"
           onClick={() => void refreshMedia()}
           disabled={refreshing()}
           aria-label="Refresh media"
@@ -56,7 +60,11 @@ export function LibraryView() {
         </div>
       </Show>
       <nav class="file-tree" classList={{ "is-open": explorerOpen() }} aria-label="Media folders">
-        <button class="folder" aria-current="page" onClick={() => void loadFolder()}>
+        <button
+          class="folder btn btn-ghost btn-sm"
+          aria-current="page"
+          onClick={() => void loadFolder()}
+        >
           ⌄ All media
         </button>
         <div class="folder-contents">
@@ -65,7 +73,10 @@ export function LibraryView() {
               <For each={folders()}>
                 {(folder) => (
                   <li>
-                    <button class="folder" onClick={() => void loadFolder(folder.id)}>
+                    <button
+                      class="folder btn btn-ghost btn-sm"
+                      onClick={() => void loadFolder(folder.id)}
+                    >
                       {folder.label}
                     </button>
                   </li>
@@ -81,6 +92,7 @@ export function LibraryView() {
               {(item) => (
                 <li>
                   <button
+                    class="btn btn-ghost btn-sm justify-start"
                     aria-pressed={selected()?.id === item.id ? "true" : "false"}
                     aria-label={`Select ${item.name}`}
                     onClick={() => {
@@ -101,6 +113,7 @@ export function LibraryView() {
       </nav>
       <Show when={nextCursor()}>
         <button
+          class="btn btn-ghost btn-sm"
           disabled={loadingMore()}
           onClick={() => void loadFolder(activeFolder(), nextCursor())}
         >
