@@ -1,10 +1,9 @@
-import { createSignal, type JSX } from "solid-js";
+import { createSignal, onCleanup, type JSX } from "solid-js";
 import { Tooltip } from "@kobalte/core/tooltip";
 import { frameDuration } from "../editor/frame";
 import {
   ChevronsLeft,
   ChevronsRight,
-  Maximize2,
   Pause,
   Play,
   SkipBack,
@@ -12,13 +11,14 @@ import {
   Volume2,
   VolumeX,
 } from "lucide-solid";
-import { canStreamPreview, formatTime } from "./model";
+import { canStreamPreview } from "./model";
 import { useWorkspace } from "../app/WorkspaceContext";
 
 type IconButtonProps = {
   label: string;
   children: JSX.Element;
   pressed?: boolean;
+  disabled?: boolean;
   keyshortcuts?: string;
   onClick: () => void;
 };
@@ -27,11 +27,13 @@ function IconButton(props: IconButtonProps) {
   return (
     <Tooltip openDelay={120} closeDelay={0}>
       <Tooltip.Trigger
+        class="btn btn-ghost btn-sm btn-square"
         type="button"
         aria-label={props.label}
         aria-pressed={props.pressed}
         aria-keyshortcuts={props.keyshortcuts}
         onClick={props.onClick}
+        disabled={props.disabled}
       >
         {props.children}
       </Tooltip.Trigger>
@@ -49,6 +51,10 @@ export function PreviewPlayer(props: { timeline: JSX.Element; controls: JSX.Elem
   const [playing, setPlaying] = createSignal(false);
   let videoElement: HTMLVideoElement | undefined;
   let settlingSeek = false;
+  onCleanup(() => {
+    workspace.pausePlayback();
+    workspace.setVideo(undefined);
+  });
 
   const step = (direction: -1 | 1) => {
     const amount = frameDuration(workspace.selected()) || 1000;
@@ -65,8 +71,21 @@ export function PreviewPlayer(props: { timeline: JSX.Element; controls: JSX.Elem
     else workspace.togglePlayback();
   };
   const fullscreen = () => {
-    if (!document.fullscreenElement) void videoElement?.requestFullscreen?.();
-    else void document.exitFullscreen?.();
+    const request = !document.fullscreenElement
+      ? videoElement?.requestFullscreen?.()
+      : document.exitFullscreen?.();
+    void request?.catch(() =>
+      workspace.setEditorStatus("Fullscreen is unavailable. Check your browser permissions."),
+    );
+  };
+  const jumpToCut = (direction: -1 | 1) => {
+    const cuts = [...workspace.present().segments].sort((a, b) => a.startMs - b.startMs);
+    const position = workspace.playheadMs();
+    const target =
+      direction < 0
+        ? [...cuts].reverse().find((cut) => cut.startMs < position)?.startMs
+        : cuts.find((cut) => cut.startMs > position)?.startMs;
+    workspace.updateTimeline({ playheadMs: target ?? (direction < 0 ? 0 : workspace.duration()) });
   };
   const setVolumeValue = (value: number) => {
     setVolume(value);
@@ -80,6 +99,7 @@ export function PreviewPlayer(props: { timeline: JSX.Element; controls: JSX.Elem
           <video
             ref={(element) => {
               videoElement = element;
+              workspace.setPreviewCenterMs(workspace.playheadMs());
               workspace.setVideo(element);
             }}
             muted={workspace.muted()}
@@ -113,13 +133,10 @@ export function PreviewPlayer(props: { timeline: JSX.Element; controls: JSX.Elem
           </p>
         )}
       </div>
-      <div class="edit-deck" aria-label="Editing controls">
-        <div class="control-rail" aria-label="Editor controls">
+      <div class="edit-deck">
+        <div class="control-rail" role="toolbar" aria-label="Editor controls">
           <div class="preview-controls" aria-label="Playback and audio controls">
-            <IconButton
-              label="Go to start"
-              onClick={() => workspace.updateTimeline({ playheadMs: 0 })}
-            >
+            <IconButton label="Previous cut" onClick={() => jumpToCut(-1)}>
               <ChevronsLeft size={18} aria-hidden="true" />
             </IconButton>
             <IconButton label="Previous frame" keyshortcuts="ArrowLeft" onClick={() => step(-1)}>
@@ -128,6 +145,7 @@ export function PreviewPlayer(props: { timeline: JSX.Element; controls: JSX.Elem
             <IconButton
               label={playing() ? "Pause preview" : "Play preview"}
               keyshortcuts="Space"
+              disabled={!canStreamPreview()}
               onClick={togglePlayback}
             >
               {playing() ? (
@@ -139,19 +157,13 @@ export function PreviewPlayer(props: { timeline: JSX.Element; controls: JSX.Elem
             <IconButton label="Next frame" keyshortcuts="ArrowRight" onClick={() => step(1)}>
               <SkipForward size={18} aria-hidden="true" />
             </IconButton>
-            <IconButton
-              label="Go to end"
-              onClick={() => workspace.updateTimeline({ playheadMs: workspace.duration() })}
-            >
+            <IconButton label="Next cut" onClick={() => jumpToCut(1)}>
               <ChevronsRight size={18} aria-hidden="true" />
             </IconButton>
-            <span class="preview-time" aria-live="off">
-              {formatTime(workspace.playheadMs(), workspace.duration())} /{" "}
-              {formatTime(workspace.duration(), workspace.duration())}
-            </span>
             <IconButton
               label={workspace.muted() ? "Unmute preview" : "Mute preview"}
               pressed={workspace.muted()}
+              disabled={!canStreamPreview()}
               onClick={() => {
                 const muted = !workspace.muted();
                 workspace.setMuted(muted);
@@ -166,17 +178,16 @@ export function PreviewPlayer(props: { timeline: JSX.Element; controls: JSX.Elem
               )}
             </IconButton>
             <input
+              class="range range-xs"
               type="range"
               aria-label="Preview volume"
+              disabled={!canStreamPreview()}
               min="0"
               max="1"
               step="0.05"
               value={volume()}
               onInput={(event) => setVolumeValue(Number(event.currentTarget.value))}
             />
-            <IconButton label="Fullscreen preview" onClick={fullscreen}>
-              <Maximize2 size={18} aria-hidden="true" />
-            </IconButton>
           </div>
           {props.controls}
         </div>

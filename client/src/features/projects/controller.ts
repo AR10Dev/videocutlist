@@ -123,7 +123,7 @@ export function createProjectsController(deps: ProjectsControllerDeps) {
         deps.setStatus(error instanceof Error ? error.message : "Project save failed.");
     }
   };
-  const loadProject = async (id = deps.projectId()) => {
+  const loadProject = async (id = deps.projectId(), imported?: Project) => {
     if (!validProjectId(id)) return void deps.setStatus("Project ID is invalid.");
     if (!confirmDiscard(deps.dirty(), () => window.confirm("Discard unsaved changes?"))) return;
     const snapshotEditorVersion = deps.editorVersion();
@@ -135,11 +135,14 @@ export function createProjectsController(deps: ProjectsControllerDeps) {
     projectRequest = controller;
     const request = ++projectRequestVersion;
     try {
-      const response = await deps.api.request(`projects/${encodeURIComponent(id)}`, {
-        signal: controller.signal,
-      });
-      if (!response.ok) throw new Error(`Project load failed (${response.status}).`);
-      const project = (await response.json()) as Project;
+      let project = imported;
+      if (!project) {
+        const response = await deps.api.request(`projects/${encodeURIComponent(id)}`, {
+          signal: controller.signal,
+        });
+        if (!response.ok) throw new Error(`Project load failed (${response.status}).`);
+        project = (await response.json()) as Project;
+      }
       const restored = await Promise.all(
         project.items.map(async (entry) => {
           const mediaResponse = await deps.api.request(
@@ -147,7 +150,10 @@ export function createProjectsController(deps: ProjectsControllerDeps) {
             { signal: controller.signal },
           );
           if (!mediaResponse.ok) throw new Error(`Media request failed (${mediaResponse.status}).`);
-          return restoreProjectItem(entry, (await mediaResponse.json()) as Media);
+          const media = (await mediaResponse.json()) as Media;
+          const error = validateSegments(entry.segments, media.durationMs);
+          if (error) throw new Error(error);
+          return restoreProjectItem(entry, media);
         }),
       );
       if (
@@ -181,9 +187,11 @@ export function createProjectsController(deps: ProjectsControllerDeps) {
         ...known,
         ...restored.map((x) => x.media).filter((x) => !known.some((k) => k.id === x.id)),
       ]);
-      deps.setDirty(false);
-      remember(project.id, project.name);
-      deps.setStatus("Project loaded.");
+      deps.setDirty(Boolean(imported));
+      if (!imported) remember(project.id, project.name);
+      deps.setStatus(
+        imported ? "Cut list imported. Save the project to keep it." : "Project loaded.",
+      );
     } catch (error) {
       if (!controller.signal.aborted && request === projectRequestVersion)
         deps.setStatus(error instanceof Error ? error.message : "Project load failed.");
@@ -218,6 +226,10 @@ export function createProjectsController(deps: ProjectsControllerDeps) {
   return {
     saveProject,
     loadProject,
+    importProject: (document: components["schemas"]["ProjectInput"]) => {
+      const id = newProjectId();
+      return loadProject(id, { ...document, id, revision: 0, updatedAt: new Date().toISOString() });
+    },
     newProject,
     dispose: () => {
       saveRequest?.abort();

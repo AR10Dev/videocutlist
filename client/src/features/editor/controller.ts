@@ -35,6 +35,7 @@ export function createEditorController(deps: {
   watchedPosition: Accessor<number>;
   togglePlayback: () => void;
 }) {
+  const [editorStatus, setEditorStatus] = createSignal("");
   const [segmentLabel, setSegmentLabel] = createSignal("");
   const [timecode, setTimecode] = createSignal("");
   const [activeSegmentIndex, setActiveSegmentIndex] = createSignal<number>();
@@ -59,6 +60,7 @@ export function createEditorController(deps: {
       : [];
   };
   const updateTimeline = (changes: Partial<TimelineHistory["present"]>) => {
+    setEditorStatus("");
     const next = editTimeline(timeline(), changes);
     setTimeline(next);
     if (changes.playheadMs !== undefined) deps.setPreviewCenterMs(next.present.playheadMs);
@@ -77,7 +79,7 @@ export function createEditorController(deps: {
     const item = deps.selected();
     const { inMs, outMs } = present();
     if (!item || inMs === undefined || outMs === undefined || inMs >= outMs)
-      return deps.setStatus("Set an in point before the out point.");
+      return setEditorStatus("Set an in point before the out point.");
     const segment: Segment = {
       startMs: inMs,
       endMs: outMs,
@@ -85,7 +87,7 @@ export function createEditorController(deps: {
     };
     const next = [...present().segments, segment];
     const error = validateSegments(next, item.durationMs);
-    if (error) return deps.setStatus(error);
+    if (error) return setEditorStatus(error);
     updateTimeline({ segments: next });
     setActiveSegmentIndex(next.length - 1);
   };
@@ -128,13 +130,14 @@ export function createEditorController(deps: {
     if (index === undefined) return;
     const next = splitSegment(present().segments, index, playheadMs());
     if (next === present().segments)
-      return deps.setStatus("Place the playhead inside the active cut to split it.");
+      return setEditorStatus("Place the playhead inside the active cut to split it.");
     updateTimeline({ segments: next });
     setActiveSegmentIndex(index + 1);
   };
 
   createEffect(() => {
     deps.selected();
+    setEditorStatus("");
     setActiveSegmentIndex();
   });
 
@@ -142,9 +145,13 @@ export function createEditorController(deps: {
     const handleKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement;
       if (
-        target.matches(
-          "input, textarea, select, [contenteditable='true'], [role='menu'], [role='dialog'], dialog",
-        )
+        event.defaultPrevented ||
+        target.closest(
+          "input, textarea, select, [contenteditable='true'], [role='menu'], [role='dialog'], dialog, .settings-view, [role='tablist']",
+        ) ||
+        ((event.ctrlKey || event.metaKey || event.altKey) &&
+          !["z", "y"].includes(event.key.toLowerCase())) ||
+        (event.key === " " && target.closest("button, a, summary"))
       )
         return;
       if (event.key === "," || event.key === ".") {
@@ -204,6 +211,8 @@ export function createEditorController(deps: {
   });
 
   return {
+    editorStatus,
+    setEditorStatus,
     segmentLabel,
     setSegmentLabel,
     timecode,

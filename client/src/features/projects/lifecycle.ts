@@ -57,6 +57,74 @@ export const parseProjectJson = (text: string): Record<string, unknown> => {
   if (!value || typeof value !== "object" || Array.isArray(value))
     throw new Error("Project shape is invalid.");
   const object = value as Record<string, unknown>;
+  if (object.schemaVersion === 2) {
+    if (
+      typeof object.name !== "string" ||
+      !object.name.trim() ||
+      !Array.isArray(object.items) ||
+      !object.items.length
+    )
+      throw new Error("Project shape is invalid.");
+    const ids = new Set<string>();
+    for (const item of object.items) {
+      if (
+        !item ||
+        typeof item !== "object" ||
+        typeof item.id !== "string" ||
+        !/^i_[A-Za-z0-9_-]{12,64}$/.test(item.id) ||
+        ids.has(item.id) ||
+        typeof item.mediaId !== "string" ||
+        !/^m_[A-Za-z0-9_-]{43}$/.test(item.mediaId) ||
+        !Array.isArray(item.segments) ||
+        !item.exportOptions ||
+        typeof item.exportOptions !== "object" ||
+        Array.isArray(item.exportOptions)
+      )
+        throw new Error("Project item is invalid.");
+      ids.add(item.id);
+      if (
+        item.segments.some(
+          (segment: unknown) =>
+            !segment ||
+            typeof segment !== "object" ||
+            !("startMs" in segment) ||
+            !("endMs" in segment) ||
+            !Number.isSafeInteger(segment.startMs) ||
+            !Number.isSafeInteger(segment.endMs) ||
+            ("label" in segment && typeof segment.label !== "string"),
+        )
+      )
+        throw new Error("Project segments are invalid.");
+      const options = item.exportOptions;
+      if (
+        (options.mode !== undefined && !["merge", "separate"].includes(options.mode)) ||
+        (options.selection !== undefined && !["segments", "gaps"].includes(options.selection)) ||
+        (options.cutStrategy !== undefined &&
+          !["stream_copy_preferred", "precise_reencode", "hybrid_smart_cut"].includes(
+            options.cutStrategy,
+          )) ||
+        (options.container !== undefined && options.container !== "mkv") ||
+        (options.destinationId !== undefined && typeof options.destinationId !== "string") ||
+        (options.filenameTemplate !== undefined && typeof options.filenameTemplate !== "string") ||
+        (options.streamIndexes !== undefined &&
+          (!Array.isArray(options.streamIndexes) ||
+            options.streamIndexes.some(
+              (index: unknown) =>
+                typeof index !== "number" || !Number.isSafeInteger(index) || index < 0,
+            )))
+      )
+        throw new Error("Project export options are invalid.");
+      if (
+        item.editorState &&
+        (!Number.isFinite(item.editorState.playheadMs) ||
+          !Number.isFinite(item.editorState.zoom) ||
+          item.editorState.zoom < 1 ||
+          typeof item.editorState.muted !== "boolean")
+      )
+        throw new Error("Project editor state is invalid.");
+    }
+    return object;
+  }
   if (
     typeof object.mediaId !== "string" ||
     !Array.isArray(object.segments) ||

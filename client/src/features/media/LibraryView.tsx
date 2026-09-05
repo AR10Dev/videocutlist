@@ -5,6 +5,7 @@ import { formatLibraryDuration, mediaSummary } from "./model";
 export function LibraryView() {
   const [explorerOpen, setExplorerOpen] = createSignal(false);
   const {
+    library,
     media,
     selected,
     folders,
@@ -22,12 +23,9 @@ export function LibraryView() {
     <section
       class="media-panel"
       classList={{ "has-selection": Boolean(selected()), "explorer-open": explorerOpen() }}
-      aria-labelledby="media-heading"
+      aria-label="Media library"
     >
       <div class="panel-heading">
-        <h2 id="media-heading" tabIndex={-1}>
-          Media
-        </h2>
         <Show when={selected()}>
           <button
             class="change-video btn btn-ghost btn-sm"
@@ -40,7 +38,7 @@ export function LibraryView() {
           class="icon-button btn btn-ghost btn-square btn-sm"
           title="Refresh media library"
           onClick={() => void refreshMedia()}
-          disabled={refreshing()}
+          disabled={refreshing() || library.scanActive()}
           aria-label="Refresh media"
         >
           ↻
@@ -54,7 +52,37 @@ export function LibraryView() {
       >
         <p role="status">{status()}</p>
       </Show>
-      <Show when={!selected() && media().length === 0}>
+      <Show when={library.libraryError() || library.scanError()}>
+        <p role="alert">{library.libraryError() || library.scanError()}</p>
+      </Show>
+      <Show when={library.importJob()}>
+        {(job) => (
+          <div aria-label="Library scan">
+            <p role="status">
+              Scan {job().state} · {job().indexed} files indexed ·{" "}
+              {Math.round(job().progress * 100)}%
+            </p>
+            <Show when={job().errorCode}>
+              <p role="alert">
+                Scan failed: {job().errorCode}. Check server media access and refresh to retry.
+              </p>
+            </Show>
+            <For each={job().validationErrors ?? []}>
+              {(message) => <p role="alert">{message}</p>}
+            </For>
+            <Show when={library.scanActive()}>
+              <button
+                class="btn btn-ghost btn-sm"
+                disabled={library.cancellingImport()}
+                onClick={() => void library.cancelImport()}
+              >
+                Cancel scan
+              </button>
+            </Show>
+          </div>
+        )}
+      </Show>
+      <Show when={!selected() && media().length === 0 && !library.libraryError()}>
         <div class="library-setup" role="region" aria-label="Media library status">
           <p role="status">{libraryMessage()}</p>
         </div>

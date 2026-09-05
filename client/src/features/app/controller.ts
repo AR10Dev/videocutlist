@@ -346,6 +346,9 @@ export function createWorkspaceController() {
     setStatus,
   });
   return {
+    library: libraryFeature,
+    editorStatus: editorFeature.editorStatus,
+    setEditorStatus: editorFeature.setEditorStatus,
     media,
     selected,
     nextCursor,

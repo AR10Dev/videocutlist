@@ -25,7 +25,8 @@ export function createPreviewController(
   const [waveform, setWaveform] = createSignal<number[]>([]);
   const [previewCenterMs, setPreviewCenterMs] = createSignal(0);
   const [diagnostics, setDiagnostics] = createSignal<PreviewDiagnostics>();
-  let video: HTMLVideoElement | undefined;
+  // Settings unmounts the player; a new element must trigger preview attachment.
+  const [video, setVideo] = createSignal<HTMLVideoElement>();
   let assetRequest: AbortController | undefined;
   let previewRequest: AbortController | undefined;
   let cleanupPreview: (() => void) | undefined;
@@ -94,7 +95,7 @@ export function createPreviewController(
     cleanupPreview = undefined;
     previewRequest?.abort();
     setDiagnostics();
-    const player = video;
+    const player = video();
     if (!item || !player || !canStreamPreview()) return;
     const timer = window.setTimeout(() => {
       const request = new AbortController();
@@ -146,17 +147,19 @@ export function createPreviewController(
         watchedMediaPosition(info.startMs, currentTime, item.durationMs),
       );
   };
-  const setVideo = (element: HTMLVideoElement) => {
-    video = element;
-  };
   const togglePlayback = () => {
-    shouldPlay = Boolean(video?.paused);
-    if (shouldPlay) void video?.play();
-    else video?.pause();
+    const player = video();
+    shouldPlay = Boolean(player?.paused);
+    if (shouldPlay)
+      void player?.play().catch(() => {
+        shouldPlay = false;
+        setPreviewStatus("Playback could not start. Wait for the preview to load and try again.");
+      });
+    else player?.pause();
   };
   const pausePlayback = () => {
     shouldPlay = false;
-    video?.pause();
+    video()?.pause();
   };
 
   return {

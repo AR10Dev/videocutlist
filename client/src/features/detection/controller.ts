@@ -91,11 +91,24 @@ export function createDetectionController(
     setDetectionCandidates([]);
     setDetectionStatus("");
   };
-  const startDetection = async (kind: DetectionKind) => {
-    const saved = await dependencies.saveProject();
-    const selected = dependencies.selected();
-    if (!saved || !selected) return;
+  const startDetection = async (
+    kind: DetectionKind,
+    options: Pick<
+      components["schemas"]["DetectionInput"],
+      "noiseDb" | "minDurationMs" | "sceneThreshold"
+    > = {},
+  ) => {
     const request = ++detectionRequest;
+    setDetectionStatus("Saving project before detection…");
+    const saved = await dependencies.saveProject();
+    if (request !== detectionRequest) return;
+    const selected = dependencies.selected();
+    if (!saved || !selected) {
+      setDetectionStatus(
+        "Detection was not started. Save the project in Project and resolve any reported errors.",
+      );
+      return;
+    }
     detectionController?.abort();
     const controller = new AbortController();
     detectionController = controller;
@@ -110,6 +123,7 @@ export function createDetectionController(
           projectItemId: dependencies.activeItemId(),
           projectRevision: saved.revision,
           kind,
+          ...options,
         }),
         signal: controller.signal,
       });
