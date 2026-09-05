@@ -7,10 +7,25 @@ export const timelineTimeFromPointer = (
   durationMs: number,
 ) => (width > 0 ? Math.max(0, Math.min(durationMs, ((clientX - left) / width) * durationMs)) : 0);
 
+export const visibleTimelineWindow = (
+  scrollLeft: number,
+  viewportWidth: number,
+  contentWidth: number,
+  durationMs: number,
+) => {
+  if (contentWidth <= 0) return { startMs: 0, endMs: durationMs };
+  const startMs = Math.max(0, Math.min(durationMs, (scrollLeft / contentWidth) * durationMs));
+  const endMs = Math.max(
+    startMs,
+    Math.min(durationMs, ((scrollLeft + viewportWidth) / contentWidth) * durationMs),
+  );
+  return { startMs, endMs };
+};
+
 export type TimelineSnapshot = {
   playheadMs: number;
-  inMs: number;
-  outMs: number;
+  inMs?: number;
+  outMs?: number;
   segments: Segment[];
   zoom: number;
 };

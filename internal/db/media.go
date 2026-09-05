@@ -2,13 +2,14 @@
 package store
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -118,7 +119,7 @@ func (s *MediaStore) Browse(ctx context.Context, folderID, cursor string, limit 
 	// Resolve the opaque folder ID by comparing hashes; no client-supplied path is accepted.
 	for _, c := range found {
 		parts := strings.Split(filepath.ToSlash(c.path), "/")
-		for depth := 0; depth < len(parts); depth++ {
+		for depth := range len(parts) {
 			parent := strings.Join(parts[:depth], "/")
 			if folderID != "" && index.FolderID(c.root, parent) != folderID {
 				continue
@@ -135,8 +136,8 @@ func (s *MediaStore) Browse(ctx context.Context, folderID, cursor string, limit 
 			break
 		}
 	}
-	sort.Slice(folders, func(i, j int) bool { return folders[i].ID < folders[j].ID })
-	sort.Slice(items, func(i, j int) bool { return items[i].ID < items[j].ID })
+	slices.SortFunc(folders, func(a, b index.Folder) int { return cmp.Compare(a.ID, b.ID) })
+	slices.SortFunc(items, func(a, b index.Media) int { return cmp.Compare(a.ID, b.ID) })
 	if len(items) > limit {
 		next = items[limit-1].ID
 		items = items[:limit]

@@ -15,7 +15,6 @@ export function createPreviewController(
   api: ApiClient,
   dependencies: {
     selected: Accessor<Media | undefined>;
-    muted: Accessor<boolean>;
     playheadMs: Accessor<number>;
     updatePlaybackPosition: (positionMs: number) => void;
   },
@@ -31,6 +30,7 @@ export function createPreviewController(
   let previewRequest: AbortController | undefined;
   let cleanupPreview: (() => void) | undefined;
   let thumbnailObjectURL: string | undefined;
+  let shouldPlay = false;
 
   createEffect(() => {
     const item = dependencies.selected();
@@ -90,7 +90,6 @@ export function createPreviewController(
   createEffect(() => {
     const item = dependencies.selected();
     const position = previewCenterMs();
-    const isMuted = dependencies.muted();
     cleanupPreview?.();
     cleanupPreview = undefined;
     previewRequest?.abort();
@@ -104,7 +103,6 @@ export function createPreviewController(
         centerMs: String(Math.round(position)),
         beforeMs: "2000",
         afterMs: "6000",
-        mute: String(isMuted),
       });
       setPreviewStatus("Loading preview…");
       cleanupPreview = streamPreview(
@@ -116,12 +114,13 @@ export function createPreviewController(
         (value) => {
           if (!request.signal.aborted) {
             setDiagnostics(value);
-            setPreviewStatus("Preview ready.");
+            setPreviewStatus("");
           }
         },
         (error) => {
           if (!request.signal.aborted) setPreviewStatus(error.message);
         },
+        () => shouldPlay,
       );
     }, 200);
     onCleanup(() => {
@@ -151,8 +150,13 @@ export function createPreviewController(
     video = element;
   };
   const togglePlayback = () => {
-    if (video?.paused) void video.play();
+    shouldPlay = Boolean(video?.paused);
+    if (shouldPlay) void video?.play();
     else video?.pause();
+  };
+  const pausePlayback = () => {
+    shouldPlay = false;
+    video?.pause();
   };
 
   return {
@@ -168,5 +172,6 @@ export function createPreviewController(
     syncPreviewPosition,
     setVideo,
     togglePlayback,
+    pausePlayback,
   };
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"videocutlist/internal/db"
@@ -100,12 +101,12 @@ func (b BatchExportUseCase) Submit(ctx context.Context, request BatchExportReque
 }
 
 func cloneProjectItem(item model.ProjectItem) model.ProjectItem {
-	item.Segments = append([]Segment(nil), item.Segments...)
+	item.Segments = slices.Clone(item.Segments)
 	if item.EditorState != nil {
 		state := *item.EditorState
 		item.EditorState = &state
 	}
-	item.ExportOptions.StreamIndexes = append([]int(nil), item.ExportOptions.StreamIndexes...)
+	item.ExportOptions.StreamIndexes = slices.Clone(item.ExportOptions.StreamIndexes)
 	return item
 }
 

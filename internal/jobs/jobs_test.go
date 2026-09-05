@@ -173,13 +173,13 @@ func TestUnifiedJobsCancellationFailureAndRestartRecovery(t *testing.T) {
 }
 
 func TestUnifiedJobsConcurrentTerminalTransitions(t *testing.T) {
-	db, err := db.OpenDatabase(context.Background(), t.TempDir()+"/jobs.db")
+	db, err := db.OpenDatabase(t.Context(), t.TempDir()+"/jobs.db")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer db.Close()
 	jobs, _ := store.NewJobsStore(db)
-	ctx := context.Background()
+	ctx := t.Context()
 	if _, err := jobs.Create(ctx, store.Job{ID: "j_000000000008", BatchID: "b_000000000008", Kind: store.JobDetect, ProjectID: "p", ProjectItemID: "i", RequestJSON: `{"kind":"scene"}`}); err != nil {
 		t.Fatal(err)
 	}
@@ -189,8 +189,7 @@ func TestUnifiedJobsConcurrentTerminalTransitions(t *testing.T) {
 	var wg sync.WaitGroup
 	results := make(chan error, 3)
 	for _, fn := range []func() (store.Job, error){func() (store.Job, error) { return jobs.Succeed(ctx, "j_000000000008", `{}`) }, func() (store.Job, error) { return jobs.Fail(ctx, "j_000000000008", "failed") }, func() (store.Job, error) { return jobs.Cancel(ctx, "j_000000000008") }} {
-		wg.Add(1)
-		go func(fn func() (store.Job, error)) { defer wg.Done(); _, err := fn(); results <- err }(fn)
+		wg.Go(func() { _, err := fn(); results <- err })
 	}
 	wg.Wait()
 	close(results)

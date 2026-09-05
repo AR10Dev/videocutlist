@@ -5,7 +5,7 @@ export function QueueView() {
   const { batches, cancelBatch, cancelChildJob, retryChildJob } = useWorkspace();
   return (
     <Show when={batches().length > 0}>
-      <section class="queue-panel" aria-labelledby="queue-heading">
+      <section class="queue-panel flex flex-col gap-4 p-4" aria-labelledby="queue-heading">
         <h2 id="queue-heading">Export queue</h2>
         <For each={batches()}>
           {(batch, index) => (
@@ -15,7 +15,12 @@ export function QueueView() {
                 {batch.state} · {Math.round(batch.progress * 100)}%
               </p>
               <Show when={batch.state === "queued" || batch.state === "running"}>
-                <button onClick={() => void cancelBatch(batch.batchId)}>Cancel batch</button>
+                <button
+                  class="btn btn-ghost btn-sm"
+                  onClick={() => void cancelBatch(batch.batchId)}
+                >
+                  Cancel batch
+                </button>
               </Show>
               <ul>
                 <For each={batch.jobs}>
@@ -30,10 +35,20 @@ export function QueueView() {
                         ? ` · ${job.result.outputNames.join(", ")}`
                         : ""}{" "}
                       <Show when={job.state === "queued" || job.state === "running"}>
-                        <button onClick={() => void cancelChildJob(job.id)}>Cancel job</button>
+                        <button
+                          class="btn btn-ghost btn-sm"
+                          onClick={() => void cancelChildJob(job.id)}
+                        >
+                          Cancel job
+                        </button>
                       </Show>
                       <Show when={job.state === "failed" && job.type === "export"}>
-                        <button onClick={() => void retryChildJob(job.id)}>Retry</button>
+                        <button
+                          class="btn btn-ghost btn-sm"
+                          onClick={() => void retryChildJob(job.id)}
+                        >
+                          Retry
+                        </button>
                       </Show>
                     </li>
                   )}

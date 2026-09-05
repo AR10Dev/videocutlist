@@ -110,6 +110,7 @@ export function streamPreview(
   request: () => Promise<Response>,
   onDiagnostics: (diagnostics: PreviewDiagnostics) => void,
   onError: (error: Error) => void,
+  shouldPlay: () => boolean = () => true,
 ): () => void {
   let mediaSource: MediaSource;
   try {
@@ -147,7 +148,13 @@ export function streamPreview(
   const fail = (message: string) => {
     if (disposed || failed) return;
     failed = true;
-    onError(new Error(message));
+    onError(
+      new Error(
+        message.includes("not supported")
+          ? message
+          : `${message} Timeline markers remain available for editing.`,
+      ),
+    );
     clean();
   };
   const sourceError = () => fail("Preview data could not be played. Try again.");
@@ -170,10 +177,17 @@ export function streamPreview(
     }
   };
   const updateEnd = () => {
-    if (!disposed && !seekApplied) {
-      seekApplied = true;
-      video.currentTime = previewOffsetMs / 1000;
-      void video.play().catch(() => undefined);
+    if (!disposed && !seekApplied && sourceBuffer) {
+      const target = previewOffsetMs / 1000;
+      const buffered = sourceBuffer.buffered;
+      for (let index = 0; !buffered || index < buffered.length; index += 1) {
+        if (!buffered || (buffered.start(index) <= target && target <= buffered.end(index))) {
+          seekApplied = true;
+          video.currentTime = target;
+          if (shouldPlay()) void video.play().catch(() => undefined);
+          break;
+        }
+      }
     }
     appendNext();
   };

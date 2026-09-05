@@ -1,4 +1,43 @@
-export type Appearance = "system" | "dark" | "light";
+export const appearances = [
+  "system",
+  "light",
+  "dark",
+  "cupcake",
+  "bumblebee",
+  "emerald",
+  "corporate",
+  "synthwave",
+  "retro",
+  "cyberpunk",
+  "valentine",
+  "halloween",
+  "garden",
+  "forest",
+  "aqua",
+  "lofi",
+  "pastel",
+  "fantasy",
+  "wireframe",
+  "black",
+  "luxury",
+  "dracula",
+  "cmyk",
+  "autumn",
+  "business",
+  "acid",
+  "lemonade",
+  "night",
+  "coffee",
+  "winter",
+  "dim",
+  "nord",
+  "sunset",
+  "caramellatte",
+  "abyss",
+  "silk",
+] as const;
+
+export type Appearance = (typeof appearances)[number];
 
 export type AppSettings = {
   filenameTemplate: string;
@@ -15,16 +54,14 @@ export const defaultSettings: AppSettings = {
   appearance: "system",
 };
 
-const appearances = new Set<Appearance>(["system", "dark", "light"]);
+const validAppearances = new Set<Appearance>(appearances);
 
-export function resolveAppearance(appearance: Appearance, prefersDark: boolean): "dark" | "light" {
+export function resolveAppearance(appearance: Appearance, prefersDark: boolean): Appearance {
   return appearance === "system" ? (prefersDark ? "dark" : "light") : appearance;
 }
 
 export function applyAppearance(appearance: Appearance, prefersDark = false): void {
-  const theme = resolveAppearance(appearance, prefersDark);
-  document.documentElement.dataset.theme = theme;
-  document.documentElement.style.colorScheme = theme;
+  document.documentElement.dataset.theme = resolveAppearance(appearance, prefersDark);
 }
 
 const strategies = new Set<AppSettings["cutStrategy"]>([
@@ -45,7 +82,7 @@ export function loadSettings(value: unknown): AppSettings {
       ? (settings.cutStrategy ?? defaultSettings.cutStrategy)
       : defaultSettings.cutStrategy,
     muted: typeof settings.muted === "boolean" ? settings.muted : defaultSettings.muted,
-    appearance: appearances.has(settings.appearance ?? defaultSettings.appearance)
+    appearance: validAppearances.has(settings.appearance ?? defaultSettings.appearance)
       ? (settings.appearance ?? defaultSettings.appearance)
       : defaultSettings.appearance,
   };

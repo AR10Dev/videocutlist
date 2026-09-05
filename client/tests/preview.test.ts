@@ -99,10 +99,18 @@ describe("preview positions", () => {
 });
 
 describe("preview streaming", () => {
-  it("seeks only after the first SourceBuffer append completes", async () => {
+  it("waits until the requested offset is buffered before seeking without overriding pause", async () => {
+    let bufferedEnd = 0;
     class FakeBuffer extends EventTarget {
       updating = false;
       appendBuffer = vi.fn();
+      buffered = {
+        get length() {
+          return bufferedEnd > 0 ? 1 : 0;
+        },
+        start: () => 0,
+        end: () => bufferedEnd,
+      };
     }
     const source = new FakeBuffer();
     const instances: EventTarget[] = [];
@@ -138,13 +146,16 @@ describe("preview streaming", () => {
       play: vi.fn(() => Promise.resolve()),
       removeAttribute: vi.fn(),
     } as unknown as HTMLVideoElement;
-    const stop = streamPreview(video, request, vi.fn(), vi.fn());
+    const stop = streamPreview(video, request, vi.fn(), vi.fn(), () => false);
     instances[0].dispatchEvent(new Event("sourceopen"));
     await vi.waitFor(() => expect(source.appendBuffer).toHaveBeenCalledOnce());
     expect(video.currentTime).toBe(0);
     source.dispatchEvent(new Event("updateend"));
+    expect(video.currentTime).toBe(0);
+    bufferedEnd = 3;
+    source.dispatchEvent(new Event("updateend"));
     expect(video.currentTime).toBe(1.234);
-    expect(video.play).toHaveBeenCalledOnce();
+    expect(video.play).not.toHaveBeenCalled();
     expect(request).toHaveBeenCalledOnce();
     expect(fetch).not.toHaveBeenCalled();
     stop();
@@ -192,7 +203,10 @@ describe("preview streaming", () => {
     instances[0].dispatchEvent(new Event("sourceopen"));
     await vi.waitFor(() =>
       expect(errors).toHaveBeenCalledWith(
-        expect.objectContaining({ message: "Preview request failed. Try again." }),
+        expect.objectContaining({
+          message:
+            "Preview request failed. Try again. Timeline markers remain available for editing.",
+        }),
       ),
     );
 
@@ -209,7 +223,10 @@ describe("preview streaming", () => {
     instances[1].dispatchEvent(new Event("sourceopen"));
     await vi.waitFor(() =>
       expect(readErrors).toHaveBeenCalledWith(
-        expect.objectContaining({ message: "Preview data could not be read. Try again." }),
+        expect.objectContaining({
+          message:
+            "Preview data could not be read. Try again. Timeline markers remain available for editing.",
+        }),
       ),
     );
 
@@ -223,7 +240,10 @@ describe("preview streaming", () => {
     instances[2].dispatchEvent(new Event("sourceopen"));
     await vi.waitFor(() =>
       expect(appendErrors).toHaveBeenCalledWith(
-        expect.objectContaining({ message: "Preview data could not be played. Try again." }),
+        expect.objectContaining({
+          message:
+            "Preview data could not be played. Try again. Timeline markers remain available for editing.",
+        }),
       ),
     );
 
@@ -283,7 +303,10 @@ describe("preview streaming", () => {
     instances[1].dispatchEvent(new Event("sourceopen"));
     await vi.waitFor(() =>
       expect(bodyErrors).toHaveBeenCalledWith(
-        expect.objectContaining({ message: "Preview returned no playable data. Try again." }),
+        expect.objectContaining({
+          message:
+            "Preview returned no playable data. Try again. Timeline markers remain available for editing.",
+        }),
       ),
     );
   });

@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 
 	"videocutlist/internal/projects"
@@ -80,7 +81,7 @@ func (s *Server) automation(w http.ResponseWriter, r *http.Request, id string) {
 			httpx.Error(w, http.StatusUnprocessableEntity, "invalid_interchange", "Interchange input is invalid.", id)
 			return
 		}
-		item.Segments = append([]model.Segment(nil), segments...)
+		item.Segments = slices.Clone(segments)
 		saved, err := s.config.Projects.Save(r.Context(), command.ProjectID, projects.ProjectInput{Revision: project.Revision, Document: project.Document})
 		if err != nil {
 			httpx.Error(w, http.StatusConflict, "revision_conflict", "Project revision conflicts.", id)
@@ -181,7 +182,7 @@ func (s *Server) importInterchange(w http.ResponseWriter, r *http.Request, route
 		httpx.Error(w, 422, "invalid_interchange", "Interchange input is invalid.", id)
 		return
 	}
-	item.Segments = append([]model.Segment(nil), segments...)
+	item.Segments = slices.Clone(segments)
 	saved, err := s.config.Projects.Save(r.Context(), parts[0], projects.ProjectInput{Revision: project.Revision, Document: project.Document})
 	if err != nil {
 		httpx.Error(w, 409, "revision_conflict", "Project revision conflicts.", id)

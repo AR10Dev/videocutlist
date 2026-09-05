@@ -4,7 +4,8 @@ package httpapi
 import (
 	"fmt"
 	"io"
-	"sort"
+	"maps"
+	"slices"
 	"strings"
 	"sync"
 )
@@ -102,19 +103,7 @@ func metricType(name string) string {
 	}
 	return "gauge"
 }
-func sorted(values map[string]uint64) []string {
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return keys
-}
+func sorted(values map[string]uint64) []string { return slices.Sorted(maps.Keys(values)) }
 func sortedFloat(values map[string]float64) []string {
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return keys
+	return slices.Sorted(maps.Keys(values))
 }

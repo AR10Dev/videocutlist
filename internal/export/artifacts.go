@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -52,7 +53,7 @@ func WriteManifest(directory, jobID, kind string, outputNames []string, expires 
 			return "", errors.New("invalid artifact name")
 		}
 	}
-	manifest := artifactManifest{JobID: jobID, OutputNames: append([]string(nil), outputNames...), Kind: kind, Expires: expires.UTC().Format(time.RFC3339Nano)}
+	manifest := artifactManifest{JobID: jobID, OutputNames: slices.Clone(outputNames), Kind: kind, Expires: expires.UTC().Format(time.RFC3339Nano)}
 	data, err := json.Marshal(manifest)
 	if err != nil {
 		return "", err
@@ -212,7 +213,7 @@ func (s *ArtifactStore) ClearManifest(job string) {
 func (s *ArtifactStore) Put(job string, values []Artifact) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.values[job] = append([]Artifact(nil), values...)
+	s.values[job] = slices.Clone(values)
 }
 
 // Remove rolls back published artifacts after a durable job transition fails.

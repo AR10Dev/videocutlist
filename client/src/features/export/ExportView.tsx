@@ -10,6 +10,7 @@ export function ExportView() {
     selected,
     dirty,
     projectItems,
+    editableItems,
     selectedExportItems,
     setSelectedExportItems,
     exportJob,
@@ -26,198 +27,82 @@ export function ExportView() {
     filenameTemplate,
     preflight,
     preflightPending,
-    present,
     export: exportFeature,
     duration,
     tracks,
     exportProject,
     cancelExport,
   } = useWorkspace();
+
+  const outputName = () =>
+    filenameTemplate()
+      .replaceAll("{ext}", "mkv")
+      .replaceAll("{segment}", "1")
+      .replaceAll("{mode}", exportMode()) || "Server default";
+  const selectedSegments = () =>
+    editableItems()
+      .filter((item) => selectedExportItems().includes(item.id))
+      .flatMap((item) => item.timeline.present.segments);
+  const totalDuration = () =>
+    selectedSegments().reduce((total, segment) => total + segment.endMs - segment.startMs, 0);
+  const blocker = () => {
+    if (exportStatus()) return exportStatus();
+    if (!selected()) return "Choose a video before exporting.";
+    if (!selectedExportItems().length) return "Select at least one project item.";
+    const needsSegment = projectItems().length === 1 && !selectedSegments().length;
+    if (needsSegment && dirty()) return "Add a segment and save the project before exporting.";
+    if (needsSegment) return "Add a segment before exporting.";
+    if (dirty()) return "Save the project before exporting.";
+    if (preflightPending()) return "Checking export requirements…";
+    if (preflight() && !preflight()!.allowed) {
+      const finding = preflight()!.findings[0];
+      if (finding?.code === "unsupported_stream") return "Review stream options before exporting.";
+      return finding?.message || "The source video is unavailable.";
+    }
+    return "";
+  };
+  const exportActive = () => exportJob()?.state === "queued" || exportJob()?.state === "running";
+
   return (
-    <Show when={selected()}>
-      <section class="export-panel" aria-labelledby="export-heading">
-        <h2 id="export-heading">Export</h2>
-        <p role="status">{exportStatus() || "Export a saved project."}</p>
-        <Show when={batchId()}>
-          <details>
-            <summary>Export activity</summary>
-            <p role="note">Exporting saved project revision {exportRevision()}.</p>
-            <ul aria-label="Export batch jobs">
-              <For each={batchJobs()}>{(job) => <li>{job.state}</li>}</For>
-            </ul>
-          </details>
-        </Show>
-        <details>
-          <summary>Advanced export options</summary>
-          <label>
-            Mode{" "}
-            <select
-              value={exportMode()}
-              onChange={(event) => {
-                exportFeature.setMode(event.currentTarget.value as "merge" | "separate");
-              }}
-            >
-              <option value="merge">Merge</option>
-              <option value="separate">Separate</option>
-            </select>
-          </label>
-          <label>
-            Selection{" "}
-            <select
-              value={exportSelection()}
-              onChange={(event) => {
-                exportFeature.setSelection(event.currentTarget.value as "segments" | "gaps");
-              }}
-            >
-              <option value="segments">Segments</option>
-              <option value="gaps">Gaps</option>
-            </select>
-          </label>
-          <fieldset>
-            <legend>Streams</legend>
-            <For each={tracks()}>
-              {(track) => {
-                const checked = () =>
-                  streamIndexes().length === 0 || streamIndexes().includes(track.index);
-                return (
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={checked()}
-                      onChange={(event) => {
-                        const all = streamIndexes().length
-                          ? streamIndexes()
-                          : tracks().map((item) => item.index);
-                        exportFeature.setStreams(
-                          event.currentTarget.checked
-                            ? [...new Set([...all, track.index])]
-                            : all.filter((index) => index !== track.index),
-                        );
-                      }}
-                    />{" "}
-                    {track.type === "video"
-                      ? "Video"
-                      : track.type === "audio"
-                        ? "Audio"
-                        : "Subtitle"}
-                    : {track.codec}
-                  </label>
-                );
-              }}
-            </For>
-          </fieldset>
-          <label>
-            Cut strategy{" "}
-            <select
-              value={cutStrategy()}
-              onChange={(event) => {
-                const value = event.currentTarget.value as Parameters<
-                  typeof exportFeature.setStrategy
-                >[0];
-                exportFeature.setStrategy(value);
-              }}
-            >
-              <option value="stream_copy_preferred">Stream copy preferred</option>
-              <option value="precise_reencode">Precise re-encode</option>
-              <option value="hybrid_smart_cut" disabled={hybridSmartCutKnownIneligible(selected())}>
-                Hybrid smart cut
-                {hybridSmartCutKnownIneligible(selected()) ? " (unavailable)" : ""}
-              </option>
-            </select>
-          </label>
-          <label>
-            Destination{" "}
-            <select
-              value={destinationId()}
-              onChange={(event) => {
-                exportFeature.setDestination(event.currentTarget.value);
-              }}
-            >
-              <For each={destinations()}>
-                {(destination) => (
-                  <option value={destination.id}>
-                    {destination.label} ({destination.retention ?? "durable"})
-                  </option>
-                )}
-              </For>
-            </select>
-          </label>
-          <label>
-            Filename template{" "}
-            <input
-              value={filenameTemplate()}
-              onInput={(event) => {
-                const value = event.currentTarget.value;
-                exportFeature.setTemplate(value);
-              }}
-              aria-label="Filename template"
-            />
-          </label>
-          <p role="status">
-            Preview:{" "}
-            {filenameTemplate()
-              .replaceAll("{ext}", "mkv")
-              .replaceAll("{segment}", "1")
-              .replaceAll("{mode}", exportMode()) || "server default"}
+    <section class="export-panel flex flex-col gap-4 p-4" aria-labelledby="export-heading">
+      <h2 id="export-heading">Export</h2>
+
+      <div class="export-summary" aria-label="Export summary">
+        <p>
+          {selectedExportItems().length} item{selectedExportItems().length === 1 ? "" : "s"} ·{" "}
+          {selectedSegments().length} segment{selectedSegments().length === 1 ? "" : "s"} ·{" "}
+          {formatTime(totalDuration(), duration())}
+        </p>
+        <p>
+          <strong>Destination</strong>{" "}
+          {destinations().find((item) => item.id === destinationId())?.label ??
+            (destinationId() || "Not selected")}
+        </p>
+        <p>
+          <strong>Expected outputs</strong>{" "}
+          {exportMode() === "merge" ? 1 : Math.max(1, selectedSegments().length)}
+        </p>
+        <p>
+          <strong>Filename preview</strong> <code>{outputName()}</code>
+        </p>
+      </div>
+
+      <Show when={blocker()}>
+        {(message) => (
+          <p class="export-state" role="status">
+            {message()}
           </p>
-        </details>
-        <div aria-label="Export review">
-          <p>
-            Scope: {exportSelection()} · {present().segments.length} segment
-            {present().segments.length === 1 ? "" : "s"} ·{" "}
-            {formatTime(
-              present().segments.reduce(
-                (total, segment) => total + segment.endMs - segment.startMs,
-                0,
-              ),
-              duration(),
-            )}{" "}
-            total
-          </p>
-          <p>
-            Destination:{" "}
-            {destinations().find((item) => item.id === destinationId())?.label ?? destinationId()}
-          </p>
-          <p>
-            Filename:{" "}
-            {filenameTemplate()
-              .replaceAll("{ext}", "mkv")
-              .replaceAll("{segment}", "1")
-              .replaceAll("{mode}", exportMode()) || "server default"}
-          </p>
-          <p>
-            Review: {exportMode()} {exportSelection()} · {cutStrategy()}
-          </p>
-          <p>
-            Requested segment bounds:{" "}
-            {present()
-              .segments.map(
-                (segment) =>
-                  `${formatTime(segment.startMs, duration())}–${formatTime(segment.endMs, duration())}`,
-              )
-              .join(", ") || "none"}
-          </p>
-          <p>Selected streams: {preflight()?.selection?.length ?? "default safe streams"}</p>
-          <Show when={cutStrategy() === "stream_copy_preferred"}>
-            <p>Stream-copy cuts may begin at an earlier keyframe; no frame-exactness is claimed.</p>
-          </Show>
-          <Show when={cutStrategy() !== "stream_copy_preferred"}>
-            <p>Boundary precision depends on the selected strategy and requires human review.</p>
-          </Show>
-          <For each={preflight()?.findings ?? []}>
-            {(finding) => (
-              <p role="status">
-                {finding.severity}: {finding.message}
-              </p>
-            )}
-          </For>
-        </div>
-        <fieldset>
-          <legend>Project items to export</legend>
+        )}
+      </Show>
+
+      <Show when={projectItems().length > 1}>
+        <fieldset class="export-items">
+          <legend>Project items</legend>
           <For each={projectItems()}>
             {(item) => (
               <label>
                 <input
+                  class="checkbox checkbox-sm"
                   type="checkbox"
                   checked={selectedExportItems().includes(item.id)}
                   onChange={(event) =>
@@ -232,131 +117,240 @@ export function ExportView() {
               </label>
             )}
           </For>
-          <button
-            type="button"
-            onClick={() => setSelectedExportItems(projectItems().map((item) => item.id))}
-          >
-            Select all
-          </button>{" "}
-          <button type="button" onClick={() => setSelectedExportItems([])}>
-            Select none
-          </button>
+          <div class="controls">
+            <button
+              class="btn btn-ghost btn-sm"
+              type="button"
+              onClick={() => setSelectedExportItems(projectItems().map((item) => item.id))}
+            >
+              Select all
+            </button>
+            <button
+              class="btn btn-ghost btn-sm"
+              type="button"
+              onClick={() => setSelectedExportItems([])}
+            >
+              Select none
+            </button>
+          </div>
         </fieldset>
-        <div class="export-blockers" aria-live="polite">
-          <Show when={!selected()}>
-            <p>Add a video before exporting.</p>
-          </Show>
-          <Show when={selected() && !selectedExportItems().length}>
-            <p>Select at least one project item.</p>
-          </Show>
-          <Show when={selected() && projectItems().length === 1 && !present().segments.length}>
-            <p>Add at least one segment.</p>
-          </Show>
-          <Show when={selected() && dirty()}>
-            <p>Save the project before exporting.</p>
-          </Show>
-          <Show when={selected() && preflightPending() && !dirty()}>
-            <p>Checking export requirements…</p>
-          </Show>
-          <Show
-            when={
-              selected() && !preflightPending() && !dirty() && preflight() && !preflight()!.allowed
-            }
-          >
-            <p>
-              {preflight()!
-                .findings.map((finding) => finding.message)
-                .join(" ") || "The source video is unavailable."}
-            </p>
-          </Show>
-        </div>
-        <div class="controls">
-          <Show when={exportJob()?.state === "queued" || exportJob()?.state === "running"}>
-            <p role="status">An export job is active; wait or cancel it.</p>
-          </Show>
-          <button
-            class="primary"
-            aria-label="Start export"
-            disabled={
-              !selected() ||
-              dirty() ||
-              !selectedExportItems().length ||
-              (projectItems().length === 1 && !present().segments.length) ||
-              (projectItems().length === 1 && preflightPending() && !dirty()) ||
-              (projectItems().length === 1 && !preflight()?.allowed && !dirty())
-            }
-            onClick={() => void exportProject()}
-          >
-            Export {selectedExportItems().length} project item
-            {selectedExportItems().length === 1 ? "" : "s"}
+      </Show>
+
+      <div class="controls export-actions">
+        <button
+          class="btn btn-primary btn-sm"
+          disabled={
+            !selected() ||
+            dirty() ||
+            !selectedExportItems().length ||
+            (projectItems().length === 1 && !selectedSegments().length) ||
+            (projectItems().length === 1 && preflightPending()) ||
+            (projectItems().length === 1 && !preflight()?.allowed)
+          }
+          onClick={() => void exportProject()}
+        >
+          {selectedExportItems().length === 1
+            ? "Export item"
+            : `Export ${selectedExportItems().length} items`}
+        </button>
+        <Show when={exportActive()}>
+          <button class="btn btn-ghost btn-sm" onClick={() => void cancelExport()}>
+            Cancel export
           </button>
-          <Show when={exportJob()?.state === "queued" || exportJob()?.state === "running"}>
-            <button onClick={() => void cancelExport()}>Cancel export</button>
-          </Show>
-        </div>
-        <Show when={exportJob()?.result}>
-          <div>
-            <div aria-label="Export result">
-              <p>
-                Output ready:{" "}
-                {exportJob()!.result!.outputName ?? exportJob()!.result!.outputNames?.join(", ")}
-              </p>
-              <p>
-                Strategy:{" "}
-                {exportJob()!.appliedStrategy ??
-                  (exportJob()!.result!.appliedStrategies?.length
-                    ? "mixed per segment"
-                    : (exportJob()!.strategy ?? cutStrategy()))}{" "}
-                · {exportJob()!.verified ? "verified output" : "requires inspection"}
-              </p>
-              <Show when={(exportJob()!.result!.appliedStrategies?.length ?? 0) > 1}>
-                <For each={exportJob()!.result!.appliedStrategies}>
-                  {(strategy) => (
-                    <p>
-                      Segment {strategy.segment}
-                      {strategy.outputName ? ` (${strategy.outputName})` : ""}: {strategy.strategy}
-                    </p>
-                  )}
-                </For>
-              </Show>
-              <p>
-                {exportJob()!.result!.sizeBytes.toLocaleString()} bytes · retained until{" "}
-                {exportJob()!.result!.retainUntil}
-              </p>
-            </div>
-            <Show
-              when={
-                exportJob()!.state === "succeeded" &&
-                exportJob()!.result!.destinationKind === "download"
+        </Show>
+      </div>
+
+      <details class="export-options">
+        <summary>Export options</summary>
+        <div class="option-fields">
+          <label>
+            Output arrangement
+            <select
+              class="select select-bordered select-sm mt-1 w-full"
+              aria-label="Output arrangement (Mode)"
+              value={exportMode()}
+              onChange={(event) =>
+                exportFeature.setMode(event.currentTarget.value as "merge" | "separate")
               }
             >
-              <For
-                each={
-                  exportJob()!.result!.outputNames ??
-                  (exportJob()!.result!.outputName ? [exportJob()!.result!.outputName] : [])
-                }
-              >
-                {(_, position) => (
-                  <a
-                    href={api.url(
-                      `jobs/${encodeURIComponent(exportJob()!.id)}/outputs/${position()}`,
-                    )}
-                    download=""
-                  >
-                    Download output {position() + 1}
-                  </a>
-                )}
+              <option value="merge">Combine selected cuts</option>
+              <option value="separate">Export each selected cut separately</option>
+            </select>
+          </label>
+          <label>
+            What to export
+            <select
+              class="select select-bordered select-sm mt-1 w-full"
+              value={exportSelection()}
+              onChange={(event) =>
+                exportFeature.setSelection(event.currentTarget.value as "segments" | "gaps")
+              }
+            >
+              <option value="segments">Selected cuts</option>
+              <option value="gaps">Gaps between cuts</option>
+            </select>
+          </label>
+          <fieldset>
+            <legend>Tracks</legend>
+            <For each={tracks()}>
+              {(track) => {
+                const checked = () =>
+                  streamIndexes().length === 0 || streamIndexes().includes(track.index);
+                return (
+                  <div class="stream-option">
+                    <label class="stream-row">
+                      <input
+                        class="input input-bordered input-sm mt-1 w-full"
+                        type="checkbox"
+                        checked={checked()}
+                        onChange={(event) => {
+                          const all = streamIndexes().length
+                            ? streamIndexes()
+                            : tracks().map((item) => item.index);
+                          exportFeature.setStreams(
+                            event.currentTarget.checked
+                              ? [...new Set([...all, track.index])]
+                              : all.filter((index) => index !== track.index),
+                          );
+                        }}
+                      />{" "}
+                      {track.type === "video"
+                        ? "Video"
+                        : track.type === "audio"
+                          ? "Audio"
+                          : "Subtitle"}
+                      : {track.codec}
+                    </label>
+                    <For
+                      each={(preflight()?.findings ?? []).filter(
+                        (finding) => finding.streamIndex === track.index,
+                      )}
+                    >
+                      {(finding) => <p role="status">{finding.message}</p>}
+                    </For>
+                  </div>
+                );
+              }}
+            </For>
+            <For
+              each={(preflight()?.findings ?? []).filter(
+                (finding) => finding.streamIndex === undefined,
+              )}
+            >
+              {(finding) => <p role="status">{finding.message}</p>}
+            </For>
+          </fieldset>
+          <label>
+            Processing
+            <select
+              class="select select-bordered select-sm mt-1 w-full"
+              value={cutStrategy()}
+              onChange={(event) =>
+                exportFeature.setStrategy(
+                  event.currentTarget.value as Parameters<typeof exportFeature.setStrategy>[0],
+                )
+              }
+            >
+              <option value="stream_copy_preferred">Fast copy</option>
+              <option value="precise_reencode">Precise encode</option>
+              <option value="hybrid_smart_cut" disabled={hybridSmartCutKnownIneligible(selected())}>
+                Hybrid smart cut
+                {hybridSmartCutKnownIneligible(selected()) ? " (unavailable)" : ""}
+              </option>
+            </select>
+          </label>
+          <Show when={cutStrategy() === "stream_copy_preferred"}>
+            <p>
+              Fast copy avoids re-encoding, but boundaries may move to nearby keyframes and are not
+              frame-exact.
+            </p>
+          </Show>
+          <label>
+            Destination
+            <select
+              class="select select-bordered select-sm mt-1 w-full"
+              value={destinationId()}
+              onChange={(event) => exportFeature.setDestination(event.currentTarget.value)}
+            >
+              <For each={destinations()}>
+                {(destination) => <option value={destination.id}>{destination.label}</option>}
               </For>
-            </Show>
-            <p role="note">Please review the exported media before delivery.</p>
-            <div aria-label="Export warnings">
-              <For each={exportJob()!.warnings ?? []}>
-                {(warning) => <p role="status">Warning: {warning}</p>}
-              </For>
-            </div>
+            </select>
+          </label>
+          <p>
+            <strong>Retention</strong>{" "}
+            {destinations().find((destination) => destination.id === destinationId())?.retention ??
+              "Durable"}
+          </p>
+          <details>
+            <summary>Advanced naming</summary>
+            <label>
+              Filename template
+              <input
+                class="input input-bordered input-sm mt-1 w-full"
+                value={filenameTemplate()}
+                onInput={(event) => exportFeature.setTemplate(event.currentTarget.value)}
+              />
+            </label>
+            <p class="control-help">
+              Tokens: {"{source}"}, {"{segment}"}, {"{mode}"}, {"{ext}"}
+            </p>
+          </details>
+        </div>
+      </details>
+
+      <Show when={batchId()}>
+        <details>
+          <summary>Export activity</summary>
+          <p role="note">Exporting saved project revision {exportRevision()}.</p>
+          <ul aria-label="Export batch jobs">
+            <For each={batchJobs()}>{(job) => <li>{job.state}</li>}</For>
+          </ul>
+        </details>
+      </Show>
+
+      <Show when={exportJob()?.result}>
+        <div class="export-result" aria-label="Export result">
+          <p>
+            Output ready:{" "}
+            {exportJob()!.result!.outputName ?? exportJob()!.result!.outputNames?.join(", ")}
+          </p>
+          <p>
+            {exportJob()!.verified ? "Verified output" : "Review before delivery"} ·{" "}
+            {exportJob()!.result!.sizeBytes.toLocaleString()} bytes · retained until{" "}
+            {exportJob()!.result!.retainUntil}
+          </p>
+          <Show
+            when={
+              exportJob()!.state === "succeeded" &&
+              exportJob()!.result!.destinationKind === "download"
+            }
+          >
+            <For
+              each={
+                exportJob()!.result!.outputNames ??
+                (exportJob()!.result!.outputName ? [exportJob()!.result!.outputName] : [])
+              }
+            >
+              {(_, position) => (
+                <a
+                  href={api.url(
+                    `jobs/${encodeURIComponent(exportJob()!.id)}/outputs/${position()}`,
+                  )}
+                  download=""
+                >
+                  Download output {position() + 1}
+                </a>
+              )}
+            </For>
+          </Show>
+          <div aria-label="Export warnings">
+            <For each={exportJob()!.warnings ?? []}>
+              {(warning) => <p role="status">Warning: {warning}</p>}
+            </For>
           </div>
-        </Show>
-      </section>
-    </Show>
+        </div>
+      </Show>
+    </section>
   );
 }

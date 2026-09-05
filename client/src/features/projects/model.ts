@@ -21,8 +21,6 @@ export const createProjectItem = (media: Media): EditableProjectItem => ({
   media,
   timeline: createTimelineHistory({
     playheadMs: 0,
-    inMs: 0,
-    outMs: 0,
     segments: [],
     zoom: 1,
   }),
@@ -42,8 +40,6 @@ export const restoreProjectItem = (item: ProjectItem, media: Media): EditablePro
     media,
     timeline: createTimelineHistory({
       playheadMs: editor.playheadMs,
-      inMs: editor.playheadMs,
-      outMs: editor.playheadMs,
       segments: item.segments,
       zoom: editor.zoom,
     }),

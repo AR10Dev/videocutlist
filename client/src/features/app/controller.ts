@@ -80,6 +80,8 @@ export function createWorkspaceController() {
     setTimecode,
     timeline,
     setTimeline,
+    activeSegmentIndex,
+    setActiveSegmentIndex,
     present,
     playheadMs,
     duration,
@@ -90,6 +92,9 @@ export function createWorkspaceController() {
     addSegment,
     removeSegment,
     moveSegment,
+    updateSegment,
+    updateSegmentLabel,
+    splitActiveSegment,
   } = editorFeature;
   const queryClient = useQueryClient();
   const exportFeature = createExportController({
@@ -216,7 +221,6 @@ export function createWorkspaceController() {
   });
   const initializedPreviewFeature = createPreviewController(api, {
     selected,
-    muted,
     playheadMs,
     updatePlaybackPosition,
   });
@@ -232,6 +236,7 @@ export function createWorkspaceController() {
     syncPreviewPosition,
     setVideo,
     togglePlayback,
+    pausePlayback,
   } = initializedPreviewFeature;
   previewRef.current = initializedPreviewFeature;
   const chooseMedia = (item: Media) => {
@@ -414,6 +419,8 @@ export function createWorkspaceController() {
     setDetectionCandidates,
     timeline,
     setTimeline,
+    activeSegmentIndex,
+    setActiveSegmentIndex,
     playheadMs,
     editableItems,
     activateItem,
@@ -440,6 +447,9 @@ export function createWorkspaceController() {
     tracks,
     removeSegment,
     moveSegment,
+    updateSegment,
+    updateSegmentLabel,
+    splitActiveSegment,
     projects: projectsFeature,
     export: exportFeature,
     exportProject,
@@ -452,6 +462,7 @@ export function createWorkspaceController() {
     acceptDetection,
     setVideo,
     togglePlayback,
+    pausePlayback,
   };
 }
 

@@ -31,8 +31,16 @@ export function ProjectsView() {
     projects,
   } = useWorkspace();
   return (
-    <Show when={selected()}>
-      <section class="project-panel" aria-labelledby="project-heading">
+    <Show
+      when={selected()}
+      fallback={
+        <section class="project-panel flex flex-col gap-4 p-4" aria-labelledby="project-heading">
+          <h2 id="project-heading">Project</h2>
+          <p>Choose a video from the Media library to start a project.</p>
+        </section>
+      }
+    >
+      <section class="project-panel flex flex-col gap-4 p-4" aria-labelledby="project-heading">
         <h2 id="project-heading">Project</h2>
         <details>
           <summary>Project details</summary>
@@ -44,6 +52,7 @@ export function ProjectsView() {
         <label>
           Project name{" "}
           <input
+            class="input input-bordered input-sm mt-1 w-full"
             value={projectName()}
             onInput={(event) => {
               setProjectName(event.currentTarget.value);
@@ -51,53 +60,55 @@ export function ProjectsView() {
             }}
           />
         </label>
-        <ol aria-label="Project media items">
+        <ol class="menu menu-sm rounded-box bg-base-200 p-2" aria-label="Project media items">
           <For each={projectItems()}>
             {(item, index) => (
               <li>
                 <button
+                  class="btn btn-ghost btn-sm justify-start"
                   aria-pressed={activeItemId() === item.id}
                   onClick={() => activateItem(item)}
                 >
                   {item.media.name}
                 </button>{" "}
-                <button
-                  aria-label={`Move ${item.media.name} up`}
-                  disabled={index() === 0}
-                  onClick={() => reorderProjectItem(item.id, -1)}
-                >
-                  Move up
-                </button>{" "}
-                <button
-                  aria-label={`Move ${item.media.name} down`}
-                  disabled={index() === projectItems().length - 1}
-                  onClick={() => reorderProjectItem(item.id, 1)}
-                >
-                  Move down
-                </button>{" "}
-                <button
-                  class="destructive"
-                  onClick={() => {
-                    if (
-                      item.timeline.present.segments.length &&
-                      !window.confirm(`Remove ${item.media.name} and its edits?`)
-                    )
-                      return;
-                    removeProjectItem(item.id);
-                  }}
-                >
+                <Show when={projectItems().length > 1}>
+                  <button
+                    class="btn btn-ghost btn-xs"
+                    aria-label={`Move ${item.media.name} up`}
+                    disabled={index() === 0}
+                    onClick={() => reorderProjectItem(item.id, -1)}
+                  >
+                    Move up
+                  </button>{" "}
+                  <button
+                    class="btn btn-ghost btn-xs"
+                    aria-label={`Move ${item.media.name} down`}
+                    disabled={index() === projectItems().length - 1}
+                    onClick={() => reorderProjectItem(item.id, 1)}
+                  >
+                    Move down
+                  </button>{" "}
+                </Show>
+                <button class="btn btn-error btn-xs" onClick={() => removeProjectItem(item.id)}>
                   Remove
                 </button>
               </li>
             )}
           </For>
         </ol>
-        <div class="controls">
-          <button class="primary" onClick={() => void projects.saveProject()}>
+        <div class="controls flex flex-wrap gap-2">
+          <button
+            class="btn btn-primary btn-sm"
+            classList={{ primary: dirty() }}
+            onClick={() => void projects.saveProject()}
+          >
             Save project
           </button>
-          <button onClick={projects.newProject}>New project</button>
+          <button class="btn btn-ghost btn-sm" onClick={projects.newProject}>
+            New project
+          </button>
           <button
+            class="btn btn-ghost btn-sm"
             onClick={() => {
               const id = window.prompt("Project ID to load", "");
               if (id) void projects.loadProject(id);
@@ -106,14 +117,13 @@ export function ProjectsView() {
             Load project
           </button>
         </div>
-        <Show when={status()}>{(message) => <p role="status">{message()}</p>}</Show>
-        <Show when={dirty()}>
-          <p role="status">Save this project to keep your changes.</p>
+        <Show when={status() || (dirty() ? "Save the project to keep your changes." : "")}>
+          {(message) => <p role="status">{message()}</p>}
         </Show>
         <details>
           <summary>Interchange</summary>
-          <p>Import or export cut lists without changing the media library.</p>
           <button
+            class="btn btn-ghost btn-sm"
             disabled={!selected()}
             onClick={() => {
               const blob = new Blob(
@@ -136,13 +146,11 @@ export function ProjectsView() {
           >
             Download cut list
           </button>
-          <Show
-            when={selected()}
-            fallback={<p>Choose a video from File explorer to import a cut list.</p>}
-          >
+          <Show when={selected()} fallback={<p>Choose a video from Media to import a cut list.</p>}>
             <label>
               Import cut list{" "}
               <input
+                class="file-input file-input-sm file-input-bordered mt-1 w-full"
                 type="file"
                 accept="application/json,.json"
                 onChange={(event) => {
@@ -180,6 +188,7 @@ export function ProjectsView() {
             <label>
               Import CSV or chapters{" "}
               <input
+                class="file-input file-input-sm file-input-bordered mt-1 w-full"
                 type="file"
                 accept=".csv,.txt,text/csv,text/plain"
                 onChange={(event) => {
@@ -222,8 +231,11 @@ export function ProjectsView() {
               />
             </label>
           </Show>
-          <p>Save or load the selected video&apos;s project before exporting CSV or chapters.</p>
+          <Show when={dirty()}>
+            <p>Save the project before importing or exporting CSV or chapters.</p>
+          </Show>
           <button
+            class="btn btn-ghost btn-sm"
             disabled={!selected() || dirty()}
             onClick={() =>
               void api
@@ -242,6 +254,7 @@ export function ProjectsView() {
             Export CSV
           </button>
           <button
+            class="btn btn-ghost btn-sm"
             disabled={!selected() || dirty()}
             onClick={() =>
               void api
@@ -265,7 +278,12 @@ export function ProjectsView() {
           <ul>
             {recent().map((item) => (
               <li>
-                <button onClick={() => void projects.loadProject(item.id)}>{item.label}</button>
+                <button
+                  class="btn btn-ghost btn-sm"
+                  onClick={() => void projects.loadProject(item.id)}
+                >
+                  {item.label}
+                </button>
               </li>
             ))}
           </ul>

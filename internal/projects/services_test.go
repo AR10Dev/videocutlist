@@ -206,7 +206,8 @@ func TestProjectUseCaseSavesValidatedBatchAtomically(t *testing.T) {
 		{ID: "i_aaaaaaaaaaaaaaaaaaaaaaaa", MediaID: mediaID, Segments: []model.Segment{{StartMS: 0, EndMS: 300}}, EditorState: &model.UIState{Zoom: 1}},
 		{ID: "i_bbbbbbbbbbbbbbbbbbbbbbbb", MediaID: mediaID, Segments: []model.Segment{{StartMS: 400, EndMS: 900}}, ExportOptions: model.ExportOptions{Mode: "separate", Container: "mkv"}},
 	}}
-	saved, err := useCase.Create(context.Background(), "p_aaaaaaaaaaaa", ProjectInput{Document: document})
+	ctx := t.Context()
+	saved, err := useCase.Create(ctx, "p_aaaaaaaaaaaa", ProjectInput{Document: document})
 	if err != nil || saved.Revision != 1 || repository.saves != 1 || len(saved.Items) != 2 {
 		t.Fatalf("saved = %#v, err = %v, saves = %d", saved, err, repository.saves)
 	}
@@ -218,26 +219,27 @@ func TestProjectUseCaseSavesValidatedBatchAtomically(t *testing.T) {
 		t.Fatalf("project response duplicates revision: %s", encoded)
 	}
 	next := ProjectInput{Revision: saved.Revision, Document: saved.Document}
-	resaved, err := useCase.Save(context.Background(), "p_aaaaaaaaaaaa", next)
+	resaved, err := useCase.Save(ctx, "p_aaaaaaaaaaaa", next)
 	if err != nil || resaved.Revision != 2 || repository.saves != 2 {
 		t.Fatalf("sequential save = %#v, err = %v, saves = %d", resaved, err, repository.saves)
 	}
 	stale := ProjectInput{Document: saved.Document}
-	if _, err := useCase.Create(context.Background(), "p_aaaaaaaaaaaa", stale); !errors.Is(err, store.ErrRevisionConflict) || repository.saves != 2 {
+	if _, err := useCase.Create(ctx, "p_aaaaaaaaaaaa", stale); !errors.Is(err, store.ErrRevisionConflict) || repository.saves != 2 {
 		t.Fatalf("duplicate create = %v, saves = %d", err, repository.saves)
 	}
 	bad := ProjectInput{Revision: resaved.Revision, Document: resaved.Document}
 	bad.Items[1].Segments[0].EndMS = 1_001
-	if _, err := useCase.Save(context.Background(), "p_aaaaaaaaaaaa", bad); err == nil || repository.saves != 2 {
+	if _, err := useCase.Save(ctx, "p_aaaaaaaaaaaa", bad); err == nil || repository.saves != 2 {
 		t.Fatalf("out-of-range save = %v, saves = %d", err, repository.saves)
 	}
 	bad.Items[1].Segments[0].EndMS = 900
 	bad.Items[1].MediaID = "m_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-	var itemErr *ProjectItemError
-	if _, err := useCase.Save(context.Background(), "p_aaaaaaaaaaaa", bad); !errors.As(err, &itemErr) || itemErr.ItemID != bad.Items[1].ID || itemErr.Code != "media_unavailable" || repository.saves != 2 {
+	if _, err := useCase.Save(ctx, "p_aaaaaaaaaaaa", bad); err == nil {
+		t.Fatalf("missing media save = %v, saves = %d", err, repository.saves)
+	} else if itemErr, ok := errors.AsType[*ProjectItemError](err); !ok || itemErr.ItemID != bad.Items[1].ID || itemErr.Code != "media_unavailable" || repository.saves != 2 {
 		t.Fatalf("missing media save = %v, saves = %d", err, repository.saves)
 	}
-	if got, err := useCase.Get(context.Background(), "p_aaaaaaaaaaaa"); err != nil || got.Revision != 2 || len(got.Items) != 2 {
+	if got, err := useCase.Get(ctx, "p_aaaaaaaaaaaa"); err != nil || got.Revision != 2 || len(got.Items) != 2 {
 		t.Fatalf("stored project = %#v, err = %v", got, err)
 	}
 }

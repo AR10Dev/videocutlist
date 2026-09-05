@@ -206,7 +206,7 @@ export function createProjectsController(deps: ProjectsControllerDeps) {
     deps.setDiagnostics();
     deps.setTimeline({
       past: [],
-      present: { playheadMs: 0, inMs: 0, outMs: 0, segments: [], zoom: 1 },
+      present: { playheadMs: 0, segments: [], zoom: 1 },
       future: [],
     });
     localStorage.removeItem("videocutlist.active-project.v2");

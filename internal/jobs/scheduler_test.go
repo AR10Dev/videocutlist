@@ -210,7 +210,7 @@ func TestSchedulerRunningCancellationWaitsForRunnerTerminalState(t *testing.T) {
 }
 
 func TestSchedulerConcurrentSubmitClaimAndCancel(t *testing.T) {
-	db, err := db.OpenDatabase(context.Background(), t.TempDir()+"/jobs.db")
+	db, err := db.OpenDatabase(t.Context(), t.TempDir()+"/jobs.db")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,18 +225,16 @@ func TestSchedulerConcurrentSubmitClaimAndCancel(t *testing.T) {
 	}
 	s.Start()
 	var wg sync.WaitGroup
-	for i := 0; i < 16; i++ {
+	for i := range 16 {
 		job := schedulerJob(fmt.Sprintf("%02d", 50+i))
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if _, err := s.Submit(context.Background(), []store.Job{job}); err == nil {
-				_, _ = s.Cancel(context.Background(), job.ID)
+		wg.Go(func() {
+			if _, err := s.Submit(t.Context(), []store.Job{job}); err == nil {
+				_, _ = s.Cancel(t.Context(), job.ID)
 			}
-		}()
+		})
 	}
 	wg.Wait()
-	if err := s.Shutdown(context.Background()); err != nil {
+	if err := s.Shutdown(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 }

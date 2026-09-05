@@ -6,11 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
-	"sort"
+	"slices"
 	"syscall"
 	"time"
 
@@ -68,11 +69,7 @@ func run(ctx context.Context) error {
 	}
 	mediaStore, _ := store.NewMediaStore(db)
 	roots := make([]index.Root, 0, len(cfg.MediaRoots))
-	aliases := make([]string, 0, len(cfg.MediaRoots))
-	for alias := range cfg.MediaRoots {
-		aliases = append(aliases, alias)
-	}
-	sort.Strings(aliases)
+	aliases := slices.Sorted(maps.Keys(cfg.MediaRoots))
 	for _, alias := range aliases {
 		roots = append(roots, index.Root{Alias: alias, Path: cfg.MediaRoots[alias]})
 	}
@@ -115,11 +112,10 @@ func run(ctx context.Context) error {
 	}
 	artifacts.Cleanup(time.Now().UTC())
 	go func() {
-		ticker := time.NewTicker(15 * time.Minute)
-		defer ticker.Stop()
+		ticks := time.Tick(15 * time.Minute)
 		for {
 			select {
-			case now := <-ticker.C:
+			case now := <-ticks:
 				artifacts.Cleanup(now.UTC())
 			case <-ctx.Done():
 				return
@@ -193,6 +189,9 @@ func run(ctx context.Context) error {
 	defer scheduler.Shutdown(context.Background())
 	if mediaService.Configured {
 		if _, err := mediaService.StartImport(ctx); err != nil && !errors.Is(err, jobqueue.ErrQueueFull) {
+			if ctx.Err() != nil {
+				return nil
+			}
 			return fmt.Errorf("start initial media scan: %w", err)
 		}
 	}

@@ -1,6 +1,8 @@
 import { createEffect, createSignal, onCleanup, Show } from "solid-js";
-import { Settings } from "lucide-solid";
+import { Redo2, Settings, Undo2 } from "lucide-solid";
+import { redoTimeline, undoTimeline } from "./features/editor/timeline";
 import { DetectionView } from "./features/detection/DetectionView";
+import { CutsView } from "./features/editor/CutsView";
 import { EditorView } from "./features/editor/EditorView";
 import { ExportView } from "./features/export/ExportView";
 import { LibraryView } from "./features/media/LibraryView";
@@ -13,8 +15,16 @@ import { applyAppearance } from "./features/settings/model";
 
 export function App() {
   const controller = createWorkspaceController();
-  const { selected, projectName, revision, dirty, settingsOpen, openSettings, appearance } =
-    controller;
+  const {
+    selected,
+    projectName,
+    revision,
+    dirty,
+    settingsOpen,
+    setSettingsOpen,
+    openSettings,
+    appearance,
+  } = controller;
   createEffect(() => {
     const preference = appearance();
     const media = window.matchMedia("(prefers-color-scheme: dark)");
@@ -23,8 +33,35 @@ export function App() {
     if (preference === "system") media.addEventListener("change", apply);
     onCleanup(() => media.removeEventListener("change", apply));
   });
-  const [activeTask, setActiveTask] = createSignal<"project" | "export" | "detection">("project");
-  const taskTabs = ["project", "export", "detection"] as const;
+  const [activeTask, setActiveTask] = createSignal<"cuts" | "project" | "export" | "detection">(
+    "project",
+  );
+  let hadSelectedMedia = false;
+  createEffect(() => {
+    const hasSelectedMedia = Boolean(selected());
+    if (hasSelectedMedia && !hadSelectedMedia)
+      queueMicrotask(() => {
+        if (dirty()) setActiveTask("cuts");
+      });
+    hadSelectedMedia = hasSelectedMedia;
+  });
+  const taskTabs = ["cuts", "project", "export", "detection"] as const;
+  const [mediaOpen, setMediaOpen] = createSignal(true);
+  const [tasksOpen, setTasksOpen] = createSignal(true);
+  const undo = () => {
+    if (!revision() && !controller.timeline().past.length) return;
+    const next = undoTimeline(controller.timeline());
+    controller.setTimeline(next);
+    controller.setPreviewCenterMs(next.present.playheadMs);
+    controller.markDirty();
+  };
+  const redo = () => {
+    if (!controller.timeline().future.length) return;
+    const next = redoTimeline(controller.timeline());
+    controller.setTimeline(next);
+    controller.setPreviewCenterMs(next.present.playheadMs);
+    controller.markDirty();
+  };
   const moveTask = (current: (typeof taskTabs)[number], direction: number) => {
     const start = taskTabs.indexOf(current);
     for (let offset = 1; offset <= taskTabs.length; offset += 1) {
@@ -39,34 +76,132 @@ export function App() {
   return (
     <WorkspaceProvider value={controller}>
       <main class="app-shell" aria-label="VideoCutlist segment selection">
-        <header class="app-header">
-          <div class="app-heading">
-            <h1>VideoCutlist</h1>
-            <div class="project-status" aria-label="Project status">
-              <strong>{revision() > 0 ? projectName() : "Unsaved project"}</strong>
-              <span>{dirty() || revision() === 0 ? "Unsaved" : "Saved"}</span>
-            </div>
+        <header class="navbar app-navbar">
+          <div class="navbar-start gap-3">
+            <button
+              class="btn btn-ghost btn-sm drawer-button"
+              type="button"
+              aria-label="Toggle Media sidebar"
+              aria-expanded={mediaOpen()}
+              onClick={() => setMediaOpen((open) => !open)}
+            >
+              ☰
+            </button>
+            <strong class="text-base">VideoCutList</strong>
+            <span class="project-status">
+              <strong>{projectName()}</strong>
+              <span role="status">
+                {revision() === 0 ? "Unsaved" : dirty() ? "Unsaved changes" : "Saved"}
+              </span>
+            </span>
           </div>
-          <button
-            class="settings-button"
-            type="button"
-            aria-label="Settings"
-            aria-pressed={settingsOpen() ? "true" : "false"}
-            title="Settings"
-            onClick={() => void openSettings()}
-          >
-            <Settings size={20} aria-hidden="true" />
-            <span>Settings</span>
-          </button>
+          <div class="navbar-center hidden md:flex gap-1">
+            <button
+              class="btn btn-ghost btn-sm"
+              aria-label="Undo"
+              aria-keyshortcuts="Control+Z Meta+Z"
+              disabled={!controller.timeline().past.length}
+              onClick={undo}
+            >
+              <Undo2 size={16} />
+            </button>
+            <button
+              class="btn btn-ghost btn-sm"
+              aria-label="Redo"
+              aria-keyshortcuts="Control+Y Meta+Shift+Z"
+              disabled={!controller.timeline().future.length}
+              onClick={redo}
+            >
+              <Redo2 size={16} />
+            </button>
+          </div>
+          <div class="navbar-end gap-1">
+            <button
+              class="btn btn-ghost btn-sm"
+              type="button"
+              aria-label={settingsOpen() ? "Back to editor" : "Settings"}
+              onClick={() => (settingsOpen() ? setSettingsOpen(false) : void openSettings())}
+            >
+              <Settings size={16} />
+              <span class="hidden sm:inline">Settings</span>
+            </button>
+            <button
+              class="btn btn-primary btn-sm"
+              type="button"
+              onClick={() => {
+                setSettingsOpen(false);
+                setActiveTask("export");
+              }}
+            >
+              <span>Export</span>
+            </button>
+            <button
+              class="btn btn-ghost btn-sm drawer-button"
+              type="button"
+              aria-label="Toggle task sidebar"
+              aria-expanded={tasksOpen()}
+              onClick={() => setTasksOpen((open) => !open)}
+            >
+              ☷
+            </button>
+          </div>
         </header>
+        <aside
+          class="left-sidebar drawer"
+          classList={{ "drawer-open": mediaOpen(), "is-collapsed": !mediaOpen() }}
+          aria-label="Media workspace"
+        >
+          <header class="app-header">
+            <div class="app-heading">
+              <h2>Media</h2>
+            </div>
+            <button
+              class="settings-button btn btn-sm btn-square"
+              type="button"
+              aria-label={settingsOpen() ? "Back to editor" : "Settings"}
+              aria-pressed={settingsOpen() ? "true" : "false"}
+              title={settingsOpen() ? "Back to editor" : "Settings"}
+              onClick={() => (settingsOpen() ? setSettingsOpen(false) : void openSettings())}
+            >
+              <Settings size={18} aria-hidden="true" />
+              <span class="sr-only">{settingsOpen() ? "Back to editor" : "Settings"}</span>
+            </button>
+          </header>
+          <Show when={!settingsOpen()}>
+            <LibraryView />
+          </Show>
+        </aside>
         <Show
           when={settingsOpen()}
           fallback={
             <>
-              <LibraryView />
               <EditorView />
-              <aside class="task-panel" aria-label="Workspace tasks">
+              <aside
+                class="task-panel"
+                classList={{ "is-collapsed": !tasksOpen() }}
+                aria-label="Workspace tasks"
+              >
                 <div class="task-tabs" role="tablist" aria-label="Workspace tasks">
+                  <button
+                    id="cuts-tab"
+                    role="tab"
+                    type="button"
+                    aria-selected={activeTask() === "cuts"}
+                    aria-controls="cuts-tabpanel"
+                    tabIndex={activeTask() === "cuts" ? 0 : -1}
+                    onClick={() => setActiveTask("cuts")}
+                    onKeyDown={(event) => {
+                      if (event.key === "ArrowRight" || event.key === "ArrowDown") {
+                        event.preventDefault();
+                        moveTask("cuts", 1);
+                      } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
+                        event.preventDefault();
+                        moveTask("cuts", -1);
+                      }
+                    }}
+                  >
+                    Cuts
+                  </button>
                   <button
                     id="project-tab"
                     role="tab"
@@ -129,21 +264,38 @@ export function App() {
                     Detection
                   </button>
                 </div>
-                <Show when={activeTask() === "project"}>
-                  <div id="project-tabpanel" role="tabpanel" aria-labelledby="project-tab">
-                    <ProjectsView />
-                  </div>
-                </Show>
-                <Show when={activeTask() === "export"}>
-                  <div id="export-tabpanel" role="tabpanel" aria-labelledby="export-tab">
-                    <ExportView />
-                  </div>
-                </Show>
-                <Show when={activeTask() === "detection" && selected()}>
-                  <div id="detection-tabpanel" role="tabpanel" aria-labelledby="detection-tab">
-                    <DetectionView />
-                  </div>
-                </Show>
+                <div
+                  id="cuts-tabpanel"
+                  role="tabpanel"
+                  aria-labelledby="cuts-tab"
+                  hidden={activeTask() !== "cuts"}
+                >
+                  <CutsView />
+                </div>
+                <div
+                  id="project-tabpanel"
+                  role="tabpanel"
+                  aria-labelledby="project-tab"
+                  hidden={activeTask() !== "project"}
+                >
+                  <ProjectsView />
+                </div>
+                <div
+                  id="export-tabpanel"
+                  role="tabpanel"
+                  aria-labelledby="export-tab"
+                  hidden={activeTask() !== "export"}
+                >
+                  <ExportView />
+                </div>
+                <div
+                  id="detection-tabpanel"
+                  role="tabpanel"
+                  aria-labelledby="detection-tab"
+                  hidden={activeTask() !== "detection"}
+                >
+                  <DetectionView />
+                </div>
                 <QueueView />
               </aside>
             </>
