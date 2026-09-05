@@ -34,7 +34,7 @@ export function SettingsView() {
     rescanLibrary,
   } = useWorkspace();
   return (
-    <section class="settings-view" aria-labelledby="settings-heading">
+    <section class="settings-view flex flex-col gap-4 p-4" aria-labelledby="settings-heading">
       <div class="panel-heading">
         <h2 id="settings-heading">Settings</h2>
       </div>
@@ -44,6 +44,7 @@ export function SettingsView() {
         <label>
           Theme
           <select
+            class="select select-bordered select-sm mt-1 w-full"
             value={appearance()}
             onChange={(event) => {
               const value = event.currentTarget.value as Appearance;
@@ -62,6 +63,7 @@ export function SettingsView() {
         </label>
         <label>
           <input
+            class="input input-bordered input-sm mt-1 w-full"
             type="checkbox"
             checked={muted()}
             onChange={(event) => {
@@ -73,6 +75,7 @@ export function SettingsView() {
           Mute previews
         </label>
         <button
+          class="btn btn-ghost btn-sm"
           type="button"
           onClick={() => {
             setSettings(defaultSettings);
@@ -109,6 +112,7 @@ export function SettingsView() {
         </Show>
         <div class="settings-actions">
           <button
+            class="btn btn-ghost btn-sm"
             type="button"
             onClick={() => void rescanLibrary()}
             disabled={rescanPending() || settingsPending()}
@@ -122,6 +126,7 @@ export function SettingsView() {
         <label>
           Cut strategy
           <select
+            class="select select-bordered select-sm mt-1 w-full"
             value={cutStrategy()}
             onChange={(event) => {
               const value = event.currentTarget.value as AppSettings["cutStrategy"];
@@ -137,6 +142,7 @@ export function SettingsView() {
         <label>
           Filename template
           <input
+            class="input input-bordered input-sm mt-1 w-full"
             value={filenameTemplate()}
             onInput={(event) => {
               const value = event.currentTarget.value;
@@ -157,6 +163,7 @@ export function SettingsView() {
                   <label>
                     Name
                     <input
+                      class="input input-bordered input-sm mt-1 w-full"
                       value={destination.label}
                       onChange={(event) =>
                         updateDestination(destination.id, { label: event.currentTarget.value })
@@ -166,6 +173,7 @@ export function SettingsView() {
                   <label>
                     Description
                     <input
+                      class="input input-bordered input-sm mt-1 w-full"
                       value={destination.description ?? ""}
                       onChange={(event) =>
                         updateDestination(destination.id, {
@@ -177,6 +185,7 @@ export function SettingsView() {
                   <label>
                     Retention
                     <input
+                      class="input input-bordered input-sm mt-1 w-full"
                       value={destination.retention ?? ""}
                       placeholder="for example 30d"
                       onChange={(event) =>
@@ -194,7 +203,12 @@ export function SettingsView() {
               )}
             </For>
           </ul>
-          <button type="button" onClick={saveDestinations} disabled={settingsPending()}>
+          <button
+            class="btn btn-ghost btn-sm"
+            type="button"
+            onClick={saveDestinations}
+            disabled={settingsPending()}
+          >
             {settingsPending() ? "Saving…" : "Save destination settings"}
           </button>
         </Show>
@@ -207,6 +221,7 @@ export function SettingsView() {
           <label>
             Export concurrency{" "}
             <input
+              class="input input-bordered input-sm mt-1 w-full"
               type="number"
               min="1"
               value={runtimeSettings()?.exportLimit ?? ""}
@@ -222,6 +237,7 @@ export function SettingsView() {
           <label>
             Preview global concurrency{" "}
             <input
+              class="input input-bordered input-sm mt-1 w-full"
               type="number"
               min="1"
               value={runtimeSettings()?.previewGlobalLimit ?? ""}
@@ -236,6 +252,7 @@ export function SettingsView() {
           <label>
             Preview before (seconds){" "}
             <input
+              class="input input-bordered input-sm mt-1 w-full"
               type="number"
               min="0.001"
               step="0.1"
@@ -253,6 +270,7 @@ export function SettingsView() {
           <label>
             Preview after (seconds){" "}
             <input
+              class="input input-bordered input-sm mt-1 w-full"
               type="number"
               min="0.001"
               step="0.1"
@@ -270,6 +288,7 @@ export function SettingsView() {
           <label>
             Preview maximum window (seconds){" "}
             <input
+              class="input input-bordered input-sm mt-1 w-full"
               type="number"
               min="0.001"
               step="0.1"
@@ -285,6 +304,7 @@ export function SettingsView() {
           <label>
             Preview grid (seconds){" "}
             <input
+              class="input input-bordered input-sm mt-1 w-full"
               type="number"
               min="0.001"
               step="0.1"
@@ -303,6 +323,7 @@ export function SettingsView() {
           <label>
             Media scan file limit{" "}
             <input
+              class="input input-bordered input-sm mt-1 w-full"
               type="number"
               min="1"
               value={runtimeSettings()?.mediaMaxFiles ?? ""}
@@ -317,6 +338,7 @@ export function SettingsView() {
           <label>
             Media scan depth limit{" "}
             <input
+              class="input input-bordered input-sm mt-1 w-full"
               type="number"
               min="1"
               value={runtimeSettings()?.mediaMaxDepth ?? ""}
@@ -332,6 +354,7 @@ export function SettingsView() {
           <label>
             Disposable cache size (MB){" "}
             <input
+              class="input input-bordered input-sm mt-1 w-full"
               type="number"
               min="1"
               value={

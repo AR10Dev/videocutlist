@@ -64,7 +64,7 @@ export function ExportView() {
   const exportActive = () => exportJob()?.state === "queued" || exportJob()?.state === "running";
 
   return (
-    <section class="export-panel" aria-labelledby="export-heading">
+    <section class="export-panel flex flex-col gap-4 p-4" aria-labelledby="export-heading">
       <h2 id="export-heading">Export</h2>
 
       <div class="export-summary" aria-label="Export summary">
@@ -102,6 +102,7 @@ export function ExportView() {
             {(item) => (
               <label>
                 <input
+                  class="checkbox checkbox-sm"
                   type="checkbox"
                   checked={selectedExportItems().includes(item.id)}
                   onChange={(event) =>
@@ -118,12 +119,17 @@ export function ExportView() {
           </For>
           <div class="controls">
             <button
+              class="btn btn-ghost btn-sm"
               type="button"
               onClick={() => setSelectedExportItems(projectItems().map((item) => item.id))}
             >
               Select all
             </button>
-            <button type="button" onClick={() => setSelectedExportItems([])}>
+            <button
+              class="btn btn-ghost btn-sm"
+              type="button"
+              onClick={() => setSelectedExportItems([])}
+            >
               Select none
             </button>
           </div>
@@ -132,7 +138,7 @@ export function ExportView() {
 
       <div class="controls export-actions">
         <button
-          class="primary"
+          class="btn btn-primary btn-sm"
           disabled={
             !selected() ||
             dirty() ||
@@ -148,7 +154,9 @@ export function ExportView() {
             : `Export ${selectedExportItems().length} items`}
         </button>
         <Show when={exportActive()}>
-          <button onClick={() => void cancelExport()}>Cancel export</button>
+          <button class="btn btn-ghost btn-sm" onClick={() => void cancelExport()}>
+            Cancel export
+          </button>
         </Show>
       </div>
 
@@ -158,6 +166,7 @@ export function ExportView() {
           <label>
             Output arrangement
             <select
+              class="select select-bordered select-sm mt-1 w-full"
               aria-label="Output arrangement (Mode)"
               value={exportMode()}
               onChange={(event) =>
@@ -171,6 +180,7 @@ export function ExportView() {
           <label>
             What to export
             <select
+              class="select select-bordered select-sm mt-1 w-full"
               value={exportSelection()}
               onChange={(event) =>
                 exportFeature.setSelection(event.currentTarget.value as "segments" | "gaps")
@@ -190,6 +200,7 @@ export function ExportView() {
                   <div class="stream-option">
                     <label class="stream-row">
                       <input
+                        class="input input-bordered input-sm mt-1 w-full"
                         type="checkbox"
                         checked={checked()}
                         onChange={(event) => {
@@ -232,6 +243,7 @@ export function ExportView() {
           <label>
             Processing
             <select
+              class="select select-bordered select-sm mt-1 w-full"
               value={cutStrategy()}
               onChange={(event) =>
                 exportFeature.setStrategy(
@@ -256,6 +268,7 @@ export function ExportView() {
           <label>
             Destination
             <select
+              class="select select-bordered select-sm mt-1 w-full"
               value={destinationId()}
               onChange={(event) => exportFeature.setDestination(event.currentTarget.value)}
             >
@@ -274,6 +287,7 @@ export function ExportView() {
             <label>
               Filename template
               <input
+                class="input input-bordered input-sm mt-1 w-full"
                 value={filenameTemplate()}
                 onInput={(event) => exportFeature.setTemplate(event.currentTarget.value)}
               />
