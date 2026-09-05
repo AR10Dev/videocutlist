@@ -18,11 +18,23 @@ import { createExportController } from "../export/controller";
 import { lastDestinationId } from "../export/destination";
 import { createEditorController } from "../editor/controller";
 import { createTimelineHistory } from "../editor/timeline";
+import type { AssetViewport } from "../preview/assets";
 type Media = components["schemas"]["Media"];
 const api = createApiClient(resolveBrowserConfiguration());
 
 export function createWorkspaceController() {
   const [selected, setSelected] = createSignal<Media>();
+  const [visibleTimelineRange, setVisibleTimelineRange] = createSignal<AssetViewport>({
+    startMs: 0,
+    endMs: 0,
+  });
+  let visibleRangeMediaId: string | undefined;
+  createEffect(() => {
+    const item = selected();
+    if (item?.id === visibleRangeMediaId) return;
+    visibleRangeMediaId = item?.id;
+    setVisibleTimelineRange({ startMs: 0, endMs: item?.durationMs ?? 0 });
+  });
   const [status, setStatus] = createSignal("Loading media…");
   const settingsFeature = createSettingsController(api);
   const {
@@ -248,6 +260,7 @@ export function createWorkspaceController() {
     playheadMs,
     activeSegment,
     segments: () => present().segments,
+    visibleRange: visibleTimelineRange,
     updatePlaybackPosition,
   });
   const {
@@ -255,6 +268,7 @@ export function createWorkspaceController() {
     previewStatus,
     thumbnailURL,
     waveform,
+    assetRange,
     setPreviewCenterMs,
     diagnostics,
     setDiagnostics,
@@ -426,6 +440,7 @@ export function createWorkspaceController() {
     setTimecode,
     thumbnailURL,
     waveform,
+    assetRange,
     setPreviewCenterMs,
     setSettings,
     appearance,
@@ -486,6 +501,8 @@ export function createWorkspaceController() {
     setDetectionCandidates,
     timeline,
     setTimeline,
+    visibleTimelineRange,
+    setVisibleTimelineRange,
     activeSegmentIndex,
     setActiveSegmentIndex,
     activeSegment,

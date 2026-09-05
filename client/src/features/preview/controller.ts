@@ -1,7 +1,7 @@
 import { createEffect, createSignal, onCleanup, type Accessor } from "solid-js";
 import type { ApiClient } from "../../api";
 import type { components } from "../../generated/api";
-import { normalizePeaks } from "./assets";
+import { normalizePeaks, visibleAssetRange, type AssetRange, type AssetViewport } from "./assets";
 import {
   canStreamPreview,
   clampMediaPosition,
@@ -22,6 +22,7 @@ export function createPreviewController(
     playheadMs: Accessor<number>;
     activeSegment: Accessor<Segment | undefined>;
     segments: Accessor<Segment[]>;
+    visibleRange: Accessor<AssetViewport>;
     updatePlaybackPosition: (positionMs: number) => void;
   },
 ) {
@@ -29,6 +30,7 @@ export function createPreviewController(
   const [previewStatus, setPreviewStatus] = createSignal("");
   const [thumbnailURL, setThumbnailURL] = createSignal<string>();
   const [waveform, setWaveform] = createSignal<number[]>([]);
+  const [assetRange, setAssetRange] = createSignal<AssetRange>();
   const [previewCenterMs, setPreviewCenterMs] = createSignal(0);
   const [previewReload, setPreviewReload] = createSignal(0);
   const [diagnostics, setDiagnostics] = createSignal<PreviewDiagnostics>();
@@ -38,6 +40,7 @@ export function createPreviewController(
   let previewRequest: AbortController | undefined;
   let cleanupPreview: (() => void) | undefined;
   let thumbnailObjectURL: string | undefined;
+  let assetGeneration = 0;
   let previewGeneration = 0;
   let renewalGeneration = -1;
   let selectedMediaId: string | undefined;
@@ -55,22 +58,29 @@ export function createPreviewController(
       setOrderedSegmentIndex(0);
       video()?.pause();
     }
+    setPreviewStatus("");
+  });
+  createEffect(() => {
+    const item = dependencies.selected();
+    const viewport = dependencies.visibleRange();
     assetRequest?.abort();
     if (thumbnailObjectURL) URL.revokeObjectURL(thumbnailObjectURL);
     thumbnailObjectURL = undefined;
     setThumbnailURL();
     setWaveform([]);
+    setAssetRange();
     setAssetStatus("");
-    setPreviewStatus("");
+    const generation = ++assetGeneration;
     if (!item) return;
+    const range = visibleAssetRange(viewport, item.durationMs);
     const controller = new AbortController();
     assetRequest = controller;
-    const durationMs = Math.max(1, Math.min(120000, item.durationMs));
+    const current = () => !controller.signal.aborted && generation === assetGeneration;
     void api
       .assetRequest(
         item.id,
         "thumbnails",
-        { startMs: 0, durationMs, count: 16, width: 320 },
+        { startMs: range.startMs, durationMs: range.durationMs, count: 16, width: 320 },
         { signal: controller.signal },
       )
       .then((response) => {
@@ -78,33 +88,34 @@ export function createPreviewController(
         return response.blob();
       })
       .then((blob) => {
-        if (!controller.signal.aborted) {
-          thumbnailObjectURL = URL.createObjectURL(blob);
-          setThumbnailURL(thumbnailObjectURL);
-        }
+        if (!current()) return;
+        thumbnailObjectURL = URL.createObjectURL(blob);
+        setThumbnailURL(thumbnailObjectURL);
+        setAssetRange(range);
       })
       .catch(() => {
-        if (!controller.signal.aborted)
-          setAssetStatus("Thumbnails unavailable; editing remains available.");
+        if (current()) setAssetStatus("Thumbnails unavailable; editing remains available.");
       });
     void api
       .assetRequest(
         item.id,
         "waveform",
-        { startMs: 0, durationMs, samples: 256 },
+        { startMs: range.startMs, durationMs: range.durationMs, samples: 256 },
         { signal: controller.signal },
       )
       .then(async (response) => {
-        const value = (await response.json()) as { peaks?: unknown };
         if (!response.ok) throw new Error();
+        const value = (await response.json()) as { peaks?: unknown };
         return normalizePeaks(value.peaks);
       })
       .then((peaks) => {
-        if (!controller.signal.aborted) setWaveform(peaks);
+        if (current()) {
+          setWaveform(peaks);
+          setAssetRange(range);
+        }
       })
       .catch(() => {
-        if (!controller.signal.aborted)
-          setAssetStatus("Waveform unavailable; editing remains available.");
+        if (current()) setAssetStatus("Waveform unavailable; editing remains available.");
       });
     onCleanup(() => controller.abort());
   });
@@ -160,6 +171,7 @@ export function createPreviewController(
   });
   onCleanup(() => {
     setPlaybackIntent(false);
+    assetGeneration += 1;
     assetRequest?.abort();
     previewRequest?.abort();
     cleanupPreview?.();
@@ -331,6 +343,7 @@ export function createPreviewController(
     previewStatus,
     thumbnailURL,
     waveform,
+    assetRange,
     previewCenterMs,
     setPreviewCenterMs,
     diagnostics,

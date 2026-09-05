@@ -1,11 +1,23 @@
 import { createEffect } from "solid-js";
+import type { AssetRange } from "../preview/assets";
 
-type Props = { thumbnailURL?: string; waveform: number[]; lane?: "thumbnail" | "waveform" };
+type Props = {
+  thumbnailURL?: string;
+  waveform: number[];
+  lane?: "thumbnail" | "waveform";
+  durationMs: number;
+  assetRange?: AssetRange;
+};
 
 export function TimelineCanvas(props: Props) {
   let canvas: HTMLCanvasElement | undefined;
   let drawVersion = 0;
-  const draw = (thumbnailURL?: string, waveformPeaks: number[] = []) => {
+  const draw = (
+    thumbnailURL: string | undefined,
+    waveformPeaks: number[] = [],
+    assetRange?: AssetRange,
+    durationMs = 0,
+  ) => {
     const version = ++drawVersion;
     if (!canvas) return;
     const bounds = canvas.getBoundingClientRect();
@@ -16,12 +28,25 @@ export function TimelineCanvas(props: Props) {
     if (!context) return;
     context.setTransform(scale, 0, 0, scale, 0, 0);
     context.clearRect(0, 0, bounds.width, bounds.height);
+    const mediaDuration = Math.max(1, durationMs);
+    const startMs = Math.max(0, Math.min(mediaDuration, assetRange?.startMs ?? 0));
+    const rangeDuration = Math.max(
+      0,
+      Math.min(mediaDuration - startMs, assetRange?.durationMs ?? mediaDuration),
+    );
+    const left = (startMs / mediaDuration) * bounds.width;
+    const width = (rangeDuration / mediaDuration) * bounds.width;
     const drawWaveform = () => {
       context.fillStyle = "rgba(96, 165, 250, 0.7)";
-      const column = bounds.width / Math.max(1, waveformPeaks.length);
+      const column = width / Math.max(1, waveformPeaks.length);
       waveformPeaks.forEach((peak, index) => {
         const height = Math.max(2, peak * bounds.height);
-        context.fillRect(index * column, (bounds.height - height) / 2, Math.ceil(column), height);
+        context.fillRect(
+          left + index * column,
+          (bounds.height - height) / 2,
+          Math.ceil(column),
+          height,
+        );
       });
     };
     if (props.lane === "waveform" || !thumbnailURL) {
@@ -31,13 +56,13 @@ export function TimelineCanvas(props: Props) {
     const image = new Image();
     image.onload = () => {
       if (version !== drawVersion) return;
-      context.drawImage(image, 0, 0, bounds.width, bounds.height);
+      context.drawImage(image, left, 0, width, bounds.height);
       drawWaveform();
     };
     image.src = thumbnailURL;
   };
   createEffect(() => {
-    draw(props.thumbnailURL, props.waveform);
+    draw(props.thumbnailURL, props.waveform, props.assetRange, props.durationMs);
   });
   return (
     <canvas

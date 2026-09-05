@@ -812,7 +812,9 @@ test("clears detection results when media context changes", async ({ page }) => 
   await expect(page.getByText(/candidates found/)).toHaveCount(0);
 });
 
-test("loads timeline assets through independent fixture routes", async ({ page }) => {
+test("loads timeline assets for the visible range and keeps editing available on media changes", async ({
+  page,
+}) => {
   const requests: string[] = [];
   page.on("request", (request) => {
     if (request.url().includes("/thumbnails") || request.url().includes("/waveform"))
@@ -822,9 +824,34 @@ test("loads timeline assets through independent fixture routes", async ({ page }
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   await expect(page.getByRole("group", { name: /Timeline/ })).toBeVisible();
   await expect(page.getByText("No cuts selected.", { exact: true })).toBeVisible();
-  expect(requests.some((url) => url.includes("/thumbnails?"))).toBeTruthy();
-  expect(requests.some((url) => url.includes("/waveform?"))).toBeTruthy();
+  await expect.poll(() => requests.some((url) => url.includes("/thumbnails?"))).toBeTruthy();
+  await expect.poll(() => requests.some((url) => url.includes("/waveform?"))).toBeTruthy();
+  const initialDuration = Number(
+    new URL(requests.find((url) => url.includes("/waveform?"))!).searchParams.get("durationMs"),
+  );
+  expect(initialDuration).toBe(10_000);
   await expect(page.locator("canvas.timeline-canvas")).toBeVisible();
+  await page.getByRole("button", { name: "Zoom in" }).click();
+  await expect
+    .poll(() =>
+      requests.some(
+        (url) =>
+          url.includes("/waveform?") &&
+          Number(new URL(url).searchParams.get("durationMs")) < initialDuration,
+      ),
+    )
+    .toBeTruthy();
+  await page.locator(".timeline-scroll").evaluate((element) => {
+    element.scrollLeft = element.scrollWidth;
+    element.dispatchEvent(new Event("scroll"));
+  });
+  await expect
+    .poll(() =>
+      requests.some(
+        (url) => url.includes("/waveform?") && Number(new URL(url).searchParams.get("startMs")) > 0,
+      ),
+    )
+    .toBeTruthy();
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: /second.mp4/ }).click();
   await expect(page.locator("canvas.timeline-canvas")).toHaveCount(1);
