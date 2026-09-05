@@ -50,7 +50,7 @@ export function CutsView() {
           </p>
         }
       >
-        <ol class="list-none space-y-1 p-0" aria-label="Selected cuts">
+        <ol class="list-none space-y-1 p-0" aria-label="Selected segments">
           <For each={workspace.present().segments}>
             {(segment, index) => (
               <li class="flex items-stretch gap-1" aria-label={`Cut ${index() + 1}`}>

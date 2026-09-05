@@ -153,19 +153,8 @@ export function App() {
         >
           <header class="app-header">
             <div class="app-heading">
-              <h2>Media</h2>
+              <h2 id="media-heading">Media</h2>
             </div>
-            <button
-              class="settings-button btn btn-sm btn-square"
-              type="button"
-              aria-label={settingsOpen() ? "Back to editor" : "Settings"}
-              aria-pressed={settingsOpen() ? "true" : "false"}
-              title={settingsOpen() ? "Back to editor" : "Settings"}
-              onClick={() => (settingsOpen() ? setSettingsOpen(false) : void openSettings())}
-            >
-              <Settings size={18} aria-hidden="true" />
-              <span class="sr-only">{settingsOpen() ? "Back to editor" : "Settings"}</span>
-            </button>
           </header>
           <Show when={!settingsOpen()}>
             <LibraryView />
