@@ -14,6 +14,7 @@ import {
   redoTimeline,
   undoTimeline,
   updateTimelinePlayback,
+  updateTimelineView,
   type TimelineHistory,
 } from "./timeline";
 import { validateSegments, type Segment } from "../preview/model";
@@ -61,10 +62,17 @@ export function createEditorController(deps: {
   };
   const updateTimeline = (changes: Partial<TimelineHistory["present"]>) => {
     setEditorStatus("");
-    const next = editTimeline(timeline(), changes);
+    const { playheadMs: nextPlayheadMs, zoom: nextZoom, ...editChanges } = changes;
+    let next = timeline();
+    if (Object.keys(editChanges).length) next = editTimeline(next, editChanges);
+    if (nextPlayheadMs !== undefined || nextZoom !== undefined)
+      next = updateTimelineView(next, {
+        ...(nextPlayheadMs !== undefined ? { playheadMs: nextPlayheadMs } : {}),
+        ...(nextZoom !== undefined ? { zoom: nextZoom } : {}),
+      });
     setTimeline(next);
-    if (changes.playheadMs !== undefined) deps.setPreviewCenterMs(next.present.playheadMs);
-    deps.markDirty();
+    if (nextPlayheadMs !== undefined) deps.setPreviewCenterMs(next.present.playheadMs);
+    if (Object.keys(editChanges).length) deps.markDirty();
   };
   const updatePlaybackPosition = (positionMs: number) => {
     const nextPosition = Math.max(0, Math.min(duration(), Math.round(positionMs)));

@@ -71,6 +71,14 @@ export const updateTimelinePlayback = (
   present: { ...history.present, playheadMs },
 });
 
+export const updateTimelineView = (
+  history: TimelineHistory,
+  changes: Partial<Pick<TimelineSnapshot, "playheadMs" | "zoom">>,
+): TimelineHistory => ({
+  ...history,
+  present: { ...history.present, ...changes },
+});
+
 export const undoTimeline = (history: TimelineHistory): TimelineHistory => {
   const previous = history.past.at(-1);
   if (!previous) return history;

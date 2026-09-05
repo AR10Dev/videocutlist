@@ -361,7 +361,7 @@ test("header distinguishes unsaved, dirty, and saved project states", async ({ p
   await expect(status).toContainText("Untitled project");
   await expect(status).toContainText("Saved");
   await page.getByLabel("Timeline playhead").fill("200");
-  await expect(status).toContainText("Unsaved changes");
+  await expect(status).toContainText("Saved");
 });
 
 test("browser theme selection persists and keeps focusable controls readable", async ({ page }) => {
@@ -857,6 +857,176 @@ test("keeps an exact timeline seek while the paused preview settles", async ({ p
   });
 
   await expect(playhead).toHaveValue("2000");
+});
+
+test("renews whole-media playback without dirtying viewing state and honors pause", async ({
+  page,
+}) => {
+  const previewRequests: string[] = [];
+  let renewalStartedResolve!: () => void;
+  const renewalStarted = new Promise<void>((resolve) => {
+    renewalStartedResolve = resolve;
+  });
+  let releaseRenewal!: () => void;
+  const renewalReleased = new Promise<void>((resolve) => {
+    releaseRenewal = resolve;
+  });
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname.endsWith("/preview")) previewRequests.push(request.url());
+  });
+  await page.route(`${apiOrigin}/api/v1/media/${media.id}/preview**`, async (route) => {
+    const url = new URL(route.request().url());
+    const center = url.searchParams.get("centerMs") ?? "0";
+    if (center === "7250") {
+      renewalStartedResolve();
+      await renewalReleased;
+    }
+    return route.fulfill({
+      headers: {
+        "content-type": "video/mp4",
+        "Access-Control-Expose-Headers":
+          "X-Preview-Start, X-Preview-Duration, X-Preview-Offset, X-Preview-Cache, X-Request-ID",
+        "X-Preview-Start": "0",
+        "X-Preview-Duration": "8000",
+        "X-Preview-Offset": center,
+        "X-Preview-Cache": "hit",
+        "X-Request-ID": `preview-${center}`,
+      },
+      body: "fragment",
+    });
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await saveProject(page);
+  const video = page.getByLabel("Preview player");
+  await video.evaluate((element) => {
+    const player = element as HTMLVideoElement;
+    player.play = () => Promise.resolve();
+    player.pause = () => undefined;
+  });
+  await expect.poll(() => previewRequests.length).toBe(1);
+  await expect(video).toHaveAttribute("data-playback-mode", "whole-media");
+  await page.getByLabel("Preview volume").fill("0.35");
+  await page.getByRole("button", { name: "Mute preview" }).click();
+  await page.getByRole("button", { name: "Play preview" }).click();
+  await expect(video).toHaveAttribute("data-playback-intent", "playing");
+  await video.evaluate((element) => {
+    const player = element as HTMLVideoElement;
+    player.currentTime = 7.25;
+    player.dispatchEvent(new Event("timeupdate"));
+  });
+  await expect(page.getByLabel("Timeline playhead")).toHaveValue("7250");
+  await renewalStarted;
+  await expect(page.getByRole("button", { name: "Pause preview" })).toBeVisible();
+  await page.getByRole("button", { name: "Pause preview" }).click();
+  await expect(page.getByRole("button", { name: "Play preview" })).toBeVisible();
+  releaseRenewal();
+  await expect.poll(() => previewRequests.length).toBe(2);
+  await expect(video).toHaveAttribute("data-preview-offset", "7250");
+  await expect(video).toHaveAttribute("data-playback-intent", "paused");
+  expect(await video.evaluate((element) => (element as HTMLVideoElement).volume)).toBe(0.35);
+  await expect(video).toHaveJSProperty("muted", true);
+  await page.getByRole("button", { name: "Zoom in" }).click();
+  await expect(page.locator("header").getByLabel("Project status")).toContainText("Saved");
+  await expect(page.getByRole("button", { name: "Undo" })).toBeDisabled();
+  expect(new URL(previewRequests[1]).searchParams.get("centerMs")).toBe("7250");
+});
+
+test("stops whole-media playback at media duration after the final window", async ({ page }) => {
+  const previewRequests: string[] = [];
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname.endsWith("/preview")) previewRequests.push(request.url());
+  });
+  await page.route(`${apiOrigin}/api/v1/media/${media.id}/preview**`, (route) => {
+    const url = new URL(route.request().url());
+    const center = url.searchParams.get("centerMs") ?? "0";
+    const finalWindow = center === "8000";
+    return route.fulfill({
+      headers: {
+        "content-type": "video/mp4",
+        "Access-Control-Expose-Headers":
+          "X-Preview-Start, X-Preview-Duration, X-Preview-Offset, X-Preview-Cache, X-Request-ID",
+        "X-Preview-Start": finalWindow ? "6000" : "0",
+        "X-Preview-Duration": finalWindow ? "4000" : "8000",
+        "X-Preview-Offset": finalWindow ? "2000" : center,
+        "X-Preview-Cache": "hit",
+        "X-Request-ID": `preview-${center}`,
+      },
+      body: "fragment",
+    });
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: /camera.mp4/ }).click();
+  const video = page.getByLabel("Preview player");
+  await video.evaluate((element) => {
+    const player = element as HTMLVideoElement;
+    player.play = () => Promise.resolve();
+    player.pause = () => undefined;
+  });
+  await expect.poll(() => previewRequests.length).toBe(1);
+  await page.getByRole("button", { name: "Play preview" }).click();
+  await video.evaluate((element) => {
+    const player = element as HTMLVideoElement;
+    player.currentTime = 8;
+    player.dispatchEvent(new Event("timeupdate"));
+  });
+  await expect.poll(() => previewRequests.length).toBe(2);
+  await expect(video).toHaveAttribute("data-preview-offset", "2000");
+  await video.evaluate((element) => {
+    const player = element as HTMLVideoElement;
+    player.currentTime = 4;
+    player.dispatchEvent(new Event("timeupdate"));
+    player.dispatchEvent(new Event("ended"));
+  });
+  await expect(page.getByRole("button", { name: "Play preview" })).toBeVisible();
+  await expect(page.getByLabel("Timeline playhead")).toHaveValue("10000");
+  await expect(video).toHaveAttribute("data-playback-intent", "paused");
+  expect(previewRequests).toHaveLength(2);
+});
+
+test("pauses and explains a failed whole-media renewal", async ({ page }) => {
+  const previewRequests: string[] = [];
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname.endsWith("/preview")) previewRequests.push(request.url());
+  });
+  await page.route(`${apiOrigin}/api/v1/media/${media.id}/preview**`, (route) => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.get("centerMs") === "7500") return route.fulfill({ status: 500 });
+    return route.fulfill({
+      headers: {
+        "content-type": "video/mp4",
+        "Access-Control-Expose-Headers":
+          "X-Preview-Start, X-Preview-Duration, X-Preview-Offset, X-Preview-Cache, X-Request-ID",
+        "X-Preview-Start": "0",
+        "X-Preview-Duration": "8000",
+        "X-Preview-Offset": url.searchParams.get("centerMs") ?? "0",
+      },
+      body: "fragment",
+    });
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: /camera.mp4/ }).click();
+  const video = page.getByLabel("Preview player");
+  await video.evaluate((element) => {
+    const player = element as HTMLVideoElement;
+    player.play = () => Promise.resolve();
+    player.pause = () => undefined;
+  });
+  await expect.poll(() => previewRequests.length).toBe(1);
+  await page.getByRole("button", { name: "Play preview" }).click();
+  await video.evaluate((element) => {
+    const player = element as HTMLVideoElement;
+    player.currentTime = 7.5;
+    player.dispatchEvent(new Event("timeupdate"));
+  });
+  await expect(
+    page.getByText(
+      "Preview request failed. Try again. Timeline markers remain available for editing.",
+    ),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "Play preview" })).toBeVisible();
+  await expect(page.getByLabel("Timeline playhead")).toHaveValue("7500");
+  expect(previewRequests).toHaveLength(2);
 });
 
 test("shows a safe preview request failure", async ({ page }) => {

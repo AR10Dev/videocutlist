@@ -4,9 +4,11 @@ import type { components } from "../../generated/api";
 import { normalizePeaks } from "./assets";
 import {
   canStreamPreview,
+  clampMediaPosition,
   streamPreview,
   watchedMediaPosition,
   type PreviewDiagnostics,
+  type PreviewPlaybackMode,
 } from "./model";
 
 type Media = components["schemas"]["Media"];
@@ -24,6 +26,7 @@ export function createPreviewController(
   const [thumbnailURL, setThumbnailURL] = createSignal<string>();
   const [waveform, setWaveform] = createSignal<number[]>([]);
   const [previewCenterMs, setPreviewCenterMs] = createSignal(0);
+  const [previewReload, setPreviewReload] = createSignal(0);
   const [diagnostics, setDiagnostics] = createSignal<PreviewDiagnostics>();
   // Settings unmounts the player; a new element must trigger preview attachment.
   const [video, setVideo] = createSignal<HTMLVideoElement>();
@@ -31,10 +34,20 @@ export function createPreviewController(
   let previewRequest: AbortController | undefined;
   let cleanupPreview: (() => void) | undefined;
   let thumbnailObjectURL: string | undefined;
-  let shouldPlay = false;
+  let previewGeneration = 0;
+  let renewalGeneration = -1;
+  let selectedMediaId: string | undefined;
+  const previewRenewalLeadMs = 1000;
+  const [playbackIntent, setPlaybackIntent] = createSignal(false);
+  const playbackMode = (): PreviewPlaybackMode => "whole-media";
 
   createEffect(() => {
     const item = dependencies.selected();
+    if (item?.id !== selectedMediaId) {
+      selectedMediaId = item?.id;
+      setPlaybackIntent(false);
+      video()?.pause();
+    }
     assetRequest?.abort();
     if (thumbnailObjectURL) URL.revokeObjectURL(thumbnailObjectURL);
     thumbnailObjectURL = undefined;
@@ -91,15 +104,19 @@ export function createPreviewController(
   createEffect(() => {
     const item = dependencies.selected();
     const position = previewCenterMs();
+    previewReload();
+    const generation = ++previewGeneration;
     cleanupPreview?.();
     cleanupPreview = undefined;
     previewRequest?.abort();
     setDiagnostics();
+    renewalGeneration = -1;
     const player = video();
     if (!item || !player || !canStreamPreview()) return;
     const timer = window.setTimeout(() => {
       const request = new AbortController();
       previewRequest = request;
+      const current = () => !request.signal.aborted && generation === previewGeneration;
       const params = new URLSearchParams({
         centerMs: String(Math.round(position)),
         beforeMs: "2000",
@@ -113,15 +130,18 @@ export function createPreviewController(
             signal: request.signal,
           }),
         (value) => {
-          if (!request.signal.aborted) {
+          if (current()) {
             setDiagnostics(value);
             setPreviewStatus("");
           }
         },
         (error) => {
-          if (!request.signal.aborted) setPreviewStatus(error.message);
+          if (current()) {
+            setPlaybackIntent(false);
+            setPreviewStatus(error.message);
+          }
         },
-        () => shouldPlay,
+        () => current() && playbackIntent(),
       );
     }, 200);
     onCleanup(() => {
@@ -132,6 +152,7 @@ export function createPreviewController(
     });
   });
   onCleanup(() => {
+    setPlaybackIntent(false);
     assetRequest?.abort();
     previewRequest?.abort();
     cleanupPreview?.();
@@ -139,26 +160,59 @@ export function createPreviewController(
   });
 
   const watchedPosition = () => dependencies.playheadMs();
+  const requestRenewal = (positionMs: number, force = false) => {
+    const item = dependencies.selected();
+    const info = diagnostics();
+    if (!item || !info || !playbackIntent() || info.durationMs <= 0) return false;
+    const position = clampMediaPosition(positionMs, item.durationMs);
+    if (position >= item.durationMs) return false;
+    const windowEnd = Math.min(item.durationMs, info.startMs + info.durationMs);
+    if (!force && windowEnd - position > previewRenewalLeadMs) return false;
+    if (renewalGeneration === previewGeneration) return true;
+    renewalGeneration = previewGeneration;
+    setPreviewCenterMs(position);
+    return true;
+  };
   const syncPreviewPosition = (currentTime: number) => {
     const item = dependencies.selected();
     const info = diagnostics();
-    if (item && info)
-      dependencies.updatePlaybackPosition(
-        watchedMediaPosition(info.startMs, currentTime, item.durationMs),
-      );
+    if (!item || !info) return;
+    const position = watchedMediaPosition(info.startMs, currentTime, item.durationMs);
+    dependencies.updatePlaybackPosition(position);
+    if (playbackIntent()) requestRenewal(position);
+  };
+  const handlePreviewEnded = (currentTime: number) => {
+    const item = dependencies.selected();
+    const info = diagnostics();
+    if (!item) {
+      setPlaybackIntent(false);
+      return;
+    }
+    if (!info) return;
+    const position = watchedMediaPosition(info.startMs, currentTime, item.durationMs);
+    dependencies.updatePlaybackPosition(position);
+    if (!playbackIntent()) return;
+    if (position >= item.durationMs || !requestRenewal(position, true)) setPlaybackIntent(false);
   };
   const togglePlayback = () => {
     const player = video();
-    shouldPlay = Boolean(player?.paused);
-    if (shouldPlay)
-      void player?.play().catch(() => {
-        shouldPlay = false;
+    const nextIntent = !playbackIntent();
+    setPlaybackIntent(nextIntent);
+    if (!nextIntent) {
+      player?.pause();
+      return;
+    }
+    if (!diagnostics() && previewStatus().includes("Try again."))
+      setPreviewReload((value) => value + 1);
+    void player?.play().catch(() => {
+      if (playbackIntent() && diagnostics()) {
+        setPlaybackIntent(false);
         setPreviewStatus("Playback could not start. Wait for the preview to load and try again.");
-      });
-    else player?.pause();
+      }
+    });
   };
   const pausePlayback = () => {
-    shouldPlay = false;
+    setPlaybackIntent(false);
     video()?.pause();
   };
 
@@ -171,8 +225,11 @@ export function createPreviewController(
     setPreviewCenterMs,
     diagnostics,
     setDiagnostics,
+    playbackMode,
+    playbackIntent,
     watchedPosition,
     syncPreviewPosition,
+    handlePreviewEnded,
     setVideo,
     togglePlayback,
     pausePlayback,

@@ -48,7 +48,6 @@ export function PreviewPlayer(props: { timeline: JSX.Element; controls: JSX.Elem
   const workspace = useWorkspace();
   const [aspectRatio, setAspectRatio] = createSignal("16 / 9");
   const [volume, setVolume] = createSignal(1);
-  const [playing, setPlaying] = createSignal(false);
   let videoElement: HTMLVideoElement | undefined;
   let settlingSeek = false;
   onCleanup(() => {
@@ -64,12 +63,8 @@ export function PreviewPlayer(props: { timeline: JSX.Element; controls: JSX.Elem
         Math.min(workspace.duration(), workspace.playheadMs() + direction * amount),
       ),
     });
-    workspace.markDirty();
   };
-  const togglePlayback = () => {
-    if (playing()) workspace.pausePlayback();
-    else workspace.togglePlayback();
-  };
+  const togglePlayback = () => workspace.togglePlayback();
   const fullscreen = () => {
     const request = !document.fullscreenElement
       ? videoElement?.requestFullscreen?.()
@@ -105,15 +100,17 @@ export function PreviewPlayer(props: { timeline: JSX.Element; controls: JSX.Elem
             muted={workspace.muted()}
             aria-label="Preview player"
             data-preview-offset={workspace.diagnostics()?.offsetMs ?? 0}
+            data-playback-mode={workspace.playbackMode()}
+            data-playback-intent={workspace.playbackIntent() ? "playing" : "paused"}
             onLoadedMetadata={(event) => {
               const { videoWidth, videoHeight } = event.currentTarget;
               if (videoWidth && videoHeight) setAspectRatio(`${videoWidth} / ${videoHeight}`);
             }}
             onClick={workspace.togglePlayback}
             onDblClick={fullscreen}
-            onPlay={() => setPlaying(true)}
-            onPause={() => setPlaying(false)}
-            onEnded={() => setPlaying(false)}
+            onEnded={(event) => {
+              workspace.handlePreviewEnded(event.currentTarget.currentTime);
+            }}
             onTimeUpdate={(event) => {
               if (!settlingSeek) workspace.syncPreviewPosition(event.currentTarget.currentTime);
             }}
@@ -143,12 +140,12 @@ export function PreviewPlayer(props: { timeline: JSX.Element; controls: JSX.Elem
               <SkipBack size={18} aria-hidden="true" />
             </IconButton>
             <IconButton
-              label={playing() ? "Pause preview" : "Play preview"}
+              label={workspace.playbackIntent() ? "Pause preview" : "Play preview"}
               keyshortcuts="Space"
               disabled={!canStreamPreview()}
               onClick={togglePlayback}
             >
-              {playing() ? (
+              {workspace.playbackIntent() ? (
                 <Pause size={22} aria-hidden="true" />
               ) : (
                 <Play size={22} aria-hidden="true" />
@@ -168,7 +165,6 @@ export function PreviewPlayer(props: { timeline: JSX.Element; controls: JSX.Elem
                 const muted = !workspace.muted();
                 workspace.setMuted(muted);
                 workspace.saveSettings({ muted });
-                workspace.markDirty();
               }}
             >
               {workspace.muted() ? (
