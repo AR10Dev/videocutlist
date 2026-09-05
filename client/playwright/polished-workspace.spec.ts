@@ -208,6 +208,7 @@ test("detection sends sensitivity settings and rejects invalid values", async ({
     });
   });
   await chooseMedia(page);
+  await page.getByRole("button", { name: "Add to project" }).click();
   await page.getByRole("tab", { name: "Detection" }).click();
   await page.getByText("Detection sensitivity").click();
   await page.getByLabel("Silence threshold (dB)").fill("-35");
@@ -371,6 +372,7 @@ test("cut labels and per-row split work without invisible menu inputs", async ({
 
 test("a multi-item JSON cut list restores as a new unsaved project", async ({ page }) => {
   await chooseMedia(page);
+  await page.getByRole("button", { name: "Add to project" }).click();
   await page.getByRole("tab", { name: "Project", exact: true }).click();
   await page.getByText("Interchange", { exact: true }).click();
   page.on("dialog", (dialog) => void dialog.accept());

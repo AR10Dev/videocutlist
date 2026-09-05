@@ -17,6 +17,7 @@ import { createProjectsController } from "../projects/controller";
 import { createExportController } from "../export/controller";
 import { lastDestinationId } from "../export/destination";
 import { createEditorController } from "../editor/controller";
+import { createTimelineHistory } from "../editor/timeline";
 type Media = components["schemas"]["Media"];
 const api = createApiClient(resolveBrowserConfiguration());
 
@@ -61,6 +62,7 @@ export function createWorkspaceController() {
     })(),
   );
   let editorVersion = 0;
+  const selectActiveExportItem: { current?: () => void } = {};
   const markDirty = () => {
     editorVersion++;
     setDirty(true);
@@ -77,6 +79,7 @@ export function createWorkspaceController() {
     playActiveSegment: (loop) => previewRef.current?.playActiveSegment(loop),
     playOrderedSegments: () => previewRef.current?.playOrderedSegments(),
     createClips: () => exportRef.current?.exportProject(),
+    onSegmentCommitted: () => selectActiveExportItem.current?.(),
   });
   const {
     segmentLabel,
@@ -159,6 +162,11 @@ export function createWorkspaceController() {
     cancelChildJob,
     retryChildJob,
   } = exportFeature;
+  selectActiveExportItem.current = () => {
+    const id = activeItemId();
+    if (!id) return;
+    setSelectedExportItems((ids) => (ids.includes(id) ? ids : [...ids, id]));
+  };
   const editableItems = () =>
     projectItems().map((item) =>
       item.id === activeItemId()
@@ -268,13 +276,43 @@ export function createWorkspaceController() {
     if (existing) {
       setProjectItems(items);
       activateItem(existing);
-      setStatus(`Selected ${item.name}.`);
+      setStatus(`Activated ${item.name} in the project.`);
       return;
     }
-    const added = createProjectItem(item, lastDestinationId());
+    setProjectItems(items);
+    setActiveItemId();
+    setSelected(item);
+    setTimeline(createTimelineHistory({ playheadMs: 0, segments: [], zoom: 1 }));
+    setPreviewCenterMs(0);
+    setMuted(false);
+    setExportMode("separate");
+    setExportSelection("segments");
+    setStreamIndexes([]);
+    setCutStrategy(settings().cutStrategy);
+    setDestinationId(lastDestinationId() ?? "download");
+    setFilenameTemplate(settings().filenameTemplate);
+    setDiagnostics();
+    setStatus(`Previewing ${item.name}. Add it to the project to keep cuts.`);
+  };
+  const addMediaToProject = () => {
+    const item = selected();
+    if (!item) return;
+    const items = editableItems();
+    const existing = items.find((entry) => entry.media.id === item.id);
+    if (existing) {
+      activateItem(existing);
+      setStatus(`Activated ${item.name} in the project.`);
+      return;
+    }
+    const added = {
+      ...createProjectItem(item, lastDestinationId()),
+      timeline: timeline(),
+    };
     setProjectItems([...items, added]);
-    setSelectedExportItems((ids) => [...ids, added.id]);
     activateItem(added);
+    if (added.timeline.present.segments.length) {
+      setSelectedExportItems((ids) => (ids.includes(added.id) ? ids : [...ids, added.id]));
+    }
     markDirty();
     setStatus(`Added ${item.name} to the project.`);
   };
@@ -472,6 +510,7 @@ export function createWorkspaceController() {
     libraryMessage,
     refreshMedia,
     chooseMedia,
+    addMediaToProject,
     reorderProjectItem,
     removeProjectItem,
     watchedPosition,

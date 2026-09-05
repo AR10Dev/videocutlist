@@ -81,6 +81,7 @@ test("export cancellation is isolated from a changed media context", async ({ pa
 
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await page.getByRole("button", { name: "Add to project" }).click();
   await page.getByRole("button", { name: "Set in" }).click();
   await page.getByRole("textbox", { name: "Timecode" }).fill("0:00.500");
   await page.getByRole("textbox", { name: "Timecode" }).press("Enter");
@@ -89,12 +90,13 @@ test("export cancellation is isolated from a changed media context", async ({ pa
   await page.getByRole("tab", { name: "Project" }).click();
   await page.getByRole("button", { name: "Save project" }).click();
   await page.getByRole("tab", { name: "Export" }).click();
-  await expect(page.getByRole("button", { name: "Export item" })).toBeEnabled();
-  await page.getByRole("button", { name: "Export item" }).click();
+  await expect(page.getByRole("button", { name: "Create clips" })).toBeEnabled();
+  await page.getByRole("button", { name: "Create clips" }).click();
   await expect(page.getByRole("button", { name: "Cancel export" })).toBeVisible();
   await page.getByRole("button", { name: "Cancel export" }).click();
   await deleteSeen;
   await page.getByRole("button", { name: /second.mp4/ }).click();
+  await page.getByRole("button", { name: "Add to project" }).click();
   await page.getByRole("tab", { name: "Project" }).click();
   releaseDelete();
   await expect.poll(() => deleteAborted).toBe(true);
@@ -145,6 +147,7 @@ test("gates interchange exports until the project is persisted", async ({ page }
 
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await page.getByRole("button", { name: "Add to project" }).click();
   await page.getByRole("tab", { name: "Project" }).click();
   await page.getByText("Interchange", { exact: true }).click();
   await expect(page.getByRole("button", { name: "Export CSV" })).toBeDisabled();
@@ -181,6 +184,7 @@ test("separates media selection from cut-list imports", async ({ page }) => {
   await expect(page.getByLabel("Import CSV or chapters")).toHaveCount(0);
 
   await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await page.getByRole("button", { name: "Add to project" }).click();
   await expect(page.getByRole("heading", { name: "Timeline" })).toBeVisible();
   await page.getByRole("tab", { name: "Project" }).click();
   await page.getByText("Interchange", { exact: true }).click();

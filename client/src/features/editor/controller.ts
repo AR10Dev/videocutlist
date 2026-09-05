@@ -39,6 +39,7 @@ export function createEditorController(deps: {
   playActiveSegment: (loop: boolean) => void;
   playOrderedSegments: () => void;
   createClips: () => void | Promise<void>;
+  onSegmentCommitted?: () => void;
 }) {
   const [editorStatus, setEditorStatus] = createSignal("");
   const [segmentLabel, setSegmentLabel] = createSignal("");
@@ -152,6 +153,7 @@ export function createEditorController(deps: {
     setSegmentLabel("");
     setActiveIndex(next.length - 1);
     setEditingActive(false);
+    deps.onSegmentCommitted?.();
   };
   const removeSegment = (index: number) => {
     const next = removeSegments(present().segments, index);

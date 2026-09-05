@@ -40,7 +40,7 @@ export function App() {
     const hasSelectedMedia = Boolean(selected());
     if (hasSelectedMedia && !hadSelectedMedia)
       queueMicrotask(() => {
-        if (dirty()) setActiveTask("cuts");
+        if (dirty() || !controller.activeItemId()) setActiveTask("cuts");
       });
     hadSelectedMedia = hasSelectedMedia;
   });
@@ -341,7 +341,7 @@ export function App() {
                     aria-selected={activeTask() === "detection"}
                     aria-controls="detection-tabpanel"
                     tabIndex={activeTask() === "detection" ? 0 : -1}
-                    disabled={!selected()}
+                    disabled={!selected() || !controller.activeItemId()}
                     onClick={() => setActiveTask("detection")}
                     onKeyDown={(event) => {
                       if (event.key === "ArrowRight" || event.key === "ArrowDown") {

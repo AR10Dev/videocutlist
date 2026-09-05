@@ -68,6 +68,11 @@ export function EditorView(props: { onChooseMedia: () => void }) {
               <strong>{item().name}</strong>
               <span>{formatTime(item().durationMs, workspace.duration())}</span>
             </div>
+            <Show when={!workspace.activeItemId()}>
+              <p class="text-sm text-base-content/70" role="status">
+                Preview only · Add to project to save cuts.
+              </p>
+            </Show>
             <p id="timeline-description" class="sr-only">
               Playhead {formatTime(workspace.playheadMs(), workspace.duration())}. In marker{" "}
               {workspace.editingInMs() === undefined

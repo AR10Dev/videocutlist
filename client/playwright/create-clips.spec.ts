@@ -16,6 +16,10 @@ const secondMedia = {
   name: "second.mp4",
 };
 
+async function addToProject(page: Page) {
+  await page.getByRole("button", { name: "Add to project" }).click();
+}
+
 async function addSegment(page: Page, start = 100, end = 700) {
   const playhead = page.getByLabel("Timeline playhead");
   await playhead.fill(String(start));
@@ -106,6 +110,7 @@ test("Create clips saves a dirty revision before fresh preflight and batch submi
   });
   await page.goto("/");
   await page.getByRole("button", { name: "Select camera.mp4" }).click();
+  await addToProject(page);
   await addSegment(page);
   await openExport(page);
   const create = page.getByRole("button", { name: "Create clips" });
@@ -135,6 +140,7 @@ test("save failures stop Create clips and leave it retryable", async ({ page }) 
   });
   await page.goto("/");
   await page.getByRole("button", { name: "Select camera.mp4" }).click();
+  await addToProject(page);
   await addSegment(page);
   await openExport(page);
   const create = page.getByRole("button", { name: "Create clips" });
@@ -163,6 +169,7 @@ test("conflicted saves never submit preflight or export", async ({ page }) => {
   });
   await page.goto("/");
   await page.getByRole("button", { name: "Select camera.mp4" }).click();
+  await addToProject(page);
   await addSegment(page);
   await openExport(page);
   await page.getByRole("button", { name: "Create clips" }).click();

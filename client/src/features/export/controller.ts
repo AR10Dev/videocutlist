@@ -163,7 +163,7 @@ export function createExportController(deps: {
     deps.revision();
     const destination = destinationId();
     const template = filenameTemplate();
-    if (!item) {
+    if (!item || !deps.projectItems().some((entry) => entry.media.id === item.id)) {
       cancelPreflight();
       setPreflight();
       setPreflightPending(false);

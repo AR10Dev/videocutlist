@@ -169,7 +169,15 @@ export function createProjectsController(deps: ProjectsControllerDeps) {
       deps.setProjectName(project.name);
       deps.setRevision(project.revision);
       deps.setProjectItems(restored);
-      deps.setSelectedExportItems(restored.map((item) => item.id));
+      deps.setSelectedExportItems(
+        restored
+          .filter(
+            (item) =>
+              item.timeline.present.segments.length > 0 &&
+              !validateSegments(item.timeline.present.segments, item.media.durationMs),
+          )
+          .map((item) => item.id),
+      );
       deps.setActiveItemId(first.id);
       deps.setSelected(first.media);
       deps.setTimeline(first.timeline);
