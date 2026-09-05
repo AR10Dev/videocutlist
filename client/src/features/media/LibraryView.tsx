@@ -22,12 +22,9 @@ export function LibraryView() {
     <section
       class="media-panel"
       classList={{ "has-selection": Boolean(selected()), "explorer-open": explorerOpen() }}
-      aria-labelledby="media-heading"
+      aria-label="Media library"
     >
       <div class="panel-heading">
-        <h2 id="media-heading" tabIndex={-1}>
-          Media
-        </h2>
         <Show when={selected()}>
           <button
             class="change-video btn btn-ghost btn-sm"

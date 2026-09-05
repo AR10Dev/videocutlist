@@ -85,6 +85,8 @@ body {
 }
 .app-navbar {
   grid-area: header;
+  min-width: 0;
+  overflow: hidden;
   min-height: 48px;
   padding: 6px 10px;
   border: 1px solid var(--border);
@@ -464,6 +466,8 @@ video {
   text-align: center;
 }
 .edit-deck {
+  min-width: 0;
+  max-width: 100%;
   margin-top: 4px;
   padding: 4px 0;
   border-top: 1px solid var(--border);
@@ -471,6 +475,8 @@ video {
 }
 .control-rail {
   display: flex;
+  max-width: 100%;
+  min-width: 0;
   align-items: center;
   gap: 6px;
   flex-wrap: nowrap;
@@ -478,14 +484,20 @@ video {
   min-height: 48px;
 }
 .editor-controls {
-  display: contents;
+  display: flex;
+  flex: none;
+  flex-wrap: nowrap;
+  align-items: center;
+}
+.editor-controls > .control-group {
+  flex: none;
 }
 .preview-controls {
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 8px;
-  flex-wrap: wrap;
+  gap: 6px;
+  flex: none;
+  flex-wrap: nowrap;
 }
 .preview-controls button {
   min-width: 44px;
@@ -651,7 +663,15 @@ video {
 }
 
 .editor-controls {
-  padding-top: 10px;
+  padding-left: 8px;
+  border-left: 1px solid var(--border);
+}
+.total-duration,
+.pending-duration {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
 .editor-controls .control-group {
   min-height: 44px;

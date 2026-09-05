@@ -4,7 +4,6 @@ import { frameDuration } from "../editor/frame";
 import {
   ChevronsLeft,
   ChevronsRight,
-  Maximize2,
   Pause,
   Play,
   SkipBack,
@@ -12,7 +11,7 @@ import {
   Volume2,
   VolumeX,
 } from "lucide-solid";
-import { canStreamPreview, formatTime } from "./model";
+import { canStreamPreview } from "./model";
 import { useWorkspace } from "../app/WorkspaceContext";
 
 type IconButtonProps = {
@@ -68,6 +67,15 @@ export function PreviewPlayer(props: { timeline: JSX.Element; controls: JSX.Elem
     if (!document.fullscreenElement) void videoElement?.requestFullscreen?.();
     else void document.exitFullscreen?.();
   };
+  const jumpToCut = (direction: -1 | 1) => {
+    const cuts = workspace.present().segments;
+    const position = workspace.playheadMs();
+    const target =
+      direction < 0
+        ? [...cuts].reverse().find((cut) => cut.startMs < position)?.startMs
+        : cuts.find((cut) => cut.startMs > position)?.startMs;
+    workspace.updateTimeline({ playheadMs: target ?? (direction < 0 ? 0 : workspace.duration()) });
+  };
   const setVolumeValue = (value: number) => {
     setVolume(value);
     if (videoElement) videoElement.volume = value;
@@ -113,13 +121,10 @@ export function PreviewPlayer(props: { timeline: JSX.Element; controls: JSX.Elem
           </p>
         )}
       </div>
-      <div class="edit-deck" aria-label="Editing controls">
-        <div class="control-rail" aria-label="Editor controls">
+      <div class="edit-deck">
+        <div class="control-rail" role="toolbar" aria-label="Editor controls">
           <div class="preview-controls" aria-label="Playback and audio controls">
-            <IconButton
-              label="Go to start"
-              onClick={() => workspace.updateTimeline({ playheadMs: 0 })}
-            >
+            <IconButton label="Previous cut" onClick={() => jumpToCut(-1)}>
               <ChevronsLeft size={18} aria-hidden="true" />
             </IconButton>
             <IconButton label="Previous frame" keyshortcuts="ArrowLeft" onClick={() => step(-1)}>
@@ -139,16 +144,9 @@ export function PreviewPlayer(props: { timeline: JSX.Element; controls: JSX.Elem
             <IconButton label="Next frame" keyshortcuts="ArrowRight" onClick={() => step(1)}>
               <SkipForward size={18} aria-hidden="true" />
             </IconButton>
-            <IconButton
-              label="Go to end"
-              onClick={() => workspace.updateTimeline({ playheadMs: workspace.duration() })}
-            >
+            <IconButton label="Next cut" onClick={() => jumpToCut(1)}>
               <ChevronsRight size={18} aria-hidden="true" />
             </IconButton>
-            <span class="preview-time" aria-live="off">
-              {formatTime(workspace.playheadMs(), workspace.duration())} /{" "}
-              {formatTime(workspace.duration(), workspace.duration())}
-            </span>
             <IconButton
               label={workspace.muted() ? "Unmute preview" : "Mute preview"}
               pressed={workspace.muted()}
@@ -174,9 +172,6 @@ export function PreviewPlayer(props: { timeline: JSX.Element; controls: JSX.Elem
               value={volume()}
               onInput={(event) => setVolumeValue(Number(event.currentTarget.value))}
             />
-            <IconButton label="Fullscreen preview" onClick={fullscreen}>
-              <Maximize2 size={18} aria-hidden="true" />
-            </IconButton>
           </div>
           {props.controls}
         </div>
