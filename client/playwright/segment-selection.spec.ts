@@ -2456,3 +2456,25 @@ test("returning from Settings reattaches preview and timecode follows later seek
   await page.getByRole("button", { name: "Next preview step (period)" }).click();
   await expect(timecode).toHaveValue("00:03.000");
 });
+
+test("automatically commits one named segment and starts a new draft", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Select camera.mp4" }).click();
+  const playhead = page.getByLabel("Timeline playhead");
+  await playhead.fill("100");
+  await page.getByRole("button", { name: "Set in" }).click();
+  await playhead.fill("700");
+  await page.getByRole("button", { name: "Set out" }).click();
+
+  await expect(page.getByText("Segment 001", { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole("button", { name: "Add to project" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "New segment" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Add cut/ })).toHaveCount(0);
+  await page.getByRole("button", { name: "New segment" }).click();
+  await playhead.fill("800");
+  await page.getByRole("button", { name: "Set in" }).click();
+  await playhead.fill("1200");
+  await page.getByRole("button", { name: "Set out" }).click();
+  await expect(page.getByText("Segment 002", { exact: true }).first()).toBeVisible();
+  await expect(page.locator("[data-segment-id]")).toHaveCount(2);
+});

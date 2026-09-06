@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizeSegments, segmentIncluded } from "../src/features/preview/model";
+import { nextSegmentName, normalizeSegments, segmentIncluded } from "../src/features/preview/model";
 
 describe("segment metadata", () => {
   it("defaults legacy segments to included and supplies stable identities", () => {
@@ -24,6 +24,18 @@ describe("segment metadata", () => {
         "item-a",
       )[1].id,
     ).toBe(first[0].id);
+  });
+
+  it("chooses a monotonic collision-free default name", () => {
+    expect(
+      nextSegmentName([
+        { id: "a", startMs: 0, endMs: 10, label: "Segment 001" },
+        { id: "b", startMs: 20, endMs: 30, label: "Custom" },
+        { id: "c", startMs: 40, endMs: 50, label: "Segment 004" },
+      ]),
+    ).toBe("Segment 005");
+    expect(nextSegmentName([{ startMs: 0, endMs: 10, label: "Segment 001" }])).toBe("Segment 002");
+    expect(nextSegmentName([{ startMs: 0, endMs: 10, label: "Segment 999" }])).toBe("Segment 1000");
   });
 
   it("keeps explicit exclusion and identity through normalization", () => {

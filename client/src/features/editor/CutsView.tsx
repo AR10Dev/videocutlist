@@ -28,8 +28,11 @@ export function CutsView() {
         when={workspace.present().segments.length}
         fallback={
           <div class="text-sm text-base-content/70">
-            <p>No cuts selected.</p>
-            <p>Set In and Out on the timeline, then choose Add cut.</p>
+            <p>No segments yet.</p>
+            <p>
+              Set In and Out on the timeline; a valid range becomes one selected segment
+              automatically.
+            </p>
           </div>
         }
       >
@@ -42,7 +45,7 @@ export function CutsView() {
                   "is-active": workspace.activeSegmentIndex() === index(),
                   "is-excluded": !segmentIncluded(segment),
                 }}
-                aria-label={`Cut ${index() + 1}${segmentIncluded(segment) ? " included" : " excluded"}`}
+                aria-label={`${segment.label || `Segment ${String(index() + 1).padStart(3, "0")}`}${segmentIncluded(segment) ? " included" : " excluded"}`}
                 data-segment-id={segment.id}
               >
                 <button
@@ -52,7 +55,9 @@ export function CutsView() {
                   aria-pressed={workspace.activeSegmentIndex() === index()}
                   onClick={() => workspace.setActiveSegmentIndex(index())}
                 >
-                  <strong>{String(index() + 1).padStart(2, "0")}</strong>
+                  <strong>
+                    {segment.label || `Segment ${String(index() + 1).padStart(3, "0")}`}
+                  </strong>
                   <span class="text-xs">
                     {formatTime(segment.startMs, workspace.duration())} –{" "}
                     {formatTime(segment.endMs, workspace.duration())}
@@ -77,7 +82,7 @@ export function CutsView() {
                     class="input input-sm"
                     aria-label={`Label cut ${index() + 1}`}
                     value={segment.label ?? ""}
-                    placeholder="Optional label"
+                    placeholder="Custom name"
                     onChange={(event) =>
                       workspace.updateSegmentLabel(index(), event.currentTarget.value)
                     }

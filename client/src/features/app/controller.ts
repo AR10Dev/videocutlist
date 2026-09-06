@@ -75,9 +75,11 @@ export function createWorkspaceController() {
   );
   let editorVersion = 0;
   const selectActiveExportItem: { current?: () => void } = {};
+  const projectsRef: { current?: ReturnType<typeof createProjectsController> } = {};
   const markDirty = () => {
     editorVersion++;
     setDirty(true);
+    projectsRef.current?.scheduleAutosave();
   };
   const previewRef: { current?: ReturnType<typeof createPreviewController> } = {};
   const exportRef: { current?: ReturnType<typeof createExportController> } = {};
@@ -92,7 +94,10 @@ export function createWorkspaceController() {
     playOrderedSegments: () => previewRef.current?.playOrderedSegments(),
     pausePlayback: () => previewRef.current?.pausePlayback(),
     createClips: () => exportRef.current?.exportProject(),
-    onSegmentCommitted: () => selectActiveExportItem.current?.(),
+    onSegmentCommitted: () => {
+      addMediaToProject();
+      selectActiveExportItem.current?.();
+    },
   });
   const {
     segmentLabel,
@@ -125,6 +130,7 @@ export function createWorkspaceController() {
     updateSegmentLabel,
     updateSegmentIncluded,
     splitActiveSegment,
+    newSegment,
   } = editorFeature;
   const queryClient = useQueryClient();
   const exportFeature = createExportController({
@@ -293,6 +299,7 @@ export function createWorkspaceController() {
   previewRef.current = initializedPreviewFeature;
   exportRef.current = exportFeature;
   const chooseMedia = (item: Media) => {
+    editorFeature.prepareMediaSwitch();
     clearDetectionContext();
     const items = editableItems();
     const existing = items.find((entry) => entry.media.id === item.id);
@@ -315,7 +322,7 @@ export function createWorkspaceController() {
     setDestinationId(lastDestinationId() ?? "download");
     setFilenameTemplate(settings().filenameTemplate);
     setDiagnostics();
-    setStatus(`Previewing ${item.name}. Add it to the project to keep cuts.`);
+    setStatus(`Previewing ${item.name}. The first valid cut adds it to the project.`);
   };
   const addMediaToProject = () => {
     const item = selected();
@@ -434,6 +441,7 @@ export function createWorkspaceController() {
     setDiagnostics,
     setStatus,
   });
+  projectsRef.current = projectsFeature;
   return {
     library: libraryFeature,
     editorStatus: editorFeature.editorStatus,
@@ -564,6 +572,8 @@ export function createWorkspaceController() {
     updateSegmentLabel,
     updateSegmentIncluded,
     splitActiveSegment,
+    newSegment,
+    saveState: projectsFeature.saveState,
     projects: projectsFeature,
     export: exportFeature,
     exportProject,

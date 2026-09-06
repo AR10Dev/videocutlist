@@ -46,6 +46,27 @@ export const newSegmentId = () => {
   return `s_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
 };
 
+const defaultSegmentName = /^Segment (\d+)$/;
+
+/** Return the next collision-free default name for one media item's segments. */
+export const nextSegmentName = (segments: Segment[]) => {
+  const names = new Set(
+    segments.flatMap((segment) => (typeof segment.label === "string" ? [segment.label] : [])),
+  );
+  let largest = 0;
+  for (const name of names) {
+    const match = defaultSegmentName.exec(name);
+    if (match) largest = Math.max(largest, Number(match[1]));
+  }
+  let number = largest + 1;
+  let name = `Segment ${String(number).padStart(3, "0")}`;
+  while (names.has(name)) {
+    number += 1;
+    name = `Segment ${String(number).padStart(3, "0")}`;
+  }
+  return name;
+};
+
 const legacySegmentId = (scope: string, segment: Segment) => {
   let hash = 2166136261;
   const value = `${scope}:${segment.startMs}:${segment.endMs}`;

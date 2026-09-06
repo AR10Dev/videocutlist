@@ -141,4 +141,118 @@ describe("projects controller", () => {
     expect(timeline().present.segments).toEqual([]);
     controller.dispose();
   });
+
+  it("debounces saves, records recovery, and clears it only after a current response", async () => {
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: memoryStorage(),
+    });
+    const item: EditableProjectItem = {
+      id: "i_autosave1234567890123456",
+      media,
+      timeline: createTimelineHistory({
+        playheadMs: 100,
+        segments: [{ id: "s_saved", startMs: 100, endMs: 300, label: "Segment 001" }],
+        zoom: 1,
+      }),
+      muted: false,
+      exportOptions: {
+        mode: "separate",
+        selection: "segments",
+        cutStrategy: "stream_copy_preferred",
+        container: "mkv",
+      },
+    };
+    const [selected] = createSignal<components["schemas"]["Media"]>(media);
+    const [projectId, setProjectId] = createSignal("p_autosave123456");
+    const [projectName, setProjectName] = createSignal("Editing");
+    const [revision, setRevision] = createSignal(0);
+    const [dirty, setDirty] = createSignal(true);
+    const [projectItems, setProjectItems] = createSignal([item]);
+    const [, setSelectedExportItems] = createSignal<string[]>([]);
+    const [, setActiveItemId] = createSignal<string | undefined>(item.id);
+    const [, setTimeline] = createSignal(item.timeline);
+    const [knownMedia, setMedia] = createSignal<components["schemas"]["Media"][]>([media]);
+    const [, setRecent] = createSignal<{ id: string; label: string; lastOpened: number }[]>([]);
+    const [, setMuted] = createSignal(false);
+    const [, setExportMode] = createSignal<"merge" | "separate">("separate");
+    const [, setExportSelection] = createSignal<"segments" | "gaps">("segments");
+    const [, setStreamIndexes] = createSignal<number[]>([]);
+    const [, setCutStrategy] = createSignal(defaultSettings.cutStrategy);
+    const [, setDestinationId] = createSignal("download");
+    const [, setFilenameTemplate] = createSignal(defaultSettings.filenameTemplate);
+    const editorVersion = 1;
+    let requests = 0;
+    const api: ApiClient = {
+      url: (path) => path,
+      request: (path, init) => {
+        if (path.startsWith("projects/") && init?.method === "PUT") {
+          requests += 1;
+          const body = JSON.parse(String(init.body));
+          return Promise.resolve(
+            Response.json({
+              ...body,
+              id: projectId(),
+              revision: 1,
+              updatedAt: "2026-01-01T00:00:00Z",
+            }),
+          );
+        }
+        return Promise.resolve(Response.json(media));
+      },
+      assetRequest: () => Promise.resolve(Response.json({})),
+      interchangeRequest: () => Promise.resolve(Response.json({})),
+    };
+    const controller = createProjectsController({
+      api,
+      queryClient: new QueryClient(),
+      selected,
+      projectId,
+      setProjectId,
+      projectName,
+      setProjectName,
+      revision,
+      setRevision,
+      dirty,
+      setDirty,
+      editorVersion: () => editorVersion,
+      projectItems,
+      setProjectItems,
+      setSelectedExportItems,
+      setActiveItemId,
+      setSelected: () => undefined,
+      setTimeline,
+      setPreviewCenterMs: () => undefined,
+      setMedia,
+      setRecent,
+      settings: () => defaultSettings,
+      setMuted,
+      setExportMode,
+      setExportSelection,
+      setStreamIndexes,
+      setCutStrategy,
+      setDestinationId,
+      setFilenameTemplate,
+      editableItems: () => projectItems(),
+      clearDetectionContext: () => undefined,
+      setDiagnostics: () => undefined,
+      setStatus: () => undefined,
+    });
+    controller.captureRecovery();
+    expect(controller.recovery()?.items[0].mediaId).toBe(media.id);
+    expect(JSON.stringify(controller.recovery())).not.toContain(media.name);
+    controller.scheduleAutosave();
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    expect(requests).toBe(1);
+    expect(controller.saveState()).toBe("saved");
+    expect(dirty()).toBe(false);
+    expect(controller.recovery()).toBeUndefined();
+    controller.dispose();
+    void setProjectName;
+    void setRevision;
+    void knownMedia;
+    void setTimeline;
+    void setMedia;
+    void editorVersion;
+  });
 });

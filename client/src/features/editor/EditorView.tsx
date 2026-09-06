@@ -1,5 +1,5 @@
 import { createEffect, createSignal, Show } from "solid-js";
-import { Clock3, LocateFixed, Maximize2, Minus, Plus, ZoomIn, ZoomOut } from "lucide-solid";
+import { Clock3, LocateFixed, Maximize2, Minus, ZoomIn, ZoomOut } from "lucide-solid";
 import { Timeline } from "./Timeline";
 import { canStreamPreview, formatTime, parseTimecode } from "../preview/model";
 import { PreviewPlayer } from "../preview/PreviewPlayer";
@@ -99,7 +99,7 @@ export function EditorView(props: { onChooseMedia: () => void }) {
             <Show when={!workspace.activeItemId()}>
               <div class="preview-only-notice" role="status">
                 <p class="text-sm text-base-content/70">
-                  Preview only · Add to project to save cuts.
+                  Preview only · Your first valid cut adds this video to the project.
                 </p>
                 <button
                   class="btn btn-primary btn-sm"
@@ -260,16 +260,15 @@ export function EditorView(props: { onChooseMedia: () => void }) {
                         : "Unset"}
                     </span>
                     <button
-                      class="btn btn-sm btn-primary"
-                      aria-label="Add cut (Add segment)"
-                      aria-keyshortcuts="C"
-                      onClick={workspace.addSegment}
-                      disabled={!validRange() || workspace.editingActive()}
-                      aria-describedby="add-segment-help"
+                      class="btn btn-sm"
+                      type="button"
+                      aria-label="New segment"
+                      aria-keyshortcuts="Escape"
+                      onClick={workspace.newSegment}
                     >
-                      <Plus size={16} aria-hidden="true" /> Add cut{" "}
+                      New segment{" "}
                       <kbd class="kbd kbd-xs" aria-hidden="true">
-                        C
+                        Esc
                       </kbd>
                     </button>
                   </div>
@@ -352,7 +351,7 @@ export function EditorView(props: { onChooseMedia: () => void }) {
                 {workspace.editorStatus()}
               </p>
             </Show>
-            <p id="add-segment-help" class="control-help mt-2" role="status">
+            <p class="control-help mt-2" role="status">
               {guidance()}
             </p>
           </>

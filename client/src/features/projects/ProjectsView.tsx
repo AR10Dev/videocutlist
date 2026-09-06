@@ -9,6 +9,88 @@ import { ProjectBrowser } from "./ProjectBrowser";
 
 const api = createApiClient(resolveBrowserConfiguration());
 
+function ProjectSaveStatus() {
+  const workspace = useWorkspace();
+  const message = () => {
+    switch (workspace.saveState()) {
+      case "saving":
+        return "Saving project…";
+      case "failed":
+        return "Save failed. Your edits are still here.";
+      case "saved":
+        return "Saved";
+      default:
+        return workspace.revision() === 0 ? "Unsaved" : "Unsaved changes";
+    }
+  };
+  return (
+    <>
+      <p role="status" aria-live="polite">
+        {message()}
+        <Show when={workspace.saveState() === "failed" && !workspace.projects.saveConflict()}>
+          <button
+            class="btn btn-ghost btn-xs ml-2"
+            type="button"
+            onClick={() => void workspace.projects.retrySave()}
+          >
+            Retry save
+          </button>
+        </Show>
+      </p>
+      <Show when={workspace.projects.saveConflict()}>
+        <div class="alert alert-warning" role="alert">
+          <span>Another client saved this project. Choose which version to keep.</span>
+          <div class="flex flex-wrap gap-2">
+            <button
+              class="btn btn-sm"
+              type="button"
+              onClick={() => void workspace.projects.reloadRemoteProject()}
+            >
+              Reload remote project
+            </button>
+            <button
+              class="btn btn-sm btn-primary"
+              type="button"
+              onClick={() => void workspace.projects.saveAsNewProject()}
+            >
+              Save local work as new project
+            </button>
+          </div>
+        </div>
+      </Show>
+    </>
+  );
+}
+
+function RecoveryNotice() {
+  const workspace = useWorkspace();
+  return (
+    <Show when={workspace.projects.recovery()}>
+      {(snapshot) => (
+        <div class="alert alert-info" role="status">
+          <span>
+            Local recovery is available from {new Date(snapshot().savedAt).toLocaleString()}.
+          </span>
+          <button
+            class="btn btn-sm"
+            type="button"
+            onClick={() => void workspace.projects.recoverProject()}
+          >
+            Recover local edits
+          </button>
+          <button
+            class="btn btn-ghost btn-sm"
+            type="button"
+            onClick={workspace.projects.dismissRecovery}
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+    </Show>
+  );
+}
+
 export function ProjectsView() {
   const {
     selected,
@@ -38,6 +120,8 @@ export function ProjectsView() {
       fallback={
         <section class="project-panel" aria-labelledby="project-heading">
           <h2 id="project-heading">Project</h2>
+          <RecoveryNotice />
+          <ProjectSaveStatus />
           <Show
             when={selected()}
             fallback={<p>Choose a video from the Media library to start a project.</p>}
@@ -57,6 +141,8 @@ export function ProjectsView() {
     >
       <section class="project-panel" aria-labelledby="project-heading">
         <h2 id="project-heading">Project</h2>
+        <RecoveryNotice />
+        <ProjectSaveStatus />
         <details>
           <summary>Project details</summary>
           <p>Project ID: {projectId()}</p>

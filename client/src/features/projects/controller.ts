@@ -1,4 +1,4 @@
-import type { Accessor, Setter } from "solid-js";
+import { createSignal, type Accessor, type Setter } from "solid-js";
 import type { QueryClient } from "@tanstack/solid-query";
 import type { ApiClient } from "../../api";
 import type { components } from "../../generated/api";
@@ -8,6 +8,7 @@ import {
   recentProjects,
   recentProjectsKey,
   validProjectId,
+  parseProjectJson,
 } from "./lifecycle";
 import { restoreProjectItem, serializeProjectItem, type EditableProjectItem } from "./model";
 import { validateSegments } from "../preview/model";
@@ -16,6 +17,49 @@ import type { AppSettings } from "../settings/model";
 
 type Project = components["schemas"]["Project"];
 type Media = components["schemas"]["Media"];
+export type SaveState = "unsaved" | "saving" | "saved" | "failed";
+export type ProjectRecovery = {
+  version: 1;
+  projectId: string;
+  revision: number;
+  schemaVersion: 2;
+  name: string;
+  items: components["schemas"]["ProjectItem"][];
+  savedAt: number;
+};
+
+const recoveryKey = "videocutlist.project-recovery.v1";
+
+const readRecovery = (): ProjectRecovery | undefined => {
+  try {
+    const value: unknown = JSON.parse(localStorage.getItem(recoveryKey) ?? "null");
+    if (!value || typeof value !== "object") return;
+    const candidate = value as Partial<ProjectRecovery>;
+    if (
+      candidate.version !== 1 ||
+      !validProjectId(candidate.projectId) ||
+      typeof candidate.revision !== "number" ||
+      !Number.isSafeInteger(candidate.revision) ||
+      candidate.revision < 0 ||
+      candidate.schemaVersion !== 2 ||
+      typeof candidate.name !== "string" ||
+      !candidate.name.trim() ||
+      !Array.isArray(candidate.items) ||
+      !candidate.items.length ||
+      typeof candidate.savedAt !== "number" ||
+      !Number.isSafeInteger(candidate.savedAt) ||
+      candidate.savedAt < 0
+    )
+      return;
+    parseProjectJson(
+      JSON.stringify({ schemaVersion: 2, name: candidate.name, items: candidate.items }),
+    );
+    return candidate as ProjectRecovery;
+  } catch {
+    return;
+  }
+};
+
 export type ProjectsControllerDeps = {
   api: ApiClient;
   queryClient: QueryClient;
@@ -56,7 +100,16 @@ export function createProjectsController(deps: ProjectsControllerDeps) {
   let projectRequest: AbortController | undefined;
   let projectRequestVersion = 0;
   let saveRequest: AbortController | undefined;
-  let saveVersion = 0;
+  let contextVersion = 0;
+  let autosaveTimer: ReturnType<typeof setTimeout> | undefined;
+  let pendingSave: "auto" | "explicit" | undefined;
+  let saveLoop: Promise<Project | undefined> | undefined;
+  let disposed = false;
+  const [saveState, setSaveState] = createSignal<SaveState>(
+    deps.revision() > 0 && !deps.dirty() ? "saved" : "unsaved",
+  );
+  const [saveConflict, setSaveConflict] = createSignal(false);
+  const [recovery, setRecovery] = createSignal<ProjectRecovery | undefined>(readRecovery());
   const remember = (id: string, label: string) => {
     let recent: ReturnType<typeof recentProjects> = [];
     try {
@@ -72,60 +125,203 @@ export function createProjectsController(deps: ProjectsControllerDeps) {
     localStorage.setItem(recentProjectsKey, JSON.stringify(next));
     localStorage.setItem("videocutlist.active-project.v2", id);
   };
-  const saveProject = async (): Promise<Project | undefined> => {
-    const snapshotProject = deps.projectId();
-    const snapshotMedia = deps.selected()?.id;
-    const snapshotEditorVersion = deps.editorVersion();
-    const request = ++saveVersion;
+  const captureRecovery = () => {
+    if (!deps.dirty()) return;
+    const items = deps.editableItems();
+    if (!items.length) return;
+    const snapshot: ProjectRecovery = {
+      version: 1,
+      projectId: deps.projectId(),
+      revision: deps.revision(),
+      schemaVersion: 2,
+      name: deps.projectName(),
+      items: items.map(serializeProjectItem),
+      savedAt: Date.now(),
+    };
+    try {
+      localStorage.setItem(recoveryKey, JSON.stringify(snapshot));
+      setRecovery(snapshot);
+    } catch {
+      // Recovery is best effort and must not interrupt editing.
+    }
+  };
+  const clearRecovery = (id?: string) => {
+    const current = recovery();
+    if (id && current && current.projectId !== id) return;
+    try {
+      localStorage.removeItem(recoveryKey);
+    } catch {
+      // Ignore unavailable browser storage.
+    }
+    setRecovery();
+  };
+  const cancelAutosave = () => {
+    if (autosaveTimer !== undefined) clearTimeout(autosaveTimer);
+    autosaveTimer = undefined;
+    pendingSave = undefined;
     saveRequest?.abort();
+  };
+  const performSave = async (): Promise<Project | undefined> => {
+    const snapshot = {
+      project: deps.projectId(),
+      media: deps.selected()?.id,
+      editorVersion: deps.editorVersion(),
+      context: contextVersion,
+      revision: deps.revision(),
+      name: deps.projectName(),
+      items: deps.editableItems(),
+    };
+    if (!validProjectId(snapshot.project)) {
+      setSaveState("failed");
+      return void deps.setStatus("Project ID is invalid.");
+    }
+    if (!snapshot.items.length) {
+      setSaveState("failed");
+      return void deps.setStatus("Add media before saving.");
+    }
+    for (const item of snapshot.items) {
+      const error = validateSegments(item.timeline.present.segments, item.media.durationMs);
+      if (error) {
+        setSaveState("failed");
+        return void deps.setStatus(`${item.media.name}: ${error}`);
+      }
+    }
+    const serializedItems = snapshot.items.map(serializeProjectItem);
     const controller = new AbortController();
     saveRequest = controller;
-    const items = deps.editableItems();
-    if (!validProjectId(snapshotProject)) return void deps.setStatus("Project ID is invalid.");
-    if (!items.length) return void deps.setStatus("Add media before saving.");
-    for (const item of items) {
-      const error = validateSegments(item.timeline.present.segments, item.media.durationMs);
-      if (error) return void deps.setStatus(`${item.media.name}: ${error}`);
-    }
+    setSaveState("saving");
     try {
-      const response = await deps.api.request(`projects/${encodeURIComponent(snapshotProject)}`, {
+      const response = await deps.api.request(`projects/${encodeURIComponent(snapshot.project)}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         signal: controller.signal,
         body: JSON.stringify({
-          revision: deps.revision(),
+          revision: snapshot.revision,
           schemaVersion: 2,
-          name: deps.projectName(),
-          items: items.map(serializeProjectItem),
+          name: snapshot.name,
+          items: serializedItems,
         }),
       });
-      if (
-        controller.signal.aborted ||
-        request !== saveVersion ||
-        snapshotEditorVersion !== deps.editorVersion() ||
-        snapshotProject !== deps.projectId() ||
-        snapshotMedia !== deps.selected()?.id
-      )
+      if (controller.signal.aborted || disposed) return;
+      const sameProject =
+        snapshot.context === contextVersion && snapshot.project === deps.projectId();
+      if (response.status === 409) {
+        if (sameProject) {
+          pendingSave = undefined;
+          setSaveConflict(true);
+          setSaveState("failed");
+          deps.setStatus(
+            "Project changed on another client. Reload it or save local work as a new project.",
+          );
+        }
         return;
-      if (response.status === 409)
-        return void deps.setStatus("Project changed on another client. Load latest before saving.");
-      if (!response.ok) return void deps.setStatus(`Project save failed (${response.status}).`);
+      }
+      if (!response.ok) {
+        if (sameProject) {
+          setSaveState("failed");
+          deps.setStatus(`Project save failed (${response.status}). Retry when ready.`);
+        }
+        return;
+      }
       const project = (await response.json()) as Project;
-      deps.setProjectItems(items);
+      if (!sameProject) return project;
       deps.setRevision(project.revision);
       await deps.queryClient.invalidateQueries({ queryKey: ["project", project.id] });
-      deps.setDirty(false);
-      remember(project.id, project.name);
-      deps.setStatus(`Project saved (revision ${project.revision}).`);
+      const current =
+        snapshot.editorVersion === deps.editorVersion() && snapshot.media === deps.selected()?.id;
+      if (current) {
+        deps.setProjectItems(snapshot.items);
+        deps.setDirty(false);
+        setSaveConflict(false);
+        setSaveState("saved");
+        clearRecovery(snapshot.project);
+        remember(project.id, project.name);
+        deps.setStatus(`Project saved (revision ${project.revision}).`);
+      } else {
+        deps.setDirty(true);
+        setSaveState("unsaved");
+        captureRecovery();
+        pendingSave = pendingSave ?? "auto";
+        deps.setStatus("Project saved; newer edits remain unsaved.");
+      }
       return project;
     } catch (error) {
-      if (!controller.signal.aborted && request === saveVersion)
-        deps.setStatus(error instanceof Error ? error.message : "Project save failed.");
+      if (!controller.signal.aborted && !disposed && snapshot.context === contextVersion) {
+        setSaveState("failed");
+        deps.setStatus(
+          error instanceof Error
+            ? `${error.message} Retry when ready.`
+            : "Project save failed. Retry when ready.",
+        );
+      }
+    } finally {
+      if (saveRequest === controller) saveRequest = undefined;
     }
   };
-  const loadProject = async (id = deps.projectId(), imported?: Project) => {
+  const runSaveLoop = async (): Promise<Project | undefined> => {
+    let latest: Project | undefined;
+    while (pendingSave && !disposed) {
+      pendingSave = undefined;
+      const result = await performSave();
+      if (result) {
+        latest = result;
+        continue;
+      }
+      if (pendingSave !== "explicit") pendingSave = undefined;
+      break;
+    }
+    return latest;
+  };
+  const requestSave = (kind: "auto" | "explicit") => {
+    if (disposed || (kind === "auto" && saveConflict())) return Promise.resolve(undefined);
+    pendingSave = kind === "explicit" ? "explicit" : (pendingSave ?? "auto");
+    if (saveLoop) return saveLoop;
+    const loop = runSaveLoop();
+    saveLoop = loop;
+    void loop.then(
+      () => {
+        if (saveLoop === loop) saveLoop = undefined;
+      },
+      () => {
+        if (saveLoop === loop) saveLoop = undefined;
+      },
+    );
+    return loop;
+  };
+  const scheduleAutosave = () => {
+    captureRecovery();
+    if (saveConflict()) return;
+    setSaveState("unsaved");
+    if (autosaveTimer !== undefined) clearTimeout(autosaveTimer);
+    autosaveTimer = setTimeout(() => {
+      autosaveTimer = undefined;
+      void requestSave("auto");
+    }, 750);
+  };
+  const saveProject = () => {
+    if (autosaveTimer !== undefined) clearTimeout(autosaveTimer);
+    autosaveTimer = undefined;
+    captureRecovery();
+    return requestSave("explicit");
+  };
+  const retrySave = () => {
+    if (saveConflict()) return Promise.resolve(undefined);
+    return saveProject();
+  };
+  const loadProject = async (
+    id = deps.projectId(),
+    imported?: Project,
+    skipDiscardConfirmation = false,
+  ) => {
     if (!validProjectId(id)) return void deps.setStatus("Project ID is invalid.");
-    if (!confirmDiscard(deps.dirty(), () => window.confirm("Discard unsaved changes?"))) return;
+    if (
+      !skipDiscardConfirmation &&
+      !confirmDiscard(deps.dirty(), () => window.confirm("Discard unsaved changes?"))
+    )
+      return;
+    cancelAutosave();
+    contextVersion++;
+    setSaveConflict(false);
     const snapshotEditorVersion = deps.editorVersion();
     const snapshotProject = deps.projectId();
     deps.clearDetectionContext();
@@ -196,7 +392,11 @@ export function createProjectsController(deps: ProjectsControllerDeps) {
         ...restored.map((x) => x.media).filter((x) => !known.some((k) => k.id === x.id)),
       ]);
       deps.setDirty(Boolean(imported));
-      if (!imported) remember(project.id, project.name);
+      setSaveState(imported ? "unsaved" : "saved");
+      if (!imported) {
+        clearRecovery(project.id);
+        remember(project.id, project.name);
+      } else captureRecovery();
       deps.setStatus(
         imported ? "Cut list imported. Save the project to keep it." : "Project loaded.",
       );
@@ -207,6 +407,9 @@ export function createProjectsController(deps: ProjectsControllerDeps) {
   };
   const newProject = () => {
     if (!confirmDiscard(deps.dirty(), () => window.confirm("Discard unsaved changes?"))) return;
+    cancelAutosave();
+    contextVersion++;
+    setSaveConflict(false);
     deps.clearDetectionContext();
     projectRequest?.abort();
     ++projectRequestVersion;
@@ -214,6 +417,8 @@ export function createProjectsController(deps: ProjectsControllerDeps) {
     deps.setProjectName("Untitled project");
     deps.setRevision(0);
     deps.setDirty(false);
+    setSaveState("unsaved");
+    clearRecovery();
     deps.setProjectItems([]);
     deps.setSelectedExportItems([]);
     deps.setActiveItemId();
@@ -228,11 +433,51 @@ export function createProjectsController(deps: ProjectsControllerDeps) {
     localStorage.removeItem("videocutlist.active-project.v2");
     deps.setStatus("New project ready.");
   };
+  const recoverProject = () => {
+    const snapshot = recovery();
+    if (!snapshot) return Promise.resolve();
+    return loadProject(
+      snapshot.projectId,
+      {
+        id: snapshot.projectId,
+        revision: snapshot.revision,
+        updatedAt: new Date(snapshot.savedAt).toISOString(),
+        schemaVersion: 2,
+        name: snapshot.name,
+        items: snapshot.items,
+      },
+      true,
+    );
+  };
+  const dismissRecovery = () => clearRecovery();
+  const saveAsNewProject = () => {
+    cancelAutosave();
+    contextVersion++;
+    setSaveConflict(false);
+    deps.setProjectId(newProjectId());
+    deps.setRevision(0);
+    deps.setDirty(true);
+    setSaveState("unsaved");
+    captureRecovery();
+    return requestSave("explicit");
+  };
+  const reloadRemoteProject = () => loadProject(deps.projectId(), undefined, true);
   const rememberedProject = localStorage.getItem("videocutlist.active-project.v2");
-  if (validProjectId(rememberedProject)) queueMicrotask(() => void loadProject(rememberedProject));
+  if (!recovery() && validProjectId(rememberedProject))
+    queueMicrotask(() => void loadProject(rememberedProject));
 
   return {
     saveProject,
+    retrySave,
+    scheduleAutosave,
+    captureRecovery,
+    saveAsNewProject,
+    reloadRemoteProject,
+    recovery,
+    recoverProject,
+    dismissRecovery,
+    saveConflict,
+    saveState,
     loadProject,
     importProject: (document: components["schemas"]["ProjectInput"]) => {
       const id = newProjectId();
@@ -240,10 +485,11 @@ export function createProjectsController(deps: ProjectsControllerDeps) {
     },
     newProject,
     dispose: () => {
-      saveRequest?.abort();
+      disposed = true;
+      cancelAutosave();
       projectRequest?.abort();
-      ++saveVersion;
       ++projectRequestVersion;
+      contextVersion++;
     },
   };
 }

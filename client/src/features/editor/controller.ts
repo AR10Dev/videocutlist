@@ -18,7 +18,13 @@ import {
   updateTimelineView,
   type TimelineHistory,
 } from "./timeline";
-import { normalizeSegments, newSegmentId, validateSegments, type Segment } from "../preview/model";
+import {
+  nextSegmentName,
+  normalizeSegments,
+  newSegmentId,
+  validateSegments,
+  type Segment,
+} from "../preview/model";
 
 type Media = components["schemas"]["Media"];
 type Track = {
@@ -52,6 +58,7 @@ export function createEditorController(deps: {
     createTimelineHistory({ playheadMs: 0, segments: [], zoom: 1 }),
   );
   let selectedMediaId: string | undefined;
+  let mediaSwitchDiscardedDraft = false;
   const present = () => timeline().present;
   const playheadMs = () => present().playheadMs;
   const duration = () => deps.selected()?.durationMs ?? 0;
@@ -136,13 +143,13 @@ export function createEditorController(deps: {
   const setMarker = (kind: "inMs" | "outMs", value: number) => {
     setEditorStatus("");
     const active = activeSegmentIndex();
+    const nextValue = Math.round(value);
+    if (!Number.isFinite(nextValue) || nextValue < 0 || nextValue > duration())
+      return setEditorStatus("In must be before Out and both must be within the video.");
     if (active !== undefined && editingActive()) {
       const current = present().segments[active];
       if (!current) return selectActiveSegment();
       const boundary = kind === "inMs" ? "start" : "end";
-      const nextValue = Math.round(value);
-      if (!Number.isFinite(nextValue) || nextValue < 0 || nextValue > duration())
-        return setEditorStatus("In must be before Out and both must be within the video.");
       const next = present().segments.map((segment, position) =>
         position === active
           ? { ...segment, [boundary === "start" ? "startMs" : "endMs"]: nextValue }
@@ -158,20 +165,48 @@ export function createEditorController(deps: {
       updateTimeline({ segments: next });
       return;
     }
+
     const currentIn = present().inMs;
     const currentOut = present().outMs;
-    const nextValue = Math.round(value);
+    const draftIn = kind === "inMs" ? nextValue : currentIn;
+    const draftOut = kind === "outMs" ? nextValue : currentOut;
     if (
-      !Number.isFinite(nextValue) ||
-      nextValue < 0 ||
-      nextValue > duration() ||
       (kind === "inMs" && currentOut !== undefined && nextValue >= currentOut) ||
       (kind === "outMs" && currentIn !== undefined && nextValue <= currentIn)
     )
       return setEditorStatus("In must be before Out and both must be within the video.");
     deps.pausePlayback();
-    setTimeline(editTimeline(timeline(), { [kind]: nextValue }));
+    if (draftIn === undefined || draftOut === undefined) {
+      setTimeline(updateTimelineDraft(timeline(), { inMs: draftIn, outMs: draftOut }));
+      return;
+    }
+
+    const segment: Segment = {
+      id: newSegmentId(),
+      startMs: draftIn,
+      endMs: draftOut,
+      label: nextSegmentName(present().segments),
+      included: true,
+    };
+    const nextSegments = [...present().segments, segment];
+    const error = validateSegments(nextSegments, duration());
+    if (error)
+      return setEditorStatus(
+        error === "Segments cannot overlap."
+          ? "That range would overlap another cut. Choose a different range."
+          : error,
+      );
+    setTimeline(
+      editTimeline(timeline(), {
+        segments: nextSegments,
+        inMs: undefined,
+        outMs: undefined,
+      }),
+    );
+    setActiveIndex(nextSegments.length - 1);
+    setEditingActive(true);
     deps.markDirty();
+    deps.onSegmentCommitted?.();
   };
   const previewMarker = (kind: "inMs" | "outMs", value: number) => {
     const active = activeSegmentIndex();
@@ -199,28 +234,19 @@ export function createEditorController(deps: {
     });
   };
   const addSegment = () => {
-    const item = deps.selected();
-    if (editingActive())
-      return setEditorStatus("Press Escape to leave active cut editing before creating a draft.");
+    if (editingActive()) return setEditorStatus("Choose New segment before starting another cut.");
     const { inMs, outMs } = present();
-    if (!item || inMs === undefined || outMs === undefined || inMs >= outMs)
-      return setEditorStatus("Set an in point before the out point.");
-    const segment: Segment = {
-      id: newSegmentId(),
-      startMs: inMs,
-      endMs: outMs,
-      label: segmentLabel().trim() || undefined,
-      included: true,
-    };
-    const next = [...present().segments, segment];
-    const error = validateSegments(next, item.durationMs);
-    if (error) return setEditorStatus(error);
-    updateTimeline({ segments: next });
+    if (inMs === undefined || outMs === undefined || inMs >= outMs)
+      return setEditorStatus("Set an In point and an Out point to create a cut.");
+    setMarker("outMs", outMs);
+  };
+  const newSegment = () => {
+    setEditorStatus("");
+    deps.pausePlayback();
+    setActiveIndex();
+    setEditingActive(false);
     clearDraft();
     setSegmentLabel("");
-    setActiveIndex(next.length - 1);
-    setEditingActive(false);
-    deps.onSegmentCommitted?.();
   };
   const removeSegment = (index: number) => {
     const active = activeSegmentIndex();
@@ -298,44 +324,67 @@ export function createEditorController(deps: {
     setActiveIndex(index + 1);
   };
 
+  const prepareMediaSwitch = () => {
+    if (present().inMs !== undefined || present().outMs !== undefined)
+      mediaSwitchDiscardedDraft = true;
+  };
+
   createEffect(() => {
     const item = deps.selected();
     if (item?.id === selectedMediaId) return;
+    const hadDraft =
+      mediaSwitchDiscardedDraft || present().inMs !== undefined || present().outMs !== undefined;
+    mediaSwitchDiscardedDraft = false;
     selectedMediaId = item?.id;
-    setEditorStatus("");
+    setEditorStatus(hadDraft ? "Incomplete marks were discarded when switching media." : "");
     setActiveIndex();
     setEditingActive(false);
     clearDraft();
   });
 
+  const syncHistorySelection = (
+    previous: TimelineHistory,
+    next: TimelineHistory,
+    selectedID: string | undefined,
+  ) => {
+    let nextIndex = selectedID
+      ? next.present.segments.findIndex((segment) => segment.id === selectedID)
+      : -1;
+    if (nextIndex < 0)
+      nextIndex = next.present.segments.findIndex(
+        (segment) => !previous.present.segments.some((item) => item.id === segment.id),
+      );
+    if (nextIndex >= 0) {
+      setActiveIndex(nextIndex);
+      setEditingActive(true);
+    } else {
+      setActiveIndex();
+      setEditingActive(false);
+    }
+  };
   const undo = () => {
+    const current = timeline();
     const selectedID = activeSegment()?.id;
-    const next = undoTimeline(timeline());
-    if (next === timeline()) return;
+    const next = undoTimeline(current);
+    if (next === current) return;
     setTimeline(next);
-    if (selectedID) {
-      const nextIndex = next.present.segments.findIndex((segment) => segment.id === selectedID);
-      if (nextIndex >= 0) setActiveIndex(nextIndex);
-      else selectActiveSegment();
-    } else if (activeSegmentIndex() !== undefined) selectActiveSegment();
+    syncHistorySelection(current, next, selectedID);
     deps.setPreviewCenterMs(next.present.playheadMs);
     deps.markDirty();
   };
   const redo = () => {
+    const current = timeline();
     const selectedID = activeSegment()?.id;
-    const next = redoTimeline(timeline());
-    if (next === timeline()) return;
+    const next = redoTimeline(current);
+    if (next === current) return;
     setTimeline(next);
-    if (selectedID) {
-      const nextIndex = next.present.segments.findIndex((segment) => segment.id === selectedID);
-      if (nextIndex >= 0) setActiveIndex(nextIndex);
-      else selectActiveSegment();
-    } else if (activeSegmentIndex() !== undefined) selectActiveSegment();
+    syncHistorySelection(current, next, selectedID);
     deps.setPreviewCenterMs(next.present.playheadMs);
     deps.markDirty();
   };
 
   createEffect(() => {
+    if (typeof window === "undefined") return;
     const handleKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement;
       const isEditable = target.closest(
@@ -377,7 +426,7 @@ export function createEditorController(deps: {
         setMarker(event.key.toLowerCase() === "i" ? "inMs" : "outMs", deps.watchedPosition());
       } else if (event.key.toLowerCase() === "c") {
         event.preventDefault();
-        addSegment();
+        newSegment();
       } else if (event.key.toLowerCase() === "b") {
         event.preventDefault();
         splitActiveSegment();
@@ -400,9 +449,14 @@ export function createEditorController(deps: {
         event.preventDefault();
         void deps.createClips();
       } else if (event.key === "Escape") {
-        if (activeSegmentIndex() !== undefined || editingActive()) {
+        if (
+          activeSegmentIndex() !== undefined ||
+          editingActive() ||
+          present().inMs !== undefined ||
+          present().outMs !== undefined
+        ) {
           event.preventDefault();
-          selectActiveSegment();
+          newSegment();
         }
       } else if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") {
         event.preventDefault();
@@ -450,6 +504,8 @@ export function createEditorController(deps: {
     updateSegmentLabel,
     updateSegmentIncluded,
     splitActiveSegment,
+    newSegment,
+    prepareMediaSwitch,
     undo,
     redo,
   };

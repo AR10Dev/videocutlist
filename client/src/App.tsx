@@ -26,6 +26,7 @@ export function App() {
     projectName,
     revision,
     dirty,
+    saveState: projectSaveState,
     settingsOpen,
     setSettingsOpen,
     openSettings,
@@ -419,7 +420,15 @@ export function App() {
             <span class="project-status" aria-label="Project status">
               <strong>{projectName()}</strong>
               <span role="status">
-                {revision() === 0 ? "Unsaved" : dirty() ? "Unsaved changes" : "Saved"}
+                {projectSaveState() === "saving"
+                  ? "Saving"
+                  : projectSaveState() === "failed"
+                    ? "Save failed"
+                    : projectSaveState() === "unsaved"
+                      ? revision() === 0
+                        ? "Unsaved"
+                        : "Unsaved changes"
+                      : "Saved"}
               </span>
             </span>
           </div>
@@ -550,7 +559,7 @@ export function App() {
                   <kbd class="kbd kbd-sm">I</kbd> / <kbd class="kbd kbd-sm">O</kbd> Set In / Out
                 </span>
                 <span>
-                  <kbd class="kbd kbd-sm">C</kbd> Commit draft cut
+                  <kbd class="kbd kbd-sm">C</kbd> Start a new segment draft
                 </span>
                 <span>
                   <kbd class="kbd kbd-sm">P</kbd> Play active cut
@@ -590,7 +599,7 @@ export function App() {
                   <kbd class="kbd kbd-sm">Shift+/</kbd> Open this reference
                 </span>
                 <span>
-                  <kbd class="kbd kbd-sm">Esc</kbd> Leave active editing
+                  <kbd class="kbd kbd-sm">Esc</kbd> Start a new segment draft
                 </span>
               </div>
               <div class="modal-action">

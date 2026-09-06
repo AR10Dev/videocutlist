@@ -99,10 +99,15 @@ export function Timeline() {
     setDragTarget();
     if (original && target) {
       workspace.setTimeline(original);
-      if (target.kind === "playhead") workspace.updateTimeline({ playheadMs: edited.playheadMs });
-      else if (target.kind === "draft-in") workspace.updateTimeline({ inMs: edited.inMs });
-      else if (target.kind === "draft-out") workspace.updateTimeline({ outMs: edited.outMs });
-      else workspace.updateTimeline({ segments: edited.segments });
+      if (target.kind === "playhead") {
+        workspace.updateTimeline({ playheadMs: edited.playheadMs });
+      } else if (target.kind === "draft-in" && edited.inMs !== undefined) {
+        workspace.setMarker("inMs", edited.inMs);
+      } else if (target.kind === "draft-out" && edited.outMs !== undefined) {
+        workspace.setMarker("outMs", edited.outMs);
+      } else if (target.kind !== "draft-in" && target.kind !== "draft-out") {
+        workspace.updateTimeline({ segments: edited.segments });
+      }
     }
     if (timeline) animate(timeline, { scaleY: 1 }, { duration: 0.1 });
   };
