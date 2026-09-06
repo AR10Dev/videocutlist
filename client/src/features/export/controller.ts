@@ -257,12 +257,18 @@ export function createExportController(deps: {
     const items = deps.editableItems();
     if (!itemIDs.length) return void setExportStatus("Select at least one project item.");
     const selectedItems = items.filter((item) => itemIDs.includes(item.id));
+    const selection = exportSelection();
     if (
       selectedItems.length !== itemIDs.length ||
-      selectedItems.some((item) => item.timeline.present.segments.length === 0)
+      (selection === "segments" &&
+        selectedItems.some(
+          (item) => !item.timeline.present.segments.some((segment) => segment.included !== false),
+        ))
     )
       return void setExportStatus(
-        "Add a segment to each selected project item before creating clips.",
+        selection === "gaps"
+          ? "Select a project item before creating gap exports."
+          : "Add or include a segment in each selected project item before creating clips.",
       );
 
     workflowActive = true;

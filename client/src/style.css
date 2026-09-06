@@ -787,6 +787,71 @@
   .detection-panel > h2 {
     margin: 0;
   }
+  .export-heading-row,
+  .queue-heading-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .export-heading-row h2,
+  .queue-heading-row h2 {
+    margin: 0;
+  }
+  .export-dialog-content {
+    gap: 14px;
+  }
+  .export-dialog-content .export-actions {
+    position: sticky;
+    bottom: -1rem;
+    z-index: 1;
+    margin-inline: -0.5rem;
+    padding: 10px 8px;
+    background: color-mix(in srgb, var(--surface-raised) 94%, transparent);
+    border-top: 1px solid var(--panel-border);
+  }
+  .export-muted-note,
+  .queue-description {
+    color: var(--text-muted);
+    font-size: 0.75rem;
+  }
+  .export-summary dl {
+    margin: 0;
+  }
+  .export-summary .export-muted-note {
+    margin: 10px 0 0;
+  }
+  .export-filename-preview {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--panel-border);
+  }
+  .export-filename-preview ul {
+    display: grid;
+    gap: 3px;
+    max-height: 8rem;
+    margin: 4px 0;
+    padding-left: 1.2rem;
+    overflow-y: auto;
+  }
+  .export-filename-preview code {
+    font-size: 0.75rem;
+  }
+  .export-findings {
+    display: grid;
+    gap: 6px;
+  }
+  .export-findings .alert {
+    min-height: 0;
+    padding: 8px 10px;
+    font-size: 0.8rem;
+  }
+  .queue-heading-row {
+    align-items: center;
+  }
+  .queue-heading-row .queue-description {
+    margin: 3px 0 0;
+  }
   .project-panel p,
   .export-panel p,
   .detection-panel p,

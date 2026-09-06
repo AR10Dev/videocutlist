@@ -95,7 +95,10 @@ export function App() {
       : !initialPanelPreferences.segmentsCollapsed,
   );
   const [queueOpen, setQueueOpen] = createSignal(false);
+  const [exportDialogOpen, setExportDialogOpen] = createSignal(false);
   let queueDismissed = false;
+  let exportDialogPreviousTask: (typeof taskTabs)[number] = "project";
+  let exportTrigger: HTMLButtonElement | undefined;
   let mediaToggle: HTMLButtonElement | undefined;
   let tasksToggle: HTMLButtonElement | undefined;
   let shortcutClose: HTMLButtonElement | undefined;
@@ -138,6 +141,16 @@ export function App() {
     if (restoreFocus && narrowViewport()) restoreTriggerFocus("segments");
   };
   const toggleTaskPanel = () => (tasksOpen() ? closeTaskPanel() : openTaskPanel(activeTask()));
+  const openExportDialog = () => {
+    exportDialogPreviousTask = activeTask();
+    if (activeTask() === "export") setActiveTask("cuts");
+    setExportDialogOpen(true);
+  };
+  const closeExportDialog = () => {
+    setExportDialogOpen(false);
+    setActiveTask(exportDialogPreviousTask);
+    requestAnimationFrame(() => exportTrigger?.focus());
+  };
   const closeOpenDrawer = () => {
     if (mediaOpen()) closeMediaPanel();
     else if (tasksOpen()) closeTaskPanel();
@@ -305,6 +318,17 @@ export function App() {
       .length;
   const failedJobCount = () =>
     controller.batches().filter((batch) => batch.state === "failed").length;
+  const includedExportCount = () => {
+    const selected = new Set(controller.selectedExportItems());
+    return controller
+      .editableItems()
+      .filter((item) => selected.has(item.id))
+      .reduce(
+        (total, item) =>
+          total + item.timeline.present.segments.filter((segment) => segment.included !== false).length,
+        0,
+      );
+  };
   return (
     <WorkspaceProvider value={controller}>
       <main
@@ -472,14 +496,16 @@ export function App() {
               </span>
             </button>
             <button
+              ref={(element) => (exportTrigger = element)}
               class="btn btn-primary btn-sm"
               type="button"
-              aria-label={`Export ${controller.present().segments.length} segments`}
-              onClick={() => openTaskPanel("export")}
+              aria-haspopup="dialog"
+              aria-label={`Export ${includedExportCount()} included segments`}
+              onClick={openExportDialog}
             >
               <span>Export</span>
               <span class="export-count" aria-hidden="true">
-                {controller.present().segments.length}
+                {includedExportCount()}
               </span>
             </button>
             <button
@@ -619,6 +645,29 @@ export function App() {
                 aria-label="Close shortcut help"
                 onClick={() => controller.setShortcutHelpOpen(false)}
               />
+            </form>
+          </dialog>
+        </Show>
+        <Show when={exportDialogOpen()}>
+          <dialog
+            id="export-dialog"
+            open
+            class="modal modal-open"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="export-dialog-heading"
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                event.preventDefault();
+                closeExportDialog();
+              }
+            }}
+          >
+            <div class="modal-box max-h-[90dvh] max-w-2xl overflow-y-auto">
+              <ExportView dialog onClose={closeExportDialog} />
+            </div>
+            <form method="dialog" class="modal-backdrop">
+              <button type="button" aria-label="Close export dialog" onClick={closeExportDialog} />
             </form>
           </dialog>
         </Show>
@@ -845,7 +894,7 @@ export function App() {
                   id="export-tabpanel"
                   role="tabpanel"
                   aria-labelledby="export-tab"
-                  hidden={activeTask() !== "export"}
+                  hidden={activeTask() !== "export" || exportDialogOpen()}
                 >
                   <ExportView />
                 </div>

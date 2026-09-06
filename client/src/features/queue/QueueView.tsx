@@ -188,9 +188,18 @@ export function QueueView() {
   };
 
   return (
-    <Show when={batches().length > 0}>
-      <section class="queue-panel flex flex-col gap-4 p-4" aria-labelledby="queue-heading">
-        <h2 id="queue-heading">Export queue</h2>
+    <section class="queue-panel flex flex-col gap-4 p-4" aria-labelledby="queue-heading">
+      <header class="queue-heading-row">
+        <div>
+          <h2 id="queue-heading">Export queue</h2>
+          <p class="queue-description">Exports continue while you keep editing.</p>
+        </div>
+        <span class="badge badge-sm">{batches().length} total</span>
+      </header>
+      <Show
+        when={batches().length > 0}
+        fallback={<p role="status">No export jobs yet. Submitted clips will appear here.</p>}
+      >
         <For each={activeOrRecent()}>
           {(batch, index) => (
             <BatchCard
@@ -222,7 +231,7 @@ export function QueueView() {
             </div>
           </details>
         </Show>
-      </section>
-    </Show>
+      </Show>
+    </section>
   );
 }

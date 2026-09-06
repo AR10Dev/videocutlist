@@ -20,13 +20,18 @@ async function addToProject(page: Page) {
   await page.getByRole("button", { name: "Add to project" }).click();
 }
 
-async function addSegment(page: Page, start = 100, end = 700) {
+async function addSegment(page: Page, start = 100, end = 700, startNew = false) {
+  if (startNew) await page.getByRole("button", { name: "New segment" }).click();
   const playhead = page.getByLabel("Timeline playhead");
   await playhead.fill(String(start));
   await page.getByRole("button", { name: "Set in" }).click();
   await playhead.fill(String(end));
   await page.getByRole("button", { name: "Set out" }).click();
-  await page.getByRole("button", { name: /Add cut \(Add segment\)/ }).click();
+  await expect(page.locator(".cut-row[data-segment-id]")).toHaveCount(1);
+  await expect(page.getByRole("button", { name: "Select cut 1" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
 }
 
 async function openMediaChooser(page: Page) {
@@ -234,7 +239,7 @@ test("conflicted saves never submit preflight or export", async ({ page }) => {
   await openExport(page);
   await page.getByRole("button", { name: "Create clips" }).click();
   await expect(
-    page.getByRole("region", { name: "Export" }).getByText(/Load latest before saving/),
+    page.getByRole("alert").filter({ hasText: "Another client saved this project." }),
   ).toBeVisible();
   expect(calls).toEqual(["save"]);
 });
@@ -259,4 +264,26 @@ test("new items use the remembered destination and unavailable preferences expla
     page.getByText("Remembered destination is unavailable. Using Browser download."),
   ).toBeVisible();
   await expect(page.getByLabel("Destination")).toHaveValue("download");
+});
+
+test("primary export opens an explicit scope dialog and jobs stays available", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Select camera.mp4" }).click();
+  await addToProject(page);
+  await addSegment(page);
+
+  await page.getByRole("button", { name: /Export 1 included segments/ }).click();
+  const dialog = page.getByRole("dialog", { name: "Export clips" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText("Export scope")).toBeVisible();
+  await expect(dialog.getByText("Included segments")).toBeVisible();
+  await expect(dialog.getByText("Filename preview")).toBeVisible();
+  await dialog.getByText("Export options", { exact: true }).click();
+  await expect(dialog.getByLabel("Output arrangement")).toBeVisible();
+  await dialog.getByRole("button", { name: "Close", exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+
+  await page.getByRole("button", { name: /^Jobs/ }).click();
+  await expect(page.getByRole("heading", { name: "Export queue" })).toBeVisible();
+  await expect(page.getByText("No export jobs yet.")).toBeVisible();
 });

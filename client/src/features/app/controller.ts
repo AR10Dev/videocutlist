@@ -341,9 +341,7 @@ export function createWorkspaceController() {
     };
     setProjectItems([...items, added]);
     activateItem(added);
-    if (added.timeline.present.segments.length) {
-      setSelectedExportItems((ids) => (ids.includes(added.id) ? ids : [...ids, added.id]));
-    }
+    setSelectedExportItems((ids) => (ids.includes(added.id) ? ids : [...ids, added.id]));
     markDirty();
     setStatus(`Added ${item.name} to the project.`);
   };
