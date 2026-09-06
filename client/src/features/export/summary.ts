@@ -1,11 +1,12 @@
 import type { EditableProjectItem } from "../projects/model";
-import type { Segment } from "../preview/model";
+import { segmentIncluded, type Segment } from "../preview/model";
 
 export function exportRanges(segments: Segment[], selection: string, duration: number): Segment[] {
-  if (selection !== "gaps") return segments;
+  const included = segments.filter(segmentIncluded);
+  if (selection !== "gaps") return included;
   const gaps: Segment[] = [];
   let cursor = 0;
-  for (const segment of [...segments].sort((a, b) => a.startMs - b.startMs)) {
+  for (const segment of [...included].sort((a, b) => a.startMs - b.startMs)) {
     if (cursor < segment.startMs) gaps.push({ startMs: cursor, endMs: segment.startMs });
     cursor = Math.max(cursor, segment.endMs);
   }

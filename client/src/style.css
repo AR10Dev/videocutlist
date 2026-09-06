@@ -509,9 +509,19 @@
   }
   .control-help,
   #timeline-description,
-  .shortcut-help {
+  .shortcut-help,
+  .asset-capability {
     color: var(--text-muted);
     font-size: 0.8rem;
+  }
+  .asset-capability {
+    margin: 8px 0 0;
+  }
+  .alert {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
   }
 
   .timeline-scroll {
@@ -615,13 +625,73 @@
   .timeline-segment {
     width: auto;
     margin-left: 0;
+    display: flex;
+    align-items: flex-start;
+    overflow: hidden;
     background: var(--color-secondary);
     opacity: 0.38;
+  }
+  .timeline-segment.segment-tone-0 {
+    background: var(--color-primary);
+  }
+  .timeline-segment.segment-tone-1 {
+    background: var(--color-secondary);
+  }
+  .timeline-segment.segment-tone-2 {
+    background: var(--color-accent);
+  }
+  .timeline-segment.segment-tone-3 {
+    background: var(--color-info);
+  }
+  .timeline-segment.segment-tone-4 {
+    background: var(--color-success);
+  }
+  .timeline-segment.is-excluded {
+    background: repeating-linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--color-neutral) 70%, var(--surface)),
+      color-mix(in srgb, var(--color-neutral) 70%, var(--surface)) 8px,
+      color-mix(in srgb, var(--color-neutral) 45%, var(--surface)) 8px,
+      color-mix(in srgb, var(--color-neutral) 45%, var(--surface)) 16px
+    );
+    opacity: 0.68;
   }
   .timeline-segment.is-active {
     opacity: 0.72;
     outline: 2px solid var(--color-primary-content);
     outline-offset: -2px;
+  }
+  .timeline-segment:focus-visible,
+  .cut-handle:focus-visible {
+    outline: 2px solid var(--color-warning);
+    outline-offset: 2px;
+  }
+  .timeline-segment-label {
+    min-width: 0;
+    padding: 12px 8px 4px;
+    overflow: hidden;
+    color: var(--color-secondary-content);
+    font-size: 0.7rem;
+    font-weight: 650;
+    line-height: 1.2;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    pointer-events: none;
+  }
+  .timeline-segment.segment-tone-0 .timeline-segment-label {
+    color: var(--color-primary-content);
+  }
+  .timeline-segment.segment-tone-2 .timeline-segment-label {
+    color: var(--color-accent-content);
+  }
+  .timeline-segment.segment-tone-3 .timeline-segment-label {
+    color: var(--color-info-content);
+  }
+  .timeline-segment.segment-tone-4 .timeline-segment-label {
+    color: var(--color-success-content);
+  }
+  .timeline-segment.is-excluded .timeline-segment-label {
+    color: var(--color-neutral-content);
   }
   .timeline-playhead {
     z-index: 2;
@@ -867,6 +937,15 @@
   .task-heading h2 {
     margin: 0;
   }
+  .cut-summary {
+    display: grid;
+    gap: 2px;
+    text-align: right;
+  }
+  .cut-summary span:last-child {
+    color: var(--text-muted);
+    font-size: 0.72rem;
+  }
   .task-heading p {
     margin: 4px 0 0;
     color: var(--text-muted);
@@ -899,14 +978,43 @@
     grid-column: 2;
     color: var(--text-muted);
   }
+  .cut-inclusion {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--text-muted);
+    font-size: 0.75rem;
+  }
   .cut-label {
     display: flex;
     align-items: center;
     gap: 6px;
   }
+  .cut-row.is-excluded .cut-select {
+    text-decoration: line-through;
+    text-decoration-thickness: 1px;
+  }
   .cut-label input {
     min-width: 0;
     width: 100%;
+  }
+  .cut-menu {
+    margin: 0;
+    padding: 0;
+    border: 0;
+  }
+  .cut-menu summary {
+    display: inline-flex;
+    width: fit-content;
+    list-style: none;
+  }
+  .cut-menu summary::-webkit-details-marker {
+    display: none;
+  }
+  .cut-menu-panel {
+    display: grid;
+    gap: 4px;
+    padding-top: 4px;
   }
   .cut-actions {
     display: flex;

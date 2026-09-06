@@ -10,6 +10,8 @@ import {
   updateTimelinePlayback,
   updateTimelineView,
   undoTimeline,
+  fitSelectionZoom,
+  timelineNudgeMs,
   visibleTimelineWindow,
   type TimelineSnapshot,
 } from "../src/features/editor/timeline";
@@ -23,6 +25,12 @@ const initial: TimelineSnapshot = {
 };
 
 describe("timeline history", () => {
+  it("calculates bounded selected-range fitting and a documented nudge", () => {
+    expect(fitSelectionZoom(10_000, 2_000, 4_000)).toBe(5);
+    expect(fitSelectionZoom(10_000, 0, 1)).toBe(16);
+    expect(timelineNudgeMs).toBe(100);
+  });
+
   it("restores the complete timeline snapshot and redoes it", () => {
     const changed = editTimeline(createTimelineHistory(initial), {
       playheadMs: 400,

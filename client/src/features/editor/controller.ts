@@ -5,7 +5,7 @@ import {
   moveSegment as moveSegments,
   moveSegmentTo,
   removeSegment as removeSegments,
-  resizeSegment,
+  resizeSegmentInteractive,
   splitSegment,
 } from "./segmentEditing";
 import {
@@ -18,7 +18,7 @@ import {
   updateTimelineView,
   type TimelineHistory,
 } from "./timeline";
-import { validateSegments, type Segment } from "../preview/model";
+import { normalizeSegments, newSegmentId, validateSegments, type Segment } from "../preview/model";
 
 type Media = components["schemas"]["Media"];
 type Track = {
@@ -38,6 +38,7 @@ export function createEditorController(deps: {
   togglePlayback: () => void;
   playActiveSegment: (loop: boolean) => void;
   playOrderedSegments: () => void;
+  pausePlayback: () => void;
   createClips: () => void | Promise<void>;
   onSegmentCommitted?: () => void;
 }) {
@@ -70,6 +71,15 @@ export function createEditorController(deps: {
     setActiveIndex(index);
     setEditingActive(index !== undefined);
     clearDraft();
+    if (index !== undefined) {
+      deps.pausePlayback();
+      const startMs = present().segments[index]?.startMs;
+      if (startMs !== undefined) {
+        const next = updateTimelineView(timeline(), { playheadMs: startMs });
+        setTimeline(next);
+        deps.setPreviewCenterMs(startMs);
+      }
+    }
   };
   const tracks = (): Track[] => {
     const value = deps.selected()?.streams.tracks;
@@ -86,18 +96,37 @@ export function createEditorController(deps: {
       : [];
   };
   const updateTimeline = (changes: Partial<TimelineHistory["present"]>) => {
+    const selectedID = activeSegment()?.id;
     setEditorStatus("");
     const { playheadMs: nextPlayheadMs, zoom: nextZoom, ...editChanges } = changes;
+    const normalizedEditChanges = editChanges.segments
+      ? {
+          ...editChanges,
+          segments: normalizeSegments(editChanges.segments, deps.selected()?.id ?? "media"),
+        }
+      : editChanges;
     let next = timeline();
-    if (Object.keys(editChanges).length) next = editTimeline(next, editChanges);
+    if (Object.keys(normalizedEditChanges).length) next = editTimeline(next, normalizedEditChanges);
     if (nextPlayheadMs !== undefined || nextZoom !== undefined)
       next = updateTimelineView(next, {
         ...(nextPlayheadMs !== undefined ? { playheadMs: nextPlayheadMs } : {}),
         ...(nextZoom !== undefined ? { zoom: nextZoom } : {}),
       });
     setTimeline(next);
+    if (selectedID) {
+      const nextIndex = next.present.segments.findIndex((segment) => segment.id === selectedID);
+      if (nextIndex >= 0) {
+        setActiveIndex(nextIndex);
+      } else {
+        setActiveIndex();
+        setEditingActive(false);
+      }
+    }
     if (nextPlayheadMs !== undefined) deps.setPreviewCenterMs(next.present.playheadMs);
-    if (Object.keys(editChanges).length) deps.markDirty();
+    if (Object.keys(normalizedEditChanges).length) {
+      deps.pausePlayback();
+      deps.markDirty();
+    }
   };
   const updatePlaybackPosition = (positionMs: number) => {
     const nextPosition = Math.max(0, Math.min(duration(), Math.round(positionMs)));
@@ -105,17 +134,27 @@ export function createEditorController(deps: {
       setTimeline(updateTimelinePlayback(timeline(), nextPosition));
   };
   const setMarker = (kind: "inMs" | "outMs", value: number) => {
+    setEditorStatus("");
     const active = activeSegmentIndex();
     if (active !== undefined && editingActive()) {
       const current = present().segments[active];
       if (!current) return selectActiveSegment();
       const boundary = kind === "inMs" ? "start" : "end";
-      const next = resizeSegment(present().segments, active, boundary, value, duration());
-      if (
-        next === present().segments &&
-        value !== current[boundary === "start" ? "startMs" : "endMs"]
-      )
-        return setEditorStatus("That boundary would overlap another cut or leave In before Out.");
+      const nextValue = Math.round(value);
+      if (!Number.isFinite(nextValue) || nextValue < 0 || nextValue > duration())
+        return setEditorStatus("In must be before Out and both must be within the video.");
+      const next = present().segments.map((segment, position) =>
+        position === active
+          ? { ...segment, [boundary === "start" ? "startMs" : "endMs"]: nextValue }
+          : segment,
+      );
+      const error = validateSegments(next, duration());
+      if (error)
+        return setEditorStatus(
+          error === "Segments cannot overlap."
+            ? "That boundary would overlap another cut or leave In before Out."
+            : error,
+        );
       updateTimeline({ segments: next });
       return;
     }
@@ -130,8 +169,34 @@ export function createEditorController(deps: {
       (kind === "outMs" && currentIn !== undefined && nextValue <= currentIn)
     )
       return setEditorStatus("In must be before Out and both must be within the video.");
+    deps.pausePlayback();
     setTimeline(editTimeline(timeline(), { [kind]: nextValue }));
     deps.markDirty();
+  };
+  const previewMarker = (kind: "inMs" | "outMs", value: number) => {
+    const active = activeSegmentIndex();
+    if (active !== undefined && editingActive()) {
+      previewSegment(active, {
+        boundary: kind === "inMs" ? "start" : "end",
+        valueMs: value,
+      });
+      return;
+    }
+    const currentIn = present().inMs;
+    const currentOut = present().outMs;
+    const nextValue = Math.round(value);
+    if (
+      !Number.isFinite(nextValue) ||
+      nextValue < 0 ||
+      nextValue > duration() ||
+      (kind === "inMs" && currentOut !== undefined && nextValue >= currentOut) ||
+      (kind === "outMs" && currentIn !== undefined && nextValue <= currentIn)
+    )
+      return;
+    setTimeline({
+      ...timeline(),
+      present: { ...present(), [kind]: nextValue },
+    });
   };
   const addSegment = () => {
     const item = deps.selected();
@@ -141,9 +206,11 @@ export function createEditorController(deps: {
     if (!item || inMs === undefined || outMs === undefined || inMs >= outMs)
       return setEditorStatus("Set an in point before the out point.");
     const segment: Segment = {
+      id: newSegmentId(),
       startMs: inMs,
       endMs: outMs,
       label: segmentLabel().trim() || undefined,
+      included: true,
     };
     const next = [...present().segments, segment];
     const error = validateSegments(next, item.durationMs);
@@ -156,32 +223,27 @@ export function createEditorController(deps: {
     deps.onSegmentCommitted?.();
   };
   const removeSegment = (index: number) => {
+    const active = activeSegmentIndex();
     const next = removeSegments(present().segments, index);
     updateTimeline({ segments: next });
-    const active = activeSegmentIndex();
     if (active === index) selectActiveSegment();
-    else if (active !== undefined && active > index) setActiveIndex(active - 1);
   };
   const moveSegment = (index: number, direction: -1 | 1) => {
     const current = present().segments;
     const next = moveSegments(current, index, direction);
     updateTimeline({ segments: next });
-    if (next !== current) {
-      const active = activeSegmentIndex();
-      const target = index + direction;
-      if (active === index) setActiveIndex(target);
-      else if (active === target) setActiveIndex(index);
-    }
   };
-  const updateSegment = (
-    index: number,
-    change: { boundary: "start" | "end"; valueMs: number } | { startMs: number },
-  ) => {
+  type SegmentChange = { boundary: "start" | "end"; valueMs: number } | { startMs: number };
+  const calculateSegmentUpdate = (index: number, change: SegmentChange) => {
     const current = present().segments;
     const next =
       "boundary" in change
-        ? resizeSegment(current, index, change.boundary, change.valueMs, duration())
+        ? resizeSegmentInteractive(current, index, change.boundary, change.valueMs, duration())
         : moveSegmentTo(current, index, change.startMs, duration());
+    return { current, next };
+  };
+  const updateSegment = (index: number, change: SegmentChange) => {
+    const { current, next } = calculateSegmentUpdate(index, change);
     if (next === current) {
       const currentValue =
         "boundary" in change
@@ -196,12 +258,36 @@ export function createEditorController(deps: {
     }
     updateTimeline({ segments: next });
   };
+  const previewSegment = (index: number, change: SegmentChange) => {
+    const { current, next } = calculateSegmentUpdate(index, change);
+    const preview =
+      "boundary" in change
+        ? resizeSegmentInteractive(current, index, change.boundary, change.valueMs, duration())
+        : next;
+    if (preview === current) return;
+    setTimeline({
+      ...timeline(),
+      present: {
+        ...present(),
+        segments: normalizeSegments(preview, deps.selected()?.id ?? "media"),
+      },
+    });
+  };
   const updateSegmentLabel = (index: number, label: string) =>
     updateTimeline({
-      segments: present().segments.map((segment, position) =>
+      segments: present().segments.map((segment: Segment, position: number) =>
         position === index ? { ...segment, label: label.trim() || undefined } : segment,
       ),
     });
+  const updateSegmentIncluded = (index: number, included: boolean) => {
+    const segment = present().segments[index];
+    if (!segment || (segment.included !== false) === included) return;
+    updateTimeline({
+      segments: present().segments.map((item: Segment, position: number) =>
+        position === index ? { ...item, included } : item,
+      ),
+    });
+  };
   const splitActiveSegment = () => {
     const index = activeSegmentIndex();
     if (index === undefined) return setEditorStatus("Select a cut before splitting it.");
@@ -223,20 +309,28 @@ export function createEditorController(deps: {
   });
 
   const undo = () => {
+    const selectedID = activeSegment()?.id;
     const next = undoTimeline(timeline());
     if (next === timeline()) return;
     setTimeline(next);
-    if (activeSegmentIndex() !== undefined && !next.present.segments[activeSegmentIndex()!])
-      selectActiveSegment();
+    if (selectedID) {
+      const nextIndex = next.present.segments.findIndex((segment) => segment.id === selectedID);
+      if (nextIndex >= 0) setActiveIndex(nextIndex);
+      else selectActiveSegment();
+    } else if (activeSegmentIndex() !== undefined) selectActiveSegment();
     deps.setPreviewCenterMs(next.present.playheadMs);
     deps.markDirty();
   };
   const redo = () => {
+    const selectedID = activeSegment()?.id;
     const next = redoTimeline(timeline());
     if (next === timeline()) return;
     setTimeline(next);
-    if (activeSegmentIndex() !== undefined && !next.present.segments[activeSegmentIndex()!])
-      selectActiveSegment();
+    if (selectedID) {
+      const nextIndex = next.present.segments.findIndex((segment) => segment.id === selectedID);
+      if (nextIndex >= 0) setActiveIndex(nextIndex);
+      else selectActiveSegment();
+    } else if (activeSegmentIndex() !== undefined) selectActiveSegment();
     deps.setPreviewCenterMs(next.present.playheadMs);
     deps.markDirty();
   };
@@ -347,11 +441,14 @@ export function createEditorController(deps: {
     updateTimeline,
     updatePlaybackPosition,
     setMarker,
+    previewMarker,
+    previewSegment,
     addSegment,
     removeSegment,
     moveSegment,
     updateSegment,
     updateSegmentLabel,
+    updateSegmentIncluded,
     splitActiveSegment,
     undo,
     redo,

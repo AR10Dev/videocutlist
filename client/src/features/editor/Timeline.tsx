@@ -1,16 +1,26 @@
 import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
 import { animate } from "motion";
 import { viewportScale } from "../preview/assets";
-import { formatTime } from "../preview/model";
-import { frameDuration } from "./frame";
+import { formatTime, segmentIncluded } from "../preview/model";
+import {
+  fitSelectionZoom,
+  timelineNudgeMs,
+  timelineTimeFromPointer,
+  visibleTimelineWindow,
+} from "./timeline";
 import { useWorkspace } from "../app/WorkspaceContext";
 import { TimelineCanvas } from "./TimelineCanvas";
-import { timelineTimeFromPointer, visibleTimelineWindow } from "./timeline";
 
 type DragTarget =
   | { kind: "playhead" | "draft-in" | "draft-out" }
   | { kind: "segment-start" | "segment-end"; index: number }
   | { kind: "segment-body"; index: number; offsetMs: number };
+
+const segmentTone = (segment: { id?: string }) => {
+  let hash = 0;
+  for (const character of segment.id ?? "segment") hash = (hash * 31 + character.charCodeAt(0)) | 0;
+  return Math.abs(hash) % 5;
+};
 
 export function Timeline() {
   const workspace = useWorkspace();
@@ -47,25 +57,25 @@ export function Timeline() {
     setHoverMs(value);
     if (target.kind === "playhead") workspace.updateTimeline({ playheadMs: value });
     else if (target.kind === "draft-in")
-      workspace.setMarker(
+      workspace.previewMarker(
         "inMs",
         Math.min(value, workspace.present().outMs ?? workspace.duration()),
       );
     else if (target.kind === "draft-out")
-      workspace.setMarker("outMs", Math.max(value, workspace.present().inMs ?? 0));
+      workspace.previewMarker("outMs", Math.max(value, workspace.present().inMs ?? 0));
     else if (target.kind === "segment-start")
-      workspace.updateSegment(target.index, { boundary: "start", valueMs: value });
+      workspace.previewSegment(target.index, { boundary: "start", valueMs: value });
     else if (target.kind === "segment-end")
-      workspace.updateSegment(target.index, { boundary: "end", valueMs: value });
+      workspace.previewSegment(target.index, { boundary: "end", valueMs: value });
     else if (target.kind === "segment-body")
-      workspace.updateSegment(target.index, { startMs: value - target.offsetMs });
+      workspace.previewSegment(target.index, { startMs: value - target.offsetMs });
   };
   const beginDrag = (target: DragTarget, event: PointerEvent) => {
     event.preventDefault();
     event.stopPropagation();
     dragStart ??= workspace.timeline();
     setDragTarget(target);
-    positionFromPointer(event.clientX, target);
+    if (target.kind !== "playhead") workspace.pausePlayback();
     try {
       (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
     } catch {
@@ -79,7 +89,7 @@ export function Timeline() {
     event.stopPropagation();
     dragStart ??= workspace.timeline();
     setDragTarget(target);
-    positionFromPointer(event.clientX, target);
+    if (target.kind !== "playhead") workspace.pausePlayback();
   };
   const finishDrag = () => {
     const target = dragTarget();
@@ -95,6 +105,29 @@ export function Timeline() {
       else workspace.updateTimeline({ segments: edited.segments });
     }
     if (timeline) animate(timeline, { scaleY: 1 }, { duration: 0.1 });
+  };
+  const cancelDrag = () => {
+    if (!dragTarget()) return;
+    const original = dragStart;
+    dragStart = undefined;
+    setDragTarget();
+    if (original) workspace.setTimeline(original);
+    if (timeline) animate(timeline, { scaleY: 1 }, { duration: 0.1 });
+  };
+  const fitSelection = () => {
+    const segment = workspace.activeSegment();
+    if (!segment || workspace.duration() <= 0) return;
+    workspace.updateTimeline({
+      zoom: fitSelectionZoom(workspace.duration(), segment.startMs, segment.endMs),
+    });
+    requestAnimationFrame(() => {
+      if (scroller && timeline) {
+        const center =
+          ((segment.startMs + segment.endMs) / 2 / workspace.duration()) * timeline.clientWidth;
+        scroller.scrollLeft = Math.max(0, center - scroller.clientWidth / 2);
+      }
+      updateWindow();
+    });
   };
   const setZoom = (zoom: number) => {
     const anchorMs = hoverMs() ?? workspace.playheadMs();
@@ -116,10 +149,12 @@ export function Timeline() {
   };
   globalThis.addEventListener("timeline-zoom", onZoom);
   globalThis.addEventListener("timeline-fit", onFit);
+  globalThis.addEventListener("timeline-fit-selection", fitSelection);
   globalThis.addEventListener("resize", updateWindow);
   onCleanup(() => {
     globalThis.removeEventListener("timeline-zoom", onZoom);
     globalThis.removeEventListener("timeline-fit", onFit);
+    globalThis.removeEventListener("timeline-fit-selection", fitSelection);
     globalThis.removeEventListener("resize", updateWindow);
   });
   createEffect(() => {
@@ -130,15 +165,27 @@ export function Timeline() {
     const target = dragTarget();
     if (target) positionFromPointer(event.clientX, target);
   };
+  const handleKeyDown = (event: KeyboardEvent) => {
+    const target = event.target;
+    const isEditable =
+      target instanceof HTMLElement &&
+      target.closest("input, textarea, select, [contenteditable='true']");
+    if (event.key !== "Escape" || !dragTarget() || isEditable) return;
+    event.preventDefault();
+    event.stopPropagation();
+    cancelDrag();
+  };
   globalThis.addEventListener("pointermove", handlePointerMove);
   globalThis.addEventListener("pointerup", finishDrag);
   globalThis.addEventListener("mousemove", handlePointerMove);
   globalThis.addEventListener("mouseup", finishDrag);
+  globalThis.addEventListener("keydown", handleKeyDown, true);
   onCleanup(() => {
     globalThis.removeEventListener("pointermove", handlePointerMove);
     globalThis.removeEventListener("pointerup", finishDrag);
     globalThis.removeEventListener("mousemove", handlePointerMove);
     globalThis.removeEventListener("mouseup", finishDrag);
+    globalThis.removeEventListener("keydown", handleKeyDown, true);
   });
 
   const zoom = () => workspace.present().zoom;
@@ -177,7 +224,7 @@ export function Timeline() {
           }}
           onPointerLeave={() => !dragTarget() && setHoverMs()}
           onPointerUp={finishDrag}
-          onPointerCancel={finishDrag}
+          onPointerCancel={cancelDrag}
         >
           <input
             class="timeline-playhead-input"
@@ -212,14 +259,16 @@ export function Timeline() {
               assetRange={workspace.assetRange()}
             />
           </div>
-          <div class="timeline-lane timeline-waveform" role="img" aria-label="Waveform lane">
-            <TimelineCanvas
-              waveform={workspace.waveform()}
-              lane="waveform"
-              durationMs={workspace.duration()}
-              assetRange={workspace.assetRange()}
-            />
-          </div>
+          <Show when={workspace.waveformVisible()}>
+            <div class="timeline-lane timeline-waveform" role="img" aria-label="Waveform lane">
+              <TimelineCanvas
+                waveform={workspace.waveform()}
+                lane="waveform"
+                durationMs={workspace.duration()}
+                assetRange={workspace.assetRange()}
+              />
+            </div>
+          </Show>
           <div class="timeline-overlays">
             <Show when={!workspace.editingActive() && workspace.present().inMs !== undefined}>
               <span
@@ -250,9 +299,11 @@ export function Timeline() {
             <For each={workspace.present().segments}>
               {(segment, index) => (
                 <span
-                  class={`timeline-segment ${workspace.activeSegmentIndex() === index() ? "is-active" : ""}`}
+                  class={`timeline-segment segment-tone-${segmentTone(segment)} ${workspace.activeSegmentIndex() === index() ? "is-active" : ""} ${segmentIncluded(segment) ? "is-included" : "is-excluded"}`}
                   role="button"
-                  aria-label={`Select cut ${index() + 1}`}
+                  aria-pressed={workspace.activeSegmentIndex() === index()}
+                  aria-label={`${segment.label || `Segment ${String(index() + 1).padStart(3, "0")}`} · ${segmentIncluded(segment) ? "included" : "excluded"} · ${workspace.activeSegmentIndex() === index() ? "selected" : "not selected"}`}
+                  aria-keyshortcuts="ArrowLeft ArrowRight"
                   tabIndex={0}
                   onClick={(event) => {
                     event.stopPropagation();
@@ -268,9 +319,7 @@ export function Timeline() {
                       workspace.setActiveSegmentIndex(index());
                       workspace.updateSegment(index(), {
                         startMs:
-                          segment.startMs +
-                          (event.key === "ArrowLeft" ? -1 : 1) *
-                            (frameDuration(workspace.selected()) || 1000),
+                          segment.startMs + (event.key === "ArrowLeft" ? -1 : 1) * timelineNudgeMs,
                       });
                     }
                   }}
@@ -290,6 +339,9 @@ export function Timeline() {
                     width: `${((segment.endMs - segment.startMs) / workspace.duration()) * 100}%`,
                   }}
                 >
+                  <span class="timeline-segment-label">
+                    {segment.label || `Segment ${String(index() + 1).padStart(3, "0")}`}
+                  </span>
                   <Show when={workspace.activeSegmentIndex() === index()}>
                     <span
                       class="cut-handle cut-handle-start"
@@ -299,6 +351,7 @@ export function Timeline() {
                       aria-valuemin="0"
                       aria-valuemax={segment.endMs - 1}
                       aria-valuenow={segment.startMs}
+                      aria-valuetext={formatTime(segment.startMs, workspace.duration())}
                       onKeyDown={(event) => {
                         if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
                         event.preventDefault();
@@ -307,8 +360,7 @@ export function Timeline() {
                           boundary: "start",
                           valueMs:
                             segment.startMs +
-                            (event.key === "ArrowLeft" ? -1 : 1) *
-                              (frameDuration(workspace.selected()) || 1000),
+                            (event.key === "ArrowLeft" ? -1 : 1) * timelineNudgeMs,
                         });
                       }}
                       onPointerDown={(event) =>
@@ -323,6 +375,7 @@ export function Timeline() {
                       aria-valuemin={segment.startMs + 1}
                       aria-valuemax={workspace.duration()}
                       aria-valuenow={segment.endMs}
+                      aria-valuetext={formatTime(segment.endMs, workspace.duration())}
                       onKeyDown={(event) => {
                         if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
                         event.preventDefault();
@@ -330,9 +383,7 @@ export function Timeline() {
                         workspace.updateSegment(index(), {
                           boundary: "end",
                           valueMs:
-                            segment.endMs +
-                            (event.key === "ArrowLeft" ? -1 : 1) *
-                              (frameDuration(workspace.selected()) || 1000),
+                            segment.endMs + (event.key === "ArrowLeft" ? -1 : 1) * timelineNudgeMs,
                         });
                       }}
                       onPointerDown={(event) =>

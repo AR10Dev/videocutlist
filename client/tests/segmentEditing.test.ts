@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { moveSegmentTo, resizeSegment, splitSegment } from "../src/features/editor/segmentEditing";
+import {
+  moveSegmentTo,
+  resizeSegment,
+  resizeSegmentInteractive,
+  splitSegment,
+} from "../src/features/editor/segmentEditing";
 
 const segments = [
   { startMs: 100, endMs: 300, label: "A" },
@@ -17,6 +22,17 @@ describe("saved cut editing", () => {
       startMs: 100,
       endMs: 101,
       label: "A",
+    });
+  });
+
+  it("clamps interactive boundaries to neighboring cuts", () => {
+    expect(resizeSegmentInteractive(segments, 0, "end", 900, 1_000)[0]).toMatchObject({
+      startMs: 100,
+      endMs: 500,
+    });
+    expect(resizeSegmentInteractive(segments, 1, "start", -50, 1_000)[1]).toMatchObject({
+      startMs: 300,
+      endMs: 700,
     });
   });
 

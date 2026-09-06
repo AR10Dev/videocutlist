@@ -118,15 +118,10 @@ func (s Service) Run(ctx context.Context, source *os.File, document model.Docume
 		return Result{}, fmt.Errorf("%w: export preflight blocked", ErrInvalidRequest)
 	}
 	request.StreamIndexes = preflight.Selection
-	if request.Selection == "gaps" { /* metadata is also needed for duration below */
-	}
 	if len(document.Items) != 1 {
 		return Result{}, fmt.Errorf("%w: export requires one project item", ErrInvalidRequest)
 	}
-	segments := slices.Clone(document.Items[0].Segments)
-	if request.Selection == "gaps" {
-		segments = selectedSegments(document.Items[0].Segments, request.Selection, metadata.DurationMS)
-	}
+	segments := selectedSegments(document.Items[0].Segments, request.Selection, metadata.DurationMS)
 	if len(segments) == 0 {
 		return Result{}, fmt.Errorf("%w: at least one segment is required", ErrInvalidRequest)
 	}
@@ -609,10 +604,16 @@ func validateStreamIndexes(indexes []int, streams []probe.Stream) error {
 }
 
 func selectedSegments(segments []model.Segment, selection string, duration int64) []model.Segment {
-	if selection == "segments" {
-		return slices.Clone(segments)
+	included := make([]model.Segment, 0, len(segments))
+	for _, segment := range segments {
+		if segment.IsIncluded() {
+			included = append(included, segment)
+		}
 	}
-	ordered := slices.Clone(segments)
+	if selection == "segments" {
+		return included
+	}
+	ordered := slices.Clone(included)
 	slices.SortFunc(ordered, func(a, b model.Segment) int { return cmp.Compare(a.StartMS, b.StartMS) })
 	var gaps []model.Segment
 	cursor := int64(0)

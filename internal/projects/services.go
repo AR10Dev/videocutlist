@@ -340,7 +340,9 @@ func (p ProjectUseCase) Get(ctx context.Context, id string) (Project, error) {
 	if err != nil {
 		return Project{}, err
 	}
-	return Project{ID: id, Document: record.Document, Revision: record.Revision, UpdatedAt: record.UpdatedAt}, nil
+	document := record.Document
+	model.EnsureSegmentIDs(&document)
+	return Project{ID: id, Document: document, Revision: record.Revision, UpdatedAt: record.UpdatedAt}, nil
 }
 
 func (p ProjectUseCase) Save(ctx context.Context, id string, input ProjectInput) (Project, error) {

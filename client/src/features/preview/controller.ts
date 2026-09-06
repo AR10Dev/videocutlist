@@ -8,12 +8,22 @@ import {
   previewRange,
   streamPreview,
   watchedMediaPosition,
+  segmentIncluded,
   type PreviewDiagnostics,
   type PreviewPlaybackMode,
   type Segment,
 } from "./model";
 
 type Media = components["schemas"]["Media"];
+
+const waveformPreferenceKey = "videocutlist.waveform-visible.v1";
+const initialWaveformVisibility = () => {
+  try {
+    return globalThis.localStorage?.getItem(waveformPreferenceKey) !== "false";
+  } catch {
+    return true;
+  }
+};
 
 type AssetRequestResult = {
   range: AssetRange;
@@ -75,6 +85,8 @@ export function createPreviewController(
 ) {
   const [assetStatus, setAssetStatus] = createSignal("");
   const [previewStatus, setPreviewStatus] = createSignal("");
+  const [waveformVisible, setWaveformVisible] = createSignal(initialWaveformVisibility());
+  const [assetReload, setAssetReload] = createSignal(0);
   const [thumbnailURL, setThumbnailURL] = createSignal<string>();
   const [waveform, setWaveform] = createSignal<number[]>([]);
   const [assetRange, setAssetRange] = createSignal<AssetRange>();
@@ -114,6 +126,7 @@ export function createPreviewController(
   createEffect(() => {
     const item = dependencies.selected();
     const viewport = dependencies.visibleRange();
+    assetReload();
     assetRequest?.abort();
     thumbnailTileURLs.forEach((url) => URL.revokeObjectURL(url));
     thumbnailTileURLs = [];
@@ -266,7 +279,7 @@ export function createPreviewController(
   });
 
   const watchedPosition = () => dependencies.playheadMs();
-  const orderedSegments = () => dependencies.segments().slice();
+  const orderedSegments = () => dependencies.segments().filter(segmentIncluded).slice();
   const playbackBounds = (item: Media) =>
     previewRange(
       playbackMode(),
@@ -449,9 +462,21 @@ export function createPreviewController(
     setPlaybackIntent(false);
     video()?.pause();
   };
+  const setWaveformVisibility = (visible: boolean) => {
+    setWaveformVisible(visible);
+    try {
+      globalThis.localStorage?.setItem(waveformPreferenceKey, String(visible));
+    } catch {
+      // Browser storage may be disabled; waveform remains available for this session.
+    }
+  };
+  const retryAssets = () => setAssetReload((value) => value + 1);
 
   return {
     assetStatus,
+    waveformVisible,
+    setWaveformVisibility,
+    retryAssets,
     previewStatus,
     thumbnailURL,
     waveform,

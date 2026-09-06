@@ -45,7 +45,7 @@ func ParseCSV(data []byte, durationMS int64) ([]model.Segment, error) {
 		if e1 != nil || e2 != nil {
 			return nil, errInvalid
 		}
-		out = append(out, model.Segment{StartMS: start, EndMS: end, Label: row[2]})
+		out = append(out, model.Segment{StartMS: start, EndMS: end, Label: row[2], Included: true})
 	}
 	return validate(out, durationMS)
 }
@@ -100,7 +100,7 @@ func ParseChapters(data []byte, durationMS int64) ([]model.Segment, error) {
 		if title == "" || strings.ContainsAny(title, "/\\") || utf8.RuneCountInString(title) > 200 {
 			return nil, errInvalid
 		}
-		starts = append(starts, model.Segment{StartMS: start, EndMS: end, Label: title})
+		starts = append(starts, model.Segment{StartMS: start, EndMS: end, Label: title, Included: true})
 	}
 	if len(starts) == 0 {
 		return nil, errInvalid

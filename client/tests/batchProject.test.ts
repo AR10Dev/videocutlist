@@ -31,7 +31,13 @@ describe("batch project items", () => {
     const saved = serializeProjectItem(first);
     const restored = restoreProjectItem(saved, first.media);
     expect(restored.timeline.present.playheadMs).toBe(500);
-    expect(restored.timeline.present.segments).toEqual([{ startMs: 100, endMs: 900 }]);
+    expect(restored.timeline.present.segments).toHaveLength(1);
+    expect(restored.timeline.present.segments[0]).toMatchObject({
+      startMs: 100,
+      endMs: 900,
+      included: true,
+    });
+    expect(restored.timeline.present.segments[0].id).toBeTruthy();
     expect(restored.exportOptions.selection).toBe("gaps");
   });
 

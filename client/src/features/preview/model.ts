@@ -38,6 +38,35 @@ export const hybridSmartCutKnownIneligible = (media?: Media) => {
 
 export type Segment = components["schemas"]["Segment"];
 
+export const segmentIncluded = (segment: Segment) => segment.included !== false;
+
+export const newSegmentId = () => {
+  const randomUUID = globalThis.crypto?.randomUUID?.();
+  if (randomUUID) return `s_${randomUUID.replaceAll("-", "")}`;
+  return `s_${Date.now().toString(36)}_${Math.random().toString(36).slice(2)}`;
+};
+
+const legacySegmentId = (scope: string, segment: Segment) => {
+  let hash = 2166136261;
+  const value = `${scope}:${segment.startMs}:${segment.endMs}`;
+  for (let position = 0; position < value.length; position += 1) {
+    hash ^= value.charCodeAt(position);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `s_legacy_${(hash >>> 0).toString(36)}`;
+};
+
+/** Add browser metadata while keeping old project segments readable. */
+export const normalizeSegments = (segments: Segment[], scope = "media") => {
+  const used = new Set<string>();
+  return segments.map((segment, index) => {
+    let id = segment.id || legacySegmentId(scope, segment);
+    if (used.has(id)) id = `${id}_${index.toString(36)}`;
+    used.add(id);
+    return { ...segment, id, included: segmentIncluded(segment) };
+  });
+};
+
 export const acceptsMediaMetadata = (
   aborted: boolean,
   request: number,

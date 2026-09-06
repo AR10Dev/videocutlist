@@ -54,6 +54,12 @@ Incomplete files end in `.partial`; only atomic rename publishes a hit.
 - Projects contain ordered media items. Each item has a stable opaque ID,
   independent segments, editor state, and export options. Revision zero creates;
   successful PUT increments revision; stale revisions return 409.
+- Segments persist a stable `id`, integer-millisecond `startMs`/`endMs`, optional
+  `label`, and `included` state. Documents written before `included` existed
+  default legacy segments to included. CSV and chapter interchange preserves
+  timing and labels only; it does not carry segment identity or inclusion, so
+  imported rows default to included and exports cannot promise that metadata
+  round-trips through those formats.
 - Segment bounds are non-negative, ordered, non-overlapping, within each item's
   media duration, and `startMs < endMs`.
 - Export, detection, and library-scan jobs use one durable SQLite state machine:

@@ -553,9 +553,11 @@ export interface components {
       filenameTemplate?: string;
     };
     Segment: {
+      id?: string;
       startMs: number;
       endMs: number;
       label?: string;
+      included?: boolean;
     };
     UIState: {
       playheadMs: number;

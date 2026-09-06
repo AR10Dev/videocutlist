@@ -1,5 +1,13 @@
 import type { Segment } from "../preview/model";
 
+export const timelineNudgeMs = 100;
+
+export const fitSelectionZoom = (durationMs: number, startMs: number, endMs: number) => {
+  const duration = Math.max(1, durationMs);
+  const range = Math.max(1, endMs - startMs);
+  return Math.max(1, Math.min(16, duration / range));
+};
+
 export const timelineTimeFromPointer = (
   clientX: number,
   left: number,
