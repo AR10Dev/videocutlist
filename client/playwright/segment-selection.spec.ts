@@ -2215,7 +2215,7 @@ test("covers the responsive workspace and keyboard editing workflow", async ({ p
   await expect(detectionTab).toHaveAttribute("aria-selected", "true");
   await page.getByRole("button", { name: "Find silence" }).focus();
   await page.keyboard.press("Enter");
-  await expect(page.getByText("Detection running.")).toBeVisible();
+  await expect(page.getByText(/1 candidates found/)).toBeVisible();
 });
 
 test("keeps the preview stable and exposes familiar playback controls", async ({ page }) => {

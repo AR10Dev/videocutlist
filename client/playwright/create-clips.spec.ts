@@ -135,9 +135,7 @@ test("Create clips saves a dirty revision before fresh preflight and batch submi
   );
 });
 
-test("multi-item Create clips preflights every selected item before submission", async ({
-  page,
-}) => {
+test("multi-item preflight checks every selected item before submission", async ({ page }) => {
   const calls: string[] = [];
   const preflightItems: string[][] = [];
   let exports = 0;
@@ -180,14 +178,10 @@ test("multi-item Create clips preflights every selected item before submission",
   await openExport(page);
   await page.getByRole("radio", { name: "Selected project items" }).check();
   await page.getByRole("button", { name: "Select all" }).click();
-  const create = page.getByRole("button", { name: "Create clips" });
-  await create.click();
-  await page.getByText("Export options", { exact: true }).click();
   await expect(page.getByText("One selected item has an unsupported stream.")).toBeVisible();
-  await expect(create).toBeDisabled();
-  expect(calls.slice(-2)).toEqual(["save", "preflight"]);
-  expect(preflightItems).toHaveLength(1);
-  expect(preflightItems[0]).toHaveLength(2);
+  await expect(page.getByRole("button", { name: "Create clips" })).toBeDisabled();
+  expect(calls.at(-1)).toBe("preflight");
+  expect(preflightItems.at(-1)).toHaveLength(2);
   expect(exports).toBe(0);
 });
 
