@@ -178,6 +178,7 @@ test("multi-item Create clips preflights every selected item before submission",
   await addToProject(page);
   await addSegment(page);
   await openExport(page);
+  await page.getByRole("radio", { name: "Selected project items" }).check();
   await page.getByRole("button", { name: "Select all" }).click();
   const create = page.getByRole("button", { name: "Create clips" });
   await create.click();
@@ -242,6 +243,61 @@ test("conflicted saves never submit preflight or export", async ({ page }) => {
     page.getByRole("alert").filter({ hasText: "Another client saved this project." }),
   ).toBeVisible();
   expect(calls).toEqual(["save"]);
+});
+
+test("changing export scope invalidates a prior preflight", async ({ page }) => {
+  const preflightItems: string[][] = [];
+  let releaseSelected: (() => void) | undefined;
+  await page.route(`${origin}/api/v1/projects/*/exports/preflight`, async (route) => {
+    const body = route.request().postDataJSON() as { itemIds?: string[] };
+    const itemIds = body.itemIds ?? [];
+    preflightItems.push(itemIds);
+    if (itemIds.length < 2)
+      return route.fulfill({ json: { allowed: true, selection: [], findings: [] } });
+    await new Promise<void>((resolve) => {
+      releaseSelected = () => {
+        void route
+          .fulfill({
+            json: {
+              allowed: false,
+              selection: [],
+              findings: [
+                {
+                  severity: "blocked",
+                  code: "unsupported_stream",
+                  message: "Selected scope preflight blocker.",
+                },
+              ],
+            },
+          })
+          .then(resolve, resolve);
+      };
+    });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Select camera.mp4" }).click();
+  await addToProject(page);
+  await addSegment(page);
+  await openMediaChooser(page);
+  await page.getByRole("button", { name: "Select second.mp4" }).click();
+  await addToProject(page);
+  await addSegment(page);
+  await openExport(page);
+  await page.getByRole("button", { name: "Save project" }).click();
+  await expect.poll(() => preflightItems.length).toBe(1);
+  expect(preflightItems[0]).toHaveLength(1);
+  const create = page.getByRole("button", { name: "Create clips" });
+  await expect(create).toBeEnabled();
+
+  await page.getByRole("radio", { name: "Selected project items" }).check();
+  await expect(page.getByText("Checking export requirements…")).toBeVisible();
+  await expect(create).toBeDisabled();
+  await expect.poll(() => preflightItems.length).toBe(2);
+  expect(preflightItems[1]).toHaveLength(2);
+  releaseSelected?.();
+  await expect(page.getByText("Selected scope preflight blocker.")).toBeVisible();
+  await expect(create).toBeDisabled();
 });
 
 test("new items use the remembered destination and unavailable preferences explain fallback", async ({

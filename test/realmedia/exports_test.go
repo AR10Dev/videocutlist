@@ -3,6 +3,9 @@
 package realmedia
 
 import (
+	"archive/zip"
+	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -59,6 +62,16 @@ func TestProductionExportsJobsAndOutputs(t *testing.T) {
 	if item.DurationMS < 2_000 {
 		t.Fatalf("fixture duration = %dms", item.DurationMS)
 	}
+	sourcePath := filepath.Join(root, "media", "sintel-trailer.mp4")
+	sourceBefore, err := os.ReadFile(sourcePath)
+	if err != nil {
+		t.Fatalf("read source before export: %v", err)
+	}
+	sourceBeforeInfo, err := os.Stat(sourcePath)
+	if err != nil {
+		t.Fatalf("stat source before export: %v", err)
+	}
+	sourceDigest := sha256.Sum256(sourceBefore)
 	projectID := "p_real_media_exports"
 	projectItem := map[string]any{"id": "i_abcdefghijklmnopqrstuvwx", "mediaId": item.ID, "segments": []any{
 		map[string]any{"startMs": 0, "endMs": 2000, "label": "opening"},
@@ -72,6 +85,22 @@ func TestProductionExportsJobsAndOutputs(t *testing.T) {
 		t.Fatalf("create project status=%d body=%s", resp.StatusCode, body)
 	}
 	resp.Body.Close()
+	var reloaded struct {
+		Revision int64 `json:"revision"`
+		Items    []struct {
+			ID       string `json:"id"`
+			MediaID  string `json:"mediaId"`
+			Segments []struct {
+				StartMS int64  `json:"startMs"`
+				EndMS   int64  `json:"endMs"`
+				Label   string `json:"label"`
+			} `json:"segments"`
+		} `json:"items"`
+	}
+	getJSON(t, p, "/api/v1/projects/"+projectID, &reloaded)
+	if reloaded.Revision != 1 || len(reloaded.Items) != 1 || reloaded.Items[0].MediaID != item.ID || len(reloaded.Items[0].Segments) != 2 || reloaded.Items[0].Segments[0].StartMS != 0 || reloaded.Items[0].Segments[1].Label != "second" {
+		t.Fatalf("reloaded project = %#v", reloaded)
+	}
 	revision := int64(1)
 
 	export := func(payload map[string]any) []string {
@@ -211,16 +240,44 @@ func TestProductionExportsJobsAndOutputs(t *testing.T) {
 				OutputCount int      `json:"outputCount"`
 				OutputName  string   `json:"outputName"`
 				OutputNames []string `json:"outputNames"`
-				Warnings    []struct {
-					Code string `json:"code"`
-				} `json:"warnings"`
 			} `json:"result"`
+			Warnings       []string `json:"warnings"`
+			WarningDetails []struct {
+				Code    string `json:"code"`
+				Message string `json:"message"`
+			} `json:"warningDetails"`
 		}
 		if json.NewDecoder(job.Body).Decode(&detail) != nil || detail.State != "succeeded" || detail.Result == nil {
 			t.Fatalf("job %s is not successful", jobID)
 		}
 		job.Body.Close()
+		if tc.strategy == "stream_copy_preferred" {
+			if len(detail.WarningDetails) != 1 || detail.WarningDetails[0].Code != "stream_copy_cut_may_not_be_frame_exact" || !strings.Contains(detail.WarningDetails[0].Message, "non-keyframe") {
+				t.Fatalf("stream-copy warnings = %#v (%#v)", detail.WarningDetails, detail.Warnings)
+			}
+		}
 		positions := 1
+		if tc.strategy == "stream_copy_preferred" && tc.mode == "merge" {
+			archiveResponse := p.request(t, "GET", "/api/v1/batches/"+batchID+"/download")
+			archiveData, readErr := io.ReadAll(archiveResponse.Body)
+			archiveResponse.Body.Close()
+			if archiveResponse.StatusCode != http.StatusOK || archiveResponse.Header.Get("Content-Type") != "application/zip" || readErr != nil || len(archiveData) == 0 {
+				t.Fatalf("batch download status=%d content-type=%q bytes=%d err=%v", archiveResponse.StatusCode, archiveResponse.Header.Get("Content-Type"), len(archiveData), readErr)
+			}
+			archive, archiveErr := zip.NewReader(bytes.NewReader(archiveData), int64(len(archiveData)))
+			if archiveErr != nil || len(archive.File) != 1 || archive.File[0].Name == "" || strings.ContainsAny(archive.File[0].Name, `/\\`) {
+				t.Fatalf("batch download archive: err=%v files=%#v", archiveErr, archive.File)
+			}
+			entry, entryErr := archive.File[0].Open()
+			if entryErr != nil {
+				t.Fatalf("open batch download entry: %v", entryErr)
+			}
+			entryBytes, entryReadErr := io.ReadAll(entry)
+			entry.Close()
+			if entryReadErr != nil || len(entryBytes) == 0 {
+				t.Fatalf("batch download entry bytes=%d err=%v", len(entryBytes), entryReadErr)
+			}
+		}
 		if tc.mode == "separate" {
 			positions = 2
 		}
@@ -298,8 +355,19 @@ func TestProductionExportsJobsAndOutputs(t *testing.T) {
 		}
 		invalidPosition.Body.Close()
 	}
+	sourceAfter, err := os.ReadFile(sourcePath)
+	if err != nil {
+		t.Fatalf("read source after export: %v", err)
+	}
+	sourceAfterInfo, err := os.Stat(sourcePath)
+	if err != nil {
+		t.Fatalf("stat source after export: %v", err)
+	}
+	if sha256.Sum256(sourceAfter) != sourceDigest || sourceAfterInfo.Size() != sourceBeforeInfo.Size() || !sourceAfterInfo.ModTime().Equal(sourceBeforeInfo.ModTime()) {
+		t.Fatal("real-media export changed the source file")
+	}
 	assertNoTemporaryArtifacts(t, root)
-	suiteSummary.Add("exports=validated output_names_safe sizes_positive durations_plausible streams=video,audio positions_and_count temp_free")
+	suiteSummary.Add("exports=validated output_names_safe sizes_positive durations_plausible streams=video,audio positions_and_count source_unchanged temp_free")
 
 	invalid := p.request(t, "GET", "/api/v1/jobs/j_invalid-output/outputs/99")
 	if invalid.StatusCode != 404 {

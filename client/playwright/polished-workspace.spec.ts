@@ -86,7 +86,7 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
-for (const width of [390, 700, 1050, 1051, 1280, 1717]) {
+for (const width of [390, 700, 1049, 1050, 1051, 1280, 1717]) {
   test(`workbench geometry and settings stay usable at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 1005 });
     await chooseMedia(page);
@@ -142,6 +142,64 @@ for (const width of [390, 700, 1050, 1051, 1280, 1717]) {
   });
 }
 
+test("editing remains usable at 200% browser zoom", async ({ page }) => {
+  // A 640 CSS-pixel viewport at 2x page zoom represents a 1280px display at 200% zoom.
+  await page.setViewportSize({ width: 640, height: 900 });
+  await chooseMedia(page);
+  await page.evaluate(() => {
+    document.documentElement.style.zoom = "2";
+  });
+  const layout = await page.evaluate(() => ({
+    zoom: getComputedStyle(document.documentElement).zoom,
+    hasPageOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+  }));
+  expect(layout.zoom).toBe("2");
+  expect(layout.hasPageOverflow).toBe(false);
+
+  const segmentsToggle = page.locator(".workspace-action-row").getByRole("button", {
+    name: /segments panel/,
+  });
+  await expect(segmentsToggle).toBeVisible();
+  if ((await segmentsToggle.getAttribute("aria-expanded")) === "false") await segmentsToggle.click();
+  await expect(segmentsToggle).toHaveAttribute("aria-expanded", "true");
+  await expect(page.locator("#segments-panel")).toHaveAttribute("aria-hidden", "false");
+  await page
+    .locator("#segments-panel")
+    .getByRole("button", { name: "Close segments panel" })
+    .click();
+  await expect(segmentsToggle).toBeFocused();
+});
+
+test("missing preview assets and audio remain non-blocking for editing", async ({ page }) => {
+  const noAudioMedia = {
+    ...media,
+    streams: { tracks: [{ index: 0, type: "video", codec: "h264" }] },
+  };
+  await page.route(`${origin}/api/v1/media/tree`, (route) =>
+    route.fulfill({ json: { folders: [], items: [noAudioMedia] } }),
+  );
+  await page.route(`${origin}/api/v1/media/${media.id}`, (route) =>
+    route.fulfill({ json: noAudioMedia }),
+  );
+  await chooseMedia(page);
+  await expect(page.getByText("Thumbnails unavailable; editing remains available.")).toBeVisible();
+  await expect(page.getByLabel("Keyframe snapping availability")).toContainText(
+    "Keyframe snapping unavailable",
+  );
+  await expect(page.getByRole("button", { name: "Set in" })).toBeEnabled();
+
+  await page.getByLabel("In point").fill("00:01.000");
+  await page.getByLabel("In point").press("Enter");
+  await page.getByLabel("Out point").fill("00:03.000");
+  await page.getByLabel("Out point").press("Enter");
+  await expect(page.locator(".cut-row[data-segment-id]")).toHaveCount(1);
+
+  await page.getByRole("tab", { name: "Export", exact: true }).click();
+  await page.getByText("Export options", { exact: true }).click();
+  await expect(page.getByRole("checkbox", { name: /Audio:/ })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Create clips" })).toBeEnabled();
+});
+
 test("onboarding expands Media and Export expands the task sidebar", async ({ page }) => {
   await page.goto("/");
   const mediaToggle = page
@@ -156,7 +214,7 @@ test("onboarding expands Media and Export expands the task sidebar", async ({ pa
   await expect(page.getByRole("button", { name: "Select camera.mp4" })).toBeFocused();
   if ((await segmentsToggle.getAttribute("aria-expanded")) === "false")
     await segmentsToggle.click();
-  await page.getByRole("button", { name: /Export 0 segments/ }).click();
+  await page.getByRole("button", { name: "Export 0 included segments" }).click();
   await expect(page.getByRole("tab", { name: "Export", exact: true })).toBeVisible();
 });
 
@@ -413,7 +471,11 @@ test("cut labels and per-row split work without invisible menu inputs", async ({
   await page.getByLabel("In point").press("Enter");
   await page.getByLabel("Out point").fill("00:03.000");
   await page.getByLabel("Out point").press("Enter");
-  await page.getByRole("button", { name: /Add cut/ }).click();
+  await expect(page.locator(".cut-row[data-segment-id]")).toHaveCount(1);
+  await expect(page.getByRole("button", { name: "Select cut 1" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
   await page.getByLabel("Label cut 1").fill("Opening");
   await page.getByLabel("Label cut 1").press("Tab");
   await page.getByLabel("Timeline playhead").fill("2000");

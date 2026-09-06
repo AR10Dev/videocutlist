@@ -319,10 +319,10 @@ export function App() {
   const failedJobCount = () =>
     controller.batches().filter((batch) => batch.state === "failed").length;
   const includedExportCount = () => {
-    const selected = new Set(controller.selectedExportItems());
+    const scoped = new Set(controller.exportItemIDs());
     return controller
       .editableItems()
-      .filter((item) => selected.has(item.id))
+      .filter((item) => scoped.has(item.id))
       .reduce(
         (total, item) =>
           total + item.timeline.present.segments.filter((segment) => segment.included !== false).length,
@@ -580,6 +580,14 @@ export function App() {
                 <span>
                   <kbd class="kbd kbd-sm">←</kbd> <kbd class="kbd kbd-sm">→</kbd> Nudge a selected
                   boundary by 100 ms
+                </span>
+                <span>
+                  <kbd class="kbd kbd-sm">←</kbd> <kbd class="kbd kbd-sm">→</kbd> Resize a focused
+                  panel separator by 16 px
+                </span>
+                <span>
+                  <kbd class="kbd kbd-sm">Home</kbd> / <kbd class="kbd kbd-sm">R</kbd> Reset a focused
+                  panel separator
                 </span>
                 <span>
                   <kbd class="kbd kbd-sm">I</kbd> / <kbd class="kbd kbd-sm">O</kbd> Set In / Out

@@ -44,6 +44,7 @@ var productionRoutes = []struct {
 	{http.MethodDelete, "/api/v1/jobs/j_aaaaaaaaaaaa", "jobs"},
 	{http.MethodPost, "/api/v1/jobs/j_aaaaaaaaaaaa/retry", "jobs"},
 	{http.MethodGet, "/api/v1/jobs/j_aaaaaaaaaaaa/outputs/0", "outputs"},
+	{http.MethodGet, "/api/v1/batches/b_aaaaaaaaaaaa/download", "outputs"},
 	{http.MethodGet, "/api/v1/batches", "batches"},
 	{http.MethodGet, "/api/v1/batches/b_aaaaaaaaaaaa", "batches"},
 	{http.MethodDelete, "/api/v1/batches/b_aaaaaaaaaaaa", "batches"},

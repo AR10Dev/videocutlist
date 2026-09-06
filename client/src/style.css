@@ -631,6 +631,7 @@
     width: auto;
     margin-left: 0;
     display: flex;
+    container-type: inline-size;
     align-items: flex-start;
     overflow: hidden;
     background: var(--color-secondary);
@@ -662,6 +663,7 @@
     opacity: 0.68;
   }
   .timeline-segment.is-active {
+    z-index: 5;
     opacity: 0.72;
     outline: 2px solid var(--color-primary-content);
     outline-offset: -2px;
@@ -720,9 +722,22 @@
   .cut-handle {
     position: absolute;
     inset-block: 0;
-    width: 10px;
+    width: 12px;
     background: var(--color-primary);
     cursor: ew-resize;
+  }
+  .cut-handle::before {
+    content: "";
+    position: absolute;
+    inset-block: 0;
+    width: min(24px, 50cqw);
+    background: transparent;
+  }
+  .cut-handle-start::before {
+    left: 0;
+  }
+  .cut-handle-end::before {
+    right: 0;
   }
   .cut-handle-start {
     left: 0;
@@ -923,6 +938,10 @@
     overflow-wrap: anywhere;
   }
   .export-items {
+    display: grid;
+    gap: 8px;
+  }
+  .export-scope-modes {
     display: grid;
     gap: 8px;
   }

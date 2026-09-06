@@ -72,6 +72,33 @@ Incomplete files end in `.partial`; only atomic rename publishes a hit.
 - MVP exports use MKV and `stream_copy_preferred`; no smart-boundary re-encode.
   Non-keyframe accuracy limitations are explicit structured warnings.
 
+## Editing workspace
+
+- In and Out marks are an incomplete draft until both bounds are valid. A valid,
+  non-overlapping range commits exactly one selected segment named `Segment NNN`;
+  marking again edits that segment instead of creating a duplicate. **New
+  segment** and Escape clear the selection and begin a new draft.
+- Segment rows and source-timeline ranges share stable segment identity. Rows
+  expose inclusion, naming, bounds, duration, selection, and deletion without
+  changing the integer-millisecond, non-overlap invariants. The included count
+  and requested duration summarize the selected export scope; they do not claim
+  frame-exact stream-copy output duration.
+- Panel widths, collapse state, waveform visibility, and loop preference are
+  browser-local preferences. Separators expose vertical separator semantics,
+  keyboard adjustment, and reset actions. At widths below 1050px, media and
+  task panels use mutually exclusive drawers; at 1050px and above the desktop
+  layout remains available. Narrow drawer close actions restore their trigger
+  focus.
+- Missing thumbnails, waveform data, source keyframe timestamps, audio tracks,
+  or MediaSource preview support are non-blocking capability states. Editing,
+  saving, and export eligibility remain available when a preview asset is
+  unavailable, with a retry or explanatory status where applicable.
+- Export requests use a successfully saved project revision and immutable job
+  snapshots. Export scope excludes segments marked `included: false`; preflight
+  and stream-copy limitations are reported before submission. Browser requests
+  identify media and destinations by opaque IDs and never carry original-media
+  filesystem paths.
+
 ## Authentication
 
 Authentication is a deployment access gate, not an application identity system.

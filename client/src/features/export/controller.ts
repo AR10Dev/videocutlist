@@ -22,6 +22,7 @@ type Track = {
   language?: string;
   disposition?: string[];
 };
+export type ExportScope = "active" | "selected";
 
 export function createExportController(deps: {
   api: ApiClient;
@@ -43,6 +44,12 @@ export function createExportController(deps: {
   saveSettings: (changes: Partial<AppSettings>) => void;
 }) {
   const [selectedExportItems, setSelectedExportItems] = createSignal<string[]>([]);
+  const [exportScope, setExportScope] = createSignal<ExportScope>("active");
+  const exportItemIDs = () => {
+    if (exportScope() === "selected") return selectedExportItems();
+    const currentItem = deps.projectItems().find((entry) => entry.media.id === deps.selected()?.id);
+    return currentItem ? [currentItem.id] : [];
+  };
   const [batches, setBatches] = createSignal<Batch[]>([]);
   const [exportJob, setExportJob] = createSignal<ExportJob>();
   const [batchJobs, setBatchJobs] = createSignal<ExportJob[]>([]);
@@ -178,9 +185,8 @@ export function createExportController(deps: {
     deps.revision();
     const destination = destinationId();
     const template = filenameTemplate();
-    const itemIDs = selectedExportItems();
+    const preflightItemIDs = exportItemIDs();
     const currentItem = deps.projectItems().find((entry) => entry.media.id === item?.id);
-    const preflightItemIDs = itemIDs.length ? itemIDs : currentItem ? [currentItem.id] : [];
     if (!item || !currentItem || preflightItemIDs.length === 0) {
       cancelPreflight();
       setPreflight();
@@ -253,7 +259,7 @@ export function createExportController(deps: {
   };
   const exportProject = async () => {
     if (exportPending() || ["queued", "running"].includes(exportJob()?.state ?? "")) return;
-    const itemIDs = [...selectedExportItems()];
+    const itemIDs = [...exportItemIDs()];
     const items = deps.editableItems();
     if (!itemIDs.length) return void setExportStatus("Select at least one project item.");
     const selectedItems = items.filter((item) => itemIDs.includes(item.id));
@@ -281,6 +287,7 @@ export function createExportController(deps: {
       mediaId: deps.selected()?.id,
       editorVersion: deps.editorVersion(),
       revision: deps.revision(),
+      scope: exportScope(),
       itemIDs,
       input: {
         mode: exportMode(),
@@ -301,8 +308,9 @@ export function createExportController(deps: {
       context.projectId === deps.projectId() &&
       context.mediaId === deps.selected()?.id &&
       context.editorVersion === deps.editorVersion() &&
-      context.itemIDs.length === selectedExportItems().length &&
-      context.itemIDs.every((id, index) => selectedExportItems()[index] === id);
+      context.scope === exportScope() &&
+      context.itemIDs.length === exportItemIDs().length &&
+      context.itemIDs.every((id, index) => exportItemIDs()[index] === id);
     const workflowCurrent = () =>
       request === workflowRequest &&
       submissionRequest === exportRequest &&
@@ -493,6 +501,9 @@ export function createExportController(deps: {
   return {
     selectedExportItems,
     setSelectedExportItems,
+    exportScope,
+    setExportScope,
+    exportItemIDs,
     batches,
     exportJob,
     batchJobs,

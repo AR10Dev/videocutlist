@@ -18,6 +18,9 @@ export function ExportView(props: ExportViewProps = {}) {
     editableItems,
     selectedExportItems,
     setSelectedExportItems,
+    exportScope,
+    setExportScope,
+    exportItemIDs,
     exportJob,
     batchJobs,
     batchId,
@@ -57,26 +60,26 @@ export function ExportView(props: ExportViewProps = {}) {
   };
 
   const summary = () =>
-    summarizeExports(editableItems().filter((item) => selectedExportItems().includes(item.id)));
+    summarizeExports(editableItems().filter((item) => exportItemIDs().includes(item.id)));
   const selectedSegments = () => summary().flatMap((item) => item.ranges);
   const totalDuration = () => summary().reduce((total, item) => total + item.duration, 0);
   const emptyItem = () =>
     exportSelection() === "segments" ? summary().find((item) => item.outputs === 0) : undefined;
   const scopeLabel = () => {
-    if (selectedExportItems().length === 1) {
+    const itemIDs = exportItemIDs();
+    if (itemIDs.length === 1) {
       return (
-        projectItems().find((item) => item.id === selectedExportItems()[0])?.media.name ??
-        "Selected media item"
+        projectItems().find((item) => item.id === itemIDs[0])?.media.name ?? "Selected media item"
       );
     }
-    return `${selectedExportItems().length} project items`;
+    return `${itemIDs.length} project items`;
   };
   const includedCount = () => summary().reduce((total, item) => total + item.includedSegments, 0);
   const excludedCount = () => summary().reduce((total, item) => total + item.excludedSegments, 0);
   const blocker = () => {
     if (exportStatus()) return exportStatus();
     if (!selected()) return "Choose a video before exporting.";
-    if (!selectedExportItems().length) return "Select at least one project item.";
+    if (!exportItemIDs().length) return "Select at least one project item.";
     if (emptyItem()) return "Add or include a segment before creating clips.";
     if (preflightPending()) return "Checking export requirements…";
     if (preflight() && !preflight()!.allowed) {
@@ -218,42 +221,76 @@ export function ExportView(props: ExportViewProps = {}) {
           when={projectItems().length > 1}
           fallback={<p class="export-muted-note">Active media item: {scopeLabel()}</p>}
         >
-          <p class="export-muted-note">Choose which saved project items enter this batch.</p>
-          <For each={projectItems()}>
-            {(item) => (
-              <label>
-                <input
-                  class="checkbox checkbox-sm"
-                  type="checkbox"
-                  checked={selectedExportItems().includes(item.id)}
-                  onChange={(event) =>
-                    setSelectedExportItems((ids) =>
-                      event.currentTarget.checked
-                        ? [...new Set([...ids, item.id])]
-                        : ids.filter((id) => id !== item.id),
-                    )
-                  }
-                />{" "}
-                {item.media.name}
-              </label>
-            )}
-          </For>
-          <div class="controls">
-            <button
-              class="btn btn-ghost btn-sm"
-              type="button"
-              onClick={() => setSelectedExportItems(projectItems().map((item) => item.id))}
-            >
-              Select all
-            </button>
-            <button
-              class="btn btn-ghost btn-sm"
-              type="button"
-              onClick={() => setSelectedExportItems([])}
-            >
-              Select none
-            </button>
+          <div class="export-scope-modes" role="radiogroup" aria-label="Export scope mode">
+            <label>
+              <input
+                class="radio radio-sm"
+                type="radio"
+                name="export-scope-mode"
+                value="active"
+                checked={exportScope() === "active"}
+                onChange={() => setExportScope("active")}
+              />{" "}
+              Active media item
+            </label>
+            <label>
+              <input
+                class="radio radio-sm"
+                type="radio"
+                name="export-scope-mode"
+                value="selected"
+                checked={exportScope() === "selected"}
+                onChange={() => setExportScope("selected")}
+              />{" "}
+              Selected project items
+            </label>
           </div>
+          <Show
+            when={exportScope() === "selected"}
+            fallback={
+              <p class="export-muted-note">
+                Only the active media item enters this export. Choose selected project items to
+                include more than the active media.
+              </p>
+            }
+          >
+            <p class="export-muted-note">Choose which saved project items enter this batch.</p>
+            <For each={projectItems()}>
+              {(item) => (
+                <label>
+                  <input
+                    class="checkbox checkbox-sm"
+                    type="checkbox"
+                    checked={selectedExportItems().includes(item.id)}
+                    onChange={(event) =>
+                      setSelectedExportItems((ids) =>
+                        event.currentTarget.checked
+                          ? [...new Set([...ids, item.id])]
+                          : ids.filter((id) => id !== item.id),
+                      )
+                    }
+                  />{" "}
+                  {item.media.name}
+                </label>
+              )}
+            </For>
+            <div class="controls">
+              <button
+                class="btn btn-ghost btn-sm"
+                type="button"
+                onClick={() => setSelectedExportItems(projectItems().map((item) => item.id))}
+              >
+                Select all
+              </button>
+              <button
+                class="btn btn-ghost btn-sm"
+                type="button"
+                onClick={() => setSelectedExportItems([])}
+              >
+                Select none
+              </button>
+            </div>
+          </Show>
         </Show>
       </fieldset>
 
@@ -265,7 +302,7 @@ export function ExportView(props: ExportViewProps = {}) {
           class="btn btn-primary btn-sm"
           disabled={
             !selected() ||
-            !selectedExportItems().length ||
+            !exportItemIDs().length ||
             Boolean(emptyItem()) ||
             exportPending() ||
             exportActive() ||
