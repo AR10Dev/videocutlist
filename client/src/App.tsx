@@ -9,6 +9,7 @@ import { ProjectsView } from "./features/projects/ProjectsView";
 import { QueueView } from "./features/queue/QueueView";
 import { SettingsView } from "./features/settings/SettingsView";
 import { createWorkspaceController } from "./features/app/controller";
+import { createWorkspacePanelController, workspaceTaskTabs } from "./features/app/panelController";
 import { WorkspaceProvider } from "./features/app/WorkspaceContext";
 import { applyAppearance } from "./features/settings/model";
 
@@ -18,7 +19,7 @@ export function App() {
     selected,
     projectName,
     revision,
-    dirty,
+    saveState: projectSaveState,
     settingsOpen,
     setSettingsOpen,
     openSettings,
@@ -32,111 +33,298 @@ export function App() {
     if (preference === "system") media.addEventListener("change", apply);
     onCleanup(() => media.removeEventListener("change", apply));
   });
-  const [activeTask, setActiveTask] = createSignal<"cuts" | "project" | "export" | "detection">(
-    "project",
-  );
-  let hadSelectedMedia = false;
-  createEffect(() => {
-    const hasSelectedMedia = Boolean(selected());
-    if (hasSelectedMedia && !hadSelectedMedia)
-      queueMicrotask(() => {
-        if (dirty() || !controller.activeItemId()) setActiveTask("cuts");
-      });
-    hadSelectedMedia = hasSelectedMedia;
+  const panel = createWorkspacePanelController({
+    selected,
+    activeItem: controller.activeItemId,
+    dirty: controller.dirty,
+    segmentCount: () => controller.present().segments.length,
+    setSettingsOpen,
   });
-  const taskTabs = ["cuts", "project", "export", "detection"] as const;
-  const [mediaOpen, setMediaOpen] = createSignal(true);
-  const [tasksOpen, setTasksOpen] = createSignal(true);
+  const {
+    activeTask,
+    setActiveTask,
+    narrowViewport,
+    mediaWidth,
+    segmentsWidth,
+    mediaOpen,
+    tasksOpen,
+    openMediaPanel,
+    closeMediaPanel,
+    toggleMediaPanel,
+    openTaskPanel,
+    closeTaskPanel,
+    toggleTaskPanel,
+    closeOpenDrawer,
+    resetPanelWidth,
+    resizePanelWithKeyboard,
+    beginPanelResize,
+    moveTask,
+  } = panel;
+  const taskTabs = workspaceTaskTabs;
+  const [queueOpen, setQueueOpen] = createSignal(false);
+  const [exportDialogOpen, setExportDialogOpen] = createSignal(false);
+  let queueDismissed = false;
+  let exportDialogPreviousTask: (typeof taskTabs)[number] = "project";
+  let exportTrigger: HTMLButtonElement | undefined;
+  let shortcutClose: HTMLButtonElement | undefined;
+  let projectMenu: HTMLDetailsElement | undefined;
+
+  const openExportDialog = () => {
+    exportDialogPreviousTask = activeTask();
+    if (activeTask() === "export") setActiveTask("cuts");
+    setExportDialogOpen(true);
+  };
+  const closeExportDialog = () => {
+    setExportDialogOpen(false);
+    setActiveTask(exportDialogPreviousTask);
+    requestAnimationFrame(() => exportTrigger?.focus());
+  };
+  const closeProjectMenu = () => projectMenu?.removeAttribute("open");
+  const openHelp = () => {
+    closeProjectMenu();
+    controller.setShortcutHelpOpen(true);
+  };
+  const loadProjectFromMenu = () => {
+    closeProjectMenu();
+    const id = window.prompt("Project ID to load", "");
+    if (id) void controller.projects.loadProject(id);
+  };
   const undo = () => controller.undo();
   const redo = () => controller.redo();
-  let shortcutClose: HTMLButtonElement | undefined;
   createEffect(() => {
     if (controller.shortcutHelpOpen()) queueMicrotask(() => shortcutClose?.focus());
   });
-  const moveTask = (current: (typeof taskTabs)[number], direction: number) => {
-    const start = taskTabs.indexOf(current);
-    for (let offset = 1; offset <= taskTabs.length; offset += 1) {
-      const candidate = taskTabs[(start + direction * offset + taskTabs.length) % taskTabs.length];
-      if (candidate !== "detection" || selected()) {
-        setActiveTask(candidate);
-        document.getElementById(`${candidate}-tab`)?.focus();
-        return;
-      }
-    }
+  createEffect(() => {
+    const batches = controller.batches();
+    if (!batches.length) queueDismissed = false;
+    else if (!queueDismissed) setQueueOpen(true);
+  });
+  const activeJobCount = () =>
+    controller.batches().filter((batch) => batch.state === "queued" || batch.state === "running")
+      .length;
+  const failedJobCount = () =>
+    controller.batches().filter((batch) => batch.state === "failed").length;
+  const includedExportCount = () => {
+    const scoped = new Set(controller.exportItemIDs());
+    return controller
+      .editableItems()
+      .filter((item) => scoped.has(item.id))
+      .reduce(
+        (total, item) =>
+          total +
+          item.timeline.present.segments.filter((segment) => segment.included !== false).length,
+        0,
+      );
   };
   return (
     <WorkspaceProvider value={controller}>
-      <main class="app-shell" aria-label="VideoCutlist segment selection">
-        <header class="navbar app-navbar">
-          <div class="navbar-start gap-3">
-            <button
-              class="btn btn-ghost btn-sm drawer-button"
-              type="button"
-              aria-label="Toggle Media sidebar"
-              aria-expanded={mediaOpen()}
-              onClick={() => setMediaOpen((open) => !open)}
-            >
-              ☰
-            </button>
-            <h1 class="text-base font-bold" tabIndex={-1}>
+      <main
+        class="app-shell"
+        aria-label="VideoCutlist segment selection"
+        style={`--media-panel-width:${mediaWidth()}px;--segments-panel-width:${segmentsWidth()}px;--media-handle-width:${mediaOpen() ? 12 : 0}px;--segments-handle-width:${tasksOpen() ? 12 : 0}px`}
+        onKeyDown={(event) => {
+          if (
+            narrowViewport() &&
+            event.key === "Escape" &&
+            !event.target.closest("[role='dialog']") &&
+            (mediaOpen() || tasksOpen())
+          ) {
+            event.preventDefault();
+            closeOpenDrawer();
+          }
+        }}
+      >
+        <header class="workspace-action-row" aria-label="Workspace actions">
+          <div class="workspace-actions-start">
+            <details class="dropdown workspace-menu" ref={(element) => (projectMenu = element)}>
+              <summary class="btn btn-ghost btn-sm">Project</summary>
+              <ul class="dropdown-content menu menu-sm z-50 w-60 rounded-box bg-base-200 p-2 shadow-lg">
+                <li>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      closeProjectMenu();
+                      openTaskPanel("project");
+                    }}
+                  >
+                    Open project panel
+                  </button>
+                </li>
+                <li>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      closeProjectMenu();
+                      controller.projects.newProject();
+                    }}
+                  >
+                    New project
+                  </button>
+                </li>
+                <li>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      closeProjectMenu();
+                      void controller.projects.saveProject();
+                    }}
+                  >
+                    Save project
+                  </button>
+                </li>
+                <li>
+                  <button type="button" onClick={loadProjectFromMenu}>
+                    Load project
+                  </button>
+                </li>
+                <li>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      closeProjectMenu();
+                      openMediaPanel();
+                    }}
+                  >
+                    Media library
+                  </button>
+                </li>
+                <li>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      closeProjectMenu();
+                      openTaskPanel("project");
+                    }}
+                  >
+                    Interchange tools
+                  </button>
+                </li>
+                <li>
+                  <button
+                    type="button"
+                    onClick={() => (settingsOpen() ? setSettingsOpen(false) : void openSettings())}
+                  >
+                    {settingsOpen() ? "Back to editor" : "Settings"}
+                  </button>
+                </li>
+                <li>
+                  <button type="button" onClick={openHelp}>
+                    Keyboard help
+                  </button>
+                </li>
+                <li class="menu-title panel-menu-title">Panel layout</li>
+                <li>
+                  <button type="button" onClick={() => resetPanelWidth("media")}>
+                    Reset media panel size
+                  </button>
+                </li>
+                <li>
+                  <button type="button" onClick={() => resetPanelWidth("segments")}>
+                    Reset segments panel size
+                  </button>
+                </li>
+              </ul>
+            </details>
+            <h1 class="workspace-brand" tabIndex={-1}>
               VideoCutList
             </h1>
             <span class="project-status" aria-label="Project status">
               <strong>{projectName()}</strong>
               <span role="status">
-                {revision() === 0 ? "Unsaved" : dirty() ? "Unsaved changes" : "Saved"}
+                {projectSaveState() === "saving"
+                  ? "Saving"
+                  : projectSaveState() === "failed"
+                    ? "Save failed"
+                    : projectSaveState() === "unsaved"
+                      ? revision() === 0
+                        ? "Unsaved"
+                        : "Unsaved changes"
+                      : "Saved"}
               </span>
             </span>
           </div>
-          <div class="navbar-center hidden md:flex gap-1">
+          <div class="workspace-actions-center" aria-label="History controls">
             <button
-              class="btn btn-ghost btn-sm"
+              class="btn btn-ghost btn-sm btn-square"
               aria-label="Undo"
               aria-keyshortcuts="Control+Z Meta+Z"
               disabled={!controller.timeline().past.length}
               onClick={undo}
             >
-              <Undo2 size={16} />
+              <Undo2 size={16} aria-hidden="true" />
             </button>
             <button
-              class="btn btn-ghost btn-sm"
+              class="btn btn-ghost btn-sm btn-square"
               aria-label="Redo"
               aria-keyshortcuts="Control+Y Meta+Shift+Z"
               disabled={!controller.timeline().future.length}
               onClick={redo}
             >
-              <Redo2 size={16} />
+              <Redo2 size={16} aria-hidden="true" />
             </button>
           </div>
-          <div class="navbar-end gap-1">
+          <div class="workspace-actions-end">
             <button
               class="btn btn-ghost btn-sm"
               type="button"
-              aria-label={settingsOpen() ? "Back to editor" : "Settings"}
-              onClick={() => (settingsOpen() ? setSettingsOpen(false) : void openSettings())}
-            >
-              <Settings size={16} />
-              <span class="hidden sm:inline">{settingsOpen() ? "Back to editor" : "Settings"}</span>
-            </button>
-            <button
-              class="btn btn-primary btn-sm"
-              type="button"
+              aria-label={`Jobs${activeJobCount() ? `, ${activeJobCount()} active` : ""}${failedJobCount() ? `, ${failedJobCount()} failed` : ""}`}
+              aria-expanded={queueOpen()}
+              aria-controls="queue-panel"
               onClick={() => {
-                setSettingsOpen(false);
-                setTasksOpen(true);
-                setActiveTask("export");
+                const nextOpen = !queueOpen();
+                queueDismissed = !nextOpen;
+                setQueueOpen(nextOpen);
+                openTaskPanel(activeTask(), false);
               }}
             >
+              Jobs{" "}
+              <span class="job-count" aria-hidden="true">
+                {activeJobCount() || failedJobCount() || ""}
+              </span>
+            </button>
+            <button
+              ref={(element) => (exportTrigger = element)}
+              class="btn btn-primary btn-sm"
+              type="button"
+              aria-haspopup="dialog"
+              aria-label={`Export ${includedExportCount()} included segments`}
+              onClick={openExportDialog}
+            >
               <span>Export</span>
+              <span class="export-count" aria-hidden="true">
+                {includedExportCount()}
+              </span>
             </button>
             <button
               class="btn btn-ghost btn-sm drawer-button"
               type="button"
-              aria-label="Toggle task sidebar"
-              aria-expanded={tasksOpen()}
-              onClick={() => setTasksOpen((open) => !open)}
+              aria-label={mediaOpen() ? "Collapse media panel" : "Expand media panel"}
+              title={mediaOpen() ? "Collapse media panel" : "Expand media panel"}
+              aria-expanded={mediaOpen()}
+              aria-controls="media-panel"
+              onClick={toggleMediaPanel}
             >
-              ☷
+              Media
+            </button>
+            <button
+              class="btn btn-ghost btn-sm drawer-button"
+              type="button"
+              aria-label={tasksOpen() ? "Collapse segments panel" : "Expand segments panel"}
+              title={tasksOpen() ? "Collapse segments panel" : "Expand segments panel"}
+              aria-expanded={tasksOpen()}
+              aria-controls="segments-panel"
+              onClick={toggleTaskPanel}
+            >
+              Segments
+            </button>
+            <button
+              class="btn btn-ghost btn-sm workspace-settings-action"
+              type="button"
+              aria-label={settingsOpen() ? "Back to editor" : "Settings"}
+              onClick={() => (settingsOpen() ? setSettingsOpen(false) : void openSettings())}
+            >
+              <Settings size={16} aria-hidden="true" />
+              <span class="hidden sm:inline">{settingsOpen() ? "Back to editor" : "Settings"}</span>
             </button>
           </div>
         </header>
@@ -172,13 +360,25 @@ export function App() {
                   <kbd class="kbd kbd-sm">←</kbd> <kbd class="kbd kbd-sm">→</kbd> Seek one second
                 </span>
                 <span>
-                  <kbd class="kbd kbd-sm">,</kbd> <kbd class="kbd kbd-sm">.</kbd> Step one frame
+                  <kbd class="kbd kbd-sm">,</kbd> <kbd class="kbd kbd-sm">.</kbd> Preview step
+                </span>
+                <span>
+                  <kbd class="kbd kbd-sm">←</kbd> <kbd class="kbd kbd-sm">→</kbd> Nudge a selected
+                  boundary by 100 ms
+                </span>
+                <span>
+                  <kbd class="kbd kbd-sm">←</kbd> <kbd class="kbd kbd-sm">→</kbd> Resize a focused
+                  panel separator by 16 px
+                </span>
+                <span>
+                  <kbd class="kbd kbd-sm">Home</kbd> / <kbd class="kbd kbd-sm">R</kbd> Reset a
+                  focused panel separator
                 </span>
                 <span>
                   <kbd class="kbd kbd-sm">I</kbd> / <kbd class="kbd kbd-sm">O</kbd> Set In / Out
                 </span>
                 <span>
-                  <kbd class="kbd kbd-sm">C</kbd> Commit draft cut
+                  <kbd class="kbd kbd-sm">C</kbd> Start a new segment draft
                 </span>
                 <span>
                   <kbd class="kbd kbd-sm">P</kbd> Play active cut
@@ -218,7 +418,7 @@ export function App() {
                   <kbd class="kbd kbd-sm">Shift+/</kbd> Open this reference
                 </span>
                 <span>
-                  <kbd class="kbd kbd-sm">Esc</kbd> Leave active editing
+                  <kbd class="kbd kbd-sm">Esc</kbd> Start a new segment draft
                 </span>
               </div>
               <div class="modal-action">
@@ -241,10 +441,48 @@ export function App() {
             </form>
           </dialog>
         </Show>
+        <Show when={exportDialogOpen()}>
+          <dialog
+            id="export-dialog"
+            open
+            class="modal modal-open"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="export-dialog-heading"
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                event.preventDefault();
+                closeExportDialog();
+              }
+            }}
+          >
+            <div class="modal-box max-h-[90dvh] max-w-2xl overflow-y-auto">
+              <ExportView dialog onClose={closeExportDialog} />
+            </div>
+            <form method="dialog" class="modal-backdrop">
+              <button type="button" aria-label="Close export dialog" onClick={closeExportDialog} />
+            </form>
+          </dialog>
+        </Show>
+        <Show when={narrowViewport() && (mediaOpen() || tasksOpen())}>
+          <button
+            class="drawer-backdrop"
+            type="button"
+            aria-label="Close open panel"
+            onClick={closeOpenDrawer}
+          />
+        </Show>
         <aside
+          id="media-panel"
           class="left-sidebar"
-          classList={{ "is-collapsed": !mediaOpen() }}
+          classList={{
+            "is-collapsed": !mediaOpen(),
+            "drawer-open": narrowViewport() && mediaOpen(),
+          }}
           aria-label="Media workspace"
+          aria-hidden={!mediaOpen()}
+          role={narrowViewport() ? "dialog" : undefined}
+          aria-modal={narrowViewport() ? "true" : undefined}
         >
           <header class="app-header">
             <div class="app-heading">
@@ -252,18 +490,40 @@ export function App() {
                 Media
               </h2>
             </div>
+            <button
+              class="btn btn-ghost btn-sm drawer-close"
+              type="button"
+              aria-label="Close media panel"
+              onClick={() => closeMediaPanel()}
+            >
+              Close
+            </button>
           </header>
           <Show when={!settingsOpen()}>
             <LibraryView />
           </Show>
         </aside>
+        <div
+          class="panel-resizer media-resizer"
+          classList={{ "is-collapsed": !mediaOpen() || settingsOpen() }}
+          role="separator"
+          aria-label="Resize media panel"
+          aria-orientation="vertical"
+          aria-valuemin="200"
+          aria-valuemax="360"
+          aria-valuenow={mediaWidth()}
+          tabIndex={0}
+          onPointerDown={(event) => beginPanelResize("media", event)}
+          onDblClick={() => resetPanelWidth("media")}
+          onKeyDown={(event) => resizePanelWithKeyboard("media", event)}
+        />
         <Show
           when={settingsOpen()}
           fallback={
             <>
               <EditorView
                 onChooseMedia={() => {
-                  setMediaOpen(true);
+                  openMediaPanel(false);
                   requestAnimationFrame(() => {
                     const target =
                       document.querySelector<HTMLElement>(".media-list button") ??
@@ -273,11 +533,53 @@ export function App() {
                   });
                 }}
               />
-              <aside
-                class="task-panel"
+              <div
+                class="panel-resizer segments-resizer"
                 classList={{ "is-collapsed": !tasksOpen() }}
-                aria-label="Workspace tasks"
+                role="separator"
+                aria-label="Resize segments panel"
+                aria-orientation="vertical"
+                aria-valuemin="200"
+                aria-valuemax="420"
+                aria-valuenow={segmentsWidth()}
+                tabIndex={0}
+                onPointerDown={(event) => beginPanelResize("segments", event)}
+                onDblClick={() => resetPanelWidth("segments")}
+                onKeyDown={(event) => resizePanelWithKeyboard("segments", event)}
+              />
+              <aside
+                id="segments-panel"
+                class="task-panel"
+                classList={{
+                  "is-collapsed": !tasksOpen(),
+                  "drawer-open": narrowViewport() && tasksOpen(),
+                }}
+                aria-label="Segments and workspace tasks"
+                aria-hidden={!tasksOpen()}
+                role={narrowViewport() ? "dialog" : undefined}
+                aria-modal={narrowViewport() ? "true" : undefined}
               >
+                <div class="task-panel-toolbar">
+                  <span>Segments and tasks</span>
+                  <div class="task-panel-toolbar-actions">
+                    <button
+                      class="btn btn-ghost btn-xs"
+                      type="button"
+                      aria-label="Reset segments panel size"
+                      onClick={() => resetPanelWidth("segments")}
+                    >
+                      Reset size
+                    </button>
+                    <button
+                      class="btn btn-ghost btn-xs drawer-close"
+                      type="button"
+                      aria-label="Close segments panel"
+                      onClick={() => closeTaskPanel()}
+                    >
+                      Close
+                    </button>
+                  </div>
+                </div>
                 <div class="task-tabs tabs" role="tablist" aria-label="Workspace tasks">
                   <button
                     id="cuts-tab"
@@ -385,7 +687,7 @@ export function App() {
                   id="export-tabpanel"
                   role="tabpanel"
                   aria-labelledby="export-tab"
-                  hidden={activeTask() !== "export"}
+                  hidden={activeTask() !== "export" || exportDialogOpen()}
                 >
                   <ExportView />
                 </div>
@@ -397,7 +699,11 @@ export function App() {
                 >
                   <DetectionView />
                 </div>
-                <QueueView />
+                <Show when={queueOpen()}>
+                  <div id="queue-panel">
+                    <QueueView />
+                  </div>
+                </Show>
               </aside>
             </>
           }

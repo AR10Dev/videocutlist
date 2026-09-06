@@ -8,12 +8,30 @@ import {
   previewRange,
   streamPreview,
   watchedMediaPosition,
+  segmentIncluded,
   type PreviewDiagnostics,
   type PreviewPlaybackMode,
   type Segment,
 } from "./model";
 
 type Media = components["schemas"]["Media"];
+
+const waveformPreferenceKey = "videocutlist.waveform-visible.v1";
+const loopPreferenceKey = "videocutlist.loop-selected-segment.v1";
+const initialWaveformVisibility = () => {
+  try {
+    return globalThis.localStorage?.getItem(waveformPreferenceKey) !== "false";
+  } catch {
+    return true;
+  }
+};
+const initialLoopPreference = () => {
+  try {
+    return globalThis.localStorage?.getItem(loopPreferenceKey) === "true";
+  } catch {
+    return false;
+  }
+};
 
 type AssetRequestResult = {
   range: AssetRange;
@@ -75,6 +93,8 @@ export function createPreviewController(
 ) {
   const [assetStatus, setAssetStatus] = createSignal("");
   const [previewStatus, setPreviewStatus] = createSignal("");
+  const [waveformVisible, setWaveformVisible] = createSignal(initialWaveformVisibility());
+  const [assetReload, setAssetReload] = createSignal(0);
   const [thumbnailURL, setThumbnailURL] = createSignal<string>();
   const [waveform, setWaveform] = createSignal<number[]>([]);
   const [assetRange, setAssetRange] = createSignal<AssetRange>();
@@ -95,6 +115,7 @@ export function createPreviewController(
   const previewRenewalLeadMs = 1000;
   const [playbackIntent, setPlaybackIntent] = createSignal(false);
   const [playbackMode, setPlaybackMode] = createSignal<PreviewPlaybackMode>("whole-media");
+  const [loopSelectedSegment, setLoopSelectedSegmentState] = createSignal(initialLoopPreference());
   const [orderedSegmentIndex, setOrderedSegmentIndex] = createSignal(0);
   // Candidate review uses the same bounded playback mode without changing the durable timeline.
   const [boundedSegment, setBoundedSegment] = createSignal<Segment>();
@@ -114,6 +135,7 @@ export function createPreviewController(
   createEffect(() => {
     const item = dependencies.selected();
     const viewport = dependencies.visibleRange();
+    assetReload();
     assetRequest?.abort();
     thumbnailTileURLs.forEach((url) => URL.revokeObjectURL(url));
     thumbnailTileURLs = [];
@@ -266,7 +288,7 @@ export function createPreviewController(
   });
 
   const watchedPosition = () => dependencies.playheadMs();
-  const orderedSegments = () => dependencies.segments().slice();
+  const orderedSegments = () => dependencies.segments().filter(segmentIncluded).slice();
   const playbackBounds = (item: Media) =>
     previewRange(
       playbackMode(),
@@ -395,13 +417,28 @@ export function createPreviewController(
     }
     startPlayback(loop ? "active-segment-loop" : "active-segment", segment.startMs, segment);
   };
+  const setLoopSelectedSegment = (enabled: boolean) => {
+    setLoopSelectedSegmentState(enabled);
+    try {
+      globalThis.localStorage?.setItem(loopPreferenceKey, String(enabled));
+    } catch {
+      // Browser storage may be disabled; the preference remains available for this session.
+    }
+  };
   const playActiveSegment = (loop: boolean) => {
     const segment = dependencies.activeSegment();
     if (!segment) {
       setPreviewStatus("Select a cut to play it.");
       return;
     }
+    if (loop) setLoopSelectedSegment(true);
     playSegment(segment, loop);
+  };
+  const toggleLoopSelectedSegment = () => {
+    const next = !loopSelectedSegment();
+    setLoopSelectedSegment(next);
+    const segment = dependencies.activeSegment();
+    if (segment) playSegment(segment, next);
   };
   const playOrderedSegments = () => {
     const segments = orderedSegments();
@@ -449,9 +486,21 @@ export function createPreviewController(
     setPlaybackIntent(false);
     video()?.pause();
   };
+  const setWaveformVisibility = (visible: boolean) => {
+    setWaveformVisible(visible);
+    try {
+      globalThis.localStorage?.setItem(waveformPreferenceKey, String(visible));
+    } catch {
+      // Browser storage may be disabled; waveform remains available for this session.
+    }
+  };
+  const retryAssets = () => setAssetReload((value: number) => value + 1);
 
   return {
     assetStatus,
+    waveformVisible,
+    setWaveformVisibility,
+    retryAssets,
     previewStatus,
     thumbnailURL,
     waveform,
@@ -462,6 +511,9 @@ export function createPreviewController(
     setDiagnostics,
     playbackMode,
     playbackIntent,
+    loopSelectedSegment,
+    setLoopSelectedSegment,
+    toggleLoopSelectedSegment,
     watchedPosition,
     syncPreviewPosition,
     handlePreviewEnded,

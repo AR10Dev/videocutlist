@@ -10,6 +10,7 @@ import (
 	"io"
 	"regexp"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -340,7 +341,9 @@ func (p ProjectUseCase) Get(ctx context.Context, id string) (Project, error) {
 	if err != nil {
 		return Project{}, err
 	}
-	return Project{ID: id, Document: record.Document, Revision: record.Revision, UpdatedAt: record.UpdatedAt}, nil
+	document := record.Document
+	model.EnsureSegmentIDs(&document)
+	return Project{ID: id, Document: document, Revision: record.Revision, UpdatedAt: record.UpdatedAt}, nil
 }
 
 func (p ProjectUseCase) Save(ctx context.Context, id string, input ProjectInput) (Project, error) {
@@ -495,6 +498,7 @@ func jobResult(record jobqueue.Job) Job {
 		var result struct {
 			OutputName        string            `json:"outputName"`
 			OutputNames       []string          `json:"outputNames"`
+			OutputFailures    []OutputFailure   `json:"outputFailures"`
 			SizeBytes         int64             `json:"sizeBytes"`
 			RetainUntil       time.Time         `json:"retainUntil"`
 			DestinationID     string            `json:"destinationId"`
@@ -507,8 +511,8 @@ func jobResult(record jobqueue.Job) Job {
 			} `json:"warnings"`
 			Verified bool `json:"verified"`
 		}
-		if json.Unmarshal([]byte(record.ResultJSON.String), &result) == nil && safeOutputNames(result.OutputName, result.OutputNames) && safeAppliedStrategies(result.AppliedStrategies) && result.SizeBytes >= 0 && !result.RetainUntil.IsZero() {
-			job.Result = &JobResult{OutputName: result.OutputName, OutputNames: result.OutputNames, AppliedStrategies: result.AppliedStrategies, SizeBytes: result.SizeBytes, RetainUntil: result.RetainUntil, DestinationID: result.DestinationID, DestinationKind: result.DestinationKind}
+		if json.Unmarshal([]byte(record.ResultJSON.String), &result) == nil && safeOutputNames(result.OutputName, result.OutputNames) && safeOutputFailures(result.OutputFailures) && safeAppliedStrategies(result.AppliedStrategies) && result.SizeBytes >= 0 && !result.RetainUntil.IsZero() {
+			job.Result = &JobResult{OutputName: result.OutputName, OutputNames: result.OutputNames, OutputFailures: result.OutputFailures, AppliedStrategies: result.AppliedStrategies, SizeBytes: result.SizeBytes, RetainUntil: result.RetainUntil, DestinationID: result.DestinationID, DestinationKind: result.DestinationKind}
 			job.AppliedStrategy = result.AppliedStrategy
 			job.Verified = result.Verified
 			for _, warning := range result.Warnings {
@@ -548,6 +552,23 @@ func safeOutputName(name string) bool {
 	for _, r := range name {
 		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '.' || r == '-' || r == '_') {
 			return false
+		}
+	}
+	return true
+}
+
+func safeOutputFailures(failures []OutputFailure) bool {
+	if len(failures) > 100 {
+		return false
+	}
+	for _, failure := range failures {
+		if failure.Segment < 1 || !safeOutputName(failure.Code) || failure.Code == "." || failure.Code == ".." || len(failure.Message) > 500 || strings.ContainsAny(failure.Message, "/\\") {
+			return false
+		}
+		for _, character := range failure.Message {
+			if character < 32 || character == 127 {
+				return false
+			}
 		}
 	}
 	return true

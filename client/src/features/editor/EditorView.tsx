@@ -1,5 +1,5 @@
-import { Show } from "solid-js";
-import { Clock3, LocateFixed, Maximize2, Minus, Plus, ZoomIn, ZoomOut } from "lucide-solid";
+import { createEffect, createSignal, Show } from "solid-js";
+import { Clock3, LocateFixed, Maximize2, Minus, ZoomIn, ZoomOut } from "lucide-solid";
 import { Timeline } from "./Timeline";
 import { canStreamPreview, formatTime, parseTimecode } from "../preview/model";
 import { PreviewPlayer } from "../preview/PreviewPlayer";
@@ -7,6 +7,22 @@ import { useWorkspace } from "../app/WorkspaceContext";
 
 export function EditorView(props: { onChooseMedia: () => void }) {
   const workspace = useWorkspace();
+  const [boundaryDraft, setBoundaryDraft] = createSignal<Partial<Record<"inMs" | "outMs", string>>>(
+    {},
+  );
+  let boundaryContext = "";
+  createEffect(() => {
+    const nextContext = `${workspace.selected()?.id ?? ""}:${workspace.activeSegmentIndex() ?? ""}`;
+    if (nextContext === boundaryContext) return;
+    boundaryContext = nextContext;
+    setBoundaryDraft({});
+  });
+  const boundaryValue = (kind: "inMs" | "outMs") => {
+    const draft = boundaryDraft()[kind];
+    if (draft !== undefined) return draft;
+    const value = kind === "inMs" ? workspace.editingInMs() : workspace.editingOutMs();
+    return value === undefined ? "" : formatTime(value, workspace.duration());
+  };
   const confirmTimecode = (input: HTMLInputElement) => {
     const value = parseTimecode(input.value);
     if (value === undefined || value > workspace.duration()) {
@@ -20,12 +36,17 @@ export function EditorView(props: { onChooseMedia: () => void }) {
   const confirmBoundary = (kind: "inMs" | "outMs", input: HTMLInputElement) => {
     const value = parseTimecode(input.value);
     const other = kind === "inMs" ? workspace.editingOutMs() : workspace.editingInMs();
-    const validOrder = other === undefined || (kind === "inMs" ? value! < other : value! > other);
+    const validOrder =
+      value !== undefined &&
+      (other === undefined || (kind === "inMs" ? value < other : value > other));
     if (value === undefined || value > workspace.duration() || !validOrder) {
       workspace.setEditorStatus("In must be before Out and both must be within the video.");
       return;
     }
+    workspace.setEditorStatus("");
     workspace.setMarker(kind, value);
+    if (!workspace.editorStatus())
+      setBoundaryDraft((current) => ({ ...current, [kind]: undefined }));
   };
   const validRange = () => {
     const inMs = workspace.editingInMs();
@@ -42,7 +63,6 @@ export function EditorView(props: { onChooseMedia: () => void }) {
     if (inMs >= outMs) return "Move Out after In to create a valid cut.";
     return `Pending cut duration ${formatTime(outMs - inMs, workspace.duration())}.`;
   };
-
   return (
     <section class="editor-panel" aria-labelledby="timeline-heading">
       <div class="panel-heading">
@@ -69,9 +89,18 @@ export function EditorView(props: { onChooseMedia: () => void }) {
               <span>{formatTime(item().durationMs, workspace.duration())}</span>
             </div>
             <Show when={!workspace.activeItemId()}>
-              <p class="text-sm text-base-content/70" role="status">
-                Preview only · Add to project to save cuts.
-              </p>
+              <div class="preview-only-notice" role="status">
+                <p class="text-sm text-base-content/70">
+                  Preview only · Your first valid cut adds this video to the project.
+                </p>
+                <button
+                  class="btn btn-primary btn-sm"
+                  type="button"
+                  onClick={() => workspace.addMediaToProject()}
+                >
+                  Add to project
+                </button>
+              </div>
             </Show>
             <p id="timeline-description" class="sr-only">
               Playhead {formatTime(workspace.playheadMs(), workspace.duration())}. In marker{" "}
@@ -90,7 +119,14 @@ export function EditorView(props: { onChooseMedia: () => void }) {
             <Show when={workspace.assetStatus()}>
               {(message) => (
                 <div class="alert alert-info mb-2" role="status">
-                  {message()}
+                  <span>{message()}</span>
+                  <button
+                    class="btn btn-ghost btn-xs"
+                    type="button"
+                    onClick={workspace.retryAssets}
+                  >
+                    Retry assets
+                  </button>
                 </div>
               )}
             </Show>
@@ -135,15 +171,21 @@ export function EditorView(props: { onChooseMedia: () => void }) {
                       <input
                         class="input input-sm"
                         aria-label="In point"
+                        aria-invalid={Boolean(workspace.editorStatus())}
                         placeholder="Unset"
-                        value={
-                          workspace.editingInMs() === undefined
-                            ? ""
-                            : formatTime(workspace.editingInMs()!, workspace.duration())
+                        value={boundaryValue("inMs")}
+                        onInput={(event) =>
+                          setBoundaryDraft((current) => ({
+                            ...current,
+                            inMs: event.currentTarget.value,
+                          }))
                         }
                         onKeyDown={(event) => {
                           if (event.key === "Enter") confirmBoundary("inMs", event.currentTarget);
-                          if (event.key === "Escape") event.currentTarget.blur();
+                          if (event.key === "Escape") {
+                            setBoundaryDraft((current) => ({ ...current, inMs: undefined }));
+                            event.currentTarget.blur();
+                          }
                         }}
                       />
                     </label>
@@ -151,7 +193,10 @@ export function EditorView(props: { onChooseMedia: () => void }) {
                       class="btn btn-sm"
                       aria-label="Set in"
                       aria-keyshortcuts="I"
-                      onClick={() => workspace.setMarker("inMs", workspace.watchedPosition())}
+                      onClick={() => {
+                        setBoundaryDraft({});
+                        workspace.setMarker("inMs", workspace.watchedPosition());
+                      }}
                     >
                       <LocateFixed size={16} aria-hidden="true" /> Set in{" "}
                       <kbd class="kbd kbd-xs" aria-hidden="true">
@@ -163,15 +208,21 @@ export function EditorView(props: { onChooseMedia: () => void }) {
                       <input
                         class="input input-sm"
                         aria-label="Out point"
+                        aria-invalid={Boolean(workspace.editorStatus())}
                         placeholder="Unset"
-                        value={
-                          workspace.editingOutMs() === undefined
-                            ? ""
-                            : formatTime(workspace.editingOutMs()!, workspace.duration())
+                        value={boundaryValue("outMs")}
+                        onInput={(event) =>
+                          setBoundaryDraft((current) => ({
+                            ...current,
+                            outMs: event.currentTarget.value,
+                          }))
                         }
                         onKeyDown={(event) => {
                           if (event.key === "Enter") confirmBoundary("outMs", event.currentTarget);
-                          if (event.key === "Escape") event.currentTarget.blur();
+                          if (event.key === "Escape") {
+                            setBoundaryDraft((current) => ({ ...current, outMs: undefined }));
+                            event.currentTarget.blur();
+                          }
                         }}
                       />
                     </label>
@@ -179,12 +230,13 @@ export function EditorView(props: { onChooseMedia: () => void }) {
                       class="btn btn-sm"
                       aria-label="Set out"
                       aria-keyshortcuts="O"
-                      onClick={() =>
+                      onClick={() => {
+                        setBoundaryDraft({});
                         workspace.setMarker(
                           "outMs",
                           Math.min(workspace.duration(), workspace.watchedPosition()),
-                        )
-                      }
+                        );
+                      }}
                     >
                       <LocateFixed size={16} aria-hidden="true" /> Set out{" "}
                       <kbd class="kbd kbd-xs" aria-hidden="true">
@@ -200,16 +252,15 @@ export function EditorView(props: { onChooseMedia: () => void }) {
                         : "Unset"}
                     </span>
                     <button
-                      class="btn btn-sm btn-primary"
-                      aria-label="Add cut (Add segment)"
-                      aria-keyshortcuts="C"
-                      onClick={workspace.addSegment}
-                      disabled={!validRange() || workspace.editingActive()}
-                      aria-describedby="add-segment-help"
+                      class="btn btn-sm"
+                      type="button"
+                      aria-label="New segment"
+                      aria-keyshortcuts="Escape"
+                      onClick={workspace.newSegment}
                     >
-                      <Plus size={16} aria-hidden="true" /> Add cut{" "}
+                      New segment{" "}
                       <kbd class="kbd kbd-xs" aria-hidden="true">
-                        C
+                        Esc
                       </kbd>
                     </button>
                   </div>
@@ -244,6 +295,23 @@ export function EditorView(props: { onChooseMedia: () => void }) {
                       <Minus size={14} /> Fit
                     </button>
                     <button
+                      class="btn btn-sm"
+                      aria-label="Fit selected segment"
+                      disabled={!workspace.activeSegment()}
+                      onClick={() => globalThis.dispatchEvent(new Event("timeline-fit-selection"))}
+                    >
+                      <Minus size={14} /> Fit selected
+                    </button>
+                    <button
+                      class="btn btn-sm"
+                      type="button"
+                      aria-label={workspace.waveformVisible() ? "Hide waveform" : "Show waveform"}
+                      aria-pressed={workspace.waveformVisible()}
+                      onClick={() => workspace.setWaveformVisibility(!workspace.waveformVisible())}
+                    >
+                      {workspace.waveformVisible() ? "Hide waveform" : "Show waveform"}
+                    </button>
+                    <button
                       class="btn btn-sm btn-square"
                       aria-label="Fullscreen preview"
                       disabled={!canStreamPreview() || !document.fullscreenEnabled}
@@ -265,12 +333,15 @@ export function EditorView(props: { onChooseMedia: () => void }) {
                 </div>
               }
             />
+            <p class="asset-capability" role="status" aria-label="Keyframe snapping availability">
+              Keyframe snapping unavailable; authoritative source timestamps are not exposed.
+            </p>
             <Show when={workspace.editorStatus()}>
               <p class="control-help" role="alert">
                 {workspace.editorStatus()}
               </p>
             </Show>
-            <p id="add-segment-help" class="control-help mt-2" role="status">
+            <p class="control-help mt-2" role="status">
               {guidance()}
             </p>
           </>

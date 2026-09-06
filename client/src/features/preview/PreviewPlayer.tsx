@@ -13,7 +13,7 @@ import {
   Volume2,
   VolumeX,
 } from "lucide-solid";
-import { canStreamPreview } from "./model";
+import { canStreamPreview, segmentIncluded } from "./model";
 import { useWorkspace } from "../app/WorkspaceContext";
 
 type IconButtonProps = {
@@ -81,7 +81,10 @@ export function PreviewPlayer(props: { timeline: JSX.Element; controls: JSX.Elem
     );
   };
   const jumpToCut = (direction: -1 | 1) => {
-    const cuts = [...workspace.present().segments].sort((a, b) => a.startMs - b.startMs);
+    const cuts = workspace
+      .present()
+      .segments.filter(segmentIncluded)
+      .sort((a, b) => a.startMs - b.startMs);
     const position = workspace.playheadMs();
     const target =
       direction < 0
@@ -147,14 +150,18 @@ export function PreviewPlayer(props: { timeline: JSX.Element; controls: JSX.Elem
                   : workspace.playbackMode() === "ordered-segments"
                     ? "Playing selected segments in order"
                     : workspace.playbackMode() === "active-segment-loop"
-                      ? "Looping active segment"
-                      : "Playing active segment"
+                      ? "Looping selected segment"
+                      : "Playing selected segment"
                 : "Preview paused"}
             </span>
             <IconButton label="Previous cut" onClick={() => jumpToCut(-1)}>
               <ChevronsLeft size={18} aria-hidden="true" />
             </IconButton>
-            <IconButton label="Previous frame (comma)" keyshortcuts="," onClick={() => step(-1)}>
+            <IconButton
+              label="Previous preview step (comma)"
+              keyshortcuts=","
+              onClick={() => step(-1)}
+            >
               <SkipBack size={18} aria-hidden="true" />
             </IconButton>
             <IconButton
@@ -169,14 +176,14 @@ export function PreviewPlayer(props: { timeline: JSX.Element; controls: JSX.Elem
                 <Play size={22} aria-hidden="true" />
               )}
             </IconButton>
-            <IconButton label="Next frame (period)" keyshortcuts="." onClick={() => step(1)}>
+            <IconButton label="Next preview step (period)" keyshortcuts="." onClick={() => step(1)}>
               <SkipForward size={18} aria-hidden="true" />
             </IconButton>
             <IconButton label="Next cut" onClick={() => jumpToCut(1)}>
               <ChevronsRight size={18} aria-hidden="true" />
             </IconButton>
             <IconButton
-              label="Play active segment"
+              label="Play selected segment"
               keyshortcuts="P"
               disabled={!workspace.activeSegment() || !canStreamPreview()}
               onClick={() => workspace.playActiveSegment(false)}
@@ -184,11 +191,11 @@ export function PreviewPlayer(props: { timeline: JSX.Element; controls: JSX.Elem
               <Play size={18} aria-hidden="true" />
             </IconButton>
             <IconButton
-              label="Loop active segment"
+              label="Loop selected segment"
               keyshortcuts="L"
-              pressed={workspace.playbackMode() === "active-segment-loop"}
+              pressed={workspace.loopSelectedSegment()}
               disabled={!workspace.activeSegment() || !canStreamPreview()}
-              onClick={() => workspace.playActiveSegment(true)}
+              onClick={workspace.toggleLoopSelectedSegment}
             >
               <Repeat2 size={18} aria-hidden="true" />
             </IconButton>

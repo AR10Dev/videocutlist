@@ -20,13 +20,18 @@ async function addToProject(page: Page) {
   await page.getByRole("button", { name: "Add to project" }).click();
 }
 
-async function addSegment(page: Page, start = 100, end = 700) {
+async function addSegment(page: Page, start = 100, end = 700, startNew = false) {
+  if (startNew) await page.getByRole("button", { name: "New segment" }).click();
   const playhead = page.getByLabel("Timeline playhead");
   await playhead.fill(String(start));
   await page.getByRole("button", { name: "Set in" }).click();
   await playhead.fill(String(end));
   await page.getByRole("button", { name: "Set out" }).click();
-  await page.getByRole("button", { name: /Add cut \(Add segment\)/ }).click();
+  await expect(page.locator(".cut-row[data-segment-id]")).toHaveCount(1);
+  await expect(page.getByRole("button", { name: "Select cut 1" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
 }
 
 async function openMediaChooser(page: Page) {
@@ -130,9 +135,7 @@ test("Create clips saves a dirty revision before fresh preflight and batch submi
   );
 });
 
-test("multi-item Create clips preflights every selected item before submission", async ({
-  page,
-}) => {
+test("multi-item preflight checks every selected item before submission", async ({ page }) => {
   const calls: string[] = [];
   const preflightItems: string[][] = [];
   let exports = 0;
@@ -173,15 +176,12 @@ test("multi-item Create clips preflights every selected item before submission",
   await addToProject(page);
   await addSegment(page);
   await openExport(page);
+  await page.getByRole("radio", { name: "Selected project items" }).check();
   await page.getByRole("button", { name: "Select all" }).click();
-  const create = page.getByRole("button", { name: "Create clips" });
-  await create.click();
-  await page.getByText("Export options", { exact: true }).click();
   await expect(page.getByText("One selected item has an unsupported stream.")).toBeVisible();
-  await expect(create).toBeDisabled();
-  expect(calls).toEqual(["save", "preflight"]);
-  expect(preflightItems).toHaveLength(1);
-  expect(preflightItems[0]).toHaveLength(2);
+  await expect(page.getByRole("button", { name: "Create clips" })).toBeDisabled();
+  expect(calls.at(-1)).toBe("preflight");
+  expect(preflightItems.at(-1)).toHaveLength(2);
   expect(exports).toBe(0);
 });
 
@@ -234,9 +234,64 @@ test("conflicted saves never submit preflight or export", async ({ page }) => {
   await openExport(page);
   await page.getByRole("button", { name: "Create clips" }).click();
   await expect(
-    page.getByRole("region", { name: "Export" }).getByText(/Load latest before saving/),
+    page.getByRole("alert").filter({ hasText: "Another client saved this project." }),
   ).toBeVisible();
   expect(calls).toEqual(["save"]);
+});
+
+test("changing export scope invalidates a prior preflight", async ({ page }) => {
+  const preflightItems: string[][] = [];
+  let releaseSelected: (() => void) | undefined;
+  await page.route(`${origin}/api/v1/projects/*/exports/preflight`, async (route) => {
+    const body = route.request().postDataJSON() as { itemIds?: string[] };
+    const itemIds = body.itemIds ?? [];
+    preflightItems.push(itemIds);
+    if (itemIds.length < 2)
+      return route.fulfill({ json: { allowed: true, selection: [], findings: [] } });
+    await new Promise<void>((resolve) => {
+      releaseSelected = () => {
+        void route
+          .fulfill({
+            json: {
+              allowed: false,
+              selection: [],
+              findings: [
+                {
+                  severity: "blocked",
+                  code: "unsupported_stream",
+                  message: "Selected scope preflight blocker.",
+                },
+              ],
+            },
+          })
+          .then(resolve, resolve);
+      };
+    });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Select camera.mp4" }).click();
+  await addToProject(page);
+  await addSegment(page);
+  await openMediaChooser(page);
+  await page.getByRole("button", { name: "Select second.mp4" }).click();
+  await addToProject(page);
+  await addSegment(page);
+  await openExport(page);
+  await page.getByRole("button", { name: "Save project" }).click();
+  await expect.poll(() => preflightItems.length).toBe(1);
+  expect(preflightItems[0]).toHaveLength(1);
+  const create = page.getByRole("button", { name: "Create clips" });
+  await expect(create).toBeEnabled();
+
+  await page.getByRole("radio", { name: "Selected project items" }).check();
+  await expect(page.getByText("Checking export requirements…")).toBeVisible();
+  await expect(create).toBeDisabled();
+  await expect.poll(() => preflightItems.length).toBe(2);
+  expect(preflightItems[1]).toHaveLength(2);
+  releaseSelected?.();
+  await expect(page.getByText("Selected scope preflight blocker.")).toBeVisible();
+  await expect(create).toBeDisabled();
 });
 
 test("new items use the remembered destination and unavailable preferences explain fallback", async ({
@@ -259,4 +314,26 @@ test("new items use the remembered destination and unavailable preferences expla
     page.getByText("Remembered destination is unavailable. Using Browser download."),
   ).toBeVisible();
   await expect(page.getByLabel("Destination")).toHaveValue("download");
+});
+
+test("primary export opens an explicit scope dialog and jobs stays available", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Select camera.mp4" }).click();
+  await addToProject(page);
+  await addSegment(page);
+
+  await page.getByRole("button", { name: /Export 1 included segments/ }).click();
+  const dialog = page.getByRole("dialog", { name: "Export clips" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText("Export scope")).toBeVisible();
+  await expect(dialog.getByText("Included segments")).toBeVisible();
+  await expect(dialog.getByText("Filename preview")).toBeVisible();
+  await dialog.getByText("Export options", { exact: true }).click();
+  await expect(dialog.getByLabel("Output arrangement")).toBeVisible();
+  await dialog.getByRole("button", { name: "Close", exact: true }).click();
+  await expect(dialog).not.toBeVisible();
+
+  await page.getByRole("button", { name: /^Jobs/ }).click();
+  await expect(page.getByRole("heading", { name: "Export queue" })).toBeVisible();
+  await expect(page.getByText("No export jobs yet.")).toBeVisible();
 });

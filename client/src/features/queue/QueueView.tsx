@@ -23,6 +23,13 @@ function BatchCard(props: {
   const completedJobs = () => props.batch.jobs.filter((job) => job.state === "succeeded");
   const outputs = () => completedJobs().flatMap((job) => outputNames(job));
   const warnings = () => [...new Set(props.batch.jobs.flatMap((job) => job.warnings ?? []))];
+  const outputFailures = () =>
+    props.batch.jobs.flatMap((job) =>
+      (job.result?.outputFailures ?? []).map((failure) => ({
+        ...failure,
+        mediaLabel: job.mediaLabel,
+      })),
+    );
   const destinationLabel = (job: Job) =>
     props.destinations().find((destination) => destination.id === job.result?.destinationId)
       ?.label ?? "the configured server destination";
@@ -86,6 +93,21 @@ function BatchCard(props: {
               {(destination) => <p role="status">Clips created in {destination}.</p>}
             </For>
             <For each={warnings()}>{(warning) => <p role="status">Warning: {warning}</p>}</For>
+            <Show when={outputFailures().length > 0}>
+              <div role="alert">
+                Some clips were not saved. Completed outputs are listed above.
+                <ul>
+                  <For each={outputFailures()}>
+                    {(failure) => (
+                      <li>
+                        {failure.mediaLabel ? `${failure.mediaLabel}: ` : ""}Segment{" "}
+                        {failure.segment}: {failure.message}
+                      </li>
+                    )}
+                  </For>
+                </ul>
+              </div>
+            </Show>
             <Show when={downloadable()}>
               <BatchDownload batchId={props.batch.batchId} outputCount={outputs().length} />
             </Show>
@@ -111,6 +133,9 @@ function BatchCard(props: {
                     {job.progress !== undefined ? ` · ${Math.round(job.progress * 100)}%` : ""}
                     {job.errorCode ? ` · ${job.errorCode}` : ""}
                     {job.warnings?.length ? ` · ${job.warnings.join(", ")}` : ""}
+                    {job.result?.outputFailures?.length
+                      ? ` · ${job.result.outputFailures.length} output failure${job.result.outputFailures.length === 1 ? "" : "s"}`
+                      : ""}
                     {job.result?.outputName ? ` · ${job.result.outputName}` : ""}
                     {job.result?.outputNames?.length
                       ? ` · ${job.result.outputNames.join(", ")}`
@@ -163,9 +188,18 @@ export function QueueView() {
   };
 
   return (
-    <Show when={batches().length > 0}>
-      <section class="queue-panel flex flex-col gap-4 p-4" aria-labelledby="queue-heading">
-        <h2 id="queue-heading">Export queue</h2>
+    <section class="queue-panel flex flex-col gap-4 p-4" aria-labelledby="queue-heading">
+      <header class="queue-heading-row">
+        <div>
+          <h2 id="queue-heading">Export queue</h2>
+          <p class="queue-description">Exports continue while you keep editing.</p>
+        </div>
+        <span class="badge badge-sm">{batches().length} total</span>
+      </header>
+      <Show
+        when={batches().length > 0}
+        fallback={<p role="status">No export jobs yet. Submitted clips will appear here.</p>}
+      >
         <For each={activeOrRecent()}>
           {(batch, index) => (
             <BatchCard
@@ -197,7 +231,7 @@ export function QueueView() {
             </div>
           </details>
         </Show>
-      </section>
-    </Show>
+      </Show>
+    </section>
   );
 }

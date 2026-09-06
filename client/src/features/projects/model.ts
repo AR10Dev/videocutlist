@@ -1,5 +1,6 @@
 import type { components } from "../../generated/api";
 import { createTimelineHistory, type TimelineHistory } from "../editor/timeline";
+import { normalizeSegments } from "../preview/model";
 
 export type Media = components["schemas"]["Media"];
 export type Project = components["schemas"]["Project"];
@@ -41,7 +42,7 @@ export const restoreProjectItem = (item: ProjectItem, media: Media): EditablePro
     media,
     timeline: createTimelineHistory({
       playheadMs: editor.playheadMs,
-      segments: item.segments,
+      segments: normalizeSegments(item.segments, item.id),
       zoom: editor.zoom,
     }),
     muted: editor.muted,
@@ -52,7 +53,7 @@ export const restoreProjectItem = (item: ProjectItem, media: Media): EditablePro
 export const serializeProjectItem = (item: EditableProjectItem): ProjectItem => ({
   id: item.id,
   mediaId: item.media.id,
-  segments: item.timeline.present.segments,
+  segments: normalizeSegments(item.timeline.present.segments, item.id),
   editorState: {
     playheadMs: item.timeline.present.playheadMs,
     zoom: item.timeline.present.zoom,

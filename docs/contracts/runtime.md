@@ -54,6 +54,12 @@ Incomplete files end in `.partial`; only atomic rename publishes a hit.
 - Projects contain ordered media items. Each item has a stable opaque ID,
   independent segments, editor state, and export options. Revision zero creates;
   successful PUT increments revision; stale revisions return 409.
+- Segments persist a stable `id`, integer-millisecond `startMs`/`endMs`, optional
+  `label`, and `included` state. Documents written before `included` existed
+  default legacy segments to included. CSV and chapter interchange preserves
+  timing and labels only; it does not carry segment identity or inclusion, so
+  imported rows default to included and exports cannot promise that metadata
+  round-trips through those formats.
 - Segment bounds are non-negative, ordered, non-overlapping, within each item's
   media duration, and `startMs < endMs`.
 - Export, detection, and library-scan jobs use one durable SQLite state machine:
@@ -64,7 +70,40 @@ Incomplete files end in `.partial`; only atomic rename publishes a hit.
 - On restart, queued jobs remain queued. Running jobs become failed with
   `interrupted_by_restart` unless artifact reconciliation proves completion.
 - MVP exports use MKV and `stream_copy_preferred`; no smart-boundary re-encode.
-  Non-keyframe accuracy limitations are explicit structured warnings.
+  Non-keyframe accuracy limitations are explicit structured warnings. Publication
+  requires a descriptor-relative atomic no-replace rename: Linux uses
+  `renameat2(RENAME_NOREPLACE)` and macOS uses `renameatx_np(RENAME_EXCL)`.
+  On other platforms, both `merge` and `separate` exports are blocked during
+  preflight with `unsupported_publication_platform` before FFmpeg starts; the
+  implementation does not fall back to a raceable check-then-rename or a
+  hard-link publication.
+
+## Editing workspace
+
+- In and Out marks are an incomplete draft until both bounds are valid. A valid,
+  non-overlapping range commits exactly one selected segment named `Segment NNN`;
+  marking again edits that segment instead of creating a duplicate. **New
+  segment** and Escape clear the selection and begin a new draft.
+- Segment rows and source-timeline ranges share stable segment identity. Rows
+  expose inclusion, naming, bounds, duration, selection, and deletion without
+  changing the integer-millisecond, non-overlap invariants. The included count
+  and requested duration summarize the selected export scope; they do not claim
+  frame-exact stream-copy output duration.
+- Panel widths, collapse state, waveform visibility, and loop preference are
+  browser-local preferences. Separators expose vertical separator semantics,
+  keyboard adjustment, and reset actions. At widths below 1050px, media and
+  task panels use mutually exclusive drawers; at 1050px and above the desktop
+  layout remains available. Narrow drawer close actions restore their trigger
+  focus.
+- Missing thumbnails, waveform data, source keyframe timestamps, audio tracks,
+  or MediaSource preview support are non-blocking capability states. Editing,
+  saving, and export eligibility remain available when a preview asset is
+  unavailable, with a retry or explanatory status where applicable.
+- Export requests use a successfully saved project revision and immutable job
+  snapshots. Export scope excludes segments marked `included: false`; preflight
+  and stream-copy limitations are reported before submission. Browser requests
+  identify media and destinations by opaque IDs and never carry original-media
+  filesystem paths.
 
 ## Authentication
 
@@ -101,6 +140,7 @@ VIDEOCUTLIST_IDLE_TIMEOUT=60s
 VIDEOCUTLIST_DATABASE_PATH
 VIDEOCUTLIST_CACHE_DIR
 VIDEOCUTLIST_EXPORT_DIR
+VIDEOCUTLIST_DESTINATIONS_JSON
 VIDEOCUTLIST_MEDIA_ROOTS_JSON
 VIDEOCUTLIST_AUTH_MODE=none|bearer|trusted_proxy
 VIDEOCUTLIST_BEARER_TOKEN
@@ -125,6 +165,15 @@ without credentials, query, or fragment; origins also have no path.
 `VIDEOCUTLIST_ALLOWED_ORIGINS` is comma-separated and empty by default. Requests
 without `Origin` and requests whose origin exactly matches the listener are
 same-origin. Other browser origins must exactly match the configured list.
+
+`VIDEOCUTLIST_DESTINATIONS_JSON` is an optional, deployment-owned array of typed
+export destinations. The default contains only the managed download destination.
+A `source_adjacent` entry explicitly enables save-beside-source and must provide
+its `mediaRoot`; the browser receives only its opaque ID, label, kind, retention,
+and the boolean `capabilities.saveBesideSource`. No destination or media path is
+returned. Save-beside-source is unavailable for a source that cannot be
+revalidated beneath that configured media root or whose adjacent export folder
+is not writable.
 Allowed responses echo that origin, set
 `Access-Control-Allow-Credentials: true`, vary on `Origin`, and expose
 `ETag`, `X-Request-ID`, `X-Preview-Start`, `X-Preview-Duration`,

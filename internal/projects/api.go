@@ -150,9 +150,16 @@ type AppliedStrategy struct {
 	Strategy   string `json:"strategy"`
 }
 
+type OutputFailure struct {
+	Segment int    `json:"segment"`
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
 type JobResult struct {
 	OutputName        string            `json:"outputName,omitempty"`
 	OutputNames       []string          `json:"outputNames,omitempty"`
+	OutputFailures    []OutputFailure   `json:"outputFailures,omitempty"`
 	AppliedStrategies []AppliedStrategy `json:"appliedStrategies,omitempty"`
 	SizeBytes         int64             `json:"sizeBytes"`
 	RetainUntil       time.Time         `json:"retainUntil"`

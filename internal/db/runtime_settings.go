@@ -180,6 +180,18 @@ func decodeRuntimeSettings(document string, settings *RuntimeSettings) error {
 	return nil
 }
 
+func validRuntimeDestinationID(value string) bool {
+	if strings.TrimSpace(value) == "" || len(value) > 64 || strings.ContainsAny(value, "/\\") {
+		return false
+	}
+	for _, character := range value {
+		if character < 32 || character == 127 {
+			return false
+		}
+	}
+	return true
+}
+
 // ValidateRuntimeSettings checks the complete effective document.
 func ValidateRuntimeSettings(settings RuntimeSettings) error {
 	if settings.MediaRoots == nil {
@@ -201,11 +213,18 @@ func ValidateRuntimeSettings(settings RuntimeSettings) error {
 	}
 	seen := make(map[string]bool, len(settings.Destinations))
 	for _, destination := range settings.Destinations {
-		if strings.TrimSpace(destination.ID) == "" || seen[destination.ID] || strings.TrimSpace(destination.Root) == "" {
-			return errors.New("destinations must have unique IDs and roots")
+		if !validRuntimeDestinationID(destination.ID) || seen[destination.ID] {
+			return errors.New("destinations must have unique safe IDs")
 		}
 		if destination.Kind != "download" && destination.Kind != "archive" && destination.Kind != "source_adjacent" {
 			return errors.New("destination has an invalid kind")
+		}
+		if destination.Kind == "source_adjacent" {
+			if strings.TrimSpace(destination.MediaRoot) == "" {
+				return errors.New("source-adjacent destinations require a media root")
+			}
+		} else if strings.TrimSpace(destination.Root) == "" {
+			return errors.New("file destinations require a root")
 		}
 		if destination.Retention != "" {
 			retention, err := time.ParseDuration(destination.Retention)

@@ -109,6 +109,10 @@ type DestinationMetadata struct {
 	Kind        string `json:"kind"`
 	Retention   string `json:"retention,omitempty"`
 }
+
+type DestinationCapabilities struct {
+	SaveBesideSource bool `json:"saveBesideSource"`
+}
 type BatchExportService interface {
 	Submit(context.Context, projects.BatchExportRequest) (string, []projects.Job, error)
 	Progress(context.Context, string) (jobqueue.JobState, float64, error)
@@ -219,7 +223,14 @@ func (s *Server) dispatch(writer http.ResponseWriter, request *http.Request, id 
 	r := parseRoute(request.Method, request.URL.EscapedPath())
 	switch r.kind {
 	case routeListDestinations:
-		httpx.WriteJSON(writer, http.StatusOK, map[string]any{"destinations": s.config.Destinations})
+		capabilities := DestinationCapabilities{}
+		for _, destination := range s.config.Destinations {
+			if destination.Kind == "source_adjacent" {
+				capabilities.SaveBesideSource = true
+				break
+			}
+		}
+		httpx.WriteJSON(writer, http.StatusOK, map[string]any{"destinations": s.config.Destinations, "capabilities": capabilities})
 		return "/api/v1/destinations", ""
 	case routeGetSettings:
 		s.getSettings(writer, request, id)
@@ -382,7 +393,7 @@ func validExport(input ExportInput) bool {
 	if (input.Mode != "merge" && input.Mode != "separate") || (input.Selection != "" && input.Selection != "segments" && input.Selection != "gaps") || (input.CutStrategy != "stream_copy_preferred" && input.CutStrategy != "precise_reencode" && input.CutStrategy != "hybrid_smart_cut") || input.Container != "mkv" {
 		return false
 	}
-	if len(input.DestinationID) > 64 || len(input.FilenameTemplate) > 160 || strings.ContainsAny(input.DestinationID, "/\\") || strings.ContainsAny(input.FilenameTemplate, "\x00") {
+	if len(input.DestinationID) > 64 || len(input.FilenameTemplate) > 160 || strings.ContainsAny(input.DestinationID, "/\\") || strings.ContainsAny(input.FilenameTemplate, "\x00") || strings.IndexFunc(input.DestinationID, func(r rune) bool { return r < 32 || r == 127 }) >= 0 {
 		return false
 	}
 	seen := map[int]bool{}

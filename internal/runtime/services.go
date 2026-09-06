@@ -178,18 +178,18 @@ func (e ExportExecutor) Preflight(ctx context.Context, _ string, project project
 	result := projects.ExportPreflight{Allowed: true}
 	useInput := len(input.ItemIDs) == 0 && len(items) == 1
 	for _, item := range items {
-		source, media, err := e.Scanner.Open(ctx, e.Media, item.MediaID)
+		file, media, location, err := e.Scanner.OpenResolved(ctx, e.Media, item.MediaID)
 		if err != nil {
 			return projects.ExportPreflight{}, err
 		}
-		file, ok := source.(*os.File)
-		if !ok {
-			_ = source.Close()
-			return projects.ExportPreflight{}, errors.New("media source is not a file")
-		}
 		request := preflightRequest(item, input, useInput)
+		request.SourceRoot = location.RootPath
+		request.SourceRelative = location.RelativePath
+		request.SourceName = media.Name
+		request.SourceSizeBytes = media.SizeBytes
+		request.SourceMtimeNS = media.MtimeNS
 		preflight, preflightErr := service.Preflight(ctx, file, request)
-		closeErr := source.Close()
+		closeErr := file.Close()
 		if preflightErr != nil {
 			return projects.ExportPreflight{}, preflightErr
 		}
@@ -596,15 +596,11 @@ func resultOutputNames(result exporter.Result) ([]string, bool) {
 }
 
 func (e ExportExecutor) ExecuteBatchSnapshot(ctx context.Context, id string, snapshot projects.ExportSnapshot) (string, error) {
-	source, _, err := e.Scanner.Open(ctx, e.Media, snapshot.Source.MediaID)
+	file, media, location, err := e.Scanner.OpenResolved(ctx, e.Media, snapshot.Source.MediaID)
 	if err != nil {
 		return "", fmt.Errorf("open batch source: %w", err)
 	}
-	defer source.Close()
-	file, ok := source.(*os.File)
-	if !ok {
-		return "", errors.New("media source is not a file")
-	}
+	defer file.Close()
 	service := e.Service
 	if snapshot.RuntimeSettings != nil {
 		applyRuntimeSettings(&service, *snapshot.RuntimeSettings)
@@ -616,6 +612,8 @@ func (e ExportExecutor) ExecuteBatchSnapshot(ctx context.Context, id string, sna
 		StreamIndexes: item.ExportOptions.StreamIndexes, CutStrategy: item.ExportOptions.CutStrategy,
 		Container: item.ExportOptions.Container, DestinationID: item.ExportOptions.DestinationID,
 		FilenameTemplate: item.ExportOptions.FilenameTemplate, JobID: id,
+		SourceRoot: location.RootPath, SourceRelative: location.RelativePath, SourceName: media.Name,
+		SourceSizeBytes: media.SizeBytes, SourceMtimeNS: media.MtimeNS,
 	})
 	if err != nil {
 		return "", err
@@ -627,6 +625,7 @@ func (e ExportExecutor) ExecuteBatchSnapshot(ctx context.Context, id string, sna
 func applyRuntimeSettings(service *exporter.Service, settings store.RuntimeSettings) {
 	service.Destinations = make([]exporter.Destination, len(settings.Destinations))
 	for i, destination := range settings.Destinations {
-		service.Destinations[i] = exporter.Destination{ID: destination.ID, Label: destination.Label, Description: destination.Description, Kind: destination.Kind, Root: destination.Root, RetentionText: destination.Retention, MediaRoot: destination.MediaRoot}
+		retention, _ := time.ParseDuration(destination.Retention)
+		service.Destinations[i] = exporter.Destination{ID: destination.ID, Label: destination.Label, Description: destination.Description, Kind: destination.Kind, Root: destination.Root, Retention: retention, RetentionText: destination.Retention, MediaRoot: destination.MediaRoot}
 	}
 }

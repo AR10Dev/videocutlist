@@ -553,9 +553,11 @@ export interface components {
       filenameTemplate?: string;
     };
     Segment: {
+      id?: string;
       startMs: number;
       endMs: number;
       label?: string;
+      included?: boolean;
     };
     UIState: {
       playheadMs: number;
@@ -642,6 +644,10 @@ export interface components {
       kind: "download" | "archive" | "source_adjacent";
       retention?: string;
     };
+    DestinationCapabilities: {
+      /** @description True only when deployment configuration explicitly includes a source_adjacent destination. No filesystem path is exposed. */
+      saveBesideSource: boolean;
+    };
     ExportPreflight: {
       allowed: boolean;
       selection: number[];
@@ -673,6 +679,12 @@ export interface components {
         outputName?: string;
         /** @description Published separate-export filenames, never filesystem paths. */
         outputNames?: string[];
+        /** @description Per-segment failures when a separate export partially succeeds. */
+        outputFailures?: {
+          segment: number;
+          code: string;
+          message: string;
+        }[];
         /** Format: int64 */
         sizeBytes: number;
         /** Format: date-time */
@@ -1236,6 +1248,7 @@ export interface operations {
         content: {
           "application/json": {
             destinations: components["schemas"]["Destination"][];
+            capabilities: components["schemas"]["DestinationCapabilities"];
           };
         };
       };

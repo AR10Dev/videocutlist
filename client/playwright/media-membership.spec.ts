@@ -23,7 +23,11 @@ async function addSegment(page: Page) {
   await page.getByRole("button", { name: "Set in" }).click();
   await playhead.fill("700");
   await page.getByRole("button", { name: "Set out" }).click();
-  await page.getByRole("button", { name: /Add cut \(Add segment\)/ }).click();
+  await expect(page.locator(".cut-row[data-segment-id]")).toHaveCount(1);
+  await expect(page.locator('button[aria-label="Select cut 1"]')).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
 }
 
 async function openMediaChooser(page: Page) {
@@ -113,7 +117,8 @@ test("browsing stays out of the project until add, then activates without duplic
   await expect(page.getByRole("button", { name: "Add to project" })).toBeVisible();
   await expect(page.getByRole("list", { name: "Project media items" })).toHaveCount(0);
   await page.getByRole("tab", { name: "Export", exact: true }).click();
-  await expect(page.getByText(/1 item · 1 segment/)).toBeVisible();
+  await expect(page.getByLabel("Export summary")).toContainText("0 · 00:00.000 requested");
+  await expect(page.getByRole("button", { name: "Create clips" })).toBeDisabled();
 
   await page.getByRole("button", { name: "Add to project" }).click();
   await page.getByRole("tab", { name: "Project", exact: true }).click();
@@ -133,9 +138,21 @@ test("browsing stays out of the project until add, then activates without duplic
 
   await page.getByRole("tab", { name: "Export", exact: true }).click();
   const exportPanel = page.getByRole("region", { name: "Export" });
-  await expect(page.getByText(/1 item · 1 segment/)).toBeVisible();
+  const activeScope = exportPanel.getByRole("radio", { name: "Active media item" });
+  const selectedScope = exportPanel.getByRole("radio", { name: "Selected project items" });
+  await expect(activeScope).toBeChecked();
+  await expect(page.getByLabel("Export summary")).toContainText("camera.mp4");
+  await expect(page.getByLabel("Export summary")).toContainText("1 · 00:00.600 requested");
+  await expect(exportPanel.getByRole("checkbox")).toHaveCount(0);
+
+  await selectedScope.check();
+  await expect(page.getByLabel("Export summary")).toContainText("2 project items");
   await expect(exportPanel.getByRole("checkbox", { name: "camera.mp4" })).toBeChecked();
-  await expect(exportPanel.getByRole("checkbox", { name: "second.mp4" })).not.toBeChecked();
+  await expect(exportPanel.getByRole("checkbox", { name: "second.mp4" })).toBeChecked();
+
+  await activeScope.check();
+  await expect(page.getByLabel("Export summary")).toContainText("camera.mp4");
+  await expect(page.getByLabel("Export summary")).toContainText("1 · 00:00.600 requested");
   await page.getByRole("button", { name: "Create clips" }).click();
   await expect(page.getByText("Export queued.")).toBeVisible();
   expect(exportBody?.itemIds).toEqual([expect.any(String)]);

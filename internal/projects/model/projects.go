@@ -2,6 +2,9 @@ package model
 
 import (
 	"cmp"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -18,10 +21,62 @@ var (
 
 const ProjectSchemaVersion = 2
 
+// EnsureSegmentIDs upgrades legacy ranges without changing their timing or
+// names. The deterministic fallback keeps an old document stable until it is
+// saved with its new metadata.
+func EnsureSegmentIDs(document *Document) {
+	for itemIndex := range document.Items {
+		item := &document.Items[itemIndex]
+		for segmentIndex := range item.Segments {
+			segment := &item.Segments[segmentIndex]
+			if segment.ID != "" {
+				continue
+			}
+			seed := fmt.Sprintf("%s:%d:%d", item.ID, segment.StartMS, segment.EndMS)
+			digest := sha256.Sum256([]byte(seed))
+			segment.ID = "s_" + base64.RawURLEncoding.EncodeToString(digest[:18])
+		}
+	}
+}
+
+// Segment is a retained source range. ID and Included were added after v2
+// shipped; custom unmarshalling keeps older project documents included by
+// default while preserving explicit exclusions.
 type Segment struct {
-	StartMS int64  `json:"startMs"`
-	EndMS   int64  `json:"endMs"`
-	Label   string `json:"label,omitempty"`
+	ID       string `json:"id,omitempty"`
+	StartMS  int64  `json:"startMs"`
+	EndMS    int64  `json:"endMs"`
+	Label    string `json:"label,omitempty"`
+	Included bool   `json:"included"`
+
+	includedSet bool
+}
+
+func (s *Segment) UnmarshalJSON(data []byte) error {
+	type segmentFields struct {
+		ID       string `json:"id"`
+		StartMS  int64  `json:"startMs"`
+		EndMS    int64  `json:"endMs"`
+		Label    string `json:"label"`
+		Included *bool  `json:"included"`
+	}
+	var fields segmentFields
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	s.ID = fields.ID
+	s.StartMS = fields.StartMS
+	s.EndMS = fields.EndMS
+	s.Label = fields.Label
+	s.Included = fields.Included == nil || *fields.Included
+	s.includedSet = fields.Included != nil
+	return nil
+}
+
+// IsIncluded treats the zero value as the legacy default while honoring an
+// explicit JSON exclusion from a decoded project document.
+func (s Segment) IsIncluded() bool {
+	return !s.includedSet || s.Included
 }
 
 type UIState struct {
@@ -59,6 +114,7 @@ type Document struct {
 // ValidateProject checks document-only invariants. Item media duration checks
 // happen where a media catalog is available.
 func ValidateProject(document Document) error {
+	EnsureSegmentIDs(&document)
 	if document.SchemaVersion != ProjectSchemaVersion {
 		return errors.New("unsupported project schema version")
 	}
@@ -115,7 +171,7 @@ func validateExportOptions(options ExportOptions) error {
 	if options.Container != "" && options.Container != "mkv" {
 		return errors.New("invalid export container")
 	}
-	if len(options.DestinationID) > 64 || len(options.FilenameTemplate) > 160 || strings.ContainsAny(options.DestinationID, "/\\") || strings.Contains(options.FilenameTemplate, "\x00") {
+	if len(options.DestinationID) > 64 || len(options.FilenameTemplate) > 160 || strings.ContainsAny(options.DestinationID, "/\\") || strings.Contains(options.FilenameTemplate, "\x00") || strings.IndexFunc(options.DestinationID, func(r rune) bool { return r < 32 || r == 127 }) >= 0 {
 		return errors.New("invalid export destination")
 	}
 	seen := make(map[int]struct{}, len(options.StreamIndexes))
@@ -134,10 +190,20 @@ func validateExportOptions(options ExportOptions) error {
 func validateSegments(segments []Segment, durationMS int64) error {
 	ordered := slices.Clone(segments)
 	slices.SortStableFunc(ordered, func(a, b Segment) int { return cmp.Compare(a.StartMS, b.StartMS) })
+	seenIDs := make(map[string]struct{}, len(segments))
 	var previousEnd int64
 	for i, segment := range ordered {
 		if segment.StartMS < 0 || segment.StartMS >= segment.EndMS || (durationMS >= 0 && segment.EndMS > durationMS) {
 			return fmt.Errorf("segment %d is outside media duration", i)
+		}
+		if segment.ID != "" {
+			if utf8.RuneCountInString(segment.ID) > 128 {
+				return fmt.Errorf("segment %d ID exceeds 128 characters", i)
+			}
+			if _, ok := seenIDs[segment.ID]; ok {
+				return fmt.Errorf("segment %d duplicates a segment ID", i)
+			}
+			seenIDs[segment.ID] = struct{}{}
 		}
 		if i > 0 && segment.StartMS < previousEnd {
 			return fmt.Errorf("segment %d overlaps a previous segment", i)

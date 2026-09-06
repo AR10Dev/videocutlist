@@ -86,7 +86,11 @@ test("export cancellation is isolated from a changed media context", async ({ pa
   await page.getByRole("textbox", { name: "Timecode" }).fill("0:00.500");
   await page.getByRole("textbox", { name: "Timecode" }).press("Enter");
   await page.getByRole("button", { name: "Set out" }).click();
-  await page.getByRole("button", { name: /Add cut/ }).click();
+  await expect(page.locator(".cut-row[data-segment-id]")).toHaveCount(1);
+  await expect(page.getByRole("button", { name: "Select cut 1" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
   await page.getByRole("tab", { name: "Project" }).click();
   await page.getByRole("button", { name: "Save project" }).click();
   await page.getByRole("tab", { name: "Export" }).click();
@@ -193,8 +197,4 @@ test("separates media selection from cut-list imports", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Export" })).toBeVisible();
   await page.getByRole("tab", { name: "Project" }).click();
   await expect(page.getByLabel("Import cut list")).toBeVisible();
-  await expect(page.getByLabel("Import CSV or chapters")).toHaveCount(0);
-
-  await page.getByRole("button", { name: "Save project" }).click();
-  await expect(page.getByLabel("Import CSV or chapters")).toBeVisible();
 });

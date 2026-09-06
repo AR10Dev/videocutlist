@@ -75,9 +75,11 @@ export function createWorkspaceController() {
   );
   let editorVersion = 0;
   const selectActiveExportItem: { current?: () => void } = {};
+  const projectsRef: { current?: ReturnType<typeof createProjectsController> } = {};
   const markDirty = () => {
     editorVersion++;
     setDirty(true);
+    projectsRef.current?.scheduleAutosave();
   };
   const previewRef: { current?: ReturnType<typeof createPreviewController> } = {};
   const exportRef: { current?: ReturnType<typeof createExportController> } = {};
@@ -90,8 +92,12 @@ export function createWorkspaceController() {
     togglePlayback: () => previewRef.current?.togglePlayback(),
     playActiveSegment: (loop) => previewRef.current?.playActiveSegment(loop),
     playOrderedSegments: () => previewRef.current?.playOrderedSegments(),
+    pausePlayback: () => previewRef.current?.pausePlayback(),
     createClips: () => exportRef.current?.exportProject(),
-    onSegmentCommitted: () => selectActiveExportItem.current?.(),
+    onSegmentCommitted: () => {
+      addMediaToProject();
+      selectActiveExportItem.current?.();
+    },
   });
   const {
     segmentLabel,
@@ -115,12 +121,17 @@ export function createWorkspaceController() {
     updateTimeline,
     updatePlaybackPosition,
     setMarker,
+    previewMarker,
+    previewSegment,
     addSegment,
     removeSegment,
     moveSegment,
     updateSegment,
+    updateSegmentBoundary,
     updateSegmentLabel,
+    updateSegmentIncluded,
     splitActiveSegment,
+    newSegment,
   } = editorFeature;
   const queryClient = useQueryClient();
   const exportFeature = createExportController({
@@ -145,6 +156,9 @@ export function createWorkspaceController() {
   const {
     selectedExportItems,
     setSelectedExportItems,
+    exportScope,
+    setExportScope,
+    exportItemIDs,
     batches,
     exportJob,
     batchJobs,
@@ -173,6 +187,7 @@ export function createWorkspaceController() {
     cancelBatch,
     cancelChildJob,
     retryChildJob,
+    destinationCapabilities,
   } = exportFeature;
   selectActiveExportItem.current = () => {
     const id = activeItemId();
@@ -199,6 +214,7 @@ export function createWorkspaceController() {
         : item,
     );
   const activateItem = (item: EditableProjectItem) => {
+    if (item.media.id !== selected()?.id) editorFeature.prepareMediaSwitch();
     setProjectItems(editableItems());
     setActiveItemId(item.id);
     setSelected(item.media);
@@ -268,6 +284,9 @@ export function createWorkspaceController() {
     previewStatus,
     thumbnailURL,
     waveform,
+    waveformVisible,
+    setWaveformVisibility,
+    retryAssets,
     assetRange,
     setPreviewCenterMs,
     diagnostics,
@@ -285,6 +304,7 @@ export function createWorkspaceController() {
   previewRef.current = initializedPreviewFeature;
   exportRef.current = exportFeature;
   const chooseMedia = (item: Media) => {
+    editorFeature.prepareMediaSwitch();
     clearDetectionContext();
     const items = editableItems();
     const existing = items.find((entry) => entry.media.id === item.id);
@@ -307,7 +327,7 @@ export function createWorkspaceController() {
     setDestinationId(lastDestinationId() ?? "download");
     setFilenameTemplate(settings().filenameTemplate);
     setDiagnostics();
-    setStatus(`Previewing ${item.name}. Add it to the project to keep cuts.`);
+    setStatus(`Previewing ${item.name}. The first valid cut adds it to the project.`);
   };
   const addMediaToProject = () => {
     const item = selected();
@@ -325,9 +345,7 @@ export function createWorkspaceController() {
     };
     setProjectItems([...items, added]);
     activateItem(added);
-    if (added.timeline.present.segments.length) {
-      setSelectedExportItems((ids) => (ids.includes(added.id) ? ids : [...ids, added.id]));
-    }
+    setSelectedExportItems((ids) => (ids.includes(added.id) ? ids : [...ids, added.id]));
     markDirty();
     setStatus(`Added ${item.name} to the project.`);
   };
@@ -426,6 +444,7 @@ export function createWorkspaceController() {
     setDiagnostics,
     setStatus,
   });
+  projectsRef.current = projectsFeature;
   return {
     library: libraryFeature,
     editorStatus: editorFeature.editorStatus,
@@ -447,6 +466,9 @@ export function createWorkspaceController() {
     setTimecode,
     thumbnailURL,
     waveform,
+    waveformVisible,
+    setWaveformVisibility,
+    retryAssets,
     assetRange,
     setPreviewCenterMs,
     setSettings,
@@ -465,6 +487,9 @@ export function createWorkspaceController() {
     diagnostics,
     playbackMode,
     playbackIntent,
+    loopSelectedSegment: initializedPreviewFeature.loopSelectedSegment,
+    setLoopSelectedSegment: initializedPreviewFeature.setLoopSelectedSegment,
+    toggleLoopSelectedSegment: initializedPreviewFeature.toggleLoopSelectedSegment,
     projectId,
     setProjectId,
     projectName,
@@ -477,6 +502,9 @@ export function createWorkspaceController() {
     activeItemId,
     selectedExportItems,
     setSelectedExportItems,
+    exportScope,
+    setExportScope,
+    exportItemIDs,
     batches,
     recent,
     exportJob,
@@ -493,6 +521,7 @@ export function createWorkspaceController() {
     streamIndexes,
     setStreamIndexes,
     destinations,
+    destinationCapabilities,
     destinationId,
     setDestinationId,
     filenameTemplate,
@@ -541,14 +570,20 @@ export function createWorkspaceController() {
     syncPreviewPosition,
     handlePreviewEnded,
     setMarker,
+    previewMarker,
+    previewSegment,
     addSegment,
     duration,
     tracks,
     removeSegment,
     moveSegment,
     updateSegment,
+    updateSegmentBoundary,
     updateSegmentLabel,
+    updateSegmentIncluded,
     splitActiveSegment,
+    newSegment,
+    saveState: projectsFeature.saveState,
     projects: projectsFeature,
     export: exportFeature,
     exportProject,
