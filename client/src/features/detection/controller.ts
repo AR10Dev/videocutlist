@@ -5,7 +5,13 @@ import type { components } from "../../generated/api";
 import { cancellationIsCurrent } from "../queue/cancellation";
 import { cancelJobLifecycle } from "../queue/queryLifecycle";
 import { jobPollInterval } from "../queue/jobPolling";
-import { acceptCandidate, type Candidate, type DetectionKind } from "./model";
+import {
+  acceptCandidates,
+  type Candidate,
+  type CandidateAcceptance,
+  type DetectionKind,
+  skippedCandidateSummary,
+} from "./model";
 import type { Segment } from "../preview/model";
 
 type Media = components["schemas"]["Media"];
@@ -21,6 +27,8 @@ type DetectionDependencies = {
   saveProject: () => Promise<Project | undefined>;
   updateSegments: (segments: Segment[]) => void;
   markDirty: () => void;
+  setExportSelection?: (selection: "segments" | "gaps") => void;
+  onSegmentsAccepted?: () => void;
 };
 
 export function createDetectionController(
@@ -35,6 +43,7 @@ export function createDetectionController(
   let detectionController: AbortController | undefined;
   let detectionCancellationController: AbortController | undefined;
   const invalidatedTerminalJobs = new Set<string>();
+  const reviewedCandidateIDs = new Set<string>();
   const cancelJobMutation = createMutation(() => ({
     mutationFn: ({ id, signal }: { id: string; signal: AbortSignal }) =>
       api.request(`jobs/${encodeURIComponent(id)}`, { method: "DELETE", signal }),
@@ -52,15 +61,19 @@ export function createDetectionController(
     refetchInterval: (query: { state: { data?: DetectionJob } }) =>
       jobPollInterval(query.state.data, 500),
   }));
+  const setDetectionResult = (candidates: Candidate[]) => {
+    setDetectionCandidates(
+      candidates.filter((candidate) => !reviewedCandidateIDs.has(candidate.id)),
+    );
+    if (!reviewedCandidateIDs.size)
+      setDetectionStatus(`${candidates.length} candidates found. Review each before accepting.`);
+  };
   createEffect(() => {
     const next = detectionStatusQuery.data;
     if (!next || next.id !== detectionJob()?.id) return;
     setDetectionJob(next);
     if (next.state === "succeeded") {
-      setDetectionCandidates(next.candidates ?? []);
-      setDetectionStatus(
-        `${next.candidates?.length ?? 0} candidates found. Review each before accepting.`,
-      );
+      setDetectionResult(next.candidates ?? []);
     } else if (next.state === "queued" || next.state === "running") {
       setDetectionStatus(next.state === "queued" ? "Detection queued." : "Detection running.");
     } else {
@@ -88,6 +101,7 @@ export function createDetectionController(
     detectionCancellationController = undefined;
     detectionRequest++;
     setDetectionJob();
+    reviewedCandidateIDs.clear();
     setDetectionCandidates([]);
     setDetectionStatus("");
   };
@@ -98,7 +112,14 @@ export function createDetectionController(
       "noiseDb" | "minDurationMs" | "sceneThreshold"
     > = {},
   ) => {
+    if (kind === "silence") dependencies.setExportSelection?.("gaps");
+    else if (kind === "scene") dependencies.setExportSelection?.("segments");
     const request = ++detectionRequest;
+    detectionController?.abort();
+    detectionController = undefined;
+    reviewedCandidateIDs.clear();
+    setDetectionJob();
+    setDetectionCandidates([]);
     setDetectionStatus("Saving project before detection…");
     const saved = await dependencies.saveProject();
     if (request !== detectionRequest) return;
@@ -109,7 +130,6 @@ export function createDetectionController(
       );
       return;
     }
-    detectionController?.abort();
     const controller = new AbortController();
     detectionController = controller;
     setDetectionCandidates([]);
@@ -140,10 +160,7 @@ export function createDetectionController(
       if (controller.signal.aborted || request !== detectionRequest) return;
       setDetectionJob(job);
       if (job.state === "succeeded") {
-        setDetectionCandidates(job.candidates ?? []);
-        setDetectionStatus(
-          `${job.candidates?.length ?? 0} candidates found. Review each before accepting.`,
-        );
+        setDetectionResult(job.candidates ?? []);
       } else if (job.state === "cancelled") setDetectionStatus("Detection cancelled.");
       else if (job.state === "queued" || job.state === "running")
         setDetectionStatus(job.state === "queued" ? "Detection queued." : "Detection running.");
@@ -191,11 +208,11 @@ export function createDetectionController(
         detectionCancellationController = undefined;
     }
   };
-  const acceptDetection = (candidate: Candidate) => {
+  const acceptanceFor = (candidates: Candidate[]): CandidateAcceptance => {
     const selected = dependencies.selected();
-    if (!selected) return;
-    const next = acceptCandidate(
-      candidate,
+    if (!selected) return { segments: dependencies.segments(), accepted: [], skipped: [] };
+    return acceptCandidates(
+      candidates,
       {
         id: dependencies.projectId(),
         mediaId: selected.id,
@@ -204,14 +221,58 @@ export function createDetectionController(
       },
       selected.durationMs,
     );
-    if (!next) {
+  };
+  const acceptDetection = (candidate: Candidate): CandidateAcceptance => {
+    const result = acceptanceFor([candidate]);
+    if (!result.accepted.length) {
       setDetectionStatus("Candidate is stale, invalid, or overlaps an existing segment.");
-      return;
+      return result;
     }
-    dependencies.updateSegments(next.segments);
+    if (candidate.source === "silence") dependencies.setExportSelection?.("gaps");
+    dependencies.updateSegments(result.segments);
+    dependencies.onSegmentsAccepted?.();
     dependencies.markDirty();
-    setDetectionCandidates((items) => items.filter((item) => item.id !== candidate.id));
+    reviewedCandidateIDs.add(candidate.id);
+    setDetectionCandidates((items: Candidate[]) =>
+      items.filter((item) => item.id !== candidate.id),
+    );
     setDetectionStatus("Candidate accepted; save the project to persist it.");
+    return result;
+  };
+  const rejectDetection = (candidate: Candidate) => {
+    reviewedCandidateIDs.add(candidate.id);
+    setDetectionCandidates((items: Candidate[]) =>
+      items.filter((item) => item.id !== candidate.id),
+    );
+    setDetectionStatus("Candidate dismissed.");
+    return true;
+  };
+  const bulkAcceptDetection = (): CandidateAcceptance => {
+    const result = acceptanceFor(detectionCandidates());
+    if (!result.accepted.length) {
+      const skipped = skippedCandidateSummary(result.skipped);
+      setDetectionStatus(
+        skipped ? `No candidates accepted; skipped ${skipped}.` : "No candidates to accept.",
+      );
+      return result;
+    }
+    if (result.accepted.some((candidate) => candidate.source === "silence"))
+      dependencies.setExportSelection?.("gaps");
+    dependencies.updateSegments(result.segments);
+    dependencies.onSegmentsAccepted?.();
+    dependencies.markDirty();
+    for (const candidate of result.accepted) reviewedCandidateIDs.add(candidate.id);
+    const acceptedIDs = new Set(result.accepted.map((candidate) => candidate.id));
+    setDetectionCandidates((items: Candidate[]) =>
+      items.filter((item) => !acceptedIDs.has(item.id)),
+    );
+    const skipped = skippedCandidateSummary(result.skipped);
+    setDetectionStatus(
+      skipped
+        ? `Accepted ${result.accepted.length} candidates; skipped ${skipped}. Save the project to persist them.`
+        : `Accepted ${result.accepted.length} candidates; save the project to persist them.`,
+    );
+    return result;
   };
 
   return {
@@ -225,5 +286,7 @@ export function createDetectionController(
     startDetection,
     cancelDetection,
     acceptDetection,
+    rejectDetection,
+    bulkAcceptDetection,
   };
 }

@@ -31,14 +31,16 @@ export function Timeline() {
   };
   const updateWindow = () => {
     if (!scroller || !timeline) return;
-    setVisibleWindow(
-      visibleTimelineWindow(
-        scroller.scrollLeft,
-        scroller.clientWidth,
-        timeline.getBoundingClientRect().width,
-        workspace.duration(),
-      ),
+    const next = visibleTimelineWindow(
+      scroller.scrollLeft,
+      scroller.clientWidth,
+      timeline.getBoundingClientRect().width,
+      workspace.duration(),
     );
+    setVisibleWindow(next);
+    const current = workspace.visibleTimelineRange();
+    if (current.startMs !== next.startMs || current.endMs !== next.endMs)
+      workspace.setVisibleTimelineRange(next);
   };
   const positionFromPointer = (clientX: number, target: DragTarget = { kind: "playhead" }) => {
     const value = pointerTime(clientX);
@@ -114,9 +116,11 @@ export function Timeline() {
   };
   globalThis.addEventListener("timeline-zoom", onZoom);
   globalThis.addEventListener("timeline-fit", onFit);
+  globalThis.addEventListener("resize", updateWindow);
   onCleanup(() => {
     globalThis.removeEventListener("timeline-zoom", onZoom);
     globalThis.removeEventListener("timeline-fit", onFit);
+    globalThis.removeEventListener("resize", updateWindow);
   });
   createEffect(() => {
     setVisibleWindow({ startMs: 0, endMs: workspace.duration() / workspace.present().zoom });
@@ -204,13 +208,20 @@ export function Timeline() {
               thumbnailURL={workspace.thumbnailURL()}
               waveform={[]}
               lane="thumbnail"
+              durationMs={workspace.duration()}
+              assetRange={workspace.assetRange()}
             />
           </div>
           <div class="timeline-lane timeline-waveform" role="img" aria-label="Waveform lane">
-            <TimelineCanvas waveform={workspace.waveform()} lane="waveform" />
+            <TimelineCanvas
+              waveform={workspace.waveform()}
+              lane="waveform"
+              durationMs={workspace.duration()}
+              assetRange={workspace.assetRange()}
+            />
           </div>
           <div class="timeline-overlays">
-            <Show when={workspace.present().inMs !== undefined}>
+            <Show when={!workspace.editingActive() && workspace.present().inMs !== undefined}>
               <span
                 class="timeline-overlay timeline-in"
                 aria-label="In marker"
@@ -223,7 +234,7 @@ export function Timeline() {
                 onPointerUp={finishDrag}
               />
             </Show>
-            <Show when={workspace.present().outMs !== undefined}>
+            <Show when={!workspace.editingActive() && workspace.present().outMs !== undefined}>
               <span
                 class="timeline-overlay timeline-out"
                 aria-label="Out marker"

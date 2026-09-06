@@ -6,7 +6,9 @@ import {
   editTimeline,
   redoTimeline,
   resetTimelineHistory,
+  updateTimelineDraft,
   updateTimelinePlayback,
+  updateTimelineView,
   undoTimeline,
   visibleTimelineWindow,
   type TimelineSnapshot,
@@ -36,13 +38,24 @@ describe("timeline history", () => {
     expect(redoTimeline(undone).present).toEqual(changed.present);
   });
 
-  it("updates playback without creating undo history", () => {
+  it("clears draft boundaries without adding a durable edit", () => {
+    const history = editTimeline(createTimelineHistory(initial), { inMs: 200, outMs: 800 });
+    const cleared = updateTimelineDraft(history, { inMs: undefined, outMs: undefined });
+    expect(cleared.present.inMs).toBeUndefined();
+    expect(cleared.present.outMs).toBeUndefined();
+    expect(cleared.past).toEqual(history.past);
+    expect(cleared.future).toEqual(history.future);
+  });
+
+  it("updates playback and view state without creating undo history", () => {
     const history = editTimeline(createTimelineHistory(initial), { inMs: 200 });
-    const played = updateTimelinePlayback(history, 750);
-    expect(played.present.playheadMs).toBe(750);
-    expect(played.past).toEqual(history.past);
-    expect(played.future).toEqual(history.future);
-    expect(undoTimeline(played).present.inMs).toBe(initial.inMs);
+    const viewed = updateTimelineView(history, { playheadMs: 750, zoom: 4 });
+    expect(viewed.present.playheadMs).toBe(750);
+    expect(viewed.present.zoom).toBe(4);
+    expect(viewed.past).toEqual(history.past);
+    expect(viewed.future).toEqual(history.future);
+    expect(undoTimeline(viewed).present.inMs).toBe(initial.inMs);
+    expect(updateTimelinePlayback(viewed, 900).past).toEqual(viewed.past);
   });
 
   it("clears redo after a new edit", () => {

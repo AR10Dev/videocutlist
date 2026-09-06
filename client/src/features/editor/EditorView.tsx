@@ -19,7 +19,7 @@ export function EditorView(props: { onChooseMedia: () => void }) {
   };
   const confirmBoundary = (kind: "inMs" | "outMs", input: HTMLInputElement) => {
     const value = parseTimecode(input.value);
-    const other = kind === "inMs" ? workspace.present().outMs : workspace.present().inMs;
+    const other = kind === "inMs" ? workspace.editingOutMs() : workspace.editingInMs();
     const validOrder = other === undefined || (kind === "inMs" ? value! < other : value! > other);
     if (value === undefined || value > workspace.duration() || !validOrder) {
       workspace.setEditorStatus("In must be before Out and both must be within the video.");
@@ -28,11 +28,15 @@ export function EditorView(props: { onChooseMedia: () => void }) {
     workspace.setMarker(kind, value);
   };
   const validRange = () => {
-    const { inMs, outMs } = workspace.present();
+    const inMs = workspace.editingInMs();
+    const outMs = workspace.editingOutMs();
     return inMs !== undefined && outMs !== undefined && inMs < outMs;
   };
   const guidance = () => {
-    const { inMs, outMs } = workspace.present();
+    const inMs = workspace.editingInMs();
+    const outMs = workspace.editingOutMs();
+    if (workspace.editingActive())
+      return `Editing cut ${workspace.activeSegmentIndex()! + 1}. Escape returns to a new draft.`;
     if (inMs === undefined) return "Set an In point to begin a cut.";
     if (outMs === undefined) return "Set an Out point to finish the range.";
     if (inMs >= outMs) return "Move Out after In to create a valid cut.";
@@ -64,15 +68,20 @@ export function EditorView(props: { onChooseMedia: () => void }) {
               <strong>{item().name}</strong>
               <span>{formatTime(item().durationMs, workspace.duration())}</span>
             </div>
+            <Show when={!workspace.activeItemId()}>
+              <p class="text-sm text-base-content/70" role="status">
+                Preview only · Add to project to save cuts.
+              </p>
+            </Show>
             <p id="timeline-description" class="sr-only">
               Playhead {formatTime(workspace.playheadMs(), workspace.duration())}. In marker{" "}
-              {workspace.present().inMs === undefined
+              {workspace.editingInMs() === undefined
                 ? "unset"
-                : formatTime(workspace.present().inMs!, workspace.duration())}
+                : formatTime(workspace.editingInMs()!, workspace.duration())}
               . Out marker{" "}
-              {workspace.present().outMs === undefined
+              {workspace.editingOutMs() === undefined
                 ? "unset"
-                : formatTime(workspace.present().outMs!, workspace.duration())}
+                : formatTime(workspace.editingOutMs()!, workspace.duration())}
               .{" "}
               {workspace.present().segments.length
                 ? `${workspace.present().segments.length} cuts selected.`
@@ -128,9 +137,9 @@ export function EditorView(props: { onChooseMedia: () => void }) {
                         aria-label="In point"
                         placeholder="Unset"
                         value={
-                          workspace.present().inMs === undefined
+                          workspace.editingInMs() === undefined
                             ? ""
-                            : formatTime(workspace.present().inMs!, workspace.duration())
+                            : formatTime(workspace.editingInMs()!, workspace.duration())
                         }
                         onKeyDown={(event) => {
                           if (event.key === "Enter") confirmBoundary("inMs", event.currentTarget);
@@ -140,10 +149,14 @@ export function EditorView(props: { onChooseMedia: () => void }) {
                     </label>
                     <button
                       class="btn btn-sm"
+                      aria-label="Set in"
                       aria-keyshortcuts="I"
                       onClick={() => workspace.setMarker("inMs", workspace.watchedPosition())}
                     >
-                      <LocateFixed size={16} aria-hidden="true" /> Set in
+                      <LocateFixed size={16} aria-hidden="true" /> Set in{" "}
+                      <kbd class="kbd kbd-xs" aria-hidden="true">
+                        I
+                      </kbd>
                     </button>
                     <label class="marker-value">
                       Out:{" "}
@@ -152,9 +165,9 @@ export function EditorView(props: { onChooseMedia: () => void }) {
                         aria-label="Out point"
                         placeholder="Unset"
                         value={
-                          workspace.present().outMs === undefined
+                          workspace.editingOutMs() === undefined
                             ? ""
-                            : formatTime(workspace.present().outMs!, workspace.duration())
+                            : formatTime(workspace.editingOutMs()!, workspace.duration())
                         }
                         onKeyDown={(event) => {
                           if (event.key === "Enter") confirmBoundary("outMs", event.currentTarget);
@@ -164,6 +177,7 @@ export function EditorView(props: { onChooseMedia: () => void }) {
                     </label>
                     <button
                       class="btn btn-sm"
+                      aria-label="Set out"
                       aria-keyshortcuts="O"
                       onClick={() =>
                         workspace.setMarker(
@@ -172,12 +186,15 @@ export function EditorView(props: { onChooseMedia: () => void }) {
                         )
                       }
                     >
-                      <LocateFixed size={16} aria-hidden="true" /> Set out
+                      <LocateFixed size={16} aria-hidden="true" /> Set out{" "}
+                      <kbd class="kbd kbd-xs" aria-hidden="true">
+                        O
+                      </kbd>
                     </button>
                     <span class="pending-duration" aria-label="Pending cut duration">
                       {validRange()
                         ? formatTime(
-                            workspace.present().outMs! - workspace.present().inMs!,
+                            workspace.editingOutMs()! - workspace.editingInMs()!,
                             workspace.duration(),
                           )
                         : "Unset"}
@@ -187,10 +204,13 @@ export function EditorView(props: { onChooseMedia: () => void }) {
                       aria-label="Add cut (Add segment)"
                       aria-keyshortcuts="C"
                       onClick={workspace.addSegment}
-                      disabled={!validRange()}
+                      disabled={!validRange() || workspace.editingActive()}
                       aria-describedby="add-segment-help"
                     >
-                      <Plus size={16} aria-hidden="true" /> Add cut
+                      <Plus size={16} aria-hidden="true" /> Add cut{" "}
+                      <kbd class="kbd kbd-xs" aria-hidden="true">
+                        C
+                      </kbd>
                     </button>
                   </div>
                   <div

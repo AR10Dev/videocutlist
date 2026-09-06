@@ -15,12 +15,26 @@ import { createSettingsController } from "../settings/controller";
 import { createLibraryController } from "../media/controller";
 import { createProjectsController } from "../projects/controller";
 import { createExportController } from "../export/controller";
+import { lastDestinationId } from "../export/destination";
 import { createEditorController } from "../editor/controller";
+import { createTimelineHistory } from "../editor/timeline";
+import type { AssetViewport } from "../preview/assets";
 type Media = components["schemas"]["Media"];
 const api = createApiClient(resolveBrowserConfiguration());
 
 export function createWorkspaceController() {
   const [selected, setSelected] = createSignal<Media>();
+  const [visibleTimelineRange, setVisibleTimelineRange] = createSignal<AssetViewport>({
+    startMs: 0,
+    endMs: 0,
+  });
+  let visibleRangeMediaId: string | undefined;
+  createEffect(() => {
+    const item = selected();
+    if (item?.id === visibleRangeMediaId) return;
+    visibleRangeMediaId = item?.id;
+    setVisibleTimelineRange({ startMs: 0, endMs: item?.durationMs ?? 0 });
+  });
   const [status, setStatus] = createSignal("Loading media…");
   const settingsFeature = createSettingsController(api);
   const {
@@ -60,11 +74,13 @@ export function createWorkspaceController() {
     })(),
   );
   let editorVersion = 0;
+  const selectActiveExportItem: { current?: () => void } = {};
   const markDirty = () => {
     editorVersion++;
     setDirty(true);
   };
   const previewRef: { current?: ReturnType<typeof createPreviewController> } = {};
+  const exportRef: { current?: ReturnType<typeof createExportController> } = {};
   const editorFeature = createEditorController({
     selected,
     setStatus,
@@ -72,6 +88,10 @@ export function createWorkspaceController() {
     setPreviewCenterMs: (ms) => previewRef.current?.setPreviewCenterMs(ms),
     watchedPosition: () => previewRef.current?.watchedPosition() ?? editorFeature.playheadMs(),
     togglePlayback: () => previewRef.current?.togglePlayback(),
+    playActiveSegment: (loop) => previewRef.current?.playActiveSegment(loop),
+    playOrderedSegments: () => previewRef.current?.playOrderedSegments(),
+    createClips: () => exportRef.current?.exportProject(),
+    onSegmentCommitted: () => selectActiveExportItem.current?.(),
   });
   const {
     segmentLabel,
@@ -82,6 +102,12 @@ export function createWorkspaceController() {
     setTimeline,
     activeSegmentIndex,
     setActiveSegmentIndex,
+    activeSegment,
+    editingActive,
+    editingInMs,
+    editingOutMs,
+    shortcutHelpOpen,
+    setShortcutHelpOpen,
     present,
     playheadMs,
     duration,
@@ -105,7 +131,10 @@ export function createWorkspaceController() {
     revision,
     dirty,
     setDirty,
+    editorVersion: () => editorVersion,
+    status,
     projectItems,
+    editableItems: () => editableItems(),
     segments: () => timeline().present.segments,
     tracks: () => tracks(),
     saveProject: () => projectsFeature.saveProject(),
@@ -137,12 +166,19 @@ export function createWorkspaceController() {
     setFilenameTemplate,
     preflight,
     preflightPending,
+    exportPending,
+    destinationStatus,
     exportProject,
     cancelExport,
     cancelBatch,
     cancelChildJob,
     retryChildJob,
   } = exportFeature;
+  selectActiveExportItem.current = () => {
+    const id = activeItemId();
+    if (!id) return;
+    setSelectedExportItems((ids) => (ids.includes(id) ? ids : [...ids, id]));
+  };
   const editableItems = () =>
     projectItems().map((item) =>
       item.id === activeItemId()
@@ -222,6 +258,9 @@ export function createWorkspaceController() {
   const initializedPreviewFeature = createPreviewController(api, {
     selected,
     playheadMs,
+    activeSegment,
+    segments: () => present().segments,
+    visibleRange: visibleTimelineRange,
     updatePlaybackPosition,
   });
   const {
@@ -229,16 +268,22 @@ export function createWorkspaceController() {
     previewStatus,
     thumbnailURL,
     waveform,
+    assetRange,
     setPreviewCenterMs,
     diagnostics,
     setDiagnostics,
+    playbackMode,
+    playbackIntent,
     watchedPosition,
     syncPreviewPosition,
+    handlePreviewEnded,
     setVideo,
     togglePlayback,
     pausePlayback,
+    playSegment,
   } = initializedPreviewFeature;
   previewRef.current = initializedPreviewFeature;
+  exportRef.current = exportFeature;
   const chooseMedia = (item: Media) => {
     clearDetectionContext();
     const items = editableItems();
@@ -246,13 +291,43 @@ export function createWorkspaceController() {
     if (existing) {
       setProjectItems(items);
       activateItem(existing);
-      setStatus(`Selected ${item.name}.`);
+      setStatus(`Activated ${item.name} in the project.`);
       return;
     }
-    const added = createProjectItem(item);
+    setProjectItems(items);
+    setActiveItemId();
+    setSelected(item);
+    setTimeline(createTimelineHistory({ playheadMs: 0, segments: [], zoom: 1 }));
+    setPreviewCenterMs(0);
+    setMuted(false);
+    setExportMode("separate");
+    setExportSelection("segments");
+    setStreamIndexes([]);
+    setCutStrategy(settings().cutStrategy);
+    setDestinationId(lastDestinationId() ?? "download");
+    setFilenameTemplate(settings().filenameTemplate);
+    setDiagnostics();
+    setStatus(`Previewing ${item.name}. Add it to the project to keep cuts.`);
+  };
+  const addMediaToProject = () => {
+    const item = selected();
+    if (!item) return;
+    const items = editableItems();
+    const existing = items.find((entry) => entry.media.id === item.id);
+    if (existing) {
+      activateItem(existing);
+      setStatus(`Activated ${item.name} in the project.`);
+      return;
+    }
+    const added = {
+      ...createProjectItem(item, lastDestinationId()),
+      timeline: timeline(),
+    };
     setProjectItems([...items, added]);
-    setSelectedExportItems((ids) => [...ids, added.id]);
     activateItem(added);
+    if (added.timeline.present.segments.length) {
+      setSelectedExportItems((ids) => (ids.includes(added.id) ? ids : [...ids, added.id]));
+    }
     markDirty();
     setStatus(`Added ${item.name} to the project.`);
   };
@@ -298,6 +373,10 @@ export function createWorkspaceController() {
     saveProject: () => projectsFeature.saveProject(),
     updateSegments: (segments) => updateTimeline({ segments }),
     markDirty,
+    setExportSelection: (selection) => {
+      if (exportSelection() !== selection) exportFeature.setSelection(selection);
+    },
+    onSegmentsAccepted: () => selectActiveExportItem.current?.(),
   });
   const {
     detectionJob,
@@ -309,6 +388,8 @@ export function createWorkspaceController() {
     startDetection,
     cancelDetection,
     acceptDetection,
+    rejectDetection,
+    bulkAcceptDetection,
   } = detectionFeature;
   const projectsFeature = createProjectsController({
     api,
@@ -366,6 +447,7 @@ export function createWorkspaceController() {
     setTimecode,
     thumbnailURL,
     waveform,
+    assetRange,
     setPreviewCenterMs,
     setSettings,
     appearance,
@@ -381,6 +463,8 @@ export function createWorkspaceController() {
     muted,
     setMuted,
     diagnostics,
+    playbackMode,
+    playbackIntent,
     projectId,
     setProjectId,
     projectName,
@@ -415,6 +499,8 @@ export function createWorkspaceController() {
     setFilenameTemplate,
     preflight,
     preflightPending,
+    exportPending,
+    destinationStatus,
     detectionJob,
     detectionStatus,
     setDetectionStatus,
@@ -422,8 +508,16 @@ export function createWorkspaceController() {
     setDetectionCandidates,
     timeline,
     setTimeline,
+    visibleTimelineRange,
+    setVisibleTimelineRange,
     activeSegmentIndex,
     setActiveSegmentIndex,
+    activeSegment,
+    editingActive,
+    editingInMs,
+    editingOutMs,
+    shortcutHelpOpen,
+    setShortcutHelpOpen,
     playheadMs,
     editableItems,
     activateItem,
@@ -440,10 +534,12 @@ export function createWorkspaceController() {
     libraryMessage,
     refreshMedia,
     chooseMedia,
+    addMediaToProject,
     reorderProjectItem,
     removeProjectItem,
     watchedPosition,
     syncPreviewPosition,
+    handlePreviewEnded,
     setMarker,
     addSegment,
     duration,
@@ -463,9 +559,16 @@ export function createWorkspaceController() {
     startDetection,
     cancelDetection,
     acceptDetection,
+    rejectDetection,
+    bulkAcceptDetection,
     setVideo,
     togglePlayback,
     pausePlayback,
+    playActiveSegment: initializedPreviewFeature.playActiveSegment,
+    playOrderedSegments: initializedPreviewFeature.playOrderedSegments,
+    playDetectionCandidate: playSegment,
+    undo: editorFeature.undo,
+    redo: editorFeature.redo,
   };
 }
 

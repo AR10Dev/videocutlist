@@ -8,6 +8,7 @@ export function LibraryView() {
     library,
     media,
     selected,
+    activeItemId,
     folders,
     activeFolder,
     nextCursor,
@@ -18,6 +19,7 @@ export function LibraryView() {
     refreshMedia,
     loadFolder,
     chooseMedia,
+    addMediaToProject: workspaceAddMediaToProject,
   } = useWorkspace();
   return (
     <section
@@ -26,6 +28,11 @@ export function LibraryView() {
       aria-label="Media library"
     >
       <div class="panel-heading">
+        <Show when={selected() && !activeItemId()}>
+          <button class="btn btn-primary btn-sm" onClick={() => workspaceAddMediaToProject()}>
+            Add to project
+          </button>
+        </Show>
         <Show when={selected()}>
           <button
             class="change-video btn btn-ghost btn-sm"

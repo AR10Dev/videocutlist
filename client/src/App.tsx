@@ -1,6 +1,5 @@
 import { createEffect, createSignal, onCleanup, Show } from "solid-js";
-import { Redo2, Settings, Undo2 } from "lucide-solid";
-import { redoTimeline, undoTimeline } from "./features/editor/timeline";
+import { Settings, Undo2, Redo2 } from "lucide-solid";
 import { DetectionView } from "./features/detection/DetectionView";
 import { CutsView } from "./features/editor/CutsView";
 import { EditorView } from "./features/editor/EditorView";
@@ -41,27 +40,19 @@ export function App() {
     const hasSelectedMedia = Boolean(selected());
     if (hasSelectedMedia && !hadSelectedMedia)
       queueMicrotask(() => {
-        if (dirty()) setActiveTask("cuts");
+        if (dirty() || !controller.activeItemId()) setActiveTask("cuts");
       });
     hadSelectedMedia = hasSelectedMedia;
   });
   const taskTabs = ["cuts", "project", "export", "detection"] as const;
   const [mediaOpen, setMediaOpen] = createSignal(true);
   const [tasksOpen, setTasksOpen] = createSignal(true);
-  const undo = () => {
-    if (!revision() && !controller.timeline().past.length) return;
-    const next = undoTimeline(controller.timeline());
-    controller.setTimeline(next);
-    controller.setPreviewCenterMs(next.present.playheadMs);
-    controller.markDirty();
-  };
-  const redo = () => {
-    if (!controller.timeline().future.length) return;
-    const next = redoTimeline(controller.timeline());
-    controller.setTimeline(next);
-    controller.setPreviewCenterMs(next.present.playheadMs);
-    controller.markDirty();
-  };
+  const undo = () => controller.undo();
+  const redo = () => controller.redo();
+  let shortcutClose: HTMLButtonElement | undefined;
+  createEffect(() => {
+    if (controller.shortcutHelpOpen()) queueMicrotask(() => shortcutClose?.focus());
+  });
   const moveTask = (current: (typeof taskTabs)[number], direction: number) => {
     const start = taskTabs.indexOf(current);
     for (let offset = 1; offset <= taskTabs.length; offset += 1) {
@@ -149,6 +140,107 @@ export function App() {
             </button>
           </div>
         </header>
+        <Show when={controller.shortcutHelpOpen()}>
+          <dialog
+            open
+            class="modal modal-open"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="shortcut-help-heading"
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                event.preventDefault();
+                controller.setShortcutHelpOpen(false);
+              }
+            }}
+          >
+            <div class="modal-box">
+              <h2 id="shortcut-help-heading" class="text-lg font-bold">
+                Keyboard shortcuts
+              </h2>
+              <p class="shortcut-help">
+                Shortcuts work while reviewing the timeline, not while typing.
+              </p>
+              <div
+                class="grid grid-cols-1 gap-2 sm:grid-cols-2"
+                aria-label="Keyboard shortcut reference"
+              >
+                <span>
+                  <kbd class="kbd kbd-sm">Space</kbd> Play or pause
+                </span>
+                <span>
+                  <kbd class="kbd kbd-sm">←</kbd> <kbd class="kbd kbd-sm">→</kbd> Seek one second
+                </span>
+                <span>
+                  <kbd class="kbd kbd-sm">,</kbd> <kbd class="kbd kbd-sm">.</kbd> Step one frame
+                </span>
+                <span>
+                  <kbd class="kbd kbd-sm">I</kbd> / <kbd class="kbd kbd-sm">O</kbd> Set In / Out
+                </span>
+                <span>
+                  <kbd class="kbd kbd-sm">C</kbd> Commit draft cut
+                </span>
+                <span>
+                  <kbd class="kbd kbd-sm">P</kbd> Play active cut
+                </span>
+                <span>
+                  <kbd class="kbd kbd-sm">L</kbd> Loop active cut
+                </span>
+                <span>
+                  <kbd class="kbd kbd-sm">R</kbd> Preview cuts in order
+                </span>
+                <span>
+                  <kbd class="kbd kbd-sm">B</kbd> Split active cut
+                </span>
+                <span>
+                  <kbd class="kbd kbd-sm">Delete</kbd> / <kbd class="kbd kbd-sm">Backspace</kbd>{" "}
+                  Remove active cut
+                </span>
+                <span>
+                  <kbd class="kbd kbd-sm">Ctrl/Cmd+Z</kbd> Undo
+                </span>
+                <span>
+                  <kbd class="kbd kbd-sm">Ctrl/Cmd+Y</kbd> Redo
+                </span>
+                <span>
+                  <kbd class="kbd kbd-sm">E</kbd> Create clips
+                </span>
+                <span>
+                  <kbd class="kbd kbd-sm">A</kbd> / <kbd class="kbd kbd-sm">Y</kbd> Accept detection
+                  candidate
+                </span>
+                <span>
+                  <kbd class="kbd kbd-sm">R</kbd> / <kbd class="kbd kbd-sm">X</kbd> /{" "}
+                  <kbd class="kbd kbd-sm">N</kbd> / <kbd class="kbd kbd-sm">Delete</kbd> /{" "}
+                  <kbd class="kbd kbd-sm">Backspace</kbd> Reject detection candidate
+                </span>
+                <span>
+                  <kbd class="kbd kbd-sm">Shift+/</kbd> Open this reference
+                </span>
+                <span>
+                  <kbd class="kbd kbd-sm">Esc</kbd> Leave active editing
+                </span>
+              </div>
+              <div class="modal-action">
+                <button
+                  ref={(element) => (shortcutClose = element)}
+                  class="btn btn-primary"
+                  type="button"
+                  onClick={() => controller.setShortcutHelpOpen(false)}
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+            <form method="dialog" class="modal-backdrop">
+              <button
+                type="button"
+                aria-label="Close shortcut help"
+                onClick={() => controller.setShortcutHelpOpen(false)}
+              />
+            </form>
+          </dialog>
+        </Show>
         <aside
           class="left-sidebar"
           classList={{ "is-collapsed": !mediaOpen() }}
@@ -258,7 +350,7 @@ export function App() {
                     aria-selected={activeTask() === "detection"}
                     aria-controls="detection-tabpanel"
                     tabIndex={activeTask() === "detection" ? 0 : -1}
-                    disabled={!selected()}
+                    disabled={!selected() || !controller.activeItemId()}
                     onClick={() => setActiveTask("detection")}
                     onKeyDown={(event) => {
                       if (event.key === "ArrowRight" || event.key === "ArrowDown") {

@@ -208,6 +208,7 @@ test("detection sends sensitivity settings and rejects invalid values", async ({
     });
   });
   await chooseMedia(page);
+  await page.getByRole("button", { name: "Add to project" }).click();
   await page.getByRole("tab", { name: "Detection" }).click();
   await page.getByText("Detection sensitivity").click();
   await page.getByLabel("Silence threshold (dB)").fill("-35");
@@ -222,10 +223,9 @@ test("detection sends sensitivity settings and rejects invalid values", async ({
     .toMatchObject({ kind: "silence", noiseDb: -35, minDurationMs: 750, sceneThreshold: 0.4 });
 });
 
-test("queue exposes every completed output and downloads with bearer authentication", async ({
-  page,
-}) => {
+test("queue exposes every completed output and authenticated batch downloads", async ({ page }) => {
   let authorization = "";
+  let aggregateAuthorization = "";
   await page.route(`${origin}/api/v1/batches?*`, (route) =>
     route.fulfill({
       json: {
@@ -243,10 +243,20 @@ test("queue exposes every completed output and downloads with bearer authenticat
               },
             ],
           },
+          {
+            batchId: "b_oldoutputs12345",
+            state: "failed",
+            progress: 1,
+            jobs: [{ id: "j_oldoutputs12345", type: "export", state: "failed" }],
+          },
         ],
       },
     }),
   );
+  await page.route(`${origin}/api/v1/batches/*/download`, (route) => {
+    aggregateAuthorization = route.request().headers().authorization;
+    return route.fulfill({ contentType: "application/zip", body: "archive-fixture" });
+  });
   await page.route(`${origin}/api/v1/jobs/*/outputs/*`, (route) => {
     authorization = route.request().headers().authorization;
     return route.fulfill({ contentType: "video/x-matroska", body: "output-fixture" });
@@ -254,10 +264,63 @@ test("queue exposes every completed output and downloads with bearer authenticat
   await page.goto("/");
   const queue = page.getByRole("region", { name: "Export queue" });
   await expect(queue.getByRole("link")).toHaveCount(2);
+  await expect(queue.getByText("Completed history (1)", { exact: true })).toBeVisible();
+  await expect(queue.locator("details.collapse")).not.toHaveAttribute("open", "");
+  await expect(queue.getByRole("button", { name: "Download all clips" })).toBeVisible();
+  const archiveDownload = page.waitForEvent("download");
+  await queue.getByRole("button", { name: "Download all clips" }).click();
+  expect((await archiveDownload).suggestedFilename()).toBe("videocutlist-clips.zip");
   const download = page.waitForEvent("download");
   await queue.getByRole("link", { name: "Download output 2" }).click();
   expect((await download).suggestedFilename()).toBe("second.mkv");
   expect(authorization).toBe("Bearer test-only-token");
+  expect(aggregateAuthorization).toBe("Bearer test-only-token");
+});
+
+test("server-folder completion names the safe destination without download actions", async ({
+  page,
+}) => {
+  await page.route(`${origin}/api/v1/batches?*`, (route) =>
+    route.fulfill({
+      json: {
+        items: [
+          {
+            batchId: "b_archive12345678",
+            state: "succeeded",
+            progress: 1,
+            jobs: [
+              {
+                id: "j_archive12345678",
+                type: "export",
+                state: "succeeded",
+                result: {
+                  destinationId: "archive",
+                  destinationKind: "archive",
+                  outputName: "clip.mkv",
+                  sizeBytes: 12,
+                  retainUntil: "2026-08-21T12:00:00Z",
+                },
+              },
+            ],
+          },
+        ],
+      },
+    }),
+  );
+  await page.route(`${origin}/api/v1/destinations`, (route) =>
+    route.fulfill({
+      json: {
+        destinations: [
+          { id: "archive", label: "Review archive", kind: "archive", retention: "durable" },
+        ],
+      },
+    }),
+  );
+  await page.goto("/");
+  const queue = page.getByRole("region", { name: "Export queue" });
+  await expect(queue.getByText("Clips created in Review archive.", { exact: true })).toBeVisible();
+  await expect(queue.getByRole("button", { name: "Download all clips" })).toHaveCount(0);
+  await expect(queue.getByRole("link")).toHaveCount(0);
 });
 
 test("server processing inputs are disabled during saves instead of dropping edits", async ({
@@ -309,6 +372,7 @@ test("cut labels and per-row split work without invisible menu inputs", async ({
 
 test("a multi-item JSON cut list restores as a new unsaved project", async ({ page }) => {
   await chooseMedia(page);
+  await page.getByRole("button", { name: "Add to project" }).click();
   await page.getByRole("tab", { name: "Project", exact: true }).click();
   await page.getByText("Interchange", { exact: true }).click();
   page.on("dialog", (dialog) => void dialog.accept());

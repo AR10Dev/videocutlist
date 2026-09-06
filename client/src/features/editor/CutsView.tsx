@@ -1,5 +1,5 @@
 import { For, Show } from "solid-js";
-import { ArrowDown, ArrowUp, Scissors, Trash2 } from "lucide-solid";
+import { ArrowDown, ArrowUp, Play, Repeat2, Scissors, Trash2 } from "lucide-solid";
 import { formatTime } from "../preview/model";
 import { useWorkspace } from "../app/WorkspaceContext";
 
@@ -100,6 +100,34 @@ export function CutsView() {
                   </button>
                 </div>
                 <div class="cut-actions">
+                  <button
+                    class="btn btn-ghost btn-xs"
+                    aria-label={`Play cut ${index() + 1}`}
+                    aria-keyshortcuts="P"
+                    onClick={() => {
+                      workspace.setActiveSegmentIndex(index());
+                      workspace.playActiveSegment(false);
+                    }}
+                  >
+                    <Play size={14} aria-hidden="true" /> Play{" "}
+                    <kbd class="kbd kbd-xs" aria-hidden="true">
+                      P
+                    </kbd>
+                  </button>
+                  <button
+                    class="btn btn-ghost btn-xs"
+                    aria-label={`Loop cut ${index() + 1}`}
+                    aria-keyshortcuts="L"
+                    onClick={() => {
+                      workspace.setActiveSegmentIndex(index());
+                      workspace.playActiveSegment(true);
+                    }}
+                  >
+                    <Repeat2 size={14} aria-hidden="true" /> Loop{" "}
+                    <kbd class="kbd kbd-xs" aria-hidden="true">
+                      L
+                    </kbd>
+                  </button>
                   <button
                     class="btn btn-ghost btn-xs"
                     onClick={() => {

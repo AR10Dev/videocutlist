@@ -1,6 +1,7 @@
 import { createSignal, For, Show } from "solid-js";
 import { formatTime, hybridSmartCutKnownIneligible } from "../preview/model";
 import { useWorkspace } from "../app/WorkspaceContext";
+import { BatchDownload } from "./BatchDownload";
 import { OutputDownload } from "./OutputDownload";
 import { summarizeExports } from "./summary";
 
@@ -17,6 +18,8 @@ export function ExportView() {
     batchId,
     exportRevision,
     exportStatus,
+    exportPending,
+    destinationStatus,
     exportMode,
     exportSelection,
     cutStrategy,
@@ -57,9 +60,7 @@ export function ExportView() {
     if (!selected()) return "Choose a video before exporting.";
     if (!selectedExportItems().length) return "Select at least one project item.";
     const needsSegment = Boolean(emptyItem());
-    if (needsSegment && dirty()) return "Add a segment and save the project before exporting.";
-    if (needsSegment) return "Add a segment before exporting.";
-    if (dirty()) return "Save the project before exporting.";
+    if (needsSegment) return "Add a segment before creating clips.";
     if (preflightPending()) return "Checking export requirements…";
     if (preflight() && !preflight()!.allowed) {
       const finding = preflight()!.findings[0];
@@ -96,6 +97,14 @@ export function ExportView() {
       </div>
 
       <Show when={blocker()}>
+        {(message) => (
+          <p class="export-state" role="status">
+            {message()}
+          </p>
+        )}
+      </Show>
+
+      <Show when={destinationStatus()}>
         {(message) => (
           <p class="export-state" role="status">
             {message()}
@@ -157,22 +166,23 @@ export function ExportView() {
       </Show>
 
       <div class="controls export-actions">
+        <span class="shortcut-help" aria-label="Create clips shortcut">
+          Create clips <kbd class="kbd kbd-xs">E</kbd>
+        </span>
         <button
           class="btn btn-primary btn-sm"
           disabled={
             !selected() ||
-            dirty() ||
             !selectedExportItems().length ||
             Boolean(emptyItem()) ||
+            exportPending() ||
             exportActive() ||
-            (projectItems().length === 1 && preflightPending()) ||
-            (projectItems().length === 1 && !preflight()?.allowed)
+            preflightPending() ||
+            Boolean(preflight() && !preflight()!.allowed)
           }
           onClick={() => void exportProject()}
         >
-          {selectedExportItems().length === 1
-            ? "Export item"
-            : `Export ${selectedExportItems().length} items`}
+          Create clips
         </button>
         <Show when={exportActive()}>
           <button class="btn btn-ghost btn-sm" onClick={() => void cancelExport()}>
@@ -352,6 +362,25 @@ export function ExportView() {
               exportJob()!.result!.destinationKind === "download"
             }
           >
+            <Show
+              when={
+                batchId() &&
+                (
+                  exportJob()!.result!.outputNames ??
+                  (exportJob()!.result!.outputName ? [exportJob()!.result!.outputName] : [])
+                ).length > 1
+              }
+            >
+              <BatchDownload
+                batchId={batchId()!}
+                outputCount={
+                  (
+                    exportJob()!.result!.outputNames ??
+                    (exportJob()!.result!.outputName ? [exportJob()!.result!.outputName] : [])
+                  ).length
+                }
+              />
+            </Show>
             <For
               each={
                 exportJob()!.result!.outputNames ??
@@ -366,6 +395,20 @@ export function ExportView() {
                 />
               )}
             </For>
+          </Show>
+          <Show
+            when={
+              exportJob()!.state === "succeeded" &&
+              exportJob()!.result!.destinationKind !== undefined &&
+              exportJob()!.result!.destinationKind !== "download"
+            }
+          >
+            <p role="status">
+              Clips created in{" "}
+              {destinations().find((item) => item.id === exportJob()!.result!.destinationId)
+                ?.label ?? "the configured server destination"}
+              .
+            </p>
           </Show>
           <div aria-label="Export warnings">
             <For each={exportJob()!.warnings ?? []}>

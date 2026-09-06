@@ -34,11 +34,20 @@ export function ProjectsView() {
   } = useWorkspace();
   return (
     <Show
-      when={selected()}
+      when={selected() && activeItemId()}
       fallback={
         <section class="project-panel" aria-labelledby="project-heading">
           <h2 id="project-heading">Project</h2>
-          <p>Choose a video from the Media library to start a project.</p>
+          <Show
+            when={selected()}
+            fallback={<p>Choose a video from the Media library to start a project.</p>}
+          >
+            {(item) => (
+              <p role="status">
+                Previewing {item().name}; add it to the project before creating or saving cuts.
+              </p>
+            )}
+          </Show>
           <ProjectBrowser />
           <Show when={status().startsWith("Project") || status().startsWith("Media request")}>
             <p role="status">{status()}</p>

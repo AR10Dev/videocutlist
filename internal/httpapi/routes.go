@@ -46,6 +46,7 @@ const (
 	routePutSettings
 	routeRefreshSettings
 	routeDownloadOutput
+	routeDownloadBatch
 	routeListBatches
 	routeGetBatch
 	routeCancelBatch
@@ -66,7 +67,7 @@ func RouteCoverageKinds() []string {
 		"list_projects", "get_project", "put_project", "create_export", "preflight_export",
 		"import_interchange", "export_interchange", "create_detection", "get_job", "cancel_job",
 		"automation", "list_destinations", "get_settings", "put_settings", "refresh_settings",
-		"download_output", "list_batches", "get_batch", "cancel_batch", "retry_job",
+		"download_output", "download_batch", "list_batches", "get_batch", "cancel_batch", "retry_job",
 	}
 }
 
@@ -149,6 +150,8 @@ func parseRoute(method, path string) route {
 		return route{kind: routeGetJob, id: parts[1]}
 	case len(parts) == 4 && parts[0] == "jobs" && validJobID(parts[1]) && parts[2] == "outputs" && method == http.MethodGet:
 		return route{kind: routeDownloadOutput, id: parts[1] + ":" + parts[3]}
+	case len(parts) == 3 && parts[0] == "batches" && validBatchID(parts[1]) && parts[2] == "download" && method == http.MethodGet:
+		return route{kind: routeDownloadBatch, id: parts[1]}
 	case len(parts) == 2 && parts[0] == "jobs" && validJobID(parts[1]) && method == http.MethodDelete:
 		return route{kind: routeCancelJob, id: parts[1]}
 	case len(parts) == 3 && parts[0] == "jobs" && validJobID(parts[1]) && parts[2] == "retry" && method == http.MethodPost:

@@ -40,7 +40,14 @@ async function loadProject(page: Page, id: string) {
   }
 }
 
+async function addSelectedMediaToProject(page: Page) {
+  await page.waitForTimeout(0);
+  const add = page.getByRole("button", { name: "Add to project" });
+  if (await add.isVisible()) await add.click();
+}
+
 async function saveProject(page: Page) {
+  await addSelectedMediaToProject(page);
   await openTask(page, "Project");
   await page.getByRole("button", { name: "Save project" }).click();
   await expect(page.getByText(/Project saved \(revision \d+\)\./)).toBeVisible();
@@ -304,6 +311,7 @@ test("task tabs expose selection, association, and keyboard navigation", async (
   const detection = page.getByRole("tab", { name: "Detection", exact: true });
   await expect(detection).toBeDisabled();
   await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await addSelectedMediaToProject(page);
   await expect(detection).toBeEnabled();
   const cuts = page.getByRole("tab", { name: "Cuts", exact: true });
   const project = page.getByRole("tab", { name: "Project", exact: true });
@@ -348,6 +356,101 @@ test("segment rows show values and support reorder and removal", async ({ page }
   await expect(rows.nth(0)).toContainText("00:00.100");
 });
 
+test("keyboard editing keeps drafts separate from active cuts and is discoverable", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: /camera.mp4/ }).click();
+  const playhead = page.getByLabel("Timeline playhead");
+  const create = async (start: number, end: number) => {
+    await playhead.fill(String(start));
+    await page.locator("body").press("i");
+    await playhead.fill(String(end));
+    await page.locator("body").press("o");
+    await page.locator("body").press("c");
+  };
+
+  await create(100, 700);
+  await page.keyboard.press("Escape");
+  await create(800, 900);
+  const rows = page.getByRole("list", { name: "Selected cuts" }).getByRole("listitem");
+  await expect(rows).toHaveCount(2);
+
+  await rows.nth(0).getByRole("button", { name: "Select cut 1" }).click();
+  await playhead.fill("400");
+  await page.keyboard.press("i");
+  await expect(page.getByLabel("In point")).toHaveValue("00:00.400");
+  await playhead.fill("850");
+  await page.keyboard.press("o");
+  await expect(page.getByText(/overlap another cut/)).toBeVisible();
+
+  await playhead.fill("500");
+  await page.keyboard.press("b");
+  await expect(rows).toHaveCount(3);
+  await page.keyboard.press("Delete");
+  await expect(rows).toHaveCount(2);
+  await page.keyboard.press("Control+z");
+  await expect(rows).toHaveCount(3);
+  await page.keyboard.press("Control+y");
+  await expect(rows).toHaveCount(2);
+
+  await page.keyboard.press("Shift+/");
+  await expect(page.getByRole("heading", { name: "Keyboard shortcuts" })).toBeVisible();
+  await expect(page.getByText("Preview selected segments", { exact: false })).toHaveCount(0);
+  await page.getByRole("button", { name: "Close", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Keyboard shortcuts" })).toHaveCount(0);
+});
+
+test("active, looping, and ordered segment preview use bounded modes", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: /camera.mp4/ }).click();
+  const playhead = page.getByLabel("Timeline playhead");
+  const create = async (start: number, end: number) => {
+    await playhead.fill(String(start));
+    await page.locator("body").press("i");
+    await playhead.fill(String(end));
+    await page.locator("body").press("o");
+    await page.locator("body").press("c");
+  };
+  await create(100, 700);
+  await page.keyboard.press("Escape");
+  await create(800, 1200);
+
+  const video = page.getByLabel("Preview player");
+  await video.evaluate((element) => {
+    const player = element as HTMLVideoElement;
+    player.play = () => Promise.resolve();
+    player.pause = () => undefined;
+  });
+  const firstRow = page.getByRole("list", { name: "Selected cuts" }).getByRole("listitem").nth(0);
+  await firstRow.getByRole("button", { name: "Play cut 1" }).click();
+  await expect(video).toHaveAttribute("data-playback-mode", "active-segment");
+  await expect(video).toHaveAttribute("data-playback-intent", "playing");
+  await expect(video).toHaveAttribute("data-preview-offset", "100");
+  await video.evaluate((element) => {
+    const player = element as HTMLVideoElement;
+    player.currentTime = 0.7;
+    player.dispatchEvent(new Event("timeupdate"));
+  });
+  await expect(playhead).toHaveValue("700");
+  await expect(video).toHaveAttribute("data-playback-intent", "paused");
+
+  await firstRow.getByRole("button", { name: "Loop cut 1" }).click();
+  await expect(video).toHaveAttribute("data-playback-mode", "active-segment-loop");
+  await expect(video).toHaveAttribute("data-preview-offset", "100");
+  await video.evaluate((element) => {
+    const player = element as HTMLVideoElement;
+    player.currentTime = 0.7;
+    player.dispatchEvent(new Event("timeupdate"));
+  });
+  await expect(playhead).toHaveValue("100");
+  await expect(video).toHaveAttribute("data-playback-intent", "playing");
+
+  await page.getByRole("button", { name: "Preview selected segments" }).click();
+  await expect(video).toHaveAttribute("data-playback-mode", "ordered-segments");
+  await expect(video).toHaveAttribute("data-playback-intent", "playing");
+});
+
 test("header distinguishes unsaved, dirty, and saved project states", async ({ page }) => {
   await page.goto("/");
   const status = page.locator("header").getByLabel("Project status");
@@ -361,7 +464,7 @@ test("header distinguishes unsaved, dirty, and saved project states", async ({ p
   await expect(status).toContainText("Untitled project");
   await expect(status).toContainText("Saved");
   await page.getByLabel("Timeline playhead").fill("200");
-  await expect(status).toContainText("Unsaved changes");
+  await expect(status).toContainText("Saved");
 });
 
 test("browser theme selection persists and keeps focusable controls readable", async ({ page }) => {
@@ -438,6 +541,7 @@ test("edits independent project items and submits a durable batch", async ({ pag
 
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await addSelectedMediaToProject(page);
   await page.getByLabel("Timeline playhead").fill("100");
   await page.getByRole("button", { name: "Set in" }).click();
   await page.getByLabel("Timeline playhead").fill("700");
@@ -445,6 +549,7 @@ test("edits independent project items and submits a durable batch", async ({ pag
   await page.getByRole("button", { name: "Add segment" }).click();
 
   await page.getByRole("button", { name: /second.mp4/ }).click();
+  await addSelectedMediaToProject(page);
   await page.getByLabel("Timeline playhead").fill("200");
   await page.getByRole("button", { name: "Set in" }).click();
   await page.getByLabel("Timeline playhead").fill("800");
@@ -471,11 +576,11 @@ test("edits independent project items and submits a durable batch", async ({ pag
   await openTask(page, "Export");
   await expect(page.getByLabel("Export summary")).toContainText("2 items · 2 segments · 00:01.200");
   await page.getByText("Export options", { exact: true }).click();
+  await page.getByLabel("Mode").selectOption("merge");
   await page.getByLabel("Mode").selectOption("separate");
-  await expect(page.getByText("Save the project before exporting.")).toBeVisible();
   await saveProject(page);
   await openTask(page, "Export");
-  await page.getByRole("button", { name: /^Export (item|\d+ items)$/ }).click();
+  await page.getByRole("button", { name: "Create clips" }).click();
   await expect.poll(() => exportBody).toBeTruthy();
   const exportedItems = savedBody?.items as Array<{
     mediaId: string;
@@ -486,6 +591,7 @@ test("edits independent project items and submits a durable batch", async ({ pag
   );
   expect(exportBody?.itemIds).toBeUndefined();
   await expect(page.getByRole("heading", { name: "Export queue" })).toBeVisible();
+  await page.getByText("Job details", { exact: true }).click();
   await expect(page.getByText(/camera.mp4 · queued/)).toBeVisible();
 });
 
@@ -539,6 +645,7 @@ test("restores the durable queue and retries a failed child as a new job", async
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Export queue" })).toBeVisible();
   await expect(page.getByText("b_failedqueue01", { exact: false })).toHaveCount(0);
+  await page.getByText("Job details", { exact: true }).click();
   await expect(page.getByText(/camera.mp4 · failed · 100% · source_changed/)).toBeVisible();
   await page.getByRole("button", { name: "Retry" }).click();
   await expect.poll(() => retried).toBe(true);
@@ -594,6 +701,7 @@ test("reload restores the active project and permits child and batch cancellatio
   await expect(projectDetails).toBeVisible();
   await expect(projectDetails).not.toHaveAttribute("open", "");
   const restored = page.getByRole("article", { name: "Export batch 1" });
+  await restored.getByText("Job details", { exact: true }).click();
   await restored.getByRole("button", { name: "Cancel job" }).click();
   await expect.poll(() => childCancelled).toBe(true);
   await restored.getByRole("button", { name: "Cancel batch" }).click();
@@ -636,29 +744,87 @@ test("keeps the inspector contextual until media is selected", async ({ page }) 
   await expect(page.getByRole("tab", { name: "Detection", exact: true })).toBeVisible();
 });
 
-test("detection polls, presents candidates, and supports reject and accept", async ({ page }) => {
+test("detection polls, previews, and supports sequential keyboard review", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await page.getByRole("button", { name: "Add to project" }).click();
   await openTask(page, "Detection");
   await page.getByRole("button", { name: "Find silence" }).click();
   await expect(page.getByText("Detection running.")).toBeVisible();
   await expect(page.getByText(/1 candidates found/)).toBeVisible();
+  await page.getByRole("button", { name: "Preview candidate 1" }).click();
+  await expect(page.getByLabel("Preview player")).toHaveAttribute(
+    "data-playback-mode",
+    "active-segment",
+  );
+  await expect(page.getByLabel("Preview player")).toHaveAttribute("data-preview-offset", "1000");
   await page.getByRole("button", { name: "Dismiss" }).click();
   await expect(page.getByText("Candidate dismissed.")).toBeVisible();
   await page.getByRole("button", { name: "Find silence" }).click();
   await expect(page.getByText(/1 candidates found/)).toBeVisible();
-  await page
-    .getByLabel("Detection candidates")
-    .getByRole("button", { name: "Add segment" })
-    .click();
+  await page.getByLabel("Detection candidates").getByRole("listitem").focus();
+  await page.keyboard.press("a");
   await expect(page.getByText("Candidate accepted; save the project to persist it.")).toBeVisible();
   await openTask(page, "Cuts");
   await expect(page.getByText(/1 selected/)).toBeVisible();
 });
 
+test("bulk detection acceptance skips unsafe candidates and undoes as one edit", async ({
+  page,
+}) => {
+  await page.route(`${apiOrigin}/api/v1/projects/*/detections`, (route) => {
+    const projectId = new URL(route.request().url()).pathname.split("/")[4];
+    const candidate = (id: string, startMs: number, endMs: number, projectRevision = 1) => ({
+      id,
+      mediaId: media.id,
+      projectId,
+      projectRevision,
+      startMs,
+      endMs,
+      source: "scene",
+      confidence: 0.9,
+    });
+    return route.fulfill({
+      status: 202,
+      json: {
+        id: "j_detection-review",
+        type: "detection",
+        state: "succeeded",
+        mediaId: media.id,
+        projectId,
+        projectRevision: 1,
+        kind: "scene",
+        candidates: [
+          candidate("c_review-valid-1", 1000, 1500),
+          candidate("c_review-valid-2", 2000, 2500),
+          candidate("c_review-overlap", 1200, 1600),
+          candidate("c_review-stale", 3000, 3500, 0),
+          candidate("c_review-invalid", 4000, 11000),
+        ],
+      },
+    });
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await page.getByRole("button", { name: "Add to project" }).click();
+  await openTask(page, "Detection");
+  await page.getByRole("button", { name: "Split into scenes" }).click();
+  await expect(page.getByText(/5 candidates found/)).toBeVisible();
+  await page.once("dialog", (dialog) => void dialog.accept());
+  await page.getByRole("button", { name: "Accept all valid" }).click();
+  await expect(
+    page.getByText(/Accepted 2 candidates; skipped 1 stale, 1 invalid, 1 overlapping/),
+  ).toBeVisible();
+  await openTask(page, "Cuts");
+  await expect(page.getByText(/2 selected/)).toBeVisible();
+  await page.getByRole("button", { name: "Undo" }).click();
+  await expect(page.getByText(/0 selected/)).toBeVisible();
+});
+
 test("detection can be cancelled and reports failed jobs", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await page.getByRole("button", { name: "Add to project" }).click();
   await openTask(page, "Detection");
   await page.getByRole("button", { name: "Find silence" }).click();
   await expect(page.getByRole("button", { name: "Cancel detection" })).toBeVisible();
@@ -706,6 +872,7 @@ test("clears detection results when media context changes", async ({ page }) => 
   });
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await page.getByRole("button", { name: "Add to project" }).click();
   await openTask(page, "Detection");
   await page.getByRole("button", { name: "Find silence" }).click();
   await expect(page.getByRole("button", { name: "Cancel detection" })).toBeVisible();
@@ -717,7 +884,9 @@ test("clears detection results when media context changes", async ({ page }) => 
   await expect(page.getByText(/candidates found/)).toHaveCount(0);
 });
 
-test("loads timeline assets through independent fixture routes", async ({ page }) => {
+test("loads timeline assets for the visible range and keeps editing available on media changes", async ({
+  page,
+}) => {
   const requests: string[] = [];
   page.on("request", (request) => {
     if (request.url().includes("/thumbnails") || request.url().includes("/waveform"))
@@ -727,9 +896,34 @@ test("loads timeline assets through independent fixture routes", async ({ page }
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   await expect(page.getByRole("group", { name: /Timeline/ })).toBeVisible();
   await expect(page.getByText("No cuts selected.", { exact: true })).toBeVisible();
-  expect(requests.some((url) => url.includes("/thumbnails?"))).toBeTruthy();
-  expect(requests.some((url) => url.includes("/waveform?"))).toBeTruthy();
+  await expect.poll(() => requests.some((url) => url.includes("/thumbnails?"))).toBeTruthy();
+  await expect.poll(() => requests.some((url) => url.includes("/waveform?"))).toBeTruthy();
+  const initialDuration = Number(
+    new URL(requests.find((url) => url.includes("/waveform?"))!).searchParams.get("durationMs"),
+  );
+  expect(initialDuration).toBe(10_000);
   await expect(page.locator("canvas.timeline-canvas")).toBeVisible();
+  await page.getByRole("button", { name: "Zoom in" }).click();
+  await expect
+    .poll(() =>
+      requests.some(
+        (url) =>
+          url.includes("/waveform?") &&
+          Number(new URL(url).searchParams.get("durationMs")) < initialDuration,
+      ),
+    )
+    .toBeTruthy();
+  await page.locator(".timeline-scroll").evaluate((element) => {
+    element.scrollLeft = element.scrollWidth;
+    element.dispatchEvent(new Event("scroll"));
+  });
+  await expect
+    .poll(() =>
+      requests.some(
+        (url) => url.includes("/waveform?") && Number(new URL(url).searchParams.get("startMs")) > 0,
+      ),
+    )
+    .toBeTruthy();
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: /second.mp4/ }).click();
   await expect(page.locator("canvas.timeline-canvas")).toHaveCount(1);
@@ -859,6 +1053,239 @@ test("keeps an exact timeline seek while the paused preview settles", async ({ p
   await expect(playhead).toHaveValue("2000");
 });
 
+test("renews whole-media playback without dirtying viewing state and honors pause", async ({
+  page,
+}) => {
+  const previewRequests: string[] = [];
+  let renewalStartedResolve!: () => void;
+  const renewalStarted = new Promise<void>((resolve) => {
+    renewalStartedResolve = resolve;
+  });
+  let releaseRenewal!: () => void;
+  const renewalReleased = new Promise<void>((resolve) => {
+    releaseRenewal = resolve;
+  });
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname.endsWith("/preview")) previewRequests.push(request.url());
+  });
+  await page.route(`${apiOrigin}/api/v1/media/${media.id}/preview**`, async (route) => {
+    const url = new URL(route.request().url());
+    const center = url.searchParams.get("centerMs") ?? "0";
+    if (center === "7250") {
+      renewalStartedResolve();
+      await renewalReleased;
+    }
+    return route.fulfill({
+      headers: {
+        "content-type": "video/mp4",
+        "Access-Control-Expose-Headers":
+          "X-Preview-Start, X-Preview-Duration, X-Preview-Offset, X-Preview-Cache, X-Request-ID",
+        "X-Preview-Start": "0",
+        "X-Preview-Duration": "8000",
+        "X-Preview-Offset": center,
+        "X-Preview-Cache": "hit",
+        "X-Request-ID": `preview-${center}`,
+      },
+      body: "fragment",
+    });
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await saveProject(page);
+  const video = page.getByLabel("Preview player");
+  await video.evaluate((element) => {
+    const player = element as HTMLVideoElement;
+    player.play = () => Promise.resolve();
+    player.pause = () => undefined;
+  });
+  await expect.poll(() => previewRequests.length).toBe(1);
+  await expect(video).toHaveAttribute("data-playback-mode", "whole-media");
+  await page.getByLabel("Preview volume").fill("0.35");
+  await page.getByRole("button", { name: "Mute preview" }).click();
+  await page.getByRole("button", { name: "Play preview" }).click();
+  await expect(video).toHaveAttribute("data-playback-intent", "playing");
+  await video.evaluate((element) => {
+    const player = element as HTMLVideoElement;
+    player.currentTime = 7.25;
+    player.dispatchEvent(new Event("timeupdate"));
+  });
+  await expect(page.getByLabel("Timeline playhead")).toHaveValue("7250");
+  await renewalStarted;
+  await expect(page.getByRole("button", { name: "Pause preview" })).toBeVisible();
+  await page.getByRole("button", { name: "Pause preview" }).click();
+  await expect(page.getByRole("button", { name: "Play preview" })).toBeVisible();
+  releaseRenewal();
+  await expect.poll(() => previewRequests.length).toBe(2);
+  await expect(video).toHaveAttribute("data-preview-offset", "7250");
+  await expect(video).toHaveAttribute("data-playback-intent", "paused");
+  expect(await video.evaluate((element) => (element as HTMLVideoElement).volume)).toBe(0.35);
+  await expect(video).toHaveJSProperty("muted", true);
+  await page.getByRole("button", { name: "Zoom in" }).click();
+  await expect(page.locator("header").getByLabel("Project status")).toContainText("Saved");
+  await expect(page.getByRole("button", { name: "Undo" })).toBeDisabled();
+  expect(new URL(previewRequests[1]).searchParams.get("centerMs")).toBe("7250");
+});
+
+test("ignores a stale renewal response after a manual seek", async ({ page }) => {
+  const previewRequests: string[] = [];
+  let renewalStartedResolve!: () => void;
+  const renewalStarted = new Promise<void>((resolve) => {
+    renewalStartedResolve = resolve;
+  });
+  let releaseRenewal!: () => void;
+  const renewalReleased = new Promise<void>((resolve) => {
+    releaseRenewal = resolve;
+  });
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname.endsWith("/preview")) previewRequests.push(request.url());
+  });
+  await page.route(`${apiOrigin}/api/v1/media/${media.id}/preview**`, async (route) => {
+    const url = new URL(route.request().url());
+    const center = url.searchParams.get("centerMs") ?? "0";
+    if (center === "7250") {
+      renewalStartedResolve();
+      await renewalReleased;
+    }
+    return route.fulfill({
+      headers: {
+        "content-type": "video/mp4",
+        "Access-Control-Expose-Headers":
+          "X-Preview-Start, X-Preview-Duration, X-Preview-Offset, X-Preview-Cache, X-Request-ID",
+        "X-Preview-Start": "0",
+        "X-Preview-Duration": "8000",
+        "X-Preview-Offset": center,
+        "X-Preview-Cache": "hit",
+        "X-Request-ID": `preview-${center}`,
+      },
+      body: "fragment",
+    });
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: /camera.mp4/ }).click();
+  const video = page.getByLabel("Preview player");
+  await video.evaluate((element) => {
+    const player = element as HTMLVideoElement;
+    player.play = () => Promise.resolve();
+    player.pause = () => undefined;
+  });
+  await expect.poll(() => previewRequests.length).toBe(1);
+  await page.getByRole("button", { name: "Play preview" }).click();
+  await video.evaluate((element) => {
+    const player = element as HTMLVideoElement;
+    player.currentTime = 7.25;
+    player.dispatchEvent(new Event("timeupdate"));
+  });
+  await renewalStarted;
+  const playhead = page.getByLabel("Timeline playhead");
+  await playhead.fill("3000");
+  await expect
+    .poll(() =>
+      previewRequests.some((request) => new URL(request).searchParams.get("centerMs") === "3000"),
+    )
+    .toBeTruthy();
+  releaseRenewal();
+  await expect(video).toHaveAttribute("data-preview-offset", "3000");
+  await expect(playhead).toHaveValue("3000");
+  expect(new URL(previewRequests.at(-1)!).searchParams.get("centerMs")).toBe("3000");
+});
+
+test("stops whole-media playback at media duration after the final window", async ({ page }) => {
+  const previewRequests: string[] = [];
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname.endsWith("/preview")) previewRequests.push(request.url());
+  });
+  await page.route(`${apiOrigin}/api/v1/media/${media.id}/preview**`, (route) => {
+    const url = new URL(route.request().url());
+    const center = url.searchParams.get("centerMs") ?? "0";
+    const finalWindow = center === "8000";
+    return route.fulfill({
+      headers: {
+        "content-type": "video/mp4",
+        "Access-Control-Expose-Headers":
+          "X-Preview-Start, X-Preview-Duration, X-Preview-Offset, X-Preview-Cache, X-Request-ID",
+        "X-Preview-Start": finalWindow ? "6000" : "0",
+        "X-Preview-Duration": finalWindow ? "4000" : "8000",
+        "X-Preview-Offset": finalWindow ? "2000" : center,
+        "X-Preview-Cache": "hit",
+        "X-Request-ID": `preview-${center}`,
+      },
+      body: "fragment",
+    });
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: /camera.mp4/ }).click();
+  const video = page.getByLabel("Preview player");
+  await video.evaluate((element) => {
+    const player = element as HTMLVideoElement;
+    player.play = () => Promise.resolve();
+    player.pause = () => undefined;
+  });
+  await expect.poll(() => previewRequests.length).toBe(1);
+  await page.getByRole("button", { name: "Play preview" }).click();
+  await video.evaluate((element) => {
+    const player = element as HTMLVideoElement;
+    player.currentTime = 8;
+    player.dispatchEvent(new Event("timeupdate"));
+  });
+  await expect.poll(() => previewRequests.length).toBe(2);
+  await expect(video).toHaveAttribute("data-preview-offset", "2000");
+  await video.evaluate((element) => {
+    const player = element as HTMLVideoElement;
+    player.currentTime = 4;
+    player.dispatchEvent(new Event("timeupdate"));
+    player.dispatchEvent(new Event("ended"));
+  });
+  await expect(page.getByRole("button", { name: "Play preview" })).toBeVisible();
+  await expect(page.getByLabel("Timeline playhead")).toHaveValue("10000");
+  await expect(video).toHaveAttribute("data-playback-intent", "paused");
+  expect(previewRequests).toHaveLength(2);
+});
+
+test("pauses and explains a failed whole-media renewal", async ({ page }) => {
+  const previewRequests: string[] = [];
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname.endsWith("/preview")) previewRequests.push(request.url());
+  });
+  await page.route(`${apiOrigin}/api/v1/media/${media.id}/preview**`, (route) => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.get("centerMs") === "7500") return route.fulfill({ status: 500 });
+    return route.fulfill({
+      headers: {
+        "content-type": "video/mp4",
+        "Access-Control-Expose-Headers":
+          "X-Preview-Start, X-Preview-Duration, X-Preview-Offset, X-Preview-Cache, X-Request-ID",
+        "X-Preview-Start": "0",
+        "X-Preview-Duration": "8000",
+        "X-Preview-Offset": url.searchParams.get("centerMs") ?? "0",
+      },
+      body: "fragment",
+    });
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: /camera.mp4/ }).click();
+  const video = page.getByLabel("Preview player");
+  await video.evaluate((element) => {
+    const player = element as HTMLVideoElement;
+    player.play = () => Promise.resolve();
+    player.pause = () => undefined;
+  });
+  await expect.poll(() => previewRequests.length).toBe(1);
+  await page.getByRole("button", { name: "Play preview" }).click();
+  await video.evaluate((element) => {
+    const player = element as HTMLVideoElement;
+    player.currentTime = 7.5;
+    player.dispatchEvent(new Event("timeupdate"));
+  });
+  await expect(
+    page.getByText(
+      "Preview request failed. Try again. Timeline markers remain available for editing.",
+    ),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "Play preview" })).toBeVisible();
+  await expect(page.getByLabel("Timeline playhead")).toHaveValue("7500");
+  expect(previewRequests).toHaveLength(2);
+});
+
 test("shows a safe preview request failure", async ({ page }) => {
   await page.route(`${apiOrigin}/api/v1/media/${media.id}/preview**`, (route) =>
     route.fulfill({ status: 500 }),
@@ -899,6 +1326,7 @@ test("save reports an optimistic revision conflict", async ({ page }) => {
   );
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await addSelectedMediaToProject(page);
   await openTask(page, "Project");
   await page.getByRole("button", { name: "Save project" }).click();
   await expect(page.getByText(/Load latest before saving/)).toBeVisible();
@@ -911,7 +1339,7 @@ test("exports the saved segments, polls to a safe result, and shows warnings", a
   await page.route(`${apiOrigin}/api/v1/projects/*/exports`, async (route) => {
     expect(route.request().method()).toBe("POST");
     expect(route.request().postDataJSON()).toEqual({
-      mode: "merge",
+      mode: "separate",
       selection: "segments",
       streamIndexes: [],
       cutStrategy: "stream_copy_preferred",
@@ -958,7 +1386,7 @@ test("exports the saved segments, polls to a safe result, and shows warnings", a
   await page.getByRole("button", { name: "Add segment" }).click();
   await saveProject(page);
   await openTask(page, "Export");
-  await page.getByRole("button", { name: /^Export (item|\d+ items)$/ }).click();
+  await page.getByRole("button", { name: "Create clips" }).click();
   await expect(page.getByText(/Export (queued|running)\./)).toBeVisible();
   await expect(page.getByRole("link", { name: "Download output 1" })).toHaveCount(0);
   await expect(page.getByText("Export complete.")).toBeVisible({
@@ -996,6 +1424,13 @@ test("reviews preflight blockers and only enables eligible downloads", async ({ 
   });
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await addSelectedMediaToProject(page);
+  await page.getByLabel("Timeline playhead").fill("100");
+  await page.getByRole("button", { name: "Set in" }).click();
+  await page.getByLabel("Timeline playhead").fill("700");
+  await page.getByRole("button", { name: "Set out" }).click();
+  await page.getByRole("button", { name: "Add segment" }).click();
+  await saveProject(page);
   await openTask(page, "Export");
   await page.getByText("Export options", { exact: true }).click();
   await expect(page.getByLabel("Destination")).toHaveValue("download");
@@ -1003,6 +1438,8 @@ test("reviews preflight blockers and only enables eligible downloads", async ({ 
   await expect(page.getByText("Audio: aac")).toBeVisible();
   await expect(page.getByText("Subtitle: ass")).toBeVisible();
   await page.getByRole("checkbox", { name: "Audio: aac" }).uncheck();
+  await saveProject(page);
+  await openTask(page, "Export");
   await expect.poll(() => requestedStreamIndexes).toEqual([0, 2]);
   await expect(page.getByRole("checkbox", { name: "Video: h264" })).toBeChecked();
   await expect(page.getByRole("checkbox", { name: "Audio: aac" })).not.toBeChecked();
@@ -1011,7 +1448,7 @@ test("reviews preflight blockers and only enables eligible downloads", async ({ 
   await expect(page.getByText("Selected streams: 2")).toHaveCount(0);
   await expect(page.getByText("Stream 1 cannot be exported.").first()).toBeVisible();
   await expect(page.getByText(/blocked:/)).toHaveCount(0);
-  await expect(page.getByRole("button", { name: /^Export (item|\d+ items)$/ })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Create clips" })).toBeDisabled();
 });
 
 test("shows stable failed and capacity messages and permits retry", async ({ page }) => {
@@ -1052,7 +1489,7 @@ test("shows stable failed and capacity messages and permits retry", async ({ pag
   await page.getByRole("button", { name: "Add segment" }).click();
   await saveProject(page);
   await openTask(page, "Export");
-  const exportButton = page.getByRole("button", { name: /^Export (item|\d+ items)$/ });
+  const exportButton = page.getByRole("button", { name: "Create clips" });
   await exportButton.click();
   await expect(page.getByText("Export capacity is busy. Try again shortly.")).toBeVisible();
   await expect(exportButton).toBeEnabled();
@@ -1086,7 +1523,7 @@ test("cancels an active export without showing a path", async ({ page }) => {
   await page.getByRole("button", { name: "Add segment" }).click();
   await saveProject(page);
   await openTask(page, "Export");
-  await page.getByRole("button", { name: /^Export (item|\d+ items)$/ }).click();
+  await page.getByRole("button", { name: "Create clips" }).click();
   await page.getByRole("button", { name: "Cancel export" }).click();
   await expect(page.getByText("Export cancelled.")).toBeVisible();
   expect(cancelled).toBe(true);
@@ -1114,6 +1551,7 @@ test("delayed project loads cannot replace a newer editor", async ({ page }) => 
   });
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await addSelectedMediaToProject(page);
   await openTask(page, "Project");
   await loadProject(page, "p_race-load012");
   page.once("dialog", (dialog) => dialog.accept());
@@ -1155,6 +1593,7 @@ test("delayed saves stay dirty and cannot launch obsolete exports", async ({ pag
   });
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await addSelectedMediaToProject(page);
   await openTask(page, "Project");
   await page.getByLabel("Timeline playhead").fill("100");
   await page.getByRole("button", { name: "Set in" }).click();
@@ -1163,14 +1602,14 @@ test("delayed saves stay dirty and cannot launch obsolete exports", async ({ pag
   await page.getByRole("button", { name: "Add segment" }).click();
   await page.getByRole("button", { name: "Save project" }).click();
   await openTask(page, "Export");
-  await expect(page.getByRole("button", { name: /^Export (item|\d+ items)$/ })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Create clips" })).toBeEnabled();
   await page.getByLabel("Timeline playhead").fill("1");
   release();
   await page.waitForTimeout(50);
   expect(exports).toBe(0);
   await saveProject(page);
   await openTask(page, "Export");
-  await page.getByRole("button", { name: /^Export (item|\d+ items)$/ }).click();
+  await page.getByRole("button", { name: "Create clips" }).click();
   await expect(page.getByText("Export queued.")).toBeVisible();
 });
 
@@ -1228,6 +1667,7 @@ test("a delayed old-project save stays silent after New and the new project save
   });
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await addSelectedMediaToProject(page);
   await openTask(page, "Project");
   await page.getByLabel("Timeline playhead").fill("100");
   await page.getByRole("button", { name: "Set in" }).click();
@@ -1240,6 +1680,7 @@ test("a delayed old-project save stays silent after New and the new project save
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "New project" }).click();
   await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await addSelectedMediaToProject(page);
   await page.getByLabel("Timeline playhead").fill("100");
   await page.getByRole("button", { name: "Set in" }).click();
   await page.getByLabel("Timeline playhead").fill("700");
@@ -1294,6 +1735,7 @@ test("unmounting a deferred export save cannot start export, poll, or remember a
   });
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await addSelectedMediaToProject(page);
   await openTask(page, "Project");
   await page.getByLabel("Timeline playhead").fill("100");
   await page.getByRole("button", { name: "Set in" }).click();
@@ -1332,6 +1774,7 @@ test("stale selection metadata cannot replace a refresh or newer selection statu
   await page.getByRole("button", { name: /second.mp4/ }).click();
   await page.getByRole("button", { name: "Refresh media" }).click();
   release();
+  await addSelectedMediaToProject(page);
   await openTask(page, "Project");
   await expect(
     page.getByRole("list", { name: "Project media items" }).getByRole("button", {
@@ -1375,6 +1818,7 @@ test("refresh metadata cannot restore an old selection", async ({ page }) => {
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: /second.mp4/ }).click();
   release();
+  await addSelectedMediaToProject(page);
   await openTask(page, "Project");
   await expect(
     page.getByRole("list", { name: "Project media items" }).getByRole("button", {
@@ -1411,6 +1855,7 @@ test("delayed cancellation cannot overwrite a replacement export", async ({ page
   });
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await addSelectedMediaToProject(page);
   await page.getByLabel("Timeline playhead").fill("100");
   await page.getByRole("button", { name: "Set in" }).click();
   await page.getByLabel("Timeline playhead").fill("700");
@@ -1418,11 +1863,11 @@ test("delayed cancellation cannot overwrite a replacement export", async ({ page
   await page.getByRole("button", { name: "Add segment" }).click();
   await saveProject(page);
   await openTask(page, "Export");
-  await page.getByRole("button", { name: /^Export (item|\d+ items)$/ }).click();
+  await page.getByRole("button", { name: "Create clips" }).click();
   await expect(page.getByText("Export queued.")).toBeVisible();
   await page.getByRole("button", { name: "Cancel export" }).click();
   await openTask(page, "Export");
-  await page.getByRole("button", { name: /^Export (item|\d+ items)$/ }).click();
+  await page.getByRole("button", { name: "Create clips" }).click();
   await expect(page.getByText("Export queued.")).toBeVisible();
   releases();
   await expect(page.getByText("Export cancelled.")).toHaveCount(0);
@@ -1431,6 +1876,7 @@ test("delayed cancellation cannot overwrite a replacement export", async ({ page
 test("new projects reset the editor and dirty changes need confirmation", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await addSelectedMediaToProject(page);
   let projectLoads = 0;
   page.on("request", (request) => {
     if (
@@ -1445,6 +1891,7 @@ test("new projects reset the editor and dirty changes need confirmation", async 
   await page.waitForTimeout(50);
   expect(projectLoads).toBe(0);
   await page.getByRole("button", { name: /second.mp4/ }).click();
+  await addSelectedMediaToProject(page);
   await expect(
     page.getByRole("list", { name: "Project media items" }).getByRole("button", {
       name: "second.mp4",
@@ -1501,6 +1948,7 @@ test("load fetches project media directly and corrupt recents do not block start
   await page.goto("/");
   await expect(page.getByRole("button", { name: /camera.mp4/ })).toBeVisible();
   await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await addSelectedMediaToProject(page);
   await openTask(page, "Project");
   await loadProject(page, "p_outside-media");
   await expect(page.getByText("Project loaded.")).toBeVisible();
@@ -1644,6 +2092,7 @@ test("covers the responsive workspace and keyboard editing workflow", async ({ p
   await page.getByRole("button", { name: /camera.mp4/ }).focus();
   await page.keyboard.press("Enter");
   await page.waitForTimeout(300);
+  await addSelectedMediaToProject(page);
 
   const projectTab = page.getByRole("tab", { name: "Project" });
   const exportTab = page.getByRole("tab", { name: "Export" });
@@ -1688,7 +2137,7 @@ test("covers the responsive workspace and keyboard editing workflow", async ({ p
   await expect(page.getByText("Saved", { exact: true })).toBeVisible();
   await exportTab.focus();
   await page.keyboard.press("Enter");
-  const startExport = page.getByRole("button", { name: "Export item" });
+  const startExport = page.getByRole("button", { name: "Create clips" });
   await expect(startExport).toBeEnabled();
   await startExport.focus();
   await page.keyboard.press("Enter");

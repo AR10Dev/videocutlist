@@ -115,6 +115,20 @@ func (d *downloadStub) Download(ctx context.Context, job string, position int) (
 	return d.download(ctx, job, position)
 }
 
+type batchDownloadStub struct {
+	calls    int
+	download func(context.Context, string) (io.ReadCloser, string, error)
+}
+
+func (d *batchDownloadStub) Download(context.Context, string, int) (io.ReadCloser, string, error) {
+	return nil, "", errors.New("individual download is not configured")
+}
+
+func (d *batchDownloadStub) DownloadBatch(ctx context.Context, batchID string) (io.ReadCloser, string, error) {
+	d.calls++
+	return d.download(ctx, batchID)
+}
+
 type headerAuthenticator struct{}
 
 func (headerAuthenticator) Authenticate(*http.Request) error { return nil }
@@ -138,6 +152,26 @@ func server(t *testing.T, authenticator api.Authenticator, media *mediaStub, pre
 func serverWith(t *testing.T, authenticator api.Authenticator, media *mediaStub, preview api.PreviewService, projects api.ProjectService, exports *exportStub, jobs api.JobService, download projects.ExportDownloadService) *api.Server {
 	t.Helper()
 	result, err := api.New(api.Config{Authenticator: authenticator, Media: media, MediaImport: media, Preview: preview, Projects: projects, BatchExports: exports, Jobs: jobs, Download: download})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return result
+}
+
+func serverWithBatchDownload(t *testing.T, authenticator api.Authenticator, batchDownload interface {
+	Download(context.Context, string, int) (io.ReadCloser, string, error)
+	DownloadBatch(context.Context, string) (io.ReadCloser, string, error)
+}) *api.Server {
+	t.Helper()
+	result, err := api.New(api.Config{
+		Authenticator: authenticator,
+		Media:         &mediaStub{},
+		Preview:       &previewStub{start: func(context.Context) (api.PreviewResult, error) { return api.PreviewResult{}, nil }},
+		Projects:      &projectStub{get: api.Project{ID: validProject}},
+		BatchExports:  &exportStub{},
+		Jobs:          &jobsStub{},
+		Download:      batchDownload,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -316,6 +350,32 @@ func TestDownloadOutputLifecycle(t *testing.T) {
 				t.Fatalf("status=%d headers=%v body=%q", response.Code, response.Header(), response.Body.String())
 			}
 		})
+	}
+}
+
+func TestBatchDownloadUsesAuthenticatedSafeArchiveResponse(t *testing.T) {
+	const batch = "b_aaaaaaaaaaaa"
+	stub := &batchDownloadStub{download: func(_ context.Context, batchID string) (io.ReadCloser, string, error) {
+		if batchID != batch {
+			return nil, "", errors.New("missing")
+		}
+		return io.NopCloser(strings.NewReader("zip bytes")), "videocutlist-clips.zip", nil
+	}}
+	service := serverWithBatchDownload(t, headerAuthenticator{}, stub)
+	request := localRequest(http.MethodGet, "/api/v1/batches/"+batch+"/download", nil)
+	response := httptest.NewRecorder()
+	service.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || response.Body.String() != "zip bytes" || response.Header().Get("Content-Type") != "application/zip" || response.Header().Get("Content-Disposition") != `attachment; filename="videocutlist-clips.zip"` || stub.calls != 1 {
+		t.Fatalf("status=%d calls=%d headers=%v body=%q", response.Code, stub.calls, response.Header(), response.Body.String())
+	}
+
+	stub.download = func(context.Context, string) (io.ReadCloser, string, error) {
+		return io.NopCloser(strings.NewReader("partial")), "/private/exports/clips.zip", nil
+	}
+	response = httptest.NewRecorder()
+	service.ServeHTTP(response, request)
+	if response.Code != http.StatusNotFound || strings.Contains(response.Body.String(), "/private/exports") || response.Header().Get("Content-Disposition") != "" {
+		t.Fatalf("unsafe archive status=%d headers=%v body=%q", response.Code, response.Header(), response.Body.String())
 	}
 }
 
