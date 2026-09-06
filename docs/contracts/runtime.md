@@ -70,7 +70,13 @@ Incomplete files end in `.partial`; only atomic rename publishes a hit.
 - On restart, queued jobs remain queued. Running jobs become failed with
   `interrupted_by_restart` unless artifact reconciliation proves completion.
 - MVP exports use MKV and `stream_copy_preferred`; no smart-boundary re-encode.
-  Non-keyframe accuracy limitations are explicit structured warnings.
+  Non-keyframe accuracy limitations are explicit structured warnings. Publication
+  requires a descriptor-relative atomic no-replace rename: Linux uses
+  `renameat2(RENAME_NOREPLACE)` and macOS uses `renameatx_np(RENAME_EXCL)`.
+  On other platforms, both `merge` and `separate` exports are blocked during
+  preflight with `unsupported_publication_platform` before FFmpeg starts; the
+  implementation does not fall back to a raceable check-then-rename or a
+  hard-link publication.
 
 ## Editing workspace
 

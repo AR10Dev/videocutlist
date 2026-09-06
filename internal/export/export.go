@@ -103,6 +103,9 @@ func (s Service) Run(ctx context.Context, source *os.File, document model.Docume
 	if source == nil {
 		return Result{}, errors.New("export source is required")
 	}
+	if !atomicNoReplacePublicationSupported() {
+		return Result{}, fmt.Errorf("%w: %s", ErrInvalidRequest, unsupportedPublicationMessage)
+	}
 	sourceName := request.SourceName
 	if sourceName == "" {
 		sourceName = source.Name()
@@ -325,7 +328,7 @@ func (s Service) Run(ctx context.Context, source *os.File, document model.Docume
 			}
 			name := separateNames[i]
 			for attempt := 0; ; attempt++ {
-				err = prepared.publishFrom(workDirectory, segmentFile, name)
+				err = prepared.publishFrom(workDirectory, filepath.Join(workDirName, segmentFile), segmentFile, name)
 				if err == nil {
 					break
 				}

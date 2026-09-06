@@ -2,6 +2,7 @@ package export
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"slices"
@@ -88,6 +89,9 @@ func Preflight(request Request, metadata probe.Metadata) PreflightResult {
 }
 
 func (s Service) preflightDestination(ctx context.Context, request Request, source *os.File) error {
+	if !atomicNoReplacePublicationSupported() {
+		return errAtomicNoReplaceUnsupported
+	}
 	destination := Destination{ID: "download", Kind: KindDownload, Root: s.OutputDir, Retention: s.Retention}
 	for _, candidate := range s.Destinations {
 		if candidate.ID == request.DestinationID || request.DestinationID == "" && candidate.ID == "download" {
@@ -137,7 +141,11 @@ func (s Service) Preflight(ctx context.Context, source *os.File, request Request
 	}
 	if err := s.preflightDestination(ctx, request, source); err != nil {
 		result.Allowed = false
-		result.Findings = append(result.Findings, Finding{Severity: "blocked", Code: "invalid_destination", Message: "The selected destination is unavailable or not writable."})
+		if errors.Is(err, errAtomicNoReplaceUnsupported) {
+			result.Findings = append(result.Findings, Finding{Severity: "blocked", Code: "unsupported_publication_platform", Message: unsupportedPublicationMessage})
+		} else {
+			result.Findings = append(result.Findings, Finding{Severity: "blocked", Code: "invalid_destination", Message: "The selected destination is unavailable or not writable."})
+		}
 	}
 	return result, nil
 }

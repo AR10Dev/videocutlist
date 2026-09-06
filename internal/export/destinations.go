@@ -11,8 +11,6 @@ import (
 	"strings"
 	"time"
 	"unicode"
-
-	"golang.org/x/sys/unix"
 )
 
 const (
@@ -116,14 +114,14 @@ func (p preparedDestination) writable() error {
 	return nil
 }
 func (p preparedDestination) publish(tempName, outputName string) error {
-	return p.publishFrom(p.directory, tempName, outputName)
+	return p.publishFrom(p.directory, tempName, tempName, outputName)
 }
 
-func (p preparedDestination) publishFrom(sourceDirectory *os.File, tempName, outputName string) error {
-	if p.directory == nil || sourceDirectory == nil {
+func (p preparedDestination) publishFrom(sourceDirectory *os.File, sourceRootName, tempName, outputName string) error {
+	if p.root == nil || p.directory == nil || sourceDirectory == nil {
 		return errors.New("destination directory is not open")
 	}
-	return unix.Renameat2(int(sourceDirectory.Fd()), tempName, int(p.directory.Fd()), outputName, unix.RENAME_NOREPLACE)
+	return publishOpenedNoReplace(sourceDirectory, p.directory, tempName, outputName, p.root, sourceRootName)
 }
 
 func (d Destination) Public() PublicDestination {
