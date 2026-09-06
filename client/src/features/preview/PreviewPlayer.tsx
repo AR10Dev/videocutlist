@@ -193,9 +193,9 @@ export function PreviewPlayer(props: { timeline: JSX.Element; controls: JSX.Elem
             <IconButton
               label="Loop selected segment"
               keyshortcuts="L"
-              pressed={workspace.playbackMode() === "active-segment-loop"}
+              pressed={workspace.loopSelectedSegment()}
               disabled={!workspace.activeSegment() || !canStreamPreview()}
-              onClick={() => workspace.playActiveSegment(true)}
+              onClick={workspace.toggleLoopSelectedSegment}
             >
               <Repeat2 size={18} aria-hidden="true" />
             </IconButton>

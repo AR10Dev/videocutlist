@@ -69,6 +69,21 @@ describe("automatic segment editing", () => {
     dispose();
   });
 
+  it("rejects invalid typed boundaries without changing the committed segment", () => {
+    const { controller, dispose } = setup();
+    controller.setMarker("inMs", 100);
+    controller.setMarker("outMs", 300);
+    const before = controller.present().segments[0];
+
+    expect(controller.updateSegmentBoundary(0, "end", 50)).toBe(false);
+    expect(controller.present().segments[0]).toEqual(before);
+    expect(controller.editorStatus()).toContain("overlap");
+
+    expect(controller.updateSegmentBoundary(0, "end", 450)).toBe(true);
+    expect(controller.present().segments[0]).toMatchObject({ id: before.id, endMs: 450 });
+    dispose();
+  });
+
   it("restores the preceding draft and identity through undo and redo", () => {
     const { controller, dispose } = setup();
     controller.setMarker("inMs", 100);

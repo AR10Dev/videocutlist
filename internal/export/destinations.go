@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -40,36 +42,65 @@ type SourceLocation struct {
 }
 
 type preparedDestination struct {
-	path string
-	root *os.Root
+	path      string
+	root      *os.Root
+	directory *os.File
 }
 
-func (p preparedDestination) close() { _ = p.root.Close() }
+func (p preparedDestination) close() {
+	if p.directory != nil {
+		_ = p.directory.Close()
+	}
+	if p.root != nil {
+		_ = p.root.Close()
+	}
+}
 
-func (p preparedDestination) createTemp(prefix, suffix string) (*os.File, string, string, error) {
+func createRootTemp(root *os.Root, prefix, suffix string) (*os.File, string, error) {
 	for range 100 {
 		name := prefix + uniqueSuffix() + suffix
-		file, err := p.root.OpenFile(name, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+		file, err := root.OpenFile(name, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
 		if err == nil {
-			return file, filepath.Join(p.path, name), name, nil
+			return file, name, nil
 		}
 		if !errors.Is(err, os.ErrExist) {
-			return nil, "", "", err
+			return nil, "", err
 		}
 	}
-	return nil, "", "", errors.New("could not create temporary destination file")
+	return nil, "", errors.New("could not create temporary destination file")
 }
 
-func (p preparedDestination) createTempDir(prefix string) (string, string, error) {
+func (p preparedDestination) createTemp(prefix, suffix string) (*os.File, string, error) {
+	file, name, err := createRootTemp(p.root, prefix, suffix)
+	if err != nil {
+		return nil, "", err
+	}
+	return file, name, nil
+}
+
+func (p preparedDestination) createTempDir(prefix string) (*os.Root, *os.File, string, error) {
 	for range 100 {
 		name := prefix + uniqueSuffix()
-		if err := p.root.Mkdir(name, 0o700); err == nil {
-			return filepath.Join(p.path, name), name, nil
-		} else if !errors.Is(err, os.ErrExist) {
-			return "", "", err
+		if err := p.root.Mkdir(name, 0o700); err != nil {
+			if errors.Is(err, os.ErrExist) {
+				continue
+			}
+			return nil, nil, "", err
 		}
+		root, err := p.root.OpenRoot(name)
+		if err != nil {
+			p.removeAll(name)
+			return nil, nil, "", err
+		}
+		directory, err := root.Open(".")
+		if err != nil {
+			_ = root.Close()
+			p.removeAll(name)
+			return nil, nil, "", err
+		}
+		return root, directory, name, nil
 	}
-	return "", "", errors.New("could not create temporary destination directory")
+	return nil, nil, "", errors.New("could not create temporary destination directory")
 }
 
 func (p preparedDestination) remove(name string)    { _ = p.root.Remove(name) }
@@ -85,7 +116,14 @@ func (p preparedDestination) writable() error {
 	return nil
 }
 func (p preparedDestination) publish(tempName, outputName string) error {
-	return p.root.Link(tempName, outputName)
+	return p.publishFrom(p.directory, tempName, outputName)
+}
+
+func (p preparedDestination) publishFrom(sourceDirectory *os.File, tempName, outputName string) error {
+	if p.directory == nil || sourceDirectory == nil {
+		return errors.New("destination directory is not open")
+	}
+	return unix.Renameat2(int(sourceDirectory.Fd()), tempName, int(p.directory.Fd()), outputName, unix.RENAME_NOREPLACE)
 }
 
 func (d Destination) Public() PublicDestination {
@@ -219,7 +257,12 @@ func prepareDestination(d Destination, source *os.File, sourceName string, locat
 	if err != nil {
 		return preparedDestination{}, err
 	}
-	prepared := preparedDestination{path: resolved, root: root}
+	directory, err := root.Open(".")
+	if err != nil {
+		_ = root.Close()
+		return preparedDestination{}, err
+	}
+	prepared := preparedDestination{path: resolved, root: root, directory: directory}
 	if err := prepared.writable(); err != nil {
 		prepared.close()
 		return preparedDestination{}, err
@@ -344,7 +387,12 @@ func prepareDestinationWithin(path, allowedRoot string) (preparedDestination, er
 	if err != nil {
 		return preparedDestination{}, err
 	}
-	return preparedDestination{path: filepath.Clean(resolved), root: destinationRoot}, nil
+	directory, err := destinationRoot.Open(".")
+	if err != nil {
+		_ = destinationRoot.Close()
+		return preparedDestination{}, err
+	}
+	return preparedDestination{path: filepath.Clean(resolved), root: destinationRoot, directory: directory}, nil
 }
 
 func prepareDestinationRoot(path string) (string, error) {

@@ -3,6 +3,7 @@ package export
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"videocutlist/internal/library/media/probe"
@@ -19,6 +20,18 @@ func verifyOutput(ctx context.Context, ffprobePath, filename string, source prob
 	if err != nil {
 		return err
 	}
+	return validateOutput(output, source, selected, expectedDurationMS)
+}
+
+func verifyOutputFile(ctx context.Context, ffprobePath string, file *os.File, source probe.Metadata, selected []int, expectedDurationMS int64) error {
+	output, err := (probe.Client{Path: ffprobePath}).ProbeFile(ctx, file)
+	if err != nil {
+		return err
+	}
+	return validateOutput(output, source, selected, expectedDurationMS)
+}
+
+func validateOutput(output, source probe.Metadata, selected []int, expectedDurationMS int64) error {
 	if !strings.Contains(output.Container, "matroska") {
 		return fmt.Errorf("unexpected output container")
 	}

@@ -89,7 +89,7 @@ func TestPreparedDestinationPublishesWithoutOverwrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer prepared.close()
-	temporary, _, temporaryName, err := prepared.createTemp(".temporary-", ".mkv")
+	temporary, temporaryName, err := prepared.createTemp(".temporary-", ".mkv")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,6 +135,52 @@ func TestSourceAdjacentDestinationRejectsReadOnlyOutput(t *testing.T) {
 	_, err = prepareDestination(Destination{ID: "beside", Kind: KindSourceAdjacent, MediaRoot: mediaRoot}, source, "clip.mkv", SourceLocation{RootPath: mediaRoot, RelativePath: "camera/clip.mkv"})
 	if err == nil {
 		t.Fatal("accepted read-only source-adjacent output")
+	}
+}
+
+func TestPreparedDestinationPublishesThroughOpenedDirectory(t *testing.T) {
+	parent := t.TempDir()
+	directory := filepath.Join(parent, "destination")
+	outside := filepath.Join(parent, "outside")
+	moved := filepath.Join(parent, "moved")
+	if err := os.Mkdir(directory, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(outside, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := prepareDestination(Destination{ID: "download", Kind: KindDownload, Root: directory}, nil, "", SourceLocation{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer prepared.close()
+	temporary, temporaryName, err := prepared.createTemp(".temporary-", ".mkv")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := temporary.WriteString("new"); err != nil {
+		temporary.Close()
+		t.Fatal(err)
+	}
+	if err := temporary.Close(); err != nil {
+		t.Fatal(err)
+	}
+	defer prepared.remove(temporaryName)
+	if err := os.Rename(directory, moved); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, directory); err != nil {
+		t.Fatal(err)
+	}
+	if err := prepared.publish(temporaryName, "published.mkv"); err != nil {
+		t.Fatal(err)
+	}
+	published, err := os.ReadFile(filepath.Join(moved, "published.mkv"))
+	if err != nil || string(published) != "new" {
+		t.Fatalf("opened destination output = %q, err=%v", published, err)
+	}
+	if _, err := os.Stat(filepath.Join(outside, "published.mkv")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("output escaped opened destination: %v", err)
 	}
 }
 

@@ -63,14 +63,6 @@ export function EditorView(props: { onChooseMedia: () => void }) {
     if (inMs >= outMs) return "Move Out after In to create a valid cut.";
     return `Pending cut duration ${formatTime(outMs - inMs, workspace.duration())}.`;
   };
-  const keyframeAvailability = () => {
-    const video = workspace.selected()?.streams.video as { keyframes?: unknown } | undefined;
-    return Array.isArray(video?.keyframes) &&
-      video.keyframes.some((value) => Number.isFinite(value))
-      ? "available"
-      : "unavailable";
-  };
-
   return (
     <section class="editor-panel" aria-labelledby="timeline-heading">
       <div class="panel-heading">
@@ -342,9 +334,7 @@ export function EditorView(props: { onChooseMedia: () => void }) {
               }
             />
             <p class="asset-capability" role="status" aria-label="Keyframe snapping availability">
-              {keyframeAvailability() === "available"
-                ? "Keyframe snapping available"
-                : "Keyframe snapping unavailable; source timestamps were not provided."}
+              Keyframe snapping unavailable; authoritative source timestamps are not exposed.
             </p>
             <Show when={workspace.editorStatus()}>
               <p class="control-help" role="alert">

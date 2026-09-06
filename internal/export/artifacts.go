@@ -82,6 +82,56 @@ func WriteManifest(directory, jobID, kind string, outputNames []string, expires 
 	return name, nil
 }
 
+// writeManifestAt is the descriptor-relative variant used for an export that
+// has already validated its destination root. The caller still gets the
+// absolute path for artifact bookkeeping, but no write is performed through it.
+func writeManifestAt(root *os.Root, directory, jobID, kind string, outputNames []string, expires time.Time) (string, error) {
+	if root == nil || directory == "" || jobID == "" || kind == "" || len(outputNames) == 0 {
+		return "", errors.New("invalid artifact manifest")
+	}
+	for _, name := range outputNames {
+		if name == "" || filepath.Base(name) != name || strings.Contains(name, "..") {
+			return "", errors.New("invalid artifact name")
+		}
+	}
+	manifest := artifactManifest{JobID: jobID, OutputNames: slices.Clone(outputNames), Kind: kind, Expires: expires.UTC().Format(time.RFC3339Nano)}
+	data, err := json.Marshal(manifest)
+	if err != nil {
+		return "", err
+	}
+	tmp, tmpName, err := createRootTemp(root, manifestPrefix+jobID+"-", ".tmp")
+	if err != nil {
+		return "", err
+	}
+	published := false
+	defer func() {
+		if !published {
+			_ = root.Remove(tmpName)
+		}
+	}()
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return "", err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return "", err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return "", err
+	}
+	if err := tmp.Close(); err != nil {
+		return "", err
+	}
+	name := manifestPrefix + jobID + ".json"
+	if err := root.Rename(tmpName, name); err != nil {
+		return "", err
+	}
+	published = true
+	return filepath.Join(directory, name), nil
+}
+
 func removeManifest(path string) { _ = os.Remove(path) }
 
 // Reconcile validates job-owned published outputs before ordinary job restart

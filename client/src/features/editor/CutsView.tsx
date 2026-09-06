@@ -1,10 +1,55 @@
-import { For, Show } from "solid-js";
+import { createSignal, For, Show } from "solid-js";
 import { ArrowDown, ArrowUp, Play, Repeat2, Scissors, Trash2 } from "lucide-solid";
-import { formatTime, segmentIncluded } from "../preview/model";
+import { formatTime, parseTimecode, segmentIncluded, type Segment } from "../preview/model";
 import { useWorkspace } from "../app/WorkspaceContext";
 
 export function CutsView() {
   const workspace = useWorkspace();
+  const [boundaryDrafts, setBoundaryDrafts] = createSignal<
+    Record<string, Partial<Record<"start" | "end", string>>>
+  >({});
+  const [boundaryErrors, setBoundaryErrors] = createSignal<Record<string, string>>({});
+  let canceledBoundaryKey: string | undefined;
+  const segmentKey = (id: string | undefined, index: number) => id ?? `index-${index}`;
+  const boundaryValue = (segment: Segment, index: number, boundary: "start" | "end") => {
+    const key = segmentKey(segment.id, index);
+    return (
+      boundaryDrafts()[key]?.[boundary] ??
+      formatTime(boundary === "start" ? segment.startMs : segment.endMs, workspace.duration())
+    );
+  };
+  const confirmBoundary = (
+    index: number,
+    segment: Segment,
+    boundary: "start" | "end",
+    input: HTMLInputElement,
+  ) => {
+    const key = segmentKey(segment.id, index);
+    if (canceledBoundaryKey === key) {
+      canceledBoundaryKey = undefined;
+      return;
+    }
+    const value = parseTimecode(input.value);
+    const valid = value !== undefined && workspace.updateSegmentBoundary(index, boundary, value);
+    if (valid) {
+      setBoundaryDrafts((current) => ({
+        ...current,
+        [key]: { ...current[key], [boundary]: undefined },
+      }));
+      setBoundaryErrors((current) => {
+        const next = { ...current };
+        delete next[key];
+        return next;
+      });
+      return;
+    }
+    const message =
+      value === undefined
+        ? "Enter a valid timecode within this video."
+        : workspace.editorStatus() ||
+          "That boundary would overlap another cut or leave In before Out.";
+    setBoundaryErrors((current) => ({ ...current, [key]: message }));
+  };
   return (
     <section class="cuts-panel" aria-labelledby="cuts-tab">
       <header class="task-heading flex items-baseline justify-between gap-2">
@@ -88,6 +133,96 @@ export function CutsView() {
                     }
                   />
                 </label>
+                <div class="cut-boundaries" aria-label={`Bounds for cut ${index() + 1}`}>
+                  <label>
+                    In
+                    <input
+                      class="input input-sm"
+                      aria-label={`Cut ${index() + 1} In`}
+                      aria-invalid={Boolean(boundaryErrors()[segmentKey(segment.id, index())])}
+                      value={boundaryValue(segment, index(), "start")}
+                      onInput={(event) =>
+                        setBoundaryDrafts((current) => ({
+                          ...current,
+                          [segmentKey(segment.id, index())]: {
+                            ...current[segmentKey(segment.id, index())],
+                            start: event.currentTarget.value,
+                          },
+                        }))
+                      }
+                      onBlur={(event) =>
+                        confirmBoundary(index(), segment, "start", event.currentTarget)
+                      }
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter")
+                          confirmBoundary(index(), segment, "start", event.currentTarget);
+                        if (event.key === "Escape") {
+                          const key = segmentKey(segment.id, index());
+                          canceledBoundaryKey = key;
+                          setBoundaryDrafts((current) => ({
+                            ...current,
+                            [key]: { ...current[key], start: undefined },
+                          }));
+                          setBoundaryErrors((current) => {
+                            const next = { ...current };
+                            delete next[key];
+                            return next;
+                          });
+                          event.currentTarget.blur();
+                        }
+                      }}
+                    />
+                  </label>
+                  <label>
+                    Out
+                    <input
+                      class="input input-sm"
+                      aria-label={`Cut ${index() + 1} Out`}
+                      aria-invalid={Boolean(boundaryErrors()[segmentKey(segment.id, index())])}
+                      value={boundaryValue(segment, index(), "end")}
+                      onInput={(event) =>
+                        setBoundaryDrafts((current) => ({
+                          ...current,
+                          [segmentKey(segment.id, index())]: {
+                            ...current[segmentKey(segment.id, index())],
+                            end: event.currentTarget.value,
+                          },
+                        }))
+                      }
+                      onBlur={(event) =>
+                        confirmBoundary(index(), segment, "end", event.currentTarget)
+                      }
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter")
+                          confirmBoundary(index(), segment, "end", event.currentTarget);
+                        if (event.key === "Escape") {
+                          const key = segmentKey(segment.id, index());
+                          canceledBoundaryKey = key;
+                          setBoundaryDrafts((current) => ({
+                            ...current,
+                            [key]: { ...current[key], end: undefined },
+                          }));
+                          setBoundaryErrors((current) => {
+                            const next = { ...current };
+                            delete next[key];
+                            return next;
+                          });
+                          event.currentTarget.blur();
+                        }
+                      }}
+                    />
+                  </label>
+                  <span>
+                    Duration {formatTime(segment.endMs - segment.startMs, workspace.duration())}
+                  </span>
+                  <Show when={boundaryErrors()[segmentKey(segment.id, index())]}>
+                    {(message) => (
+                      <small class="control-help" role="alert">
+                        {message()}
+                      </small>
+                    )}
+                  </Show>
+                </div>
                 <details class="cut-menu" open>
                   <summary class="btn btn-ghost btn-sm">Actions</summary>
                   <div class="cut-menu-panel">
@@ -159,7 +294,7 @@ export function CutsView() {
                         aria-keyshortcuts="L"
                         onClick={() => {
                           workspace.setActiveSegmentIndex(index());
-                          workspace.playActiveSegment(true);
+                          workspace.toggleLoopSelectedSegment();
                         }}
                       >
                         <Repeat2 size={14} aria-hidden="true" /> Loop{" "}

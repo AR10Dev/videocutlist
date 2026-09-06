@@ -17,11 +17,19 @@ import {
 type Media = components["schemas"]["Media"];
 
 const waveformPreferenceKey = "videocutlist.waveform-visible.v1";
+const loopPreferenceKey = "videocutlist.loop-selected-segment.v1";
 const initialWaveformVisibility = () => {
   try {
     return globalThis.localStorage?.getItem(waveformPreferenceKey) !== "false";
   } catch {
     return true;
+  }
+};
+const initialLoopPreference = () => {
+  try {
+    return globalThis.localStorage?.getItem(loopPreferenceKey) === "true";
+  } catch {
+    return false;
   }
 };
 
@@ -107,6 +115,7 @@ export function createPreviewController(
   const previewRenewalLeadMs = 1000;
   const [playbackIntent, setPlaybackIntent] = createSignal(false);
   const [playbackMode, setPlaybackMode] = createSignal<PreviewPlaybackMode>("whole-media");
+  const [loopSelectedSegment, setLoopSelectedSegmentState] = createSignal(initialLoopPreference());
   const [orderedSegmentIndex, setOrderedSegmentIndex] = createSignal(0);
   // Candidate review uses the same bounded playback mode without changing the durable timeline.
   const [boundedSegment, setBoundedSegment] = createSignal<Segment>();
@@ -408,13 +417,28 @@ export function createPreviewController(
     }
     startPlayback(loop ? "active-segment-loop" : "active-segment", segment.startMs, segment);
   };
+  const setLoopSelectedSegment = (enabled: boolean) => {
+    setLoopSelectedSegmentState(enabled);
+    try {
+      globalThis.localStorage?.setItem(loopPreferenceKey, String(enabled));
+    } catch {
+      // Browser storage may be disabled; the preference remains available for this session.
+    }
+  };
   const playActiveSegment = (loop: boolean) => {
     const segment = dependencies.activeSegment();
     if (!segment) {
       setPreviewStatus("Select a cut to play it.");
       return;
     }
+    if (loop) setLoopSelectedSegment(true);
     playSegment(segment, loop);
+  };
+  const toggleLoopSelectedSegment = () => {
+    const next = !loopSelectedSegment();
+    setLoopSelectedSegment(next);
+    const segment = dependencies.activeSegment();
+    if (segment) playSegment(segment, next);
   };
   const playOrderedSegments = () => {
     const segments = orderedSegments();
@@ -470,7 +494,7 @@ export function createPreviewController(
       // Browser storage may be disabled; waveform remains available for this session.
     }
   };
-  const retryAssets = () => setAssetReload((value) => value + 1);
+  const retryAssets = () => setAssetReload((value: number) => value + 1);
 
   return {
     assetStatus,
@@ -487,6 +511,9 @@ export function createPreviewController(
     setDiagnostics,
     playbackMode,
     playbackIntent,
+    loopSelectedSegment,
+    setLoopSelectedSegment,
+    toggleLoopSelectedSegment,
     watchedPosition,
     syncPreviewPosition,
     handlePreviewEnded,

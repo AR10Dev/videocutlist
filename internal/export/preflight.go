@@ -106,7 +106,7 @@ func (s Service) preflightDestination(ctx context.Context, request Request, sour
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	temporary, _, temporaryName, err := prepared.createTemp(".videocutlist-preflight-", ".tmp")
+	temporary, temporaryName, err := prepared.createTemp(".videocutlist-preflight-", ".tmp")
 	if err != nil {
 		return err
 	}

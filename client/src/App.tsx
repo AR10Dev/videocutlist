@@ -9,15 +9,9 @@ import { ProjectsView } from "./features/projects/ProjectsView";
 import { QueueView } from "./features/queue/QueueView";
 import { SettingsView } from "./features/settings/SettingsView";
 import { createWorkspaceController } from "./features/app/controller";
+import { createWorkspacePanelController, workspaceTaskTabs } from "./features/app/panelController";
 import { WorkspaceProvider } from "./features/app/WorkspaceContext";
 import { applyAppearance } from "./features/settings/model";
-import {
-  clampPanelPreferences,
-  defaultPanelPreferences,
-  PANEL_PREFERENCES_KEY,
-  parsePanelPreferences,
-  serializePanelPreferences,
-} from "./features/app/panelPreferences";
 
 export function App() {
   const controller = createWorkspaceController();
@@ -25,7 +19,6 @@ export function App() {
     selected,
     projectName,
     revision,
-    dirty,
     saveState: projectSaveState,
     settingsOpen,
     setSettingsOpen,
@@ -40,107 +33,42 @@ export function App() {
     if (preference === "system") media.addEventListener("change", apply);
     onCleanup(() => media.removeEventListener("change", apply));
   });
-  const [activeTask, setActiveTask] = createSignal<"cuts" | "project" | "export" | "detection">(
-    "project",
-  );
-  let hadSelectedMedia = false;
-  let hadActiveItem = false;
-  let previousSegmentCount = 0;
-  createEffect(() => {
-    const hasSelectedMedia = Boolean(selected());
-    if (hasSelectedMedia && !hadSelectedMedia)
-      queueMicrotask(() => {
-        if (narrowViewport()) {
-          closeMediaPanel(false);
-          requestAnimationFrame(() => document.getElementById("timeline-heading")?.focus());
-        }
-        if (dirty() || !controller.activeItemId()) setActiveTask("cuts");
-      });
-    hadSelectedMedia = hasSelectedMedia;
+  const panel = createWorkspacePanelController({
+    selected,
+    activeItem: controller.activeItemId,
+    dirty: controller.dirty,
+    segmentCount: () => controller.present().segments.length,
+    setSettingsOpen,
   });
-  createEffect(() => {
-    const hasActiveItem = Boolean(controller.activeItemId());
-    if (hasActiveItem && !hadActiveItem && narrowViewport())
-      queueMicrotask(() => openTaskPanel("cuts", false));
-    hadActiveItem = hasActiveItem;
-  });
-  createEffect(() => {
-    const segmentCount = controller.present().segments.length;
-    if (segmentCount > previousSegmentCount && narrowViewport() && !tasksOpen())
-      queueMicrotask(() => openTaskPanel("cuts", false));
-    previousSegmentCount = segmentCount;
-  });
-  const taskTabs = ["cuts", "project", "export", "detection"] as const;
-  const initialPanelPreferences = (() => {
-    const defaults = defaultPanelPreferences();
-    try {
-      const parsed = parsePanelPreferences(window.localStorage.getItem(PANEL_PREFERENCES_KEY));
-      return window.innerWidth < 1050 ? parsed : clampPanelPreferences(parsed, window.innerWidth);
-    } catch {
-      return defaults;
-    }
-  })();
-  const initialNarrowViewport = window.innerWidth < 1050;
-  const [narrowViewport, setNarrowViewport] = createSignal(initialNarrowViewport);
-  const [mediaWidth, setMediaWidth] = createSignal(initialPanelPreferences.mediaWidth);
-  const [segmentsWidth, setSegmentsWidth] = createSignal(initialPanelPreferences.segmentsWidth);
-  const [mediaCollapsed, setMediaCollapsed] = createSignal(initialPanelPreferences.mediaCollapsed);
-  const [segmentsCollapsed, setSegmentsCollapsed] = createSignal(
-    initialPanelPreferences.segmentsCollapsed,
-  );
-  const [mediaOpen, setMediaOpen] = createSignal(!initialPanelPreferences.mediaCollapsed);
-  const [tasksOpen, setTasksOpen] = createSignal(
-    initialNarrowViewport
-      ? initialPanelPreferences.mediaCollapsed && !initialPanelPreferences.segmentsCollapsed
-      : !initialPanelPreferences.segmentsCollapsed,
-  );
+  const {
+    activeTask,
+    setActiveTask,
+    narrowViewport,
+    mediaWidth,
+    segmentsWidth,
+    mediaOpen,
+    tasksOpen,
+    openMediaPanel,
+    closeMediaPanel,
+    toggleMediaPanel,
+    openTaskPanel,
+    closeTaskPanel,
+    toggleTaskPanel,
+    closeOpenDrawer,
+    resetPanelWidth,
+    resizePanelWithKeyboard,
+    beginPanelResize,
+    moveTask,
+  } = panel;
+  const taskTabs = workspaceTaskTabs;
   const [queueOpen, setQueueOpen] = createSignal(false);
   const [exportDialogOpen, setExportDialogOpen] = createSignal(false);
   let queueDismissed = false;
   let exportDialogPreviousTask: (typeof taskTabs)[number] = "project";
   let exportTrigger: HTMLButtonElement | undefined;
-  let mediaToggle: HTMLButtonElement | undefined;
-  let tasksToggle: HTMLButtonElement | undefined;
   let shortcutClose: HTMLButtonElement | undefined;
   let projectMenu: HTMLDetailsElement | undefined;
-  type ResizablePanel = "media" | "segments";
-  let resizeState: { panel: ResizablePanel; startX: number; startWidth: number } | undefined;
 
-  const focusPanel = (panel: ResizablePanel) => {
-    requestAnimationFrame(() => {
-      const target = panel === "media" ? "media-heading" : `${activeTask()}-tab`;
-      document.getElementById(target)?.focus();
-    });
-  };
-  const restoreTriggerFocus = (panel: ResizablePanel) => {
-    requestAnimationFrame(() => (panel === "media" ? mediaToggle : tasksToggle)?.focus());
-  };
-  const openMediaPanel = (focus = true) => {
-    setMediaCollapsed(false);
-    setMediaOpen(true);
-    if (narrowViewport()) setTasksOpen(false);
-    if (focus) focusPanel("media");
-  };
-  const closeMediaPanel = (restoreFocus = true) => {
-    setMediaCollapsed(true);
-    setMediaOpen(false);
-    if (restoreFocus && narrowViewport()) restoreTriggerFocus("media");
-  };
-  const toggleMediaPanel = () => (mediaOpen() ? closeMediaPanel() : openMediaPanel());
-  const openTaskPanel = (task: (typeof taskTabs)[number], focus = true) => {
-    setSettingsOpen(false);
-    setActiveTask(task);
-    setSegmentsCollapsed(false);
-    setTasksOpen(true);
-    if (narrowViewport()) setMediaOpen(false);
-    if (focus) requestAnimationFrame(() => document.getElementById(`${task}-tab`)?.focus());
-  };
-  const closeTaskPanel = (restoreFocus = true) => {
-    setSegmentsCollapsed(true);
-    setTasksOpen(false);
-    if (restoreFocus && narrowViewport()) restoreTriggerFocus("segments");
-  };
-  const toggleTaskPanel = () => (tasksOpen() ? closeTaskPanel() : openTaskPanel(activeTask()));
   const openExportDialog = () => {
     exportDialogPreviousTask = activeTask();
     if (activeTask() === "export") setActiveTask("cuts");
@@ -150,86 +78,6 @@ export function App() {
     setExportDialogOpen(false);
     setActiveTask(exportDialogPreviousTask);
     requestAnimationFrame(() => exportTrigger?.focus());
-  };
-  const closeOpenDrawer = () => {
-    if (mediaOpen()) closeMediaPanel();
-    else if (tasksOpen()) closeTaskPanel();
-  };
-  const resetPanelWidth = (panel: ResizablePanel) => {
-    const defaults = defaultPanelPreferences();
-    const next = clampPanelPreferences(
-      {
-        mediaWidth: panel === "media" ? defaults.mediaWidth : mediaWidth(),
-        segmentsWidth: panel === "segments" ? defaults.segmentsWidth : segmentsWidth(),
-        mediaCollapsed: mediaCollapsed(),
-        segmentsCollapsed: segmentsCollapsed(),
-      },
-      window.innerWidth,
-    );
-    setMediaWidth(next.mediaWidth);
-    setSegmentsWidth(next.segmentsWidth);
-  };
-  const updatePanelWidth = (panel: ResizablePanel, value: number) => {
-    const next = clampPanelPreferences(
-      {
-        mediaWidth: panel === "media" ? value : mediaWidth(),
-        segmentsWidth: panel === "segments" ? value : segmentsWidth(),
-        mediaCollapsed: mediaCollapsed(),
-        segmentsCollapsed: segmentsCollapsed(),
-      },
-      window.innerWidth,
-    );
-    setMediaWidth(next.mediaWidth);
-    setSegmentsWidth(next.segmentsWidth);
-  };
-  const resizePanelWithKeyboard = (panel: ResizablePanel, event: KeyboardEvent) => {
-    if (event.key === "Escape" && resizeState?.panel === panel) {
-      event.preventDefault();
-      updatePanelWidth(panel, resizeState.startWidth);
-      finishPanelResize();
-      return;
-    }
-    if (event.key === "Home" || event.key.toLowerCase() === "r") {
-      event.preventDefault();
-      resetPanelWidth(panel);
-      return;
-    }
-    if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
-    event.preventDefault();
-    const delta =
-      panel === "media"
-        ? event.key === "ArrowRight"
-          ? 16
-          : -16
-        : event.key === "ArrowLeft"
-          ? 16
-          : -16;
-    updatePanelWidth(panel, (panel === "media" ? mediaWidth() : segmentsWidth()) + delta);
-  };
-  const beginPanelResize = (panel: ResizablePanel, event: PointerEvent) => {
-    if (narrowViewport()) return;
-    event.preventDefault();
-    resizeState = {
-      panel,
-      startX: event.clientX,
-      startWidth: panel === "media" ? mediaWidth() : segmentsWidth(),
-    };
-    try {
-      (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
-    } catch {
-      // Window-level handlers keep resizing available when pointer capture is unsupported.
-    }
-  };
-  const updatePanelResize = (event: PointerEvent) => {
-    if (!resizeState) return;
-    const direction = resizeState.panel === "media" ? 1 : -1;
-    updatePanelWidth(
-      resizeState.panel,
-      resizeState.startWidth + (event.clientX - resizeState.startX) * direction,
-    );
-  };
-  const finishPanelResize = () => {
-    resizeState = undefined;
   };
   const closeProjectMenu = () => projectMenu?.removeAttribute("open");
   const openHelp = () => {
@@ -247,72 +95,10 @@ export function App() {
     if (controller.shortcutHelpOpen()) queueMicrotask(() => shortcutClose?.focus());
   });
   createEffect(() => {
-    const current = {
-      mediaWidth: mediaWidth(),
-      segmentsWidth: segmentsWidth(),
-      mediaCollapsed: mediaCollapsed(),
-      segmentsCollapsed: segmentsCollapsed(),
-    };
-    const next = narrowViewport() ? current : clampPanelPreferences(current, window.innerWidth);
-    if (next.mediaWidth !== current.mediaWidth) setMediaWidth(next.mediaWidth);
-    if (next.segmentsWidth !== current.segmentsWidth) setSegmentsWidth(next.segmentsWidth);
-    try {
-      window.localStorage.setItem(PANEL_PREFERENCES_KEY, serializePanelPreferences(next));
-    } catch {
-      // Panel preferences are optional and should not interrupt editing.
-    }
-  });
-  createEffect(() => {
     const batches = controller.batches();
     if (!batches.length) queueDismissed = false;
     else if (!queueDismissed) setQueueOpen(true);
   });
-  createEffect(() => {
-    const handleResize = () => {
-      const nextNarrow = window.innerWidth < 1050;
-      const wasNarrow = narrowViewport();
-      setNarrowViewport(nextNarrow);
-      if (nextNarrow && !wasNarrow && mediaOpen() && tasksOpen()) setTasksOpen(false);
-      if (!nextNarrow && wasNarrow) {
-        setMediaOpen(!mediaCollapsed());
-        setTasksOpen(!segmentsCollapsed());
-        const next = clampPanelPreferences(
-          {
-            mediaWidth: mediaWidth(),
-            segmentsWidth: segmentsWidth(),
-            mediaCollapsed: mediaCollapsed(),
-            segmentsCollapsed: segmentsCollapsed(),
-          },
-          window.innerWidth,
-        );
-        setMediaWidth(next.mediaWidth);
-        setSegmentsWidth(next.segmentsWidth);
-      }
-    };
-    window.addEventListener("resize", handleResize);
-    onCleanup(() => window.removeEventListener("resize", handleResize));
-  });
-  createEffect(() => {
-    window.addEventListener("pointermove", updatePanelResize);
-    window.addEventListener("pointerup", finishPanelResize);
-    window.addEventListener("pointercancel", finishPanelResize);
-    onCleanup(() => {
-      window.removeEventListener("pointermove", updatePanelResize);
-      window.removeEventListener("pointerup", finishPanelResize);
-      window.removeEventListener("pointercancel", finishPanelResize);
-    });
-  });
-  const moveTask = (current: (typeof taskTabs)[number], direction: number) => {
-    const start = taskTabs.indexOf(current);
-    for (let offset = 1; offset <= taskTabs.length; offset += 1) {
-      const candidate = taskTabs[(start + direction * offset + taskTabs.length) % taskTabs.length];
-      if (candidate !== "detection" || selected()) {
-        setActiveTask(candidate);
-        document.getElementById(`${candidate}-tab`)?.focus();
-        return;
-      }
-    }
-  };
   const activeJobCount = () =>
     controller.batches().filter((batch) => batch.state === "queued" || batch.state === "running")
       .length;
@@ -325,7 +111,8 @@ export function App() {
       .filter((item) => scoped.has(item.id))
       .reduce(
         (total, item) =>
-          total + item.timeline.present.segments.filter((segment) => segment.included !== false).length,
+          total +
+          item.timeline.present.segments.filter((segment) => segment.included !== false).length,
         0,
       );
   };
@@ -509,7 +296,6 @@ export function App() {
               </span>
             </button>
             <button
-              ref={(element) => (mediaToggle = element)}
               class="btn btn-ghost btn-sm drawer-button"
               type="button"
               aria-label={mediaOpen() ? "Collapse media panel" : "Expand media panel"}
@@ -521,7 +307,6 @@ export function App() {
               Media
             </button>
             <button
-              ref={(element) => (tasksToggle = element)}
               class="btn btn-ghost btn-sm drawer-button"
               type="button"
               aria-label={tasksOpen() ? "Collapse segments panel" : "Expand segments panel"}
@@ -586,8 +371,8 @@ export function App() {
                   panel separator by 16 px
                 </span>
                 <span>
-                  <kbd class="kbd kbd-sm">Home</kbd> / <kbd class="kbd kbd-sm">R</kbd> Reset a focused
-                  panel separator
+                  <kbd class="kbd kbd-sm">Home</kbd> / <kbd class="kbd kbd-sm">R</kbd> Reset a
+                  focused panel separator
                 </span>
                 <span>
                   <kbd class="kbd kbd-sm">I</kbd> / <kbd class="kbd kbd-sm">O</kbd> Set In / Out

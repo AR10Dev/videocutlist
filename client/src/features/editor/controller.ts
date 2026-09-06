@@ -121,7 +121,9 @@ export function createEditorController(deps: {
       });
     setTimeline(next);
     if (selectedID) {
-      const nextIndex = next.present.segments.findIndex((segment) => segment.id === selectedID);
+      const nextIndex = next.present.segments.findIndex(
+        (segment: Segment) => segment.id === selectedID,
+      );
       if (nextIndex >= 0) {
         setActiveIndex(nextIndex);
       } else {
@@ -150,7 +152,7 @@ export function createEditorController(deps: {
       const current = present().segments[active];
       if (!current) return selectActiveSegment();
       const boundary = kind === "inMs" ? "start" : "end";
-      const next = present().segments.map((segment, position) =>
+      const next = present().segments.map((segment: Segment, position: number) =>
         position === active
           ? { ...segment, [boundary === "start" ? "startMs" : "endMs"]: nextValue }
           : segment,
@@ -284,6 +286,29 @@ export function createEditorController(deps: {
     }
     updateTimeline({ segments: next });
   };
+  const updateSegmentBoundary = (index: number, boundary: "start" | "end", valueMs: number) => {
+    const segment = present().segments[index];
+    if (!segment || !Number.isInteger(valueMs) || valueMs < 0 || valueMs > duration()) {
+      setEditorStatus("In must be before Out and both must be within the video.");
+      return false;
+    }
+    const currentValue = boundary === "start" ? segment.startMs : segment.endMs;
+    if (currentValue === valueMs) {
+      setEditorStatus("");
+      return true;
+    }
+    const next = present().segments.map((item: Segment, position: number) =>
+      position === index
+        ? { ...item, [boundary === "start" ? "startMs" : "endMs"]: valueMs }
+        : item,
+    );
+    if (validateSegments(next, duration())) {
+      setEditorStatus("That boundary would overlap another cut or leave In before Out.");
+      return false;
+    }
+    updateTimeline({ segments: next });
+    return true;
+  };
   const previewSegment = (index: number, change: SegmentChange) => {
     const { current, next } = calculateSegmentUpdate(index, change);
     const preview =
@@ -349,7 +374,7 @@ export function createEditorController(deps: {
     selectedID: string | undefined,
   ) => {
     let nextIndex = selectedID
-      ? next.present.segments.findIndex((segment) => segment.id === selectedID)
+      ? next.present.segments.findIndex((segment: Segment) => segment.id === selectedID)
       : -1;
     if (nextIndex < 0)
       nextIndex = next.present.segments.findIndex(
@@ -502,6 +527,7 @@ export function createEditorController(deps: {
     removeSegment,
     moveSegment,
     updateSegment,
+    updateSegmentBoundary,
     updateSegmentLabel,
     updateSegmentIncluded,
     splitActiveSegment,
