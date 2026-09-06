@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -355,5 +356,106 @@ func TestCancellationRemovesIncompleteOutput(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Fatalf("cancelled export published leftovers: %#v", entries)
+	}
+}
+
+func TestSourceAdjacentExportUsesOpaqueLocationAndKeepsSource(t *testing.T) {
+	ffmpeg, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg is required")
+	}
+	ffprobe, err := exec.LookPath("ffprobe")
+	if err != nil {
+		t.Skip("ffprobe is required")
+	}
+	directory := t.TempDir()
+	mediaRoot := filepath.Join(directory, "media")
+	sourceDir := filepath.Join(mediaRoot, "camera")
+	if err := os.MkdirAll(sourceDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	sourcePath := filepath.Join(sourceDir, "fixture.mkv")
+	fixture := exec.Command(ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=160x90:rate=30", "-t", "1", "-c:v", "libx264", sourcePath)
+	if output, err := fixture.CombinedOutput(); err != nil {
+		t.Skipf("cannot generate fixture: %v: %s", err, output)
+	}
+	before, err := os.ReadFile(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := os.Open(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	service := export.Service{
+		FFmpegPath: ffmpeg, FFprobePath: ffprobe,
+		Destinations: []export.Destination{{ID: "beside", Kind: export.KindSourceAdjacent, MediaRoot: mediaRoot}},
+	}
+	result, err := service.Run(context.Background(), source, projectDocument(model.Segment{StartMS: 0, EndMS: 500}), export.Request{
+		Mode: "merge", CutStrategy: "stream_copy_preferred", Container: "mkv", DestinationID: "beside",
+		SourceRoot: mediaRoot, SourceRelative: "camera/fixture.mkv", SourceName: "fixture.mkv",
+		SourceSizeBytes: info.Size(), SourceMtimeNS: info.ModTime().UnixNano(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	outputPath := filepath.Join(sourceDir, ".videocutlist-exports", result.OutputName)
+	if _, err := os.Stat(outputPath); err != nil {
+		t.Fatalf("source-adjacent output missing: %v", err)
+	}
+	after, err := os.ReadFile(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(before) != string(after) {
+		t.Fatal("source changed during source-adjacent export")
+	}
+	if current, err := os.Stat(sourcePath); err != nil || current.Size() != info.Size() || current.ModTime() != info.ModTime() {
+		t.Fatalf("source metadata changed: current=%v err=%v", current, err)
+	}
+}
+
+func TestSeparateExportReportsPartialSuccess(t *testing.T) {
+	ffmpeg, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg is required")
+	}
+	ffprobe, err := exec.LookPath("ffprobe")
+	if err != nil {
+		t.Skip("ffprobe is required")
+	}
+	directory := t.TempDir()
+	sourcePath := filepath.Join(directory, "fixture.mkv")
+	fixture := exec.Command(ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=160x90:rate=30", "-t", "1", "-c:v", "libx264", "-g", "15", sourcePath)
+	if output, err := fixture.CombinedOutput(); err != nil {
+		t.Skipf("cannot generate fixture: %v: %s", err, output)
+	}
+	wrapper := filepath.Join(directory, "ffmpeg-wrapper.sh")
+	script := fmt.Sprintf("#!/bin/sh\ncase \"$*\" in *segment-000.mkv*) exit 7;; esac\nexec %q \"$@\"\n", ffmpeg)
+	if err := os.WriteFile(wrapper, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	source, err := os.Open(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	service := export.Service{FFmpegPath: wrapper, FFprobePath: ffprobe, OutputDir: filepath.Join(directory, "exports")}
+	result, err := service.Run(context.Background(), source, projectDocument(
+		model.Segment{StartMS: 0, EndMS: 400}, model.Segment{StartMS: 500, EndMS: 900},
+	), export.Request{Mode: "separate", CutStrategy: "stream_copy_preferred", Container: "mkv"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.OutputNames) != 1 || len(result.OutputFailures) != 1 || result.OutputFailures[0].Segment != 1 {
+		t.Fatalf("partial result = %#v", result)
+	}
+	if _, err := os.Stat(filepath.Join(service.OutputDir, result.OutputNames[0])); err != nil {
+		t.Fatalf("successful output missing: %v", err)
 	}
 }

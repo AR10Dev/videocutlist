@@ -87,7 +87,7 @@ func Preflight(request Request, metadata probe.Metadata) PreflightResult {
 	return result
 }
 
-func (s Service) preflightDestination(request Request, source string) error {
+func (s Service) preflightDestination(ctx context.Context, request Request, source *os.File) error {
 	destination := Destination{ID: "download", Kind: KindDownload, Root: s.OutputDir, Retention: s.Retention}
 	for _, candidate := range s.Destinations {
 		if candidate.ID == request.DestinationID || request.DestinationID == "" && candidate.ID == "download" {
@@ -98,8 +98,24 @@ func (s Service) preflightDestination(request Request, source string) error {
 	if request.DestinationID != "" && destination.ID != request.DestinationID {
 		return fmt.Errorf("unknown destination %q", request.DestinationID)
 	}
-	_, err := destinationRoot(destination, source)
-	return err
+	prepared, err := prepareDestination(destination, source, requestSourceName(source, request), SourceLocation{RootPath: request.SourceRoot, RelativePath: request.SourceRelative})
+	if err != nil {
+		return err
+	}
+	defer prepared.close()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	temporary, _, temporaryName, err := prepared.createTemp(".videocutlist-preflight-", ".tmp")
+	if err != nil {
+		return err
+	}
+	defer prepared.remove(temporaryName)
+	if err := temporary.Sync(); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	return temporary.Close()
 }
 
 func (s Service) Preflight(ctx context.Context, source *os.File, request Request) (PreflightResult, error) {
@@ -111,9 +127,17 @@ func (s Service) Preflight(ctx context.Context, source *os.File, request Request
 		return PreflightResult{}, fmt.Errorf("probe export source: %w", err)
 	}
 	result := Preflight(request, metadata)
-	if err := s.preflightDestination(request, source.Name()); err != nil {
+	if request.SourceSizeBytes > 0 || request.SourceMtimeNS > 0 {
+		info, statErr := source.Stat()
+		if statErr != nil || request.SourceSizeBytes > 0 && info.Size() != request.SourceSizeBytes || request.SourceMtimeNS > 0 && info.ModTime().UnixNano() != request.SourceMtimeNS {
+			result.Allowed = false
+			result.Findings = append(result.Findings, Finding{Severity: "blocked", Code: "source_changed", Message: "The source changed while export requirements were checked."})
+			return result, nil
+		}
+	}
+	if err := s.preflightDestination(ctx, request, source); err != nil {
 		result.Allowed = false
-		result.Findings = append(result.Findings, Finding{Severity: "blocked", Code: "invalid_destination", Message: err.Error()})
+		result.Findings = append(result.Findings, Finding{Severity: "blocked", Code: "invalid_destination", Message: "The selected destination is unavailable or not writable."})
 	}
 	return result, nil
 }

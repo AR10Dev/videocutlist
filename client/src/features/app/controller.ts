@@ -177,6 +177,7 @@ export function createWorkspaceController() {
     cancelBatch,
     cancelChildJob,
     retryChildJob,
+    destinationCapabilities,
   } = exportFeature;
   selectActiveExportItem.current = () => {
     const id = activeItemId();
@@ -503,6 +504,7 @@ export function createWorkspaceController() {
     streamIndexes,
     setStreamIndexes,
     destinations,
+    destinationCapabilities,
     destinationId,
     setDestinationId,
     filenameTemplate,

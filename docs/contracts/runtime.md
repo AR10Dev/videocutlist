@@ -107,6 +107,7 @@ VIDEOCUTLIST_IDLE_TIMEOUT=60s
 VIDEOCUTLIST_DATABASE_PATH
 VIDEOCUTLIST_CACHE_DIR
 VIDEOCUTLIST_EXPORT_DIR
+VIDEOCUTLIST_DESTINATIONS_JSON
 VIDEOCUTLIST_MEDIA_ROOTS_JSON
 VIDEOCUTLIST_AUTH_MODE=none|bearer|trusted_proxy
 VIDEOCUTLIST_BEARER_TOKEN
@@ -131,6 +132,15 @@ without credentials, query, or fragment; origins also have no path.
 `VIDEOCUTLIST_ALLOWED_ORIGINS` is comma-separated and empty by default. Requests
 without `Origin` and requests whose origin exactly matches the listener are
 same-origin. Other browser origins must exactly match the configured list.
+
+`VIDEOCUTLIST_DESTINATIONS_JSON` is an optional, deployment-owned array of typed
+export destinations. The default contains only the managed download destination.
+A `source_adjacent` entry explicitly enables save-beside-source and must provide
+its `mediaRoot`; the browser receives only its opaque ID, label, kind, retention,
+and the boolean `capabilities.saveBesideSource`. No destination or media path is
+returned. Save-beside-source is unavailable for a source that cannot be
+revalidated beneath that configured media root or whose adjacent export folder
+is not writable.
 Allowed responses echo that origin, set
 `Access-Control-Allow-Credentials: true`, vary on `Origin`, and expose
 `ETag`, `X-Request-ID`, `X-Preview-Start`, `X-Preview-Duration`,

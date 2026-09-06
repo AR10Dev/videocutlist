@@ -418,11 +418,14 @@ paths:
                 type: object
                 required:
                   - destinations
+                  - capabilities
                 properties:
                   destinations:
                     type: array
                     items:
                       $ref: "#/components/schemas/Destination"
+                  capabilities:
+                    $ref: "#/components/schemas/DestinationCapabilities"
   /jobs/{jobId}:
     parameters:
       - $ref: "#/components/parameters/JobId"
@@ -1083,6 +1086,16 @@ components:
             - source_adjacent
         retention:
           type: string
+    DestinationCapabilities:
+      type: object
+      required:
+        - saveBesideSource
+      properties:
+        saveBesideSource:
+          type: boolean
+          description: >-
+            True only when deployment configuration explicitly includes a
+            source_adjacent destination. No filesystem path is exposed.
     ExportPreflight:
       type: object
       required:
@@ -1180,6 +1193,22 @@ components:
                 Published separate-export filenames, never filesystem paths.
               items:
                 type: string
+            outputFailures:
+              type: array
+              description: >-
+                Per-segment failures when a separate export partially succeeds.
+              items:
+                type: object
+                additionalProperties: false
+                required: [segment, code, message]
+                properties:
+                  segment:
+                    type: integer
+                    minimum: 1
+                  code:
+                    type: string
+                  message:
+                    type: string
             sizeBytes:
               type: integer
               format: int64

@@ -109,8 +109,15 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 	}
 	seenDestinations := map[string]bool{}
 	for _, destination := range c.Destinations {
-		if destination.ID == "" || seenDestinations[destination.ID] || destination.Kind != exporter.KindDownload && destination.Kind != exporter.KindArchive && destination.Kind != exporter.KindSourceAdjacent {
+		if !validDestinationID(destination.ID) || seenDestinations[destination.ID] || destination.Kind != exporter.KindDownload && destination.Kind != exporter.KindArchive && destination.Kind != exporter.KindSourceAdjacent {
 			return Config{}, fmt.Errorf("invalid destination configuration")
+		}
+		if destination.Kind == exporter.KindSourceAdjacent {
+			if strings.TrimSpace(destination.MediaRoot) == "" {
+				return Config{}, fmt.Errorf("source-adjacent destinations require a media root")
+			}
+		} else if strings.TrimSpace(destination.Root) == "" {
+			return Config{}, fmt.Errorf("file destinations require a root")
 		}
 		seenDestinations[destination.ID] = true
 	}
@@ -177,6 +184,18 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 		return Config{}, fmt.Errorf("VIDEOCUTLIST_PREVIEW_MAX_MS must cover the default preview window")
 	}
 	return c, nil
+}
+
+func validDestinationID(value string) bool {
+	if strings.TrimSpace(value) == "" || len(value) > 64 || strings.ContainsAny(value, "/\\") {
+		return false
+	}
+	for _, character := range value {
+		if character < 32 || character == 127 {
+			return false
+		}
+	}
+	return true
 }
 
 func loadListener(c *Config, lookup func(string) (string, bool)) error {

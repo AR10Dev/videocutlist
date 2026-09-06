@@ -183,6 +183,30 @@ func TestLoadAllowsAnUnconfiguredMediaLibrary(t *testing.T) {
 	}
 }
 
+func TestSaveBesideSourceIsExplicitlyConfigured(t *testing.T) {
+	values := mergeEnv(baseEnv(), map[string]string{
+		"VIDEOCUTLIST_DESTINATIONS_JSON": `[{"id":"beside","label":"Beside source","kind":"source_adjacent","mediaRoot":"/media/camera"}]`,
+	})
+	config, err := load(env(values))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(config.Destinations) != 1 || config.Destinations[0].Kind != "source_adjacent" {
+		t.Fatalf("destinations = %#v", config.Destinations)
+	}
+	if _, err := load(env(mergeEnv(baseEnv(), map[string]string{
+		"VIDEOCUTLIST_DESTINATIONS_JSON": `[{"id":"beside","label":"Beside source","kind":"source_adjacent"}]`,
+	}))); err == nil {
+		t.Fatal("accepted source-adjacent destination without a media root")
+	}
+	for _, id := range []string{"../escape", "bad\\u0000id"} {
+		raw := `[{"id":"` + id + `","label":"Unsafe","kind":"download","root":"/exports"}]`
+		if _, err := load(env(mergeEnv(baseEnv(), map[string]string{"VIDEOCUTLIST_DESTINATIONS_JSON": raw}))); err == nil {
+			t.Fatalf("accepted unsafe destination ID %q", id)
+		}
+	}
+}
+
 func TestLoadErrorNamesSetting(t *testing.T) {
 	_, err := load(env(map[string]string{}))
 	if err == nil || !strings.Contains(err.Error(), "VIDEOCUTLIST_DATABASE_PATH") {

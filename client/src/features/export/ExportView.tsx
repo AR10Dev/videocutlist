@@ -25,6 +25,7 @@ export function ExportView() {
     cutStrategy,
     streamIndexes,
     destinations,
+    destinationCapabilities,
     destinationId,
     filenameTemplate,
     preflight,
@@ -309,7 +310,17 @@ export function ExportView() {
               onChange={(event) => exportFeature.setDestination(event.currentTarget.value)}
             >
               <For each={destinations()}>
-                {(destination) => <option value={destination.id}>{destination.label}</option>}
+                {(destination) => (
+                  <option
+                    value={destination.id}
+                    disabled={
+                      destination.kind === "source_adjacent" &&
+                      !destinationCapabilities().saveBesideSource
+                    }
+                  >
+                    {destination.label}
+                  </option>
+                )}
               </For>
             </select>
           </label>
@@ -356,6 +367,20 @@ export function ExportView() {
             {exportJob()!.result!.sizeBytes.toLocaleString()} bytes · retained until{" "}
             {exportJob()!.result!.retainUntil}
           </p>
+          <Show when={(exportJob()!.result!.outputFailures?.length ?? 0) > 0}>
+            <div role="alert">
+              Some clips were not saved. Completed outputs are listed above.
+              <ul>
+                <For each={exportJob()!.result!.outputFailures}>
+                  {(failure) => (
+                    <li>
+                      Segment {failure.segment}: {failure.message}
+                    </li>
+                  )}
+                </For>
+              </ul>
+            </div>
+          </Show>
           <Show
             when={
               exportJob()!.state === "succeeded" &&

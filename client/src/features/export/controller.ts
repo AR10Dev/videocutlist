@@ -54,6 +54,9 @@ export function createExportController(deps: {
   const [cutStrategy, setCutStrategy] = createSignal(deps.settings().cutStrategy);
   const [streamIndexes, setStreamIndexes] = createSignal<number[]>([]);
   const [destinations, setDestinations] = createSignal<Destination[]>([]);
+  const [destinationCapabilities, setDestinationCapabilities] = createSignal<
+    components["schemas"]["DestinationCapabilities"]
+  >({ saveBesideSource: false });
   const [destinationId, setDestinationId] = createSignal(lastDestinationId() ?? "download");
   const [destinationStatus, setDestinationStatus] = createSignal("");
   const [filenameTemplate, setFilenameTemplate] = createSignal(deps.settings().filenameTemplate);
@@ -137,11 +140,23 @@ export function createExportController(deps: {
   });
   void deps.api.request("destinations").then(async (response) => {
     if (!response.ok) return;
-    const value = (await response.json()) as { destinations?: Destination[] };
-    setDestinations(Array.isArray(value.destinations) ? value.destinations : []);
+    const value = (await response.json()) as {
+      destinations?: Destination[];
+      capabilities?: components["schemas"]["DestinationCapabilities"];
+    };
+    const configured = Array.isArray(value.destinations) ? value.destinations : [];
+    setDestinations(configured);
+    setDestinationCapabilities(
+      value.capabilities ?? {
+        saveBesideSource: configured.some((item) => item.kind === "source_adjacent"),
+      },
+    );
   });
   createEffect(() => {
-    const configured = destinations();
+    const configured = destinations().filter(
+      (destination) =>
+        destination.kind !== "source_adjacent" || destinationCapabilities().saveBesideSource,
+    );
     const current = destinationId();
     if (!configured.length) return;
     if (!destinationIsConfigured(current, configured)) {
@@ -487,6 +502,7 @@ export function createExportController(deps: {
     streamIndexes,
     setStreamIndexes,
     destinations,
+    destinationCapabilities,
     destinationId,
     setDestinationId,
     filenameTemplate,

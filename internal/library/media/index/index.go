@@ -408,28 +408,46 @@ func (s *Scanner) Refresh(ctx context.Context, catalog Catalog) error {
 	return firstErr
 }
 
+// SourceLocation identifies an indexed source for server-side destination
+// resolution. It is deliberately not part of any browser-facing model.
+type SourceLocation struct {
+	RootPath     string `json:"-"`
+	RelativePath string `json:"-"`
+}
+
 // Open resolves a catalog record server-side and returns an open file, never a
 // filesystem path. Callers must close the returned reader.
 func (s *Scanner) Open(ctx context.Context, catalog Catalog, id string) (io.ReadCloser, Media, error) {
+	file, media, _, err := s.OpenResolved(ctx, catalog, id)
+	return file, media, err
+}
+
+// OpenResolved returns the same validated source as Open plus its opaque
+// server-side location for destinations that need to sit beside the source.
+func (s *Scanner) OpenResolved(ctx context.Context, catalog Catalog, id string) (*os.File, Media, SourceLocation, error) {
 	s.config.RLock()
 	defer s.config.RUnlock()
 	record, err := catalog.Get(ctx, id)
 	if err != nil {
-		return nil, Media{}, err
+		return nil, Media{}, SourceLocation{}, err
 	}
 	root, err := s.root(record.RootAlias)
 	if err != nil {
-		return nil, Media{}, err
+		return nil, Media{}, SourceLocation{}, err
 	}
 	file, info, err := openMedia(root, record.RelativePath)
 	if err != nil {
-		return nil, Media{}, err
+		return nil, Media{}, SourceLocation{}, err
 	}
 	if !info.Mode().IsRegular() || info.Size() != record.SizeBytes || info.ModTime().UnixNano() != record.MtimeNS {
 		_ = file.Close()
-		return nil, Media{}, ErrSourceChanged
+		return nil, Media{}, SourceLocation{}, ErrSourceChanged
 	}
-	return file, record.Media, nil
+	rootPath := root.Path
+	if root.handle != nil && root.handle.Name() != "" {
+		rootPath = root.handle.Name()
+	}
+	return file, record.Media, SourceLocation{RootPath: rootPath, RelativePath: filepath.ToSlash(record.RelativePath)}, nil
 }
 
 // openMedia resolves a relative path beneath the root's persistent descriptor,

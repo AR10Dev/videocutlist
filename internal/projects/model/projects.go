@@ -171,7 +171,7 @@ func validateExportOptions(options ExportOptions) error {
 	if options.Container != "" && options.Container != "mkv" {
 		return errors.New("invalid export container")
 	}
-	if len(options.DestinationID) > 64 || len(options.FilenameTemplate) > 160 || strings.ContainsAny(options.DestinationID, "/\\") || strings.Contains(options.FilenameTemplate, "\x00") {
+	if len(options.DestinationID) > 64 || len(options.FilenameTemplate) > 160 || strings.ContainsAny(options.DestinationID, "/\\") || strings.Contains(options.FilenameTemplate, "\x00") || strings.IndexFunc(options.DestinationID, func(r rune) bool { return r < 32 || r == 127 }) >= 0 {
 		return errors.New("invalid export destination")
 	}
 	seen := make(map[int]struct{}, len(options.StreamIndexes))
