@@ -2190,10 +2190,10 @@ test("keeps the preview stable and exposes familiar playback controls", async ({
     "aria-pressed",
     "true",
   );
-  await page.getByRole("button", { name: "Next frame" }).click();
+  await page.getByRole("button", { name: "Next preview step (period)" }).click();
   const nextFrame = Number(await page.getByLabel("Timeline playhead").inputValue());
   expect(nextFrame).toBeGreaterThan(1000);
-  await page.getByRole("button", { name: "Previous frame" }).click();
+  await page.getByRole("button", { name: "Previous preview step (comma)" }).click();
   await expect(page.getByLabel("Timeline playhead")).toHaveValue("1000");
 
   await page.getByLabel("Timeline playhead").fill("3000");
@@ -2453,6 +2453,6 @@ test("returning from Settings reattaches preview and timecode follows later seek
   const timecode = page.getByRole("textbox", { name: "Timecode", exact: true });
   await timecode.fill("00:02.000");
   await timecode.press("Enter");
-  await page.getByRole("button", { name: "Next frame" }).click();
+  await page.getByRole("button", { name: "Next preview step (period)" }).click();
   await expect(timecode).toHaveValue("00:03.000");
 });

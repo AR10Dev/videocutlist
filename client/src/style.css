@@ -519,9 +519,14 @@
   }
   .alert {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     justify-content: space-between;
     gap: 8px;
+  }
+  .alert > span {
+    min-width: 0;
+    overflow-wrap: anywhere;
   }
 
   .timeline-scroll {
@@ -1248,7 +1253,11 @@
       width: 64px;
     }
     .view-controls {
+      flex: 1 1 100%;
+      min-width: 0;
+      max-width: 100%;
       margin-left: 0;
+      flex-wrap: wrap;
     }
     .task-panel,
     .settings-view {

@@ -114,7 +114,11 @@ export function CutsView() {
                           workspace.playheadMs() >= segment.endMs
                         }
                         onClick={() => {
-                          workspace.setActiveSegmentIndex(index());
+                          const playheadMs = workspace.playheadMs();
+                          if (workspace.activeSegmentIndex() !== index()) {
+                            workspace.setActiveSegmentIndex(index());
+                            workspace.updateTimeline({ playheadMs });
+                          }
                           workspace.splitActiveSegment();
                         }}
                       >
