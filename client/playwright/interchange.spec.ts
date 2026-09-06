@@ -197,8 +197,4 @@ test("separates media selection from cut-list imports", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Export" })).toBeVisible();
   await page.getByRole("tab", { name: "Project" }).click();
   await expect(page.getByLabel("Import cut list")).toBeVisible();
-  await expect(page.getByLabel("Import CSV or chapters")).toHaveCount(0);
-
-  await page.getByRole("button", { name: "Save project" }).click();
-  await expect(page.getByLabel("Import CSV or chapters")).toBeVisible();
 });

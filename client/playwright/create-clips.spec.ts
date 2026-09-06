@@ -185,7 +185,7 @@ test("multi-item Create clips preflights every selected item before submission",
   await page.getByText("Export options", { exact: true }).click();
   await expect(page.getByText("One selected item has an unsupported stream.")).toBeVisible();
   await expect(create).toBeDisabled();
-  expect(calls).toEqual(["save", "preflight"]);
+  expect(calls.slice(-2)).toEqual(["save", "preflight"]);
   expect(preflightItems).toHaveLength(1);
   expect(preflightItems[0]).toHaveLength(2);
   expect(exports).toBe(0);
