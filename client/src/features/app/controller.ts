@@ -210,6 +210,7 @@ export function createWorkspaceController() {
         : item,
     );
   const activateItem = (item: EditableProjectItem) => {
+    if (item.media.id !== selected()?.id) editorFeature.prepareMediaSwitch();
     setProjectItems(editableItems());
     setActiveItemId(item.id);
     setSelected(item.media);

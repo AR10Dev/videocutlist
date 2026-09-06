@@ -19,7 +19,7 @@ const setup = () => {
   let dispose!: () => void;
   const value = createRoot((cleanup) => {
     dispose = cleanup;
-    const [selected] = createSignal<Media | undefined>(media);
+    const [selected, setSelected] = createSignal<Media | undefined>(media);
     const [, setStatus] = createSignal("");
     let dirty = 0;
     let committed = 0;
@@ -40,7 +40,7 @@ const setup = () => {
         committed += 1;
       },
     });
-    return { controller, dirty: () => dirty, committed: () => committed };
+    return { controller, dirty: () => dirty, committed: () => committed, setSelected };
   });
   return { ...value, dispose };
 };
@@ -89,6 +89,19 @@ describe("automatic segment editing", () => {
     expect(controller.present().segments[0].id).toBe(firstId);
     expect(controller.present().segments[1]).toEqual(second);
     expect(controller.activeSegmentIndex()).toBe(1);
+    dispose();
+  });
+
+  it("discards an incomplete draft before switching media", async () => {
+    const { controller, setSelected, dispose } = setup();
+    controller.setMarker("inMs", 100);
+    controller.prepareMediaSwitch();
+    setSelected({ ...media, id: "m_9876543210987654321098765432109876543210987" });
+    await Promise.resolve();
+
+    expect(controller.present().inMs).toBeUndefined();
+    expect(controller.present().outMs).toBeUndefined();
+    expect(controller.editorStatus()).toContain("Incomplete marks were discarded");
     dispose();
   });
 });

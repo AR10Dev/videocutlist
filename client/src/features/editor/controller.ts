@@ -325,8 +325,9 @@ export function createEditorController(deps: {
   };
 
   const prepareMediaSwitch = () => {
-    if (present().inMs !== undefined || present().outMs !== undefined)
-      mediaSwitchDiscardedDraft = true;
+    if (present().inMs === undefined && present().outMs === undefined) return;
+    mediaSwitchDiscardedDraft = true;
+    clearDraft();
   };
 
   createEffect(() => {
