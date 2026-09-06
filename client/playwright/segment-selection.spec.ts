@@ -2093,6 +2093,10 @@ test("covers the responsive workspace and keyboard editing workflow", async ({ p
   await page.keyboard.press("Enter");
   await page.waitForTimeout(300);
   await addSelectedMediaToProject(page);
+  const taskToggle = page.locator(".workspace-action-row").getByRole("button", {
+    name: /segments panel/,
+  });
+  if ((await taskToggle.getAttribute("aria-expanded")) === "false") await taskToggle.click();
 
   const projectTab = page.getByRole("tab", { name: "Project" });
   const exportTab = page.getByRole("tab", { name: "Export" });
@@ -2412,6 +2416,10 @@ test("keeps motion reduced and overflow local at a narrow viewport", async ({ pa
     }),
   ).toBeVisible();
   await expect(page.getByLabel("Label cut 1")).toBeVisible();
+  const taskToggle = page.locator(".workspace-action-row").getByRole("button", {
+    name: /segments panel/,
+  });
+  if ((await taskToggle.getAttribute("aria-expanded")) === "true") await taskToggle.click();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
   const timelineOverflow = await page.locator(".timeline-scroll").evaluate((element) => ({
     client: element.clientWidth,

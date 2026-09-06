@@ -69,9 +69,18 @@ export function EditorView(props: { onChooseMedia: () => void }) {
               <span>{formatTime(item().durationMs, workspace.duration())}</span>
             </div>
             <Show when={!workspace.activeItemId()}>
-              <p class="text-sm text-base-content/70" role="status">
-                Preview only · Add to project to save cuts.
-              </p>
+              <div class="preview-only-notice" role="status">
+                <p class="text-sm text-base-content/70">
+                  Preview only · Add to project to save cuts.
+                </p>
+                <button
+                  class="btn btn-primary btn-sm"
+                  type="button"
+                  onClick={() => workspace.addMediaToProject()}
+                >
+                  Add to project
+                </button>
+              </div>
             </Show>
             <p id="timeline-description" class="sr-only">
               Playhead {formatTime(workspace.playheadMs(), workspace.duration())}. In marker{" "}

@@ -90,10 +90,9 @@ for (const width of [390, 700, 1050, 1051, 1280, 1717]) {
   test(`workbench geometry and settings stay usable at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 1005 });
     await chooseMedia(page);
-    const header = await page.locator(".app-header").boundingBox();
-    expect(header!.height).toBeLessThan(70);
-    const navbar = await page.locator(".app-navbar").boundingBox();
-    expect(navbar!.y).toBeLessThan(20);
+    const actionRow = await page.locator(".workspace-action-row").boundingBox();
+    expect(actionRow!.y).toBeLessThan(20);
+    expect(actionRow!.height).toBeLessThan(180);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
       width,
     );
@@ -110,6 +109,17 @@ for (const width of [390, 700, 1050, 1051, 1280, 1717]) {
     if (width >= 1051) {
       const timelineBox = (await page.locator(".timeline-scroll").boundingBox())!;
       expect(timelineBox.y + timelineBox.height).toBeLessThan(1005);
+    }
+    if (width < 1050) {
+      const mediaToggle = page.locator(".workspace-action-row").getByRole("button", {
+        name: /media panel/,
+      });
+      const segmentsToggle = page.locator(".workspace-action-row").getByRole("button", {
+        name: /segments panel/,
+      });
+      if ((await mediaToggle.getAttribute("aria-expanded")) === "true") await mediaToggle.click();
+      if ((await segmentsToggle.getAttribute("aria-expanded")) === "false")
+        await segmentsToggle.click();
     }
     await page.getByRole("tab", { name: "Export", exact: true }).click();
     await page.getByText("Export options", { exact: true }).click();
@@ -134,12 +144,58 @@ for (const width of [390, 700, 1050, 1051, 1280, 1717]) {
 
 test("onboarding expands Media and Export expands the task sidebar", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: "Toggle Media sidebar" }).click();
+  const mediaToggle = page
+    .locator(".workspace-action-row")
+    .getByRole("button", { name: /media panel/ });
+  const segmentsToggle = page
+    .locator(".workspace-action-row")
+    .getByRole("button", { name: /segments panel/ });
+  if ((await mediaToggle.getAttribute("aria-expanded")) === "true") await mediaToggle.click();
+  if ((await segmentsToggle.getAttribute("aria-expanded")) === "true") await segmentsToggle.click();
   await page.getByRole("button", { name: "Choose a video" }).click();
   await expect(page.getByRole("button", { name: "Select camera.mp4" })).toBeFocused();
-  await page.getByRole("button", { name: "Toggle task sidebar" }).click();
-  await page.getByRole("button", { name: "Export", exact: true }).click();
+  if ((await segmentsToggle.getAttribute("aria-expanded")) === "false")
+    await segmentsToggle.click();
+  await page.getByRole("button", { name: /Export 0 segments/ }).click();
   await expect(page.getByRole("tab", { name: "Export", exact: true })).toBeVisible();
+});
+
+test("panel layout persists and narrow drawers remain exclusive", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto("/");
+  await page.evaluate(() => localStorage.clear());
+  await page.reload();
+
+  const mediaToggle = page.locator(".workspace-action-row").getByRole("button", {
+    name: /media panel/,
+  });
+  const segmentsToggle = page.locator(".workspace-action-row").getByRole("button", {
+    name: /segments panel/,
+  });
+  const mediaResizer = page.locator(".media-resizer");
+  await mediaResizer.focus();
+  await mediaResizer.press("ArrowRight");
+  await expect(mediaResizer).toHaveAttribute("aria-valuenow", "256");
+  await mediaResizer.press("Home");
+  await expect(mediaResizer).toHaveAttribute("aria-valuenow", "240");
+  await mediaToggle.click();
+  await expect(mediaToggle).toHaveAttribute("aria-expanded", "false");
+  await page.reload();
+  await expect(mediaToggle).toHaveAttribute("aria-expanded", "false");
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.reload();
+  await mediaToggle.click();
+  await expect(mediaToggle).toHaveAttribute("aria-expanded", "true");
+  await expect(segmentsToggle).toHaveAttribute("aria-expanded", "false");
+  await segmentsToggle.click();
+  await expect(segmentsToggle).toHaveAttribute("aria-expanded", "true");
+  await expect(mediaToggle).toHaveAttribute("aria-expanded", "false");
+  await page
+    .locator("#segments-panel")
+    .getByRole("button", { name: "Close segments panel" })
+    .click();
+  await expect(segmentsToggle).toBeFocused();
 });
 
 test("server projects are browsable without selecting media and support pagination", async ({
