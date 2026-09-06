@@ -283,10 +283,7 @@ export function CutsView() {
                           workspace.playActiveSegment(false);
                         }}
                       >
-                        <Play size={14} aria-hidden="true" /> Play{" "}
-                        <kbd class="kbd kbd-xs" aria-hidden="true">
-                          P
-                        </kbd>
+                        <Play size={14} aria-hidden="true" /> Play
                       </button>
                       <button
                         class="btn btn-ghost btn-xs"
@@ -297,10 +294,7 @@ export function CutsView() {
                           workspace.toggleLoopSelectedSegment();
                         }}
                       >
-                        <Repeat2 size={14} aria-hidden="true" /> Loop{" "}
-                        <kbd class="kbd kbd-xs" aria-hidden="true">
-                          L
-                        </kbd>
+                        <Repeat2 size={14} aria-hidden="true" /> Loop
                       </button>
                       <button
                         class="btn btn-ghost btn-xs"

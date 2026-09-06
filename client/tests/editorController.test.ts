@@ -69,6 +69,27 @@ describe("automatic segment editing", () => {
     dispose();
   });
 
+  it("starts a second draft when Start is pressed after a completed cut", () => {
+    const { controller, dispose } = setup();
+    controller.setMarker("inMs", 100);
+    controller.setMarker("outMs", 300);
+
+    controller.startSegmentAt(500);
+    expect(controller.present().segments).toHaveLength(1);
+    expect(controller.present().segments[0]).toMatchObject({ startMs: 100, endMs: 300 });
+    expect(controller.present().inMs).toBe(500);
+    expect(controller.present().outMs).toBeUndefined();
+    expect(controller.activeSegmentIndex()).toBeUndefined();
+
+    controller.setMarker("outMs", 700);
+    expect(controller.present().segments).toHaveLength(2);
+    expect(controller.present().segments[1]).toMatchObject({ startMs: 500, endMs: 700 });
+
+    expect(controller.updateSegmentBoundary(0, "start", 120)).toBe(true);
+    expect(controller.present().segments[0]).toMatchObject({ startMs: 120, endMs: 300 });
+    dispose();
+  });
+
   it("rejects invalid typed boundaries without changing the committed segment", () => {
     const { controller, dispose } = setup();
     controller.setMarker("inMs", 100);

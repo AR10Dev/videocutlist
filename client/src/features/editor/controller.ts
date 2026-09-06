@@ -210,6 +210,20 @@ export function createEditorController(deps: {
     deps.markDirty();
     deps.onSegmentCommitted?.();
   };
+  /** Start a fresh range when the user presses Start after a completed cut.
+   * Boundary inputs intentionally continue to use setMarker so existing cuts can be edited.
+   */
+  const startSegmentAt = (value: number) => {
+    const nextValue = Math.round(value);
+    if (!Number.isFinite(nextValue) || nextValue < 0 || nextValue > duration())
+      return setEditorStatus("In must be before Out and both must be within the video.");
+    setEditorStatus("");
+    deps.pausePlayback();
+    setActiveIndex();
+    setEditingActive(false);
+    setTimeline(updateTimelineDraft(timeline(), { inMs: nextValue, outMs: undefined }));
+  };
+
   const previewMarker = (kind: "inMs" | "outMs", value: number) => {
     const active = activeSegmentIndex();
     if (active !== undefined && editingActive()) {
@@ -449,7 +463,8 @@ export function createEditorController(deps: {
         deps.togglePlayback();
       } else if (event.key.toLowerCase() === "i" || event.key.toLowerCase() === "o") {
         event.preventDefault();
-        setMarker(event.key.toLowerCase() === "i" ? "inMs" : "outMs", deps.watchedPosition());
+        if (event.key.toLowerCase() === "i") startSegmentAt(deps.watchedPosition());
+        else setMarker("outMs", deps.watchedPosition());
       } else if (event.key.toLowerCase() === "c") {
         event.preventDefault();
         newSegment();
@@ -521,6 +536,7 @@ export function createEditorController(deps: {
     updateTimeline,
     updatePlaybackPosition,
     setMarker,
+    startSegmentAt,
     previewMarker,
     previewSegment,
     addSegment,

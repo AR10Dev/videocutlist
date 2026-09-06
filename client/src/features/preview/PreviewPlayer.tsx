@@ -1,4 +1,4 @@
-import { createSignal, onCleanup, Show, type JSX } from "solid-js";
+import { createSignal, onCleanup, type JSX } from "solid-js";
 import { Tooltip } from "@kobalte/core/tooltip";
 import { frameDuration } from "../editor/frame";
 import {
@@ -38,11 +38,6 @@ function IconButton(props: IconButtonProps) {
         disabled={props.disabled}
       >
         {props.children}
-        <Show when={props.keyshortcuts}>
-          <kbd class="kbd kbd-xs control-key" aria-hidden="true">
-            {props.keyshortcuts}
-          </kbd>
-        </Show>
       </Tooltip.Trigger>
       <Tooltip.Portal>
         <Tooltip.Content class="tooltip-content">{props.label}</Tooltip.Content>
@@ -157,11 +152,7 @@ export function PreviewPlayer(props: { timeline: JSX.Element; controls: JSX.Elem
             <IconButton label="Previous cut" onClick={() => jumpToCut(-1)}>
               <ChevronsLeft size={18} aria-hidden="true" />
             </IconButton>
-            <IconButton
-              label="Previous preview step (comma)"
-              keyshortcuts=","
-              onClick={() => step(-1)}
-            >
+            <IconButton label="Previous preview step" keyshortcuts="," onClick={() => step(-1)}>
               <SkipBack size={18} aria-hidden="true" />
             </IconButton>
             <IconButton
@@ -176,7 +167,7 @@ export function PreviewPlayer(props: { timeline: JSX.Element; controls: JSX.Elem
                 <Play size={22} aria-hidden="true" />
               )}
             </IconButton>
-            <IconButton label="Next preview step (period)" keyshortcuts="." onClick={() => step(1)}>
+            <IconButton label="Next preview step" keyshortcuts="." onClick={() => step(1)}>
               <SkipForward size={18} aria-hidden="true" />
             </IconButton>
             <IconButton label="Next cut" onClick={() => jumpToCut(1)}>
@@ -207,33 +198,42 @@ export function PreviewPlayer(props: { timeline: JSX.Element; controls: JSX.Elem
             >
               <List size={18} aria-hidden="true" />
             </IconButton>
-            <IconButton
-              label={workspace.muted() ? "Unmute preview" : "Mute preview"}
-              pressed={workspace.muted()}
-              disabled={!canStreamPreview()}
-              onClick={() => {
-                const muted = !workspace.muted();
-                workspace.setMuted(muted);
-                workspace.saveSettings({ muted });
-              }}
-            >
-              {workspace.muted() ? (
-                <VolumeX size={18} aria-hidden="true" />
-              ) : (
-                <Volume2 size={18} aria-hidden="true" />
-              )}
-            </IconButton>
-            <input
-              class="range range-xs"
-              type="range"
-              aria-label="Preview volume"
-              disabled={!canStreamPreview()}
-              min="0"
-              max="1"
-              step="0.05"
-              value={volume()}
-              onInput={(event) => setVolumeValue(Number(event.currentTarget.value))}
-            />
+            <div class="volume-control" aria-label="Preview audio">
+              <IconButton
+                label={workspace.muted() ? "Unmute preview" : "Mute preview"}
+                pressed={workspace.muted()}
+                disabled={!canStreamPreview()}
+                onClick={() => {
+                  const muted = !workspace.muted();
+                  workspace.setMuted(muted);
+                  workspace.saveSettings({ muted });
+                }}
+              >
+                {workspace.muted() ? (
+                  <VolumeX size={18} aria-hidden="true" />
+                ) : (
+                  <Volume2 size={18} aria-hidden="true" />
+                )}
+              </IconButton>
+              <input
+                class="range range-xs"
+                type="range"
+                aria-label="Preview volume"
+                title="Preview volume"
+                disabled={!canStreamPreview()}
+                min="0"
+                max="1"
+                step="0.05"
+                value={volume()}
+                onInput={(event) => {
+                  setVolumeValue(Number(event.currentTarget.value));
+                  if (workspace.muted()) {
+                    workspace.setMuted(false);
+                    workspace.saveSettings({ muted: false });
+                  }
+                }}
+              />
+            </div>
           </div>
           {props.controls}
         </div>

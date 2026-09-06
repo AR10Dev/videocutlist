@@ -103,38 +103,34 @@ test("browsing stays out of the project until add, then activates without duplic
   await page.getByRole("button", { name: "Select camera.mp4" }).click();
   await expect(page.getByRole("button", { name: "Add to project" })).toBeVisible();
 
-  await page.getByRole("tab", { name: "Project", exact: true }).click();
-  await expect(page.getByText(/Previewing camera\.mp4/)).toBeVisible();
   await expect(page.getByRole("list", { name: "Project media items" })).toHaveCount(0);
 
   await page.getByRole("button", { name: "Add to project" }).click();
   const projectItems = page.getByRole("list", { name: "Project media items" });
-  await expect(projectItems.getByRole("button", { name: "camera.mp4", exact: true })).toBeVisible();
+  await expect(projectItems.getByRole("button", { name: /^camera\.mp4/ })).toBeVisible();
   await addSegment(page);
 
   await openMediaChooser(page);
   await page.getByRole("button", { name: "Select second.mp4" }).click();
   await expect(page.getByRole("button", { name: "Add to project" })).toBeVisible();
-  await expect(page.getByRole("list", { name: "Project media items" })).toHaveCount(0);
+  await expect(projectItems).toHaveCount(1);
+  await expect(projectItems.getByRole("button", { name: /^second\.mp4/ })).toHaveCount(0);
   await page.getByRole("tab", { name: "Export", exact: true }).click();
   await expect(page.getByLabel("Export summary")).toContainText("0 · 00:00.000 requested");
   await expect(page.getByRole("button", { name: "Create clips" })).toBeDisabled();
 
   await page.getByRole("button", { name: "Add to project" }).click();
-  await page.getByRole("tab", { name: "Project", exact: true }).click();
-  await expect(projectItems.getByRole("button", { name: "camera.mp4", exact: true })).toBeVisible();
-  await expect(projectItems.getByRole("button", { name: "second.mp4", exact: true })).toBeVisible();
+  await expect(projectItems.getByRole("button", { name: /^camera\.mp4/ })).toBeVisible();
+  await expect(projectItems.getByRole("button", { name: /^second\.mp4/ })).toBeVisible();
 
   await openMediaChooser(page);
   await page.getByRole("button", { name: "Select camera.mp4" }).click();
   await expect(page.getByRole("button", { name: "Add to project" })).toHaveCount(0);
-  await page.getByRole("tab", { name: "Project", exact: true }).click();
-  await expect(
-    projectItems.getByRole("button", { name: "camera.mp4", exact: true }),
-  ).toHaveAttribute("aria-pressed", "true");
-  await expect(projectItems.getByRole("button", { name: "camera.mp4", exact: true })).toHaveCount(
-    1,
+  await expect(projectItems.getByRole("button", { name: /^camera\.mp4/ })).toHaveAttribute(
+    "aria-pressed",
+    "true",
   );
+  await expect(projectItems.getByRole("button", { name: /^camera\.mp4/ })).toHaveCount(1);
 
   await page.getByRole("tab", { name: "Export", exact: true }).click();
   const exportPanel = page.getByRole("region", { name: "Export" });

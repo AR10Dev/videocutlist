@@ -91,9 +91,8 @@ test("export cancellation is isolated from a changed media context", async ({ pa
     "aria-pressed",
     "true",
   );
-  await page.getByRole("tab", { name: "Project" }).click();
-  await page.getByRole("button", { name: "Save project" }).click();
-  await page.getByRole("tab", { name: "Export" }).click();
+  await page.getByRole("button", { name: "Save project", exact: true }).click();
+  await page.getByRole("tab", { name: "Export", exact: true }).click();
   await expect(page.getByRole("button", { name: "Create clips" })).toBeEnabled();
   await page.getByRole("button", { name: "Create clips" }).click();
   await expect(page.getByRole("button", { name: "Cancel export" })).toBeVisible();
@@ -101,17 +100,15 @@ test("export cancellation is isolated from a changed media context", async ({ pa
   await deleteSeen;
   await page.getByRole("button", { name: /second.mp4/ }).click();
   await page.getByRole("button", { name: "Add to project" }).click();
-  await page.getByRole("tab", { name: "Project" }).click();
   releaseDelete();
   await expect.poll(() => deleteAborted).toBe(true);
   releaseOldMetadata();
   await expect(
     page.getByRole("list", { name: "Project media items" }).getByRole("button", {
-      name: "second.mp4",
-      exact: true,
+      name: /^second\.mp4/,
     }),
   ).toHaveAttribute("aria-pressed", "true");
-  await page.getByRole("tab", { name: "Export" }).click();
+  await page.getByRole("tab", { name: "Export", exact: true }).click();
   await expect(page.getByText("Export cancelled.")).toBeVisible();
   await expect(page.getByRole("button", { name: "Cancel export" })).not.toBeVisible();
 });
@@ -119,9 +116,10 @@ test("export cancellation is isolated from a changed media context", async ({ pa
 test("project interchange controls wait for media selection", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Choose a video to begin" })).toBeVisible();
-  await expect(page.getByRole("tab", { name: "Project", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Project", exact: true })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Cuts", exact: true })).toBeVisible();
   await expect(page.getByRole("tab", { name: "Export", exact: true })).toBeVisible();
-  await expect(page.getByRole("tab", { name: "Detection", exact: true })).toBeDisabled();
+  await expect(page.getByRole("tab", { name: "Auto-detect", exact: true })).toBeDisabled();
   await expect(
     page.getByText("Select a video from the Media library to unlock the editing workspace."),
   ).toBeVisible();
@@ -130,7 +128,9 @@ test("project interchange controls wait for media selection", async ({ page }) =
   await expect(page.getByLabel("Import CSV or chapters")).not.toBeVisible();
 });
 
-test("gates interchange exports until the project is persisted", async ({ page }) => {
+test("project interchange stays available in the compact sidebar after media is added", async ({
+  page,
+}) => {
   await page.addInitScript(() => {
     window.VIDEOCUTLIST_CONFIG = {
       serverBaseUrl: "http://127.0.0.1:8787",
@@ -152,17 +152,10 @@ test("gates interchange exports until the project is persisted", async ({ page }
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   await page.getByRole("button", { name: "Add to project" }).click();
-  await page.getByRole("tab", { name: "Project" }).click();
   await page.getByText("Interchange", { exact: true }).click();
-  await expect(page.getByRole("button", { name: "Export CSV" })).toBeDisabled();
-  await expect(page.getByRole("button", { name: "Export chapters" })).toBeDisabled();
-  await expect(
-    page.getByText("Save the project before importing or exporting CSV or chapters."),
-  ).toBeVisible();
-
-  await page.getByRole("button", { name: "Save project" }).click();
-  await expect(page.getByRole("button", { name: "Export CSV" })).toBeEnabled();
-  await expect(page.getByRole("button", { name: "Export chapters" })).toBeEnabled();
+  await expect(page.getByLabel("Import cut list")).toBeVisible();
+  await page.getByRole("button", { name: "Save project", exact: true }).click();
+  await expect(page.getByText(/Project saved \(revision \d+\)\./)).toBeVisible();
 });
 
 test("separates media selection from cut-list imports", async ({ page }) => {
@@ -190,11 +183,9 @@ test("separates media selection from cut-list imports", async ({ page }) => {
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   await page.getByRole("button", { name: "Add to project" }).click();
   await expect(page.getByRole("heading", { name: "Timeline" })).toBeVisible();
-  await page.getByRole("tab", { name: "Project" }).click();
   await page.getByText("Interchange", { exact: true }).click();
-  await expect(page.getByRole("button", { name: "Export CSV" })).toBeVisible();
-  await page.getByRole("tab", { name: "Export" }).click();
-  await expect(page.getByRole("heading", { name: "Export" })).toBeVisible();
-  await page.getByRole("tab", { name: "Project" }).click();
+  await expect(page.getByLabel("Import cut list")).toBeVisible();
+  await page.getByRole("tab", { name: "Export", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Export", exact: true })).toBeVisible();
   await expect(page.getByLabel("Import cut list")).toBeVisible();
 });

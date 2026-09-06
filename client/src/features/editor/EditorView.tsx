@@ -1,11 +1,28 @@
 import { createEffect, createSignal, Show } from "solid-js";
-import { Clock3, LocateFixed, Maximize2, Minus, ZoomIn, ZoomOut } from "lucide-solid";
+import {
+  Clock3,
+  LocateFixed,
+  Maximize2,
+  Minus,
+  PanelLeft,
+  PanelRight,
+  Redo2,
+  Undo2,
+  ZoomIn,
+  ZoomOut,
+} from "lucide-solid";
 import { Timeline } from "./Timeline";
 import { canStreamPreview, formatTime, parseTimecode } from "../preview/model";
 import { PreviewPlayer } from "../preview/PreviewPlayer";
 import { useWorkspace } from "../app/WorkspaceContext";
 
-export function EditorView(props: { onChooseMedia: () => void }) {
+export function EditorView(props: {
+  onChooseMedia: () => void;
+  mediaOpen: boolean;
+  tasksOpen: boolean;
+  openMediaPanel: () => void;
+  openTaskPanel: () => void;
+}) {
   const workspace = useWorkspace();
   const [boundaryDraft, setBoundaryDraft] = createSignal<Partial<Record<"inMs" | "outMs", string>>>(
     {},
@@ -65,10 +82,39 @@ export function EditorView(props: { onChooseMedia: () => void }) {
   };
   return (
     <section class="editor-panel" aria-labelledby="timeline-heading">
-      <div class="panel-heading">
-        <h2 id="timeline-heading" tabIndex={-1} class="text-base">
-          Timeline
-        </h2>
+      <div class="panel-heading editor-heading">
+        <div>
+          <h2 id="timeline-heading" tabIndex={-1} class="text-base">
+            Timeline
+          </h2>
+          <Show when={workspace.selected()}>
+            <p class="editor-heading-note">Mark a range, then keep refining your cuts.</p>
+          </Show>
+        </div>
+        <div class="editor-heading-actions" aria-label="Workspace panels">
+          <button
+            class="btn btn-ghost btn-sm btn-square"
+            type="button"
+            title="Show media library"
+            aria-label="Show media library"
+            aria-expanded={props.mediaOpen}
+            aria-controls="media-panel"
+            onClick={props.openMediaPanel}
+          >
+            <PanelLeft size={16} aria-hidden="true" />
+          </button>
+          <button
+            class="btn btn-ghost btn-sm btn-square"
+            type="button"
+            title="Show editing tools"
+            aria-label="Show editing tools"
+            aria-expanded={props.tasksOpen}
+            aria-controls="segments-panel"
+            onClick={props.openTaskPanel}
+          >
+            <PanelRight size={16} aria-hidden="true" />
+          </button>
+        </div>
       </div>
       <Show
         when={workspace.selected()}
@@ -195,13 +241,10 @@ export function EditorView(props: { onChooseMedia: () => void }) {
                       aria-keyshortcuts="I"
                       onClick={() => {
                         setBoundaryDraft({});
-                        workspace.setMarker("inMs", workspace.watchedPosition());
+                        workspace.startSegmentAt(workspace.watchedPosition());
                       }}
                     >
                       <LocateFixed size={16} aria-hidden="true" /> Set in{" "}
-                      <kbd class="kbd kbd-xs" aria-hidden="true">
-                        I
-                      </kbd>
                     </button>
                     <label class="marker-value">
                       Out:{" "}
@@ -239,9 +282,6 @@ export function EditorView(props: { onChooseMedia: () => void }) {
                       }}
                     >
                       <LocateFixed size={16} aria-hidden="true" /> Set out{" "}
-                      <kbd class="kbd kbd-xs" aria-hidden="true">
-                        O
-                      </kbd>
                     </button>
                     <span class="pending-duration" aria-label="Pending cut duration">
                       {validRange()
@@ -258,16 +298,31 @@ export function EditorView(props: { onChooseMedia: () => void }) {
                       aria-keyshortcuts="Escape"
                       onClick={workspace.newSegment}
                     >
-                      New segment{" "}
-                      <kbd class="kbd kbd-xs" aria-hidden="true">
-                        Esc
-                      </kbd>
+                      New segment
                     </button>
                   </div>
                   <div
                     class="control-group view-controls flex items-center gap-1"
                     aria-label="View"
                   >
+                    <button
+                      class="btn btn-sm btn-square"
+                      aria-label="Undo"
+                      title="Undo"
+                      disabled={!workspace.timeline().past.length}
+                      onClick={workspace.undo}
+                    >
+                      <Undo2 size={16} aria-hidden="true" />
+                    </button>
+                    <button
+                      class="btn btn-sm btn-square"
+                      aria-label="Redo"
+                      title="Redo"
+                      disabled={!workspace.timeline().future.length}
+                      onClick={workspace.redo}
+                    >
+                      <Redo2 size={16} aria-hidden="true" />
+                    </button>
                     <button
                       class="btn btn-sm btn-square"
                       aria-label="Zoom out"

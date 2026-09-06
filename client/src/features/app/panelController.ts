@@ -7,7 +7,7 @@ import {
   serializePanelPreferences,
 } from "./panelPreferences";
 
-export const workspaceTaskTabs = ["cuts", "project", "export", "detection"] as const;
+export const workspaceTaskTabs = ["cuts", "detection", "export"] as const;
 export type WorkspaceTask = (typeof workspaceTaskTabs)[number];
 export type ResizablePanel = "media" | "segments";
 
@@ -41,7 +41,7 @@ export function createWorkspacePanelController(deps: {
       ? initialPanelPreferences.mediaCollapsed && !initialPanelPreferences.segmentsCollapsed
       : !initialPanelPreferences.segmentsCollapsed,
   );
-  const [activeTask, setActiveTask] = createSignal<WorkspaceTask>("project");
+  const [activeTask, setActiveTask] = createSignal<WorkspaceTask>("cuts");
   let hadSelectedMedia = false;
   let hadActiveItem = false;
   let previousSegmentCount = 0;
@@ -73,6 +73,7 @@ export function createWorkspacePanelController(deps: {
     setMediaOpen(false);
     if (restoreFocus && narrowViewport()) restoreTriggerFocus("media");
   };
+  const hideMediaPanel = () => setMediaOpen(false);
   const toggleMediaPanel = () => (mediaOpen() ? closeMediaPanel() : openMediaPanel());
   const openTaskPanel = (task: WorkspaceTask, focus = true) => {
     deps.setSettingsOpen(false);
@@ -273,6 +274,7 @@ export function createWorkspacePanelController(deps: {
     tasksOpen,
     openMediaPanel,
     closeMediaPanel,
+    hideMediaPanel,
     toggleMediaPanel,
     openTaskPanel,
     closeTaskPanel,

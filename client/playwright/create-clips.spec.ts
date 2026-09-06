@@ -278,7 +278,7 @@ test("changing export scope invalidates a prior preflight", async ({ page }) => 
   await addToProject(page);
   await addSegment(page);
   await openExport(page);
-  await page.getByRole("button", { name: "Save project" }).click();
+  await page.getByRole("button", { name: "Save project", exact: true }).click();
   await expect.poll(() => preflightItems.length).toBe(1);
   expect(preflightItems[0]).toHaveLength(1);
   const create = page.getByRole("button", { name: "Create clips" });
@@ -316,24 +316,18 @@ test("new items use the remembered destination and unavailable preferences expla
   await expect(page.getByLabel("Destination")).toHaveValue("download");
 });
 
-test("primary export opens an explicit scope dialog and jobs stays available", async ({ page }) => {
+test("export task keeps scope options and the queue in one workspace panel", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Select camera.mp4" }).click();
   await addToProject(page);
   await addSegment(page);
 
-  await page.getByRole("button", { name: /Export 1 included segments/ }).click();
-  const dialog = page.getByRole("dialog", { name: "Export clips" });
-  await expect(dialog).toBeVisible();
-  await expect(dialog.getByText("Export scope")).toBeVisible();
-  await expect(dialog.getByText("Included segments")).toBeVisible();
-  await expect(dialog.getByText("Filename preview")).toBeVisible();
-  await dialog.getByText("Export options", { exact: true }).click();
-  await expect(dialog.getByLabel("Output arrangement")).toBeVisible();
-  await dialog.getByRole("button", { name: "Close", exact: true }).click();
-  await expect(dialog).not.toBeVisible();
-
-  await page.getByRole("button", { name: /^Jobs/ }).click();
-  await expect(page.getByRole("heading", { name: "Export queue" })).toBeVisible();
+  await openExport(page);
+  await expect(page.getByRole("group", { name: "Export scope" })).toBeVisible();
+  await expect(page.getByText("Included segments", { exact: true })).toBeVisible();
+  await expect(page.getByText("Filename preview", { exact: true })).toBeVisible();
+  await page.getByText("Export options", { exact: true }).click();
+  await expect(page.getByLabel("Output arrangement")).toBeVisible();
+  await expect(page.getByRole("region", { name: "Export queue" })).toBeVisible();
   await expect(page.getByText("No export jobs yet.")).toBeVisible();
 });

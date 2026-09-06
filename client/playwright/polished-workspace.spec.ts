@@ -90,9 +90,9 @@ for (const width of [390, 700, 1049, 1050, 1051, 1280, 1717]) {
   test(`workbench geometry and settings stay usable at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 1005 });
     await chooseMedia(page);
-    const actionRow = await page.locator(".workspace-action-row").boundingBox();
-    expect(actionRow!.y).toBeLessThan(20);
-    expect(actionRow!.height).toBeLessThan(180);
+    const editorHeader = await page.locator(".editor-heading").boundingBox();
+    expect(editorHeader!.y).toBeLessThanOrEqual(20);
+    expect(editorHeader!.height).toBeLessThan(100);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
       width,
     );
@@ -111,12 +111,8 @@ for (const width of [390, 700, 1049, 1050, 1051, 1280, 1717]) {
       expect(timelineBox.y + timelineBox.height).toBeLessThan(1005);
     }
     if (width < 1050) {
-      const mediaToggle = page.locator(".workspace-action-row").getByRole("button", {
-        name: /media panel/,
-      });
-      const segmentsToggle = page.locator(".workspace-action-row").getByRole("button", {
-        name: /segments panel/,
-      });
+      const mediaToggle = page.getByRole("button", { name: /media library/ }).first();
+      const segmentsToggle = page.getByRole("button", { name: /editing tools/ }).first();
       if ((await mediaToggle.getAttribute("aria-expanded")) === "true") await mediaToggle.click();
       if ((await segmentsToggle.getAttribute("aria-expanded")) === "false")
         await segmentsToggle.click();
@@ -130,6 +126,13 @@ for (const width of [390, 700, 1049, 1050, 1051, 1280, 1717]) {
     await track.uncheck();
     await expect(track).not.toBeChecked();
     await expect(page.getByRole("checkbox", { name: "Video: h264" })).toBeDisabled();
+    if (width < 1050) {
+      const closeTasks = page.getByRole("button", { name: "Close segments panel" });
+      if (await closeTasks.isVisible()) await closeTasks.click();
+    }
+    const settingsPanelToggle = page.getByRole("button", { name: /media library/ }).first();
+    if ((await settingsPanelToggle.getAttribute("aria-expanded")) === "false")
+      await settingsPanelToggle.click();
     await page.getByRole("button", { name: "Settings", exact: true }).click();
     const mute = page.getByRole("checkbox", { name: "Mute previews" });
     const muteBox = (await mute.boundingBox())!;
@@ -156,11 +159,10 @@ test("editing remains usable at 200% browser zoom", async ({ page }) => {
   expect(layout.zoom).toBe("2");
   expect(layout.hasPageOverflow).toBe(false);
 
-  const segmentsToggle = page.locator(".workspace-action-row").getByRole("button", {
-    name: /segments panel/,
-  });
+  const segmentsToggle = page.getByRole("button", { name: /editing tools/ }).first();
   await expect(segmentsToggle).toBeVisible();
-  if ((await segmentsToggle.getAttribute("aria-expanded")) === "false") await segmentsToggle.click();
+  if ((await segmentsToggle.getAttribute("aria-expanded")) === "false")
+    await segmentsToggle.click();
   await expect(segmentsToggle).toHaveAttribute("aria-expanded", "true");
   await expect(page.locator("#segments-panel")).toHaveAttribute("aria-hidden", "false");
   await page
@@ -202,19 +204,15 @@ test("missing preview assets and audio remain non-blocking for editing", async (
 
 test("onboarding expands Media and Export expands the task sidebar", async ({ page }) => {
   await page.goto("/");
-  const mediaToggle = page
-    .locator(".workspace-action-row")
-    .getByRole("button", { name: /media panel/ });
-  const segmentsToggle = page
-    .locator(".workspace-action-row")
-    .getByRole("button", { name: /segments panel/ });
+  const mediaToggle = page.getByRole("button", { name: /media library/ }).first();
+  const segmentsToggle = page.getByRole("button", { name: /editing tools/ }).first();
   if ((await mediaToggle.getAttribute("aria-expanded")) === "true") await mediaToggle.click();
   if ((await segmentsToggle.getAttribute("aria-expanded")) === "true") await segmentsToggle.click();
   await page.getByRole("button", { name: "Choose a video" }).click();
   await expect(page.getByRole("button", { name: "Select camera.mp4" })).toBeFocused();
   if ((await segmentsToggle.getAttribute("aria-expanded")) === "false")
     await segmentsToggle.click();
-  await page.getByRole("button", { name: "Export 0 included segments" }).click();
+  await page.getByRole("tab", { name: "Export", exact: true }).click();
   await expect(page.getByRole("tab", { name: "Export", exact: true })).toBeVisible();
 });
 
@@ -224,12 +222,8 @@ test("panel layout persists and narrow drawers remain exclusive", async ({ page 
   await page.evaluate(() => localStorage.clear());
   await page.reload();
 
-  const mediaToggle = page.locator(".workspace-action-row").getByRole("button", {
-    name: /media panel/,
-  });
-  const segmentsToggle = page.locator(".workspace-action-row").getByRole("button", {
-    name: /segments panel/,
-  });
+  const mediaToggle = page.getByRole("button", { name: /media library/ }).first();
+  const segmentsToggle = page.getByRole("button", { name: /editing tools/ }).first();
   const mediaResizer = page.locator(".media-resizer");
   await mediaResizer.focus();
   await mediaResizer.press("ArrowRight");
@@ -243,9 +237,12 @@ test("panel layout persists and narrow drawers remain exclusive", async ({ page 
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.reload();
+  const openTasks = page.getByRole("button", { name: "Close segments panel" });
+  if (await openTasks.isVisible()) await openTasks.click();
   await mediaToggle.click();
   await expect(mediaToggle).toHaveAttribute("aria-expanded", "true");
   await expect(segmentsToggle).toHaveAttribute("aria-expanded", "false");
+  await page.locator("#media-panel").getByRole("button", { name: "Close media panel" }).click();
   await segmentsToggle.click();
   await expect(segmentsToggle).toHaveAttribute("aria-expanded", "true");
   await expect(mediaToggle).toHaveAttribute("aria-expanded", "false");
@@ -306,9 +303,9 @@ test("library scans show progress and can be cancelled", async ({ page }) => {
   });
   await page.goto("/");
   await page.getByRole("button", { name: "Refresh media" }).click();
-  await expect(page.getByLabel("Library scan")).toContainText("4 files indexed");
-  await page.getByRole("button", { name: "Cancel scan" }).click();
-  await expect(page.getByLabel("Library scan")).toContainText("cancelled");
+  await expect(page.getByLabel("Library scan")).toContainText("4 indexed");
+  await page.getByRole("button", { name: "Cancel" }).click();
+  await expect(page.getByLabel("Library scan")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Refresh media" })).toBeEnabled();
 });
 
@@ -323,7 +320,7 @@ test("detection sends sensitivity settings and rejects invalid values", async ({
   });
   await chooseMedia(page);
   await page.getByRole("button", { name: "Add to project" }).click();
-  await page.getByRole("tab", { name: "Detection" }).click();
+  await page.getByRole("tab", { name: "Auto-detect" }).click();
   await page.getByText("Detection sensitivity").click();
   await page.getByLabel("Silence threshold (dB)").fill("-35");
   await page.getByLabel("Minimum duration (ms)").fill("750");
@@ -376,6 +373,7 @@ test("queue exposes every completed output and authenticated batch downloads", a
     return route.fulfill({ contentType: "video/x-matroska", body: "output-fixture" });
   });
   await page.goto("/");
+  await page.getByRole("tab", { name: "Export", exact: true }).click();
   const queue = page.getByRole("region", { name: "Export queue" });
   await expect(queue.getByRole("link")).toHaveCount(2);
   await expect(queue.getByText("Completed history (1)", { exact: true })).toBeVisible();
@@ -431,6 +429,7 @@ test("server-folder completion names the safe destination without download actio
     }),
   );
   await page.goto("/");
+  await page.getByRole("tab", { name: "Export", exact: true }).click();
   const queue = page.getByRole("region", { name: "Export queue" });
   await expect(queue.getByText("Clips created in Review archive.", { exact: true })).toBeVisible();
   await expect(queue.getByRole("button", { name: "Download all clips" })).toHaveCount(0);
@@ -491,7 +490,6 @@ test("cut labels and per-row split work without invisible menu inputs", async ({
 test("a multi-item JSON cut list restores as a new unsaved project", async ({ page }) => {
   await chooseMedia(page);
   await page.getByRole("button", { name: "Add to project" }).click();
-  await page.getByRole("tab", { name: "Project", exact: true }).click();
   await page.getByText("Interchange", { exact: true }).click();
   page.on("dialog", (dialog) => void dialog.accept());
   const document = {

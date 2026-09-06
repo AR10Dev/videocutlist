@@ -119,7 +119,7 @@ export function DetectionView() {
       aria-labelledby="detection-heading"
       onKeyDown={handleReviewKeyDown}
     >
-      <h2 id="detection-heading">Detection</h2>
+      <h2 id="detection-heading">Auto-detect</h2>
       <p>
         Start a goal-oriented scan, preview each bounded candidate, then accept only the cuts you
         want.
@@ -241,8 +241,7 @@ export function DetectionView() {
             </button>
           </div>
           <p class="shortcut-help">
-            Focus a candidate, then press <kbd class="kbd kbd-xs">A</kbd> to accept or{" "}
-            <kbd class="kbd kbd-xs">R</kbd> to reject. Each action advances to the next candidate.
+            Focus a candidate to review it. Accepting or rejecting advances to the next candidate.
           </p>
           <ol aria-label="Detection candidates">
             <For each={workspace.detectionCandidates()}>

@@ -1,4 +1,5 @@
 import { For, Show } from "solid-js";
+import { ArrowLeft, Settings2 } from "lucide-solid";
 import { canStreamPreview } from "../preview/model";
 import {
   appearances,
@@ -9,9 +10,11 @@ import {
 } from "./model";
 import { useWorkspace } from "../app/WorkspaceContext";
 
-export function SettingsView() {
+export function SettingsView(props: { onClose?: () => void } = {}) {
   const {
     setSettings,
+    settingsOpen,
+    setSettingsOpen,
     appearance,
     setAppearance,
     serverSettingsStatus,
@@ -35,8 +38,21 @@ export function SettingsView() {
   } = useWorkspace();
   return (
     <section class="settings-view flex flex-col gap-4 p-4" aria-labelledby="settings-heading">
-      <div class="panel-heading">
-        <h2 id="settings-heading">Settings</h2>
+      <div class="panel-heading settings-heading">
+        <div>
+          <span class="section-kicker">Workspace</span>
+          <h2 id="settings-heading">
+            <Settings2 size={16} aria-hidden="true" /> Settings
+          </h2>
+        </div>
+        <button
+          class="btn btn-ghost btn-sm"
+          type="button"
+          aria-label="Back to editor"
+          onClick={() => (props.onClose ? props.onClose() : setSettingsOpen(!settingsOpen()))}
+        >
+          <ArrowLeft size={15} aria-hidden="true" /> Back to editor
+        </button>
       </div>
       <p>Browser-local preferences stay in this browser and do not change server configuration.</p>
       <section aria-labelledby="browser-settings-heading">

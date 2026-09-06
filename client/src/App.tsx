@@ -1,15 +1,23 @@
-import { createEffect, createSignal, onCleanup, Show } from "solid-js";
-import { Settings, Undo2, Redo2 } from "lucide-solid";
+import { createEffect, onCleanup, Show } from "solid-js";
+import {
+  AlertCircle,
+  CheckCircle2,
+  CircleHelp,
+  Ellipsis,
+  FolderOpen,
+  LoaderCircle,
+  Save,
+  Settings,
+} from "lucide-solid";
 import { DetectionView } from "./features/detection/DetectionView";
 import { CutsView } from "./features/editor/CutsView";
 import { EditorView } from "./features/editor/EditorView";
 import { ExportView } from "./features/export/ExportView";
 import { LibraryView } from "./features/media/LibraryView";
 import { ProjectsView } from "./features/projects/ProjectsView";
-import { QueueView } from "./features/queue/QueueView";
 import { SettingsView } from "./features/settings/SettingsView";
 import { createWorkspaceController } from "./features/app/controller";
-import { createWorkspacePanelController, workspaceTaskTabs } from "./features/app/panelController";
+import { createWorkspacePanelController } from "./features/app/panelController";
 import { WorkspaceProvider } from "./features/app/WorkspaceContext";
 import { applyAppearance } from "./features/settings/model";
 
@@ -50,35 +58,18 @@ export function App() {
     tasksOpen,
     openMediaPanel,
     closeMediaPanel,
-    toggleMediaPanel,
+    hideMediaPanel,
     openTaskPanel,
     closeTaskPanel,
-    toggleTaskPanel,
     closeOpenDrawer,
     resetPanelWidth,
     resizePanelWithKeyboard,
     beginPanelResize,
     moveTask,
   } = panel;
-  const taskTabs = workspaceTaskTabs;
-  const [queueOpen, setQueueOpen] = createSignal(false);
-  const [exportDialogOpen, setExportDialogOpen] = createSignal(false);
-  let queueDismissed = false;
-  let exportDialogPreviousTask: (typeof taskTabs)[number] = "project";
-  let exportTrigger: HTMLButtonElement | undefined;
   let shortcutClose: HTMLButtonElement | undefined;
   let projectMenu: HTMLDetailsElement | undefined;
 
-  const openExportDialog = () => {
-    exportDialogPreviousTask = activeTask();
-    if (activeTask() === "export") setActiveTask("cuts");
-    setExportDialogOpen(true);
-  };
-  const closeExportDialog = () => {
-    setExportDialogOpen(false);
-    setActiveTask(exportDialogPreviousTask);
-    requestAnimationFrame(() => exportTrigger?.focus());
-  };
   const closeProjectMenu = () => projectMenu?.removeAttribute("open");
   const openHelp = () => {
     closeProjectMenu();
@@ -89,33 +80,19 @@ export function App() {
     const id = window.prompt("Project ID to load", "");
     if (id) void controller.projects.loadProject(id);
   };
-  const undo = () => controller.undo();
-  const redo = () => controller.redo();
+  const toggleSettings = () => {
+    if (settingsOpen()) {
+      setSettingsOpen(false);
+      openMediaPanel(false);
+      return;
+    }
+    if (mediaOpen()) hideMediaPanel();
+    closeTaskPanel(false);
+    void openSettings();
+  };
   createEffect(() => {
     if (controller.shortcutHelpOpen()) queueMicrotask(() => shortcutClose?.focus());
   });
-  createEffect(() => {
-    const batches = controller.batches();
-    if (!batches.length) queueDismissed = false;
-    else if (!queueDismissed) setQueueOpen(true);
-  });
-  const activeJobCount = () =>
-    controller.batches().filter((batch) => batch.state === "queued" || batch.state === "running")
-      .length;
-  const failedJobCount = () =>
-    controller.batches().filter((batch) => batch.state === "failed").length;
-  const includedExportCount = () => {
-    const scoped = new Set(controller.exportItemIDs());
-    return controller
-      .editableItems()
-      .filter((item) => scoped.has(item.id))
-      .reduce(
-        (total, item) =>
-          total +
-          item.timeline.present.segments.filter((segment) => segment.included !== false).length,
-        0,
-      );
-  };
   return (
     <WorkspaceProvider value={controller}>
       <main
@@ -134,200 +111,6 @@ export function App() {
           }
         }}
       >
-        <header class="workspace-action-row" aria-label="Workspace actions">
-          <div class="workspace-actions-start">
-            <details class="dropdown workspace-menu" ref={(element) => (projectMenu = element)}>
-              <summary class="btn btn-ghost btn-sm">Project</summary>
-              <ul class="dropdown-content menu menu-sm z-50 w-60 rounded-box bg-base-200 p-2 shadow-lg">
-                <li>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      closeProjectMenu();
-                      openTaskPanel("project");
-                    }}
-                  >
-                    Open project panel
-                  </button>
-                </li>
-                <li>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      closeProjectMenu();
-                      controller.projects.newProject();
-                    }}
-                  >
-                    New project
-                  </button>
-                </li>
-                <li>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      closeProjectMenu();
-                      void controller.projects.saveProject();
-                    }}
-                  >
-                    Save project
-                  </button>
-                </li>
-                <li>
-                  <button type="button" onClick={loadProjectFromMenu}>
-                    Load project
-                  </button>
-                </li>
-                <li>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      closeProjectMenu();
-                      openMediaPanel();
-                    }}
-                  >
-                    Media library
-                  </button>
-                </li>
-                <li>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      closeProjectMenu();
-                      openTaskPanel("project");
-                    }}
-                  >
-                    Interchange tools
-                  </button>
-                </li>
-                <li>
-                  <button
-                    type="button"
-                    onClick={() => (settingsOpen() ? setSettingsOpen(false) : void openSettings())}
-                  >
-                    {settingsOpen() ? "Back to editor" : "Settings"}
-                  </button>
-                </li>
-                <li>
-                  <button type="button" onClick={openHelp}>
-                    Keyboard help
-                  </button>
-                </li>
-                <li class="menu-title panel-menu-title">Panel layout</li>
-                <li>
-                  <button type="button" onClick={() => resetPanelWidth("media")}>
-                    Reset media panel size
-                  </button>
-                </li>
-                <li>
-                  <button type="button" onClick={() => resetPanelWidth("segments")}>
-                    Reset segments panel size
-                  </button>
-                </li>
-              </ul>
-            </details>
-            <h1 class="workspace-brand" tabIndex={-1}>
-              VideoCutList
-            </h1>
-            <span class="project-status" aria-label="Project status">
-              <strong>{projectName()}</strong>
-              <span role="status">
-                {projectSaveState() === "saving"
-                  ? "Saving"
-                  : projectSaveState() === "failed"
-                    ? "Save failed"
-                    : projectSaveState() === "unsaved"
-                      ? revision() === 0
-                        ? "Unsaved"
-                        : "Unsaved changes"
-                      : "Saved"}
-              </span>
-            </span>
-          </div>
-          <div class="workspace-actions-center" aria-label="History controls">
-            <button
-              class="btn btn-ghost btn-sm btn-square"
-              aria-label="Undo"
-              aria-keyshortcuts="Control+Z Meta+Z"
-              disabled={!controller.timeline().past.length}
-              onClick={undo}
-            >
-              <Undo2 size={16} aria-hidden="true" />
-            </button>
-            <button
-              class="btn btn-ghost btn-sm btn-square"
-              aria-label="Redo"
-              aria-keyshortcuts="Control+Y Meta+Shift+Z"
-              disabled={!controller.timeline().future.length}
-              onClick={redo}
-            >
-              <Redo2 size={16} aria-hidden="true" />
-            </button>
-          </div>
-          <div class="workspace-actions-end">
-            <button
-              class="btn btn-ghost btn-sm"
-              type="button"
-              aria-label={`Jobs${activeJobCount() ? `, ${activeJobCount()} active` : ""}${failedJobCount() ? `, ${failedJobCount()} failed` : ""}`}
-              aria-expanded={queueOpen()}
-              aria-controls="queue-panel"
-              onClick={() => {
-                const nextOpen = !queueOpen();
-                queueDismissed = !nextOpen;
-                setQueueOpen(nextOpen);
-                openTaskPanel(activeTask(), false);
-              }}
-            >
-              Jobs{" "}
-              <span class="job-count" aria-hidden="true">
-                {activeJobCount() || failedJobCount() || ""}
-              </span>
-            </button>
-            <button
-              ref={(element) => (exportTrigger = element)}
-              class="btn btn-primary btn-sm"
-              type="button"
-              aria-haspopup="dialog"
-              aria-label={`Export ${includedExportCount()} included segments`}
-              onClick={openExportDialog}
-            >
-              <span>Export</span>
-              <span class="export-count" aria-hidden="true">
-                {includedExportCount()}
-              </span>
-            </button>
-            <button
-              class="btn btn-ghost btn-sm drawer-button"
-              type="button"
-              aria-label={mediaOpen() ? "Collapse media panel" : "Expand media panel"}
-              title={mediaOpen() ? "Collapse media panel" : "Expand media panel"}
-              aria-expanded={mediaOpen()}
-              aria-controls="media-panel"
-              onClick={toggleMediaPanel}
-            >
-              Media
-            </button>
-            <button
-              class="btn btn-ghost btn-sm drawer-button"
-              type="button"
-              aria-label={tasksOpen() ? "Collapse segments panel" : "Expand segments panel"}
-              title={tasksOpen() ? "Collapse segments panel" : "Expand segments panel"}
-              aria-expanded={tasksOpen()}
-              aria-controls="segments-panel"
-              onClick={toggleTaskPanel}
-            >
-              Segments
-            </button>
-            <button
-              class="btn btn-ghost btn-sm workspace-settings-action"
-              type="button"
-              aria-label={settingsOpen() ? "Back to editor" : "Settings"}
-              onClick={() => (settingsOpen() ? setSettingsOpen(false) : void openSettings())}
-            >
-              <Settings size={16} aria-hidden="true" />
-              <span class="hidden sm:inline">{settingsOpen() ? "Back to editor" : "Settings"}</span>
-            </button>
-          </div>
-        </header>
         <Show when={controller.shortcutHelpOpen()}>
           <dialog
             open
@@ -441,29 +224,6 @@ export function App() {
             </form>
           </dialog>
         </Show>
-        <Show when={exportDialogOpen()}>
-          <dialog
-            id="export-dialog"
-            open
-            class="modal modal-open"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="export-dialog-heading"
-            onKeyDown={(event) => {
-              if (event.key === "Escape") {
-                event.preventDefault();
-                closeExportDialog();
-              }
-            }}
-          >
-            <div class="modal-box max-h-[90dvh] max-w-2xl overflow-y-auto">
-              <ExportView dialog onClose={closeExportDialog} />
-            </div>
-            <form method="dialog" class="modal-backdrop">
-              <button type="button" aria-label="Close export dialog" onClick={closeExportDialog} />
-            </form>
-          </dialog>
-        </Show>
         <Show when={narrowViewport() && (mediaOpen() || tasksOpen())}>
           <button
             class="drawer-backdrop"
@@ -484,22 +244,121 @@ export function App() {
           role={narrowViewport() ? "dialog" : undefined}
           aria-modal={narrowViewport() ? "true" : undefined}
         >
-          <header class="app-header">
-            <div class="app-heading">
-              <h2 id="media-heading" tabIndex={-1}>
-                Media
-              </h2>
+          <header class="project-sidebar-header" aria-label="Project controls">
+            <div class="project-identity">
+              <span class="app-wordmark">VideoCutlist</span>
+              <strong title={projectName()}>{projectName()}</strong>
+              <span
+                class="project-save-state"
+                aria-label="Project status"
+                role="status"
+                title={
+                  projectSaveState() === "failed"
+                    ? controller.status() || "Save failed. Try again."
+                    : undefined
+                }
+              >
+                {projectSaveState() === "saving" ? (
+                  <>
+                    <LoaderCircle class="spin" size={13} aria-hidden="true" /> Saving…
+                  </>
+                ) : projectSaveState() === "failed" ? (
+                  <>
+                    <AlertCircle size={13} aria-hidden="true" /> Save failed
+                  </>
+                ) : projectSaveState() === "unsaved" ? (
+                  <>
+                    <span class="status-dot" aria-hidden="true" />
+                    {revision() === 0 ? "Not saved yet" : "Unsaved changes"}
+                  </>
+                ) : (
+                  <>
+                    <CheckCircle2 size={13} aria-hidden="true" /> Saved
+                  </>
+                )}
+              </span>
             </div>
-            <button
-              class="btn btn-ghost btn-sm drawer-close"
-              type="button"
-              aria-label="Close media panel"
-              onClick={() => closeMediaPanel()}
-            >
-              Close
-            </button>
+            <div class="project-header-actions">
+              <button
+                class="btn btn-ghost btn-sm btn-square"
+                type="button"
+                title={projectSaveState() === "failed" ? "Retry save" : "Save project"}
+                aria-label="Save project from project header"
+                disabled={projectSaveState() === "saving"}
+                onClick={() => void controller.projects.saveProject()}
+              >
+                <Save size={16} aria-hidden="true" />
+              </button>
+              <button
+                class="btn btn-ghost btn-sm btn-square"
+                type="button"
+                title={settingsOpen() ? "Back to editor" : "Settings"}
+                aria-label={settingsOpen() ? "Back to editor" : "Settings"}
+                onClick={toggleSettings}
+              >
+                <Settings size={16} aria-hidden="true" />
+              </button>
+              <details class="project-menu dropdown" ref={(element) => (projectMenu = element)}>
+                <summary class="btn btn-ghost btn-sm btn-square" title="Project menu">
+                  <Ellipsis size={17} aria-hidden="true" />
+                  <span class="sr-only">Project menu</span>
+                </summary>
+                <ul class="dropdown-content menu menu-sm z-50 w-60 rounded-box bg-base-200 p-2 shadow-lg">
+                  <li>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        closeProjectMenu();
+                        controller.projects.newProject();
+                      }}
+                    >
+                      New project
+                    </button>
+                  </li>
+                  <li>
+                    <button type="button" onClick={loadProjectFromMenu}>
+                      <FolderOpen size={15} aria-hidden="true" /> Load project
+                    </button>
+                  </li>
+                  <li>
+                    <button type="button" onClick={openHelp}>
+                      <CircleHelp size={15} aria-hidden="true" /> Keyboard help
+                    </button>
+                  </li>
+                  <li class="menu-title panel-menu-title">Panel layout</li>
+                  <li>
+                    <button type="button" onClick={() => resetPanelWidth("media")}>
+                      Reset media panel size
+                    </button>
+                  </li>
+                  <li>
+                    <button type="button" onClick={() => resetPanelWidth("segments")}>
+                      Reset tasks panel size
+                    </button>
+                  </li>
+                </ul>
+              </details>
+            </div>
           </header>
           <Show when={!settingsOpen()}>
+            <ProjectsView compact />
+            <header class="app-header media-header">
+              <div class="app-heading">
+                <h2 id="media-heading" tabIndex={-1}>
+                  Media library
+                </h2>
+                <p>Choose a video to start a cut.</p>
+              </div>
+              <button
+                class="btn btn-ghost btn-sm drawer-close"
+                type="button"
+                aria-label="Close media panel"
+                title="Close media library"
+                onClick={() => closeMediaPanel()}
+              >
+                Close
+              </button>
+            </header>
             <LibraryView />
           </Show>
         </aside>
@@ -522,6 +381,10 @@ export function App() {
           fallback={
             <>
               <EditorView
+                mediaOpen={mediaOpen()}
+                tasksOpen={tasksOpen()}
+                openMediaPanel={() => (mediaOpen() ? closeMediaPanel() : openMediaPanel())}
+                openTaskPanel={() => (tasksOpen() ? closeTaskPanel() : openTaskPanel(activeTask()))}
                 onChooseMedia={() => {
                   openMediaPanel(false);
                   requestAnimationFrame(() => {
@@ -603,25 +466,26 @@ export function App() {
                     Cuts
                   </button>
                   <button
-                    id="project-tab"
+                    id="detection-tab"
                     class="tab"
                     role="tab"
                     type="button"
-                    aria-selected={activeTask() === "project"}
-                    aria-controls="project-tabpanel"
-                    tabIndex={activeTask() === "project" ? 0 : -1}
-                    onClick={() => setActiveTask("project")}
+                    aria-selected={activeTask() === "detection"}
+                    aria-controls="detection-tabpanel"
+                    tabIndex={activeTask() === "detection" ? 0 : -1}
+                    disabled={!selected() || !controller.activeItemId()}
+                    onClick={() => setActiveTask("detection")}
                     onKeyDown={(event) => {
                       if (event.key === "ArrowRight" || event.key === "ArrowDown") {
                         event.preventDefault();
-                        moveTask("project", 1);
+                        moveTask("detection", 1);
                       } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
                         event.preventDefault();
-                        moveTask("project", -1);
+                        moveTask("detection", -1);
                       }
                     }}
                   >
-                    Project
+                    Auto-detect
                   </button>
                   <button
                     id="export-tab"
@@ -644,28 +508,6 @@ export function App() {
                   >
                     Export
                   </button>
-                  <button
-                    id="detection-tab"
-                    class="tab"
-                    role="tab"
-                    type="button"
-                    aria-selected={activeTask() === "detection"}
-                    aria-controls="detection-tabpanel"
-                    tabIndex={activeTask() === "detection" ? 0 : -1}
-                    disabled={!selected() || !controller.activeItemId()}
-                    onClick={() => setActiveTask("detection")}
-                    onKeyDown={(event) => {
-                      if (event.key === "ArrowRight" || event.key === "ArrowDown") {
-                        event.preventDefault();
-                        moveTask("detection", 1);
-                      } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
-                        event.preventDefault();
-                        moveTask("detection", -1);
-                      }
-                    }}
-                  >
-                    Detection
-                  </button>
                 </div>
                 <div
                   id="cuts-tabpanel"
@@ -676,18 +518,10 @@ export function App() {
                   <CutsView />
                 </div>
                 <div
-                  id="project-tabpanel"
-                  role="tabpanel"
-                  aria-labelledby="project-tab"
-                  hidden={activeTask() !== "project"}
-                >
-                  <ProjectsView />
-                </div>
-                <div
                   id="export-tabpanel"
                   role="tabpanel"
                   aria-labelledby="export-tab"
-                  hidden={activeTask() !== "export" || exportDialogOpen()}
+                  hidden={activeTask() !== "export"}
                 >
                   <ExportView />
                 </div>
@@ -699,16 +533,16 @@ export function App() {
                 >
                   <DetectionView />
                 </div>
-                <Show when={queueOpen()}>
-                  <div id="queue-panel">
-                    <QueueView />
-                  </div>
-                </Show>
               </aside>
             </>
           }
         >
-          <SettingsView />
+          <SettingsView
+            onClose={() => {
+              setSettingsOpen(false);
+              openMediaPanel(false);
+            }}
+          />
         </Show>
       </main>
     </WorkspaceProvider>

@@ -1,9 +1,10 @@
-import { createSignal, For, Show } from "solid-js";
+import { For, Show } from "solid-js";
 import { formatTime, hybridSmartCutKnownIneligible } from "../preview/model";
 import { useWorkspace } from "../app/WorkspaceContext";
 import { BatchDownload } from "./BatchDownload";
 import { OutputDownload } from "./OutputDownload";
 import { summarizeExports } from "./summary";
+import { QueueView } from "../queue/QueueView";
 
 type ExportViewProps = {
   dialog?: boolean;
@@ -13,7 +14,6 @@ type ExportViewProps = {
 export function ExportView(props: ExportViewProps = {}) {
   const {
     selected,
-    dirty,
     projectItems,
     editableItems,
     selectedExportItems,
@@ -42,22 +42,7 @@ export function ExportView(props: ExportViewProps = {}) {
     tracks,
     exportProject,
     cancelExport,
-    projects,
-    status,
   } = useWorkspace();
-  const [saving, setSaving] = createSignal(false);
-  const [saveError, setSaveError] = createSignal("");
-  const save = async () => {
-    if (saving()) return;
-    setSaving(true);
-    setSaveError("");
-    try {
-      if (!(await projects.saveProject()))
-        setSaveError(status() || "Project could not be saved. Try again.");
-    } finally {
-      setSaving(false);
-    }
-  };
 
   const summary = () =>
     summarizeExports(editableItems().filter((item) => exportItemIDs().includes(item.id)));
@@ -170,27 +155,6 @@ export function ExportView(props: ExportViewProps = {}) {
         </div>
       </Show>
 
-      <Show when={projects.saveConflict()}>
-        <div class="alert alert-warning" role="alert">
-          <span>Another client saved this project. Choose which version to keep before exporting.</span>
-          <div class="controls">
-            <button
-              class="btn btn-sm"
-              type="button"
-              onClick={() => void projects.reloadRemoteProject()}
-            >
-              Reload remote project
-            </button>
-            <button
-              class="btn btn-primary btn-sm"
-              type="button"
-              onClick={() => void projects.saveAsNewProject()}
-            >
-              Save local work as new project
-            </button>
-          </div>
-        </div>
-      </Show>
       <Show when={blocker()}>
         {(message) => (
           <p class="export-state" role="status">
@@ -207,14 +171,6 @@ export function ExportView(props: ExportViewProps = {}) {
         )}
       </Show>
 
-      <Show when={dirty() && selected()}>
-        <button class="btn btn-sm" disabled={saving()} onClick={() => void save()}>
-          Save project
-        </button>
-      </Show>
-      <Show when={saveError()}>
-        <p role="alert">{saveError()}</p>
-      </Show>
       <fieldset class="export-items" aria-label="Export scope">
         <legend>Export scope</legend>
         <Show
@@ -295,9 +251,7 @@ export function ExportView(props: ExportViewProps = {}) {
       </fieldset>
 
       <div class="controls export-actions">
-        <span class="shortcut-help" aria-label="Create clips shortcut">
-          Create clips <kbd class="kbd kbd-xs">E</kbd>
-        </span>
+        <span class="shortcut-help">Create clips when your selection is ready.</span>
         <button
           class="btn btn-primary btn-sm"
           disabled={
@@ -570,6 +524,7 @@ export function ExportView(props: ExportViewProps = {}) {
           </div>
         </div>
       </Show>
+      <QueueView />
     </section>
   );
 }

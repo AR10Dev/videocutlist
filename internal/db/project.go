@@ -64,7 +64,7 @@ func (s *ProjectStore) List(ctx context.Context, cursor string, limit int) ([]Pr
 		return nil, nil, err
 	}
 	defer rows.Close()
-	projects := make([]ProjectSummary, 0, limit)
+	projects := []ProjectSummary{}
 	for rows.Next() {
 		var summary ProjectSummary
 		var documentJSON, updated string

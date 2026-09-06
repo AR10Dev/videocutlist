@@ -142,7 +142,7 @@ describe("projects controller", () => {
     controller.dispose();
   });
 
-  it("debounces saves, records recovery, and clears it only after a current response", async () => {
+  it("debounces saves, keeps recovery, and stays saved when cache refresh fails", async () => {
     Object.defineProperty(globalThis, "localStorage", {
       configurable: true,
       value: memoryStorage(),
@@ -203,9 +203,11 @@ describe("projects controller", () => {
       assetRequest: () => Promise.resolve(Response.json({})),
       interchangeRequest: () => Promise.resolve(Response.json({})),
     };
+    const queryClient = new QueryClient();
+    queryClient.invalidateQueries = () => Promise.reject(new Error("cache refresh failed"));
     const controller = createProjectsController({
       api,
-      queryClient: new QueryClient(),
+      queryClient,
       selected,
       projectId,
       setProjectId,

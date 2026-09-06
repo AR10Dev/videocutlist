@@ -226,7 +226,14 @@ export function createProjectsController(deps: ProjectsControllerDeps) {
       const project = (await response.json()) as Project;
       if (!sameProject) return project;
       deps.setRevision(project.revision);
-      await deps.queryClient.invalidateQueries({ queryKey: ["project", project.id] });
+      // A successful PUT is the source of truth. A cache refresh can fail when a
+      // project query is stale or the media endpoint is briefly unavailable; that
+      // must not turn a persisted project into a false "Save failed" state.
+      try {
+        await deps.queryClient.invalidateQueries({ queryKey: ["project", project.id] });
+      } catch {
+        // Keep the saved response and let the next explicit load refresh the cache.
+      }
       const current =
         snapshot.editorVersion === deps.editorVersion() && snapshot.media === deps.selected()?.id;
       if (current) {
