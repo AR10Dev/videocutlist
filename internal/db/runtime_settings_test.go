@@ -58,6 +58,36 @@ func TestRuntimeSettingsSeedPersistsAndDoesNotOverwrite(t *testing.T) {
 	}
 }
 
+func TestRuntimeSettingsSeedAddsNewDefaultDestinations(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.OpenDatabase(ctx, t.TempDir()+"/settings.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	settings, _ := store.NewRuntimeSettingsStore(db)
+	legacy := validRuntimeSettings()
+	first, err := settings.Seed(ctx, legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaults := legacy
+	defaults.ExportLimit = 9
+	defaults.Destinations = append(append([]store.RuntimeDestination{}, legacy.Destinations...), store.RuntimeDestination{
+		ID: "server", Label: "Server", Kind: "archive", Root: "/exports",
+	})
+	migrated, err := settings.Seed(ctx, defaults)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if migrated.Revision != first.Revision+1 || len(migrated.Settings.Destinations) != 2 || migrated.Settings.Destinations[1].ID != "server" {
+		t.Fatalf("migrated settings = %#v", migrated)
+	}
+	if migrated.Settings.ExportLimit != legacy.ExportLimit {
+		t.Fatalf("seed overwrote saved settings: export limit = %d", migrated.Settings.ExportLimit)
+	}
+}
+
 func TestRuntimeSettingsRejectsInvalidAndStaleUpdatesAtomically(t *testing.T) {
 	ctx := context.Background()
 	db, err := store.OpenDatabase(ctx, t.TempDir()+"/settings.db")

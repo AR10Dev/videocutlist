@@ -49,8 +49,14 @@ export function createWorkspacePanelController(deps: {
 
   const focusPanel = (panel: ResizablePanel) => {
     requestAnimationFrame(() => {
-      const target = panel === "media" ? "media-heading" : `${activeTask()}-tab`;
-      document.getElementById(target)?.focus();
+      if (panel === "media") {
+        const target =
+          document.querySelector<HTMLElement>("#media-panel .media-list button") ??
+          document.querySelector<HTMLElement>("#media-panel .media-panel .panel-heading button");
+        target?.focus();
+        return;
+      }
+      document.getElementById(`${activeTask()}-tab`)?.focus();
     });
   };
   const restoreTriggerFocus = (panel: ResizablePanel) => {

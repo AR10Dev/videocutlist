@@ -167,8 +167,10 @@ without `Origin` and requests whose origin exactly matches the listener are
 same-origin. Other browser origins must exactly match the configured list.
 
 `VIDEOCUTLIST_DESTINATIONS_JSON` is an optional, deployment-owned array of typed
-export destinations. The default contains only the managed download destination.
-A `source_adjacent` entry explicitly enables save-beside-source and must provide
+export destinations. The default provides `download` (browser download) and
+`server` (a durable server-side archive), both rooted at
+`VIDEOCUTLIST_EXPORT_DIR`; a custom value replaces these defaults. A
+`source_adjacent` entry explicitly enables save-beside-source and must provide
 its `mediaRoot`; the browser receives only its opaque ID, label, kind, retention,
 and the boolean `capabilities.saveBesideSource`. No destination or media path is
 returned. Save-beside-source is unavailable for a source that cannot be

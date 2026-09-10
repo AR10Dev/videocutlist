@@ -14,7 +14,6 @@ import { CutsView } from "./features/editor/CutsView";
 import { EditorView } from "./features/editor/EditorView";
 import { ExportView } from "./features/export/ExportView";
 import { LibraryView } from "./features/media/LibraryView";
-import { ProjectsView } from "./features/projects/ProjectsView";
 import { SettingsView } from "./features/settings/SettingsView";
 import { createWorkspaceController } from "./features/app/controller";
 import { createWorkspacePanelController } from "./features/app/panelController";
@@ -246,7 +245,6 @@ export function App() {
         >
           <header class="project-sidebar-header" aria-label="Project controls">
             <div class="project-identity">
-              <span class="app-wordmark">VideoCutlist</span>
               <strong title={projectName()}>{projectName()}</strong>
               <span
                 class="project-save-state"
@@ -341,24 +339,6 @@ export function App() {
             </div>
           </header>
           <Show when={!settingsOpen()}>
-            <ProjectsView compact />
-            <header class="app-header media-header">
-              <div class="app-heading">
-                <h2 id="media-heading" tabIndex={-1}>
-                  Media library
-                </h2>
-                <p>Choose a video to start a cut.</p>
-              </div>
-              <button
-                class="btn btn-ghost btn-sm drawer-close"
-                type="button"
-                aria-label="Close media panel"
-                title="Close media library"
-                onClick={() => closeMediaPanel()}
-              >
-                Close
-              </button>
-            </header>
             <LibraryView />
           </Show>
         </aside>
@@ -390,7 +370,9 @@ export function App() {
                   requestAnimationFrame(() => {
                     const target =
                       document.querySelector<HTMLElement>(".media-list button") ??
-                      document.getElementById("media-heading");
+                      document.querySelector<HTMLElement>(
+                        "#media-panel .media-panel .panel-heading button",
+                      );
                     target?.focus();
                     target?.scrollIntoView({ block: "nearest" });
                   });
@@ -422,27 +404,6 @@ export function App() {
                 role={narrowViewport() ? "dialog" : undefined}
                 aria-modal={narrowViewport() ? "true" : undefined}
               >
-                <div class="task-panel-toolbar">
-                  <span>Segments and tasks</span>
-                  <div class="task-panel-toolbar-actions">
-                    <button
-                      class="btn btn-ghost btn-xs"
-                      type="button"
-                      aria-label="Reset segments panel size"
-                      onClick={() => resetPanelWidth("segments")}
-                    >
-                      Reset size
-                    </button>
-                    <button
-                      class="btn btn-ghost btn-xs drawer-close"
-                      type="button"
-                      aria-label="Close segments panel"
-                      onClick={() => closeTaskPanel()}
-                    >
-                      Close
-                    </button>
-                  </div>
-                </div>
                 <div class="task-tabs tabs" role="tablist" aria-label="Workspace tasks">
                   <button
                     id="cuts-tab"

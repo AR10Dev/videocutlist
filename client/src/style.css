@@ -245,35 +245,6 @@
   .segments-resizer {
     grid-area: segments-resizer;
   }
-  .task-panel-toolbar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    margin: -4px 0 10px;
-    color: var(--text-muted);
-    font-size: 0.75rem;
-  }
-  .task-panel-toolbar-actions {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-  }
-  .app-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 12px;
-    border-bottom: 1px solid var(--panel-border);
-  }
-  .media-header {
-    flex: none;
-  }
-  .media-header p {
-    margin: 2px 0 0;
-    color: var(--text-muted);
-    font-size: 0.7rem;
-  }
   .project-sidebar-header {
     display: flex;
     align-items: center;
@@ -287,12 +258,6 @@
     display: grid;
     min-width: 0;
     gap: 2px;
-  }
-  .app-wordmark {
-    color: var(--text-muted);
-    font-size: 0.65rem;
-    font-weight: 750;
-    letter-spacing: 0.05em;
   }
   .project-identity strong {
     min-width: 0;
@@ -354,101 +319,9 @@
       transform: rotate(360deg);
     }
   }
-  .app-header h2 {
-    margin: 0;
-  }
   .media-panel {
     min-height: 0;
     padding: 10px;
-  }
-  .project-sidebar-panel {
-    flex: none;
-    display: grid;
-    gap: 8px;
-    padding: 10px;
-    border-bottom: 1px solid var(--panel-border);
-  }
-  .project-sidebar-heading {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-  }
-  .project-sidebar-heading h2 {
-    margin: 0;
-    font-size: 0.8rem;
-  }
-  .project-sidebar-empty,
-  .project-sidebar-panel > p {
-    margin: 0;
-    color: var(--text-muted);
-    font-size: 0.74rem;
-    line-height: 1.45;
-  }
-  .project-sidebar-actions {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px;
-  }
-  .project-sidebar-actions .btn {
-    min-height: 30px;
-  }
-  .project-sidebar-details {
-    margin: 0;
-    padding-top: 6px;
-  }
-  .project-sidebar-details label {
-    display: grid;
-    gap: 4px;
-    font-size: 0.75rem;
-  }
-  .project-sidebar-details p {
-    margin: 6px 0 0;
-    color: var(--text-muted);
-    font-size: 0.7rem;
-  }
-  .project-sidebar-panel .project-items {
-    display: grid;
-    gap: 3px;
-  }
-  .project-sidebar-panel .project-items > li {
-    display: flex;
-    align-items: center;
-    gap: 2px;
-    padding: 3px;
-    border: 1px solid transparent;
-    border-radius: 6px;
-  }
-  .project-sidebar-panel .project-items > li.is-active {
-    border-color: color-mix(in srgb, var(--color-primary) 65%, transparent);
-    background: color-mix(in srgb, var(--color-primary) 12%, var(--surface));
-  }
-  .project-item-button {
-    display: grid;
-    flex: 1 1 auto;
-    min-width: 0;
-    justify-content: start;
-    gap: 1px;
-    padding: 5px 6px;
-    text-align: left;
-  }
-  .project-item-name {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-size: 0.76rem;
-  }
-  .project-item-button small {
-    color: var(--text-muted);
-    font-size: 0.66rem;
-  }
-  .project-item-actions {
-    display: flex;
-    flex: none;
-  }
-  .project-item-actions .btn {
-    min-height: 27px;
-    min-width: 27px;
   }
   .panel-heading {
     display: flex;
@@ -560,11 +433,6 @@
     margin-bottom: 6px;
     padding: 0 2px;
   }
-  .editor-heading-note {
-    margin: 2px 0 0;
-    color: var(--text-muted);
-    font-size: 0.7rem;
-  }
   .editor-heading-actions {
     display: flex;
     gap: 2px;
@@ -648,12 +516,14 @@
     display: flex;
     flex-wrap: wrap;
     align-items: center;
+    justify-content: center;
     gap: 8px 12px;
   }
   .preview-controls {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
+    justify-content: center;
     gap: 4px;
   }
   .preview-controls button {
@@ -661,19 +531,23 @@
     min-height: 36px;
   }
   .volume-control {
+    position: relative;
     display: inline-flex;
     align-items: center;
-    gap: 0;
-    min-width: 38px;
-    transition: min-width 120ms ease;
-  }
-  .volume-control:hover,
-  .volume-control:focus-within {
-    min-width: 112px;
+    min-width: 36px;
   }
   .volume-control input[type="range"] {
-    width: 38px;
-    opacity: 0.72;
+    position: absolute;
+    z-index: 1;
+    top: 50%;
+    left: calc(100% + 4px);
+    width: 0;
+    min-width: 0;
+    max-width: 0;
+    margin: 0;
+    opacity: 0;
+    pointer-events: none;
+    transform: translateY(-50%);
     transition:
       width 120ms ease,
       opacity 120ms ease;
@@ -681,62 +555,11 @@
   .volume-control:hover input[type="range"],
   .volume-control:focus-within input[type="range"] {
     width: 72px;
+    min-width: 72px;
+    max-width: 72px;
     opacity: 1;
+    pointer-events: auto;
   }
-  .editor-controls {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 8px;
-    width: 100%;
-  }
-  .primary-timecode {
-    width: 9rem;
-    margin: 0;
-  }
-  .primary-timecode input {
-    min-width: 0;
-  }
-  .marking-controls {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 6px;
-  }
-  .marker-value {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    margin: 0;
-    color: var(--text-muted);
-  }
-  .marker-value input {
-    width: 7rem;
-  }
-  .view-controls {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    margin-left: auto;
-  }
-  .view-controls span {
-    white-space: nowrap;
-    font-size: 0.8rem;
-  }
-  .total-duration,
-  .pending-duration {
-    color: var(--text-muted);
-    font-size: 0.75rem;
-    white-space: nowrap;
-  }
-  .marking-controls button[aria-keyshortcuts="I"] {
-    border-color: var(--color-primary);
-  }
-  .marking-controls button[aria-keyshortcuts="O"] {
-    border-color: var(--color-secondary);
-  }
-  .primary-timecode,
-  .marker-value input,
   .export-summary code {
     font-family: ui-monospace, monospace;
     font-variant-numeric: tabular-nums;
@@ -1528,22 +1351,8 @@
       height: auto;
       aspect-ratio: 16 / 9;
     }
-    .volume-control,
-    .volume-control:hover,
-    .volume-control:focus-within {
-      min-width: 104px;
-    }
-    .volume-control input[type="range"],
-    .volume-control:hover input[type="range"],
-    .volume-control:focus-within input[type="range"] {
-      width: 68px;
-      opacity: 1;
-    }
   }
   @media (max-width: 700px) {
-    .app-header {
-      padding: 10px 12px;
-    }
     .media-panel {
       padding-block: 6px;
     }
@@ -1552,10 +1361,6 @@
     }
     .media-panel.has-selection:not(.explorer-open) .file-tree {
       display: none;
-    }
-    .project-sidebar-panel {
-      max-height: 245px;
-      overflow-y: auto;
     }
     .media-panel .panel-heading {
       justify-content: space-between;
@@ -1568,16 +1373,6 @@
     .preview-controls button {
       min-width: 44px;
       min-height: 44px;
-    }
-    .preview-controls input[type="range"] {
-      width: 64px;
-    }
-    .view-controls {
-      flex: 1 1 100%;
-      min-width: 0;
-      max-width: 100%;
-      margin-left: 0;
-      flex-wrap: wrap;
     }
     .task-panel,
     .settings-view {

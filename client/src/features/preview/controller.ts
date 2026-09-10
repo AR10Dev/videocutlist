@@ -400,7 +400,7 @@ export function createPreviewController(
     const item = dependencies.selected();
     if (!canStreamPreview()) {
       setPreviewStatus(
-        "Preview is unavailable in this browser. Use the timeline controls instead.",
+        "Preview is unavailable in this browser. Use the I and O keyboard shortcuts instead.",
       );
       return;
     }

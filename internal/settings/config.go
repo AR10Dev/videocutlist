@@ -101,7 +101,10 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 	if c.DatabasePath == "" || c.CacheDir == "" || c.ExportDir == "" {
 		return Config{}, fmt.Errorf("VIDEOCUTLIST_DATABASE_PATH, VIDEOCUTLIST_CACHE_DIR, and VIDEOCUTLIST_EXPORT_DIR are required")
 	}
-	c.Destinations = []exporter.Destination{{ID: "download", Label: "Downloads", Kind: exporter.KindDownload, Root: c.ExportDir, Retention: 24 * time.Hour, RetentionText: "24h"}}
+	c.Destinations = []exporter.Destination{
+		{ID: "download", Label: "Downloads", Kind: exporter.KindDownload, Root: c.ExportDir, Retention: 24 * time.Hour, RetentionText: "24h"},
+		{ID: "server", Label: "Server", Kind: exporter.KindArchive, Root: c.ExportDir},
+	}
 	if raw := value(lookup, "VIDEOCUTLIST_DESTINATIONS_JSON", ""); raw != "" {
 		if err := json.Unmarshal([]byte(raw), &c.Destinations); err != nil || len(c.Destinations) == 0 {
 			return Config{}, fmt.Errorf("VIDEOCUTLIST_DESTINATIONS_JSON must be a non-empty JSON array")

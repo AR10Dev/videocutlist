@@ -46,7 +46,7 @@ function IconButton(props: IconButtonProps) {
   );
 }
 
-export function PreviewPlayer(props: { timeline: JSX.Element; controls: JSX.Element }) {
+export function PreviewPlayer(props: { timeline: JSX.Element }) {
   const workspace = useWorkspace();
   const [aspectRatio, setAspectRatio] = createSignal("16 / 9");
   const [volume, setVolume] = createSignal(1);
@@ -125,8 +125,8 @@ export function PreviewPlayer(props: { timeline: JSX.Element; controls: JSX.Elem
         ) : null}
         {!canStreamPreview() && (
           <p class="preview-overlay" role="status">
-            Preview is unavailable in this browser. Use the timeline controls to set markers
-            manually.
+            Preview is unavailable in this browser. Use the I and O keyboard shortcuts to set
+            markers manually.
           </p>
         )}
         {workspace.previewStatus() && (
@@ -235,7 +235,6 @@ export function PreviewPlayer(props: { timeline: JSX.Element; controls: JSX.Elem
               />
             </div>
           </div>
-          {props.controls}
         </div>
       </div>
       {props.timeline}

@@ -26,6 +26,9 @@ func TestLoadDefaults(t *testing.T) {
 	if got := c.MediaRoots["camera"]; got != "/media/camera" {
 		t.Fatalf("media root = %q", got)
 	}
+	if len(c.Destinations) != 2 || c.Destinations[1].ID != "server" || c.Destinations[1].Kind != "archive" {
+		t.Fatalf("destinations = %#v", c.Destinations)
+	}
 }
 
 func TestLoadListenerConfiguration(t *testing.T) {

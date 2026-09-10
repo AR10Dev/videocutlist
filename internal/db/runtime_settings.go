@@ -89,7 +89,7 @@ func NewRuntimeSettingsStore(db *sql.DB) (*RuntimeSettingsStore, error) {
 	return &RuntimeSettingsStore{db: db}, nil
 }
 
-// Seed stores defaults only when this database has no runtime settings.
+// Seed stores defaults for a new database and adopts untouched new defaults.
 func (s *RuntimeSettingsStore) Seed(ctx context.Context, defaults RuntimeSettings) (RuntimeSettingsRecord, error) {
 	if err := ValidateRuntimeSettings(defaults); err != nil {
 		return RuntimeSettingsRecord{}, err
@@ -104,7 +104,19 @@ func (s *RuntimeSettingsStore) Seed(ctx context.Context, defaults RuntimeSetting
 	if err != nil {
 		return RuntimeSettingsRecord{}, fmt.Errorf("seed runtime settings: %w", err)
 	}
-	return s.Get(ctx)
+	record, err := s.Get(ctx)
+	if err != nil {
+		return RuntimeSettingsRecord{}, err
+	}
+	// Preserve saved settings, but adopt newly added defaults when the stored
+	// destination list is still an unchanged prefix of the defaults.
+	if len(record.Settings.Destinations) < len(defaults.Destinations) &&
+		slices.Equal(record.Settings.Destinations, defaults.Destinations[:len(record.Settings.Destinations)]) {
+		updated := record.Settings
+		updated.Destinations = slices.Clone(defaults.Destinations)
+		return s.Update(ctx, record.Revision, updated)
+	}
+	return record, nil
 }
 
 func (s *RuntimeSettingsStore) Get(ctx context.Context) (RuntimeSettingsRecord, error) {
