@@ -17,11 +17,10 @@ files. Original-media filesystem paths never leave the server.
 
 ## Requirements
 
-- Go 1.26+
-- Node.js 26+
-- pnpm 10.34.5+
-- FFmpeg and FFprobe
-- Docker or Podman with Compose
+Enter `devenv shell` for the project-local Go, gopls, golangci-lint, Node, pnpm,
+FFmpeg, ShellCheck, shfmt, and Hadolint toolchain.
+
+You still need Docker or Podman with Compose for container checks.
 
 ## Run locally
 

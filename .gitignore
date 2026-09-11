@@ -3,6 +3,7 @@
 .cache/
 dist/
 node_modules/
+.pnpm-store/
 test-results/
 *.tmp
 *.partial

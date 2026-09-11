@@ -1,6 +1,8 @@
 ## Commands
 
 - Prefix shell commands with `rtk`.
+- Enter `devenv shell` for the project-local Go, gopls, golangci-lint,
+  FFmpeg, Node, and shell tooling.
 - The integration commands are `make check`, `make test`, and `make smoke`.
 - Go must pass `gofmt`, `go vet`, and `go test -race ./...`.
 - Web code must pass lint, Vitest, build, and Playwright.

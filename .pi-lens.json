@@ -1,0 +1,36 @@
+{
+  "$schema": "https://raw.githubusercontent.com/apmantza/pi-lens/master/docs/schema/pi-lens-config-v1.json",
+  "ignore": [
+    ".agents/**",
+    ".cache/**",
+    ".devenv/**",
+    ".pnpm-store/**",
+    "node_modules/**",
+    "client/node_modules/**",
+    "client/dist/**",
+    "internal/web/webassets/dist/**",
+    "test/fixtures/real-media/**",
+    "test-results/**",
+    "**/*.tfstate",
+    "**/*.tfplan"
+  ],
+  "lsp": {
+    "warmFiles": [
+      "cmd/videocutlist/main.go",
+      "client/src/App.tsx",
+      "deployments/containers/compose.yaml"
+    ],
+    "servers": {
+      "tailwindcss": {
+        "name": "Tailwind CSS Language Server",
+        "extensions": [".css", ".html", ".jsx", ".tsx"],
+        "command": "node",
+        "args": [
+          "node_modules/@tailwindcss/language-server/bin/tailwindcss-language-server",
+          "--stdio"
+        ],
+        "rootMarkers": ["package.json"]
+      }
+    }
+  }
+}
