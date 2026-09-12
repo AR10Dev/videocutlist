@@ -557,6 +557,7 @@ export interface components {
       startMs: number;
       endMs: number;
       label?: string;
+      /** @default true */
       included?: boolean;
     };
     UIState: {
@@ -702,6 +703,18 @@ export interface components {
       };
       /** @description Requested cut strategy. */
       strategy?: string;
+      /**
+       * @description Requested output arrangement.
+       * @enum {string}
+       */
+      mode?: "merge" | "separate";
+      /**
+       * @description Requested ranges (included cuts or gaps between cuts).
+       * @enum {string}
+       */
+      selection?: "segments" | "gaps";
+      /** @description Resolved stream indexes used by the export job. */
+      selectedStreams?: number[];
       /** @description Strategy used by every selected segment; omitted when segments use different strategies. See result.appliedStrategies for per-segment values. */
       appliedStrategy?: string;
       warnings?: string[];

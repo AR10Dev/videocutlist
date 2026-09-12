@@ -1249,6 +1249,20 @@ components:
         strategy:
           type: string
           description: Requested cut strategy.
+        mode:
+          type: string
+          enum: [merge, separate]
+          description: Requested output arrangement.
+        selection:
+          type: string
+          enum: [segments, gaps]
+          description: Requested ranges (included cuts or gaps between cuts).
+        selectedStreams:
+          type: array
+          items:
+            type: integer
+            minimum: 0
+          description: Resolved stream indexes used by the export job.
         appliedStrategy:
           type: string
           description: >-

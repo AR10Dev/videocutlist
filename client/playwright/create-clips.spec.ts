@@ -44,6 +44,86 @@ async function openExport(page: Page) {
   await expect(page.getByRole("button", { name: "Create clips" })).toBeVisible();
 }
 
+test("rebuilt export recovers from preflight errors and explains empty scope", async ({
+  page,
+}, testInfo) => {
+  let preflights = 0;
+  await page.route(`${origin}/api/v1/projects/*/exports/preflight`, (route) => {
+    preflights++;
+    return preflights === 1
+      ? route.fulfill({ status: 503 })
+      : route.fulfill({ json: { allowed: true, selection: [0], findings: [] } });
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Select camera.mp4" }).click();
+  await addToProject(page);
+  await openExport(page);
+  await expect(
+    page.getByText("Add or include a segment before creating clips.", { exact: true }),
+  ).toBeVisible();
+  await page.getByLabel("What to export", { exact: true }).selectOption("gaps");
+  const create = page.getByRole("button", { name: "Create clips" });
+  await expect(create).toBeEnabled();
+  await page.screenshot({ path: testInfo.outputPath("export.png"), fullPage: true });
+  await create.click();
+  await expect(
+    page.getByText("Export preflight failed (503). Try again.", { exact: true }),
+  ).toBeVisible();
+  await expect(create).toBeEnabled();
+  await create.click();
+  await expect(page.getByText("Export queued.", { exact: true })).toBeVisible();
+});
+
+test("rebuilt detection sends source identity and completes candidate review", async ({
+  page,
+}, testInfo) => {
+  let input: Record<string, unknown> | undefined;
+  await page.route(`${origin}/api/v1/projects/*/detections`, (route) => {
+    input = route.request().postDataJSON();
+    return route.fulfill({
+      status: 202,
+      json: {
+        id: "j_detect-review",
+        type: "detection",
+        state: "succeeded",
+        kind: "black",
+        candidates: [
+          { id: "candidate-1", source: "black", startMs: 100, endMs: 800, confidence: 0.9 },
+        ],
+      },
+    });
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Select camera.mp4" }).click();
+  await addToProject(page);
+  await page.getByRole("tab", { name: "Auto-detect", exact: true }).click();
+  await page.getByText("Detection sensitivity", { exact: true }).click();
+  await page.getByLabel("Minimum duration (ms)").fill("750");
+  await page.getByRole("button", { name: "Find black frames", exact: true }).click();
+  await expect
+    .poll(() => input)
+    .toMatchObject({ kind: "black", minDurationMs: 750, sourceFingerprint: "v1" });
+  await expect(page.getByText("90%", { exact: true })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("detection.png"), fullPage: true });
+  await page.getByRole("button", { name: "Dismiss", exact: true }).click();
+  await expect(page.getByText("All candidates reviewed", { exact: true })).toBeVisible();
+  await expect(page.getByText("No candidates found", { exact: true })).toHaveCount(0);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page
+    .getByRole("button", { name: "Close open panel", exact: true })
+    .click({ position: { x: 385, y: 800 } });
+  await page.getByRole("button", { name: "Show editing tools", exact: true }).click();
+  await page.getByRole("tab", { name: "Auto-detect", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Find black frames", exact: true })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("detection-mobile.png"), fullPage: true });
+  await page.getByRole("tab", { name: "Export", exact: true }).click();
+  await expect(page.getByLabel("Output arrangement", { exact: true })).toBeVisible();
+  await page.screenshot({ path: testInfo.outputPath("export-mobile.png"), fullPage: true });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+});
+
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     window.VIDEOCUTLIST_CONFIG = {

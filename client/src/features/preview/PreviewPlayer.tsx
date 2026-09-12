@@ -7,7 +7,6 @@ import {
   List,
   Pause,
   Play,
-  Repeat2,
   SkipBack,
   SkipForward,
   Volume2,
@@ -180,15 +179,6 @@ export function PreviewPlayer(props: { timeline: JSX.Element }) {
               onClick={() => workspace.playActiveSegment(false)}
             >
               <Play size={18} aria-hidden="true" />
-            </IconButton>
-            <IconButton
-              label="Loop selected segment"
-              keyshortcuts="L"
-              pressed={workspace.loopSelectedSegment()}
-              disabled={!workspace.activeSegment() || !canStreamPreview()}
-              onClick={workspace.toggleLoopSelectedSegment}
-            >
-              <Repeat2 size={18} aria-hidden="true" />
             </IconButton>
             <IconButton
               label="Preview selected segments"
