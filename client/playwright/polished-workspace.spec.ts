@@ -350,7 +350,13 @@ test("queue exposes every completed output and authenticated batch downloads", a
                 id: "j_output12345678",
                 type: "export",
                 state: "succeeded",
-                result: { destinationKind: "download", outputNames: ["first.mkv", "second.mkv"] },
+                result: { destinationKind: "download", outputNames: ["first.mkv"] },
+              },
+              {
+                id: "j_output23456789",
+                type: "export",
+                state: "succeeded",
+                result: { destinationKind: "download", outputNames: ["second.mkv"] },
               },
             ],
           },
@@ -383,7 +389,7 @@ test("queue exposes every completed output and authenticated batch downloads", a
   await queue.getByRole("button", { name: "Download all clips" }).click();
   expect((await archiveDownload).suggestedFilename()).toBe("videocutlist-clips.zip");
   const download = page.waitForEvent("download");
-  await queue.getByRole("link", { name: "Download output 2" }).click();
+  await queue.getByRole("link", { name: "Download output 1" }).nth(1).click();
   expect((await download).suggestedFilename()).toBe("second.mkv");
   expect(authorization).toBe("Bearer test-only-token");
   expect(aggregateAuthorization).toBe("Bearer test-only-token");

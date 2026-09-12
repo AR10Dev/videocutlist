@@ -201,7 +201,6 @@
     border: 1px solid var(--panel-border);
     border-radius: 8px;
     overflow-y: auto;
-    resize: horizontal;
   }
   .left-sidebar {
     display: flex;
@@ -789,7 +788,7 @@
     position: absolute;
     inset-block: 0;
     width: 12px;
-    background: var(--color-primary);
+    background: inherit;
     cursor: ew-resize;
   }
   .cut-handle::before {
@@ -1387,5 +1386,801 @@
     animation: none !important;
     transition: none !important;
     scroll-behavior: auto !important;
+  }
+}
+
+/* Detection and export use a quiet control-room hierarchy inside the task rail. */
+@layer workbench {
+  .section-kicker {
+    display: block;
+    margin-bottom: 3px;
+    color: var(--color-primary);
+    font-size: 0.65rem;
+    font-weight: 750;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .task-heading.detection-heading,
+  .export-page-heading {
+    align-items: flex-start;
+    margin-bottom: 0;
+    padding-bottom: 2px;
+  }
+  .detection-heading h2,
+  .export-page-heading h2 {
+    margin: 0;
+    font-size: 1.05rem;
+    letter-spacing: -0.01em;
+  }
+  .detection-heading p,
+  .export-page-heading p {
+    max-width: 38ch;
+    margin: 5px 0 0;
+    color: var(--text-muted);
+    font-size: 0.78rem;
+    line-height: 1.45;
+  }
+  .detection-source-strip {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px;
+    border: 1px solid var(--panel-border);
+    border-left: 3px solid var(--color-primary);
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--surface) 74%, var(--color-primary));
+  }
+  .detection-source-icon {
+    display: grid;
+    flex: none;
+    width: 30px;
+    height: 30px;
+    place-items: center;
+    color: var(--color-primary-content);
+    background: var(--color-primary);
+    border-radius: 5px;
+  }
+  .detection-source-copy {
+    display: grid;
+    min-width: 0;
+    gap: 2px;
+  }
+  .detection-source-copy strong,
+  .detection-source-copy span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .detection-source-copy strong {
+    font-size: 0.82rem;
+  }
+  .detection-source-copy span {
+    color: var(--text-muted);
+    font-size: 0.7rem;
+    font-variant-numeric: tabular-nums;
+  }
+  .detection-workflow-group {
+    display: grid;
+    gap: 8px;
+  }
+  .detection-section-label,
+  .export-section-heading,
+  .export-plan-heading,
+  .detection-review-heading {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .detection-section-label > svg,
+  .export-plan-heading > svg {
+    flex: none;
+    color: var(--color-primary);
+  }
+  .detection-section-label h3,
+  .export-section-heading h3,
+  .export-plan-heading h3,
+  .detection-review-heading h3 {
+    margin: 0;
+    font-size: 0.88rem;
+  }
+  .detection-section-label p,
+  .export-section-heading p,
+  .export-plan-heading p,
+  .detection-review-heading p {
+    margin: 3px 0 0;
+    color: var(--text-muted);
+    font-size: 0.73rem;
+    line-height: 1.4;
+  }
+  .detection-workflow-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 7px;
+  }
+  .detection-workflow-card {
+    display: grid;
+    align-content: start;
+    gap: 6px;
+    min-width: 0;
+    padding: 9px;
+    border: 1px solid var(--panel-border);
+    border-radius: 6px;
+    background: var(--surface);
+  }
+  .detection-workflow-card .btn {
+    justify-content: flex-start;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .detection-workflow-card p {
+    margin: 0;
+    font-size: 0.7rem;
+    line-height: 1.35;
+  }
+  .detection-methods {
+    gap: 0;
+    overflow: hidden;
+    border: 1px solid var(--panel-border);
+    border-radius: 6px;
+    background: var(--surface);
+  }
+  .detection-method-row {
+    display: grid;
+    grid-template-columns: minmax(0, auto) minmax(0, 1fr);
+    align-items: center;
+    gap: 8px;
+    padding: 7px;
+    border-bottom: 1px solid var(--panel-border);
+  }
+  .detection-method-row:last-child {
+    border-bottom: 0;
+  }
+  .detection-method-row .btn {
+    justify-self: start;
+  }
+  .detection-method-row span {
+    min-width: 0;
+    color: var(--text-muted);
+    font-size: 0.7rem;
+    line-height: 1.3;
+  }
+  .detection-job-state,
+  .export-status,
+  .export-loading {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    padding: 9px 10px;
+    border: 1px solid color-mix(in srgb, var(--color-info) 40%, var(--panel-border));
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--color-info) 10%, var(--surface));
+    font-size: 0.78rem;
+  }
+  .detection-job-state {
+    justify-content: space-between;
+  }
+  .detection-job-state-main {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    min-width: 0;
+  }
+  .detection-job-state-main > svg {
+    flex: none;
+    margin-top: 1px;
+  }
+  .detection-job-state-main > div {
+    display: grid;
+    min-width: 0;
+    gap: 2px;
+  }
+  .detection-job-state-main span {
+    color: var(--text-muted);
+    font-size: 0.7rem;
+    overflow-wrap: anywhere;
+  }
+  .detection-job-state-succeeded {
+    border-color: color-mix(in srgb, var(--color-success) 45%, var(--panel-border));
+    background: color-mix(in srgb, var(--color-success) 10%, var(--surface));
+  }
+  .detection-job-state-succeeded svg {
+    color: var(--color-success);
+  }
+  .detection-job-state-failed {
+    border-color: color-mix(in srgb, var(--color-error) 45%, var(--panel-border));
+    background: color-mix(in srgb, var(--color-error) 10%, var(--surface));
+  }
+  .detection-job-state-failed svg {
+    color: var(--color-error);
+  }
+  .detection-job-state-cancelled {
+    border-color: color-mix(in srgb, var(--color-warning) 45%, var(--panel-border));
+    background: color-mix(in srgb, var(--color-warning) 10%, var(--surface));
+  }
+  .detection-job-state-cancelled svg {
+    color: var(--color-warning);
+  }
+  .detection-options,
+  .export-options,
+  .export-naming-details,
+  .export-job-subdetails {
+    margin-top: 0;
+    border-top: 0;
+    padding-top: 0;
+  }
+  .detection-options > summary,
+  .export-options > summary,
+  .export-naming-details > summary,
+  .export-job-subdetails > summary {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 36px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--panel-border);
+  }
+  .detection-options[open] > summary,
+  .export-options[open] > summary {
+    margin-bottom: 2px;
+  }
+  .detection-options .option-fields {
+    padding: 10px;
+    border: 1px solid var(--panel-border);
+    border-top: 0;
+    border-radius: 0 0 6px 6px;
+    background: var(--surface);
+  }
+  .detection-options label {
+    display: grid;
+    gap: 5px;
+  }
+  .detection-options label .control-help {
+    margin: 0;
+  }
+  .detection-option-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .detection-empty-state,
+  .export-empty-state {
+    display: flex;
+    align-items: flex-start;
+    gap: 9px;
+    padding: 12px;
+    border: 1px dashed var(--panel-border);
+    border-radius: 6px;
+    color: var(--text-muted);
+    background: color-mix(in srgb, var(--surface) 65%, var(--surface-raised));
+  }
+  .detection-empty-state > svg,
+  .export-empty-state > svg {
+    flex: none;
+    margin-top: 1px;
+    color: var(--color-warning);
+  }
+  .detection-empty-state strong,
+  .export-empty-state strong {
+    display: block;
+    color: var(--text);
+    font-size: 0.8rem;
+  }
+  .detection-empty-state p,
+  .export-empty-state p {
+    margin: 3px 0 0;
+    font-size: 0.75rem;
+  }
+  .detection-empty-state-result {
+    border-style: solid;
+  }
+  .detection-empty-state-result > svg {
+    color: var(--color-success);
+  }
+  .detection-review {
+    gap: 9px;
+    padding-top: 2px;
+  }
+  .detection-review-heading {
+    align-items: center;
+  }
+  .detection-review ol {
+    gap: 7px;
+  }
+  .detection-review li {
+    align-items: stretch;
+    gap: 9px;
+    padding: 9px;
+    border-radius: 6px;
+    background: var(--surface);
+  }
+  .detection-candidate-copy {
+    display: grid;
+    flex: 1 1 100%;
+    min-width: 0;
+    gap: 8px;
+  }
+  .detection-candidate-title {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 7px;
+  }
+  .detection-candidate-title strong {
+    font-size: 0.78rem;
+    font-variant-numeric: tabular-nums;
+  }
+  .detection-candidate-copy dl {
+    grid-template-columns: max-content minmax(0, 1fr) max-content minmax(0, 1fr);
+    gap: 3px 7px;
+    margin: 0;
+    font-size: 0.68rem;
+  }
+  .detection-candidate-copy dd {
+    font-variant-numeric: tabular-nums;
+  }
+  .detection-candidate-copy dd:last-child {
+    grid-column: 2 / -1;
+    min-width: 0;
+  }
+  .detection-candidate-copy code {
+    overflow-wrap: anywhere;
+  }
+  .detection-candidate-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+  }
+  .detection-candidate-actions .btn {
+    flex: 1 1 auto;
+  }
+  .detection-status:empty {
+    display: none;
+  }
+  .export-plan,
+  .export-preflight,
+  .export-activity,
+  .export-items {
+    display: grid;
+    gap: 10px;
+    padding: 12px;
+    border: 1px solid var(--panel-border);
+    border-radius: 7px;
+    background: var(--surface);
+  }
+  .export-plan {
+    border-top: 3px solid var(--color-primary);
+  }
+  .export-plan dl,
+  .export-job-facts {
+    margin: 0;
+    font-size: 0.73rem;
+  }
+  .export-plan .export-filename-preview {
+    margin-top: 0;
+    padding-top: 10px;
+  }
+  .export-subheading {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 0.76rem;
+  }
+  .export-subheading code {
+    max-width: 60%;
+    color: var(--text-muted);
+    overflow-wrap: anywhere;
+    text-align: right;
+  }
+  .export-filename-preview ul {
+    max-height: 7rem;
+    margin-bottom: 4px;
+  }
+  .export-preflight {
+    background: color-mix(in srgb, var(--surface) 78%, var(--color-info));
+  }
+  .export-resolved-selection {
+    display: grid;
+    gap: 3px;
+    padding: 8px;
+    border-left: 2px solid var(--color-info);
+    background: color-mix(in srgb, var(--color-info) 9%, var(--surface));
+    font-size: 0.72rem;
+  }
+  .export-resolved-selection span {
+    color: var(--text-muted);
+    line-height: 1.35;
+  }
+  .export-findings {
+    gap: 6px;
+  }
+  .export-finding {
+    align-items: flex-start;
+    justify-content: flex-start;
+    min-height: 0;
+    padding: 8px;
+    gap: 8px;
+    font-size: 0.72rem;
+  }
+  .export-finding > svg {
+    flex: none;
+    margin-top: 1px;
+  }
+  .export-finding > div {
+    display: grid;
+    min-width: 0;
+    gap: 2px;
+  }
+  .export-finding span,
+  .export-finding small {
+    overflow-wrap: anywhere;
+  }
+  .export-finding span {
+    line-height: 1.35;
+  }
+  .export-finding small {
+    color: var(--text-muted);
+    font-size: 0.65rem;
+  }
+  .export-finding-allowed {
+    border-color: color-mix(in srgb, var(--color-success) 45%, var(--panel-border));
+    background: color-mix(in srgb, var(--color-success) 9%, var(--surface));
+  }
+  .export-finding-allowed > svg {
+    color: var(--color-success);
+  }
+  .export-finding-warn {
+    border-color: color-mix(in srgb, var(--color-warning) 45%, var(--panel-border));
+    background: color-mix(in srgb, var(--color-warning) 9%, var(--surface));
+  }
+  .export-finding-warn > svg {
+    color: var(--color-warning);
+  }
+  .export-finding-blocked {
+    border-color: color-mix(in srgb, var(--color-error) 45%, var(--panel-border));
+    background: color-mix(in srgb, var(--color-error) 9%, var(--surface));
+  }
+  .export-finding-blocked > svg {
+    color: var(--color-error);
+  }
+  .export-items {
+    display: grid;
+  }
+  .export-items > legend {
+    display: none;
+  }
+  .export-scope-modes {
+    gap: 6px;
+  }
+  .export-scope-modes label,
+  .export-item-checklist label {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    min-width: 0;
+    padding: 8px;
+    border: 1px solid var(--panel-border);
+    border-radius: 5px;
+    background: color-mix(in srgb, var(--surface-raised) 55%, var(--surface));
+  }
+  .export-scope-modes label:has(input:checked) {
+    border-color: var(--color-primary);
+    background: color-mix(in srgb, var(--color-primary) 10%, var(--surface));
+  }
+  .export-scope-modes input,
+  .export-item-checklist input {
+    flex: none;
+    margin-top: 2px;
+  }
+  .export-scope-modes label > span,
+  .export-item-checklist label > span,
+  .stream-row > span {
+    display: grid;
+    min-width: 0;
+    gap: 2px;
+  }
+  .export-scope-modes small,
+  .export-item-checklist small,
+  .stream-row small {
+    color: var(--text-muted);
+    font-size: 0.68rem;
+    line-height: 1.3;
+    overflow-wrap: anywhere;
+  }
+  .export-item-checklist {
+    display: grid;
+    gap: 5px;
+  }
+  .export-item-checklist label {
+    align-items: center;
+  }
+  .export-item-checklist label > span {
+    overflow: hidden;
+  }
+  .export-item-checklist strong,
+  .export-item-checklist small {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .export-track-fieldset {
+    display: grid;
+    gap: 7px;
+    margin: 0;
+    padding: 9px;
+    background: color-mix(in srgb, var(--surface) 84%, var(--surface-raised));
+  }
+  .export-track-fieldset > p {
+    margin: 0;
+  }
+  .export-track-list {
+    display: grid;
+    gap: 5px;
+  }
+  .export-track-list .stream-row {
+    align-items: flex-start;
+    min-height: 34px;
+    padding: 6px;
+    border-radius: 4px;
+  }
+  .export-track-list .stream-row:has(input:checked) {
+    background: color-mix(in srgb, var(--color-primary) 8%, var(--surface));
+  }
+  .export-track-list strong {
+    font-size: 0.76rem;
+  }
+  .export-destination-field {
+    display: grid;
+    gap: 8px;
+  }
+  .destination-description {
+    display: grid;
+    gap: 8px;
+    padding: 9px;
+    border-left: 2px solid var(--color-secondary);
+    background: color-mix(in srgb, var(--color-secondary) 8%, var(--surface));
+  }
+  .destination-description > div {
+    display: grid;
+    min-width: 0;
+    gap: 2px;
+  }
+  .destination-description span {
+    color: var(--text-muted);
+    font-size: 0.72rem;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+  }
+  .destination-description dl {
+    margin: 0;
+    font-size: 0.7rem;
+  }
+  .export-submit-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 11px 12px;
+    border: 1px solid var(--panel-border);
+    border-radius: 7px;
+    background: color-mix(in srgb, var(--color-primary) 8%, var(--surface-raised));
+  }
+  .export-submit-row > div:first-child {
+    display: grid;
+    min-width: 0;
+    gap: 2px;
+  }
+  .export-submit-row > div:first-child span {
+    color: var(--text-muted);
+    font-size: 0.7rem;
+  }
+  .export-submit-row .controls {
+    flex: none;
+  }
+  .export-job-card {
+    display: grid;
+    gap: 9px;
+    padding: 10px;
+    border: 1px solid var(--panel-border);
+    border-radius: 6px;
+    background: var(--surface-raised);
+  }
+  .export-job-card-heading,
+  .queue-batch-heading {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .export-job-card-heading h4,
+  .queue-batch-heading h3 {
+    margin: 0;
+    font-size: 0.8rem;
+  }
+  .export-job-card-heading p,
+  .queue-batch-heading p {
+    margin: 3px 0 0;
+    color: var(--text-muted);
+    font-size: 0.67rem;
+    overflow-wrap: anywhere;
+  }
+  .export-job-card-heading code,
+  .queue-batch-heading code {
+    overflow-wrap: anywhere;
+  }
+  .export-job-progress,
+  .queue-batch-progress {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+  }
+  .export-job-progress .progress,
+  .queue-batch-progress .progress {
+    flex: 1;
+    height: 7px;
+  }
+  .export-job-progress > span,
+  .queue-batch-progress > span {
+    flex: none;
+    color: var(--text-muted);
+    font-size: 0.68rem;
+    font-variant-numeric: tabular-nums;
+  }
+  .export-job-facts {
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: 3px 8px;
+  }
+  .export-job-result {
+    display: grid;
+    gap: 8px;
+    padding-top: 9px;
+    border-top: 1px solid var(--panel-border);
+  }
+  .export-result-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .export-result-heading h5,
+  .export-result-heading > span {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    margin: 0;
+    font-size: 0.76rem;
+  }
+  .export-output-list,
+  .export-detail-list {
+    display: grid;
+    gap: 5px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .export-output-list li {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 6px 7px;
+    border: 1px solid var(--panel-border);
+    border-radius: 4px;
+    font-size: 0.72rem;
+  }
+  .export-output-list code {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .export-output-list .link {
+    flex: none;
+    font-size: 0.7rem;
+  }
+  .export-detail-list {
+    padding-left: 1rem;
+    list-style: disc;
+    font-size: 0.7rem;
+  }
+  .export-job-subdetails > summary {
+    min-height: 30px;
+    padding-block: 5px;
+    font-size: 0.72rem;
+  }
+  .export-job-actions,
+  .queue-batch-actions,
+  .queue-heading-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .export-activity {
+    gap: 10px;
+    background: color-mix(in srgb, var(--surface) 82%, var(--color-secondary));
+  }
+  .export-activity > .export-section-heading p {
+    overflow-wrap: anywhere;
+  }
+  .queue-panel {
+    gap: 10px;
+    margin-top: 4px;
+    padding: 12px;
+    border-top: 1px solid var(--panel-border);
+  }
+  .queue-heading-row {
+    align-items: center;
+  }
+  .queue-heading-row h2 {
+    margin: 0;
+  }
+  .queue-heading-row .section-kicker {
+    margin-bottom: 1px;
+  }
+  .queue-batch-list,
+  .queue-job-list {
+    display: grid;
+    gap: 8px;
+  }
+  .queue-batch {
+    display: grid;
+    gap: 9px;
+    padding: 11px;
+    border: 1px solid var(--panel-border);
+    border-radius: 7px;
+    background: var(--surface);
+  }
+  .queue-batch-summary {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: 0.7rem;
+  }
+  .queue-destination-notes {
+    display: grid;
+    gap: 3px;
+    padding: 7px 8px;
+    border-left: 2px solid var(--color-secondary);
+    background: color-mix(in srgb, var(--color-secondary) 8%, var(--surface));
+  }
+  .queue-destination-notes p {
+    margin: 0;
+    font-size: 0.72rem;
+  }
+  .queue-history {
+    border: 1px solid var(--panel-border);
+    border-radius: 6px;
+  }
+  .queue-history .collapse-title {
+    min-height: 38px;
+    padding: 9px 34px 9px 10px;
+    font-size: 0.78rem;
+  }
+  .queue-history .collapse-content {
+    padding: 0 8px 8px;
+  }
+  @media (max-width: 380px) {
+    .detection-workflow-grid {
+      grid-template-columns: 1fr;
+    }
+    .detection-method-row {
+      grid-template-columns: 1fr;
+    }
+    .detection-method-row .btn {
+      width: 100%;
+    }
+    .export-submit-row {
+      align-items: stretch;
+      flex-direction: column;
+    }
+    .export-submit-row .controls .btn {
+      flex: 1 1 auto;
+    }
+  }
+  @media (min-width: 1050px) {
+    .task-panel {
+      padding: 14px;
+    }
   }
 }

@@ -69,6 +69,14 @@ export function createDetectionController(
       setDetectionStatus(`${candidates.length} candidates found. Review each before accepting.`);
   };
   createEffect(() => {
+    const error = detectionStatusQuery.error;
+    if (error && detectionJob()?.id) {
+      setDetectionStatus(
+        error instanceof Error ? error.message : "Detection status could not be updated.",
+      );
+    }
+  });
+  createEffect(() => {
     const next = detectionStatusQuery.data;
     if (!next || next.id !== detectionJob()?.id) return;
     setDetectionJob(next);
@@ -143,6 +151,7 @@ export function createDetectionController(
           projectItemId: dependencies.activeItemId(),
           projectRevision: saved.revision,
           kind,
+          sourceFingerprint: selected.etag,
           ...options,
         }),
         signal: controller.signal,
@@ -152,7 +161,11 @@ export function createDetectionController(
         setDetectionStatus(
           response.status === 409
             ? "Detection is stale; save or reload the project."
-            : "Detection could not be started.",
+            : response.status === 429
+              ? "Detection capacity is busy. Try again shortly."
+              : response.status === 422
+                ? "Detection settings were rejected. Check the sensitivity values."
+                : "Detection could not be started.",
         );
         return;
       }
@@ -282,6 +295,13 @@ export function createDetectionController(
     setDetectionStatus,
     detectionCandidates,
     setDetectionCandidates,
+    detectionLoading: () => Boolean(detectionJob()?.id) && detectionStatusQuery.isFetching,
+    detectionQueryError: () =>
+      detectionStatusQuery.error instanceof Error
+        ? detectionStatusQuery.error.message
+        : detectionStatusQuery.error
+          ? "Detection status could not be updated."
+          : "",
     clearDetectionContext,
     startDetection,
     cancelDetection,
