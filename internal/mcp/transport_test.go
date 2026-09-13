@@ -36,6 +36,7 @@ func TestTransportDisabledAndAuthenticationAreIsolated(t *testing.T) {
 func TestTransportInitializationNegotiationDiscoveryAndCall(t *testing.T) {
 	credentials, secret, _ := transportCredentials(t, time.Hour)
 	called := false
+	deniedResolved := false
 	handler := newTransport(t, mcp.TransportConfig{
 		Enabled: true, Credentials: credentials,
 		Tools: []mcp.Tool{
@@ -43,7 +44,10 @@ func TestTransportInitializationNegotiationDiscoveryAndCall(t *testing.T) {
 				called = ctx.Credential.ID != "" && string(arguments) == `{"query":"clip"}`
 				return mcp.ToolResult{Content: []mcp.ToolContent{{Type: "text", Text: "one item"}}, StructuredContent: map[string]any{"count": 1}}, nil
 			}},
-			{Name: "start_export", Permission: mcp.PermissionExportsRun, InputSchema: map[string]any{"type": "object"}, Resource: func(mcp.Context, json.RawMessage) (mcp.Resource, error) { return mcp.Resource{}, nil }},
+			{Name: "start_export", Permission: mcp.PermissionExportsRun, InputSchema: map[string]any{"type": "object"}, Resource: func(mcp.Context, json.RawMessage) (mcp.Resource, error) {
+				deniedResolved = true
+				return mcp.Resource{}, nil
+			}},
 			{Name: "huge_result", Permission: mcp.PermissionMediaRead, InputSchema: map[string]any{"type": "object"}, Resource: func(mcp.Context, json.RawMessage) (mcp.Resource, error) { return mcp.Resource{}, nil }, Call: func(mcp.Context, json.RawMessage) (mcp.ToolResult, error) {
 				return mcp.ToolResult{StructuredContent: map[string]any{"value": strings.Repeat("x", 2<<20)}}, nil
 			}},
@@ -75,8 +79,8 @@ func TestTransportInitializationNegotiationDiscoveryAndCall(t *testing.T) {
 
 	denied := sessionRequest(`{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"start_export","arguments":{}}}`, secret, session)
 	response = serve(handler, denied)
-	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "Unknown or unauthorized tool") {
-		t.Fatalf("denied call status=%d body=%s", response.Code, response.Body.String())
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "Unknown or unauthorized tool") || deniedResolved {
+		t.Fatalf("denied call status=%d resolved=%v body=%s", response.Code, deniedResolved, response.Body.String())
 	}
 
 	huge := sessionRequest(`{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"huge_result","arguments":{}}}`, secret, session)

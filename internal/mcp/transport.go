@@ -315,6 +315,9 @@ func (t *transport) callTool(r *http.Request, raw json.RawMessage, credential Cr
 		if tool.Name != params.Name {
 			continue
 		}
+		if !credential.HasPermission(tool.Permission) {
+			return nil, &rpcError{Code: -32602, Message: "Unknown or unauthorized tool"}
+		}
 		if tool.Resource == nil {
 			return nil, &rpcError{Code: -32603, Message: "Internal error"}
 		}
