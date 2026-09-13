@@ -84,7 +84,7 @@ func (s *Scheduler) Submit(ctx context.Context, jobs []Job) ([]Job, error) {
 			return nil, err
 		}
 		now := time.Now().UTC().Format(time.RFC3339Nano)
-		if _, err := tx.ExecContext(ctx, `INSERT INTO jobs (id,batch_id,kind,project_id,project_item_id,state,request_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)`, job.ID, job.BatchID, job.Kind, nullString(job.ProjectID), nullString(job.ProjectItemID), JobQueued, job.RequestJSON, now, now); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO jobs (id,batch_id,kind,project_id,project_item_id,proposal_id,credential_id,state,request_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`, job.ID, job.BatchID, job.Kind, nullString(job.ProjectID), nullString(job.ProjectItemID), nullString(job.ProposalID), nullString(job.CredentialID), JobQueued, job.RequestJSON, now, now); err != nil {
 			return nil, fmt.Errorf("create job: %w", err)
 		}
 	}
@@ -100,6 +100,50 @@ func (s *Scheduler) Submit(ctx context.Context, jobs []Job) ([]Job, error) {
 	}
 	s.signal()
 	return out, nil
+}
+
+// SubmitProposal atomically returns the jobs already bound to a proposal or
+// admits its exact export batch. This is the proposal idempotency boundary.
+func (s *Scheduler) SubmitProposal(ctx context.Context, proposalID, credentialID string, jobs []Job) ([]Job, error) {
+	if proposalID == "" || credentialID == "" || len(jobs) == 0 || len(jobs) > s.config.QueueCapacity {
+		return nil, errors.New("proposal export jobs are required")
+	}
+	tx, err := s.jobs.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	var existing int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM jobs WHERE proposal_id = ?`, proposalID).Scan(&existing); err != nil {
+		return nil, err
+	}
+	if existing > 0 {
+		if err := tx.Rollback(); err != nil {
+			return nil, err
+		}
+		return s.jobs.ListByProposal(ctx, proposalID)
+	}
+	var queued int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM jobs WHERE state IN ('queued','running')`).Scan(&queued); err != nil {
+		return nil, err
+	}
+	if queued+len(jobs) > s.config.QueueCapacity {
+		return nil, ErrQueueFull
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	for _, job := range jobs {
+		if err := validateNewJob(job); err != nil || job.Kind != JobExport || job.ProposalID != proposalID || job.CredentialID != credentialID {
+			return nil, errors.New("invalid proposal export job")
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO jobs (id,batch_id,kind,project_id,project_item_id,proposal_id,credential_id,state,request_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`, job.ID, job.BatchID, job.Kind, job.ProjectID, job.ProjectItemID, proposalID, credentialID, JobQueued, job.RequestJSON, now, now); err != nil {
+			return nil, fmt.Errorf("create proposal job: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	s.signal()
+	return s.jobs.ListByProposal(ctx, proposalID)
 }
 
 func validateNewJob(job Job) error {
@@ -278,7 +322,7 @@ func (s *Scheduler) claim(ctx context.Context) (Job, error) {
 	if err != nil || n != 1 {
 		return Job{}, sql.ErrNoRows
 	}
-	row := tx.QueryRowContext(ctx, `SELECT id,batch_id,kind,COALESCE(project_id,''),COALESCE(project_item_id,''),state,request_json,result_json,error_code,created_at,updated_at FROM jobs WHERE id=?`, id)
+	row := tx.QueryRowContext(ctx, `SELECT id,batch_id,kind,COALESCE(project_id,''),COALESCE(project_item_id,''),COALESCE(proposal_id,''),COALESCE(credential_id,''),state,request_json,result_json,error_code,created_at,updated_at FROM jobs WHERE id=?`, id)
 	job, err := scanUnifiedJob(row)
 	if err != nil {
 		return Job{}, err

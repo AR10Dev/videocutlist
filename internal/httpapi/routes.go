@@ -51,6 +51,8 @@ const (
 	routeGetBatch
 	routeCancelBatch
 	routeRetryJob
+	routeGetExportProposal
+	routeApproveExportProposal
 )
 
 type route struct {
@@ -68,6 +70,7 @@ func RouteCoverageKinds() []string {
 		"import_interchange", "export_interchange", "create_detection", "get_job", "cancel_job",
 		"automation", "list_destinations", "get_settings", "put_settings", "refresh_settings",
 		"download_output", "download_batch", "list_batches", "get_batch", "cancel_batch", "retry_job",
+		"get_export_proposal", "approve_export_proposal",
 	}
 }
 
@@ -86,6 +89,9 @@ func validFolderID(value string) bool  { return folderIDPattern.MatchString(valu
 func validProjectID(value string) bool { return projectIDPattern.MatchString(value) }
 func validJobID(value string) bool     { return jobIDPattern.MatchString(value) }
 func validBatchID(value string) bool   { return batchIDPattern.MatchString(value) }
+func validProposalID(value string) bool {
+	return strings.HasPrefix(value, "ep_") && len(value) >= 15 && len(value) <= 67 && regexp.MustCompile(`^[A-Za-z0-9_-]+$`).MatchString(value)
+}
 
 func parseRoute(method, path string) route {
 	if !strings.HasPrefix(path, "/api/v1/") || strings.Contains(path, "\\") {
@@ -162,6 +168,10 @@ func parseRoute(method, path string) route {
 		return route{kind: routeGetBatch, id: parts[1]}
 	case len(parts) == 2 && parts[0] == "batches" && validBatchID(parts[1]) && method == http.MethodDelete:
 		return route{kind: routeCancelBatch, id: parts[1]}
+	case len(parts) == 2 && parts[0] == "export-proposals" && validProposalID(parts[1]) && method == http.MethodGet:
+		return route{kind: routeGetExportProposal, id: parts[1]}
+	case len(parts) == 3 && parts[0] == "export-proposals" && validProposalID(parts[1]) && parts[2] == "approval" && method == http.MethodPost:
+		return route{kind: routeApproveExportProposal, id: parts[1]}
 	case len(parts) == 1 && parts[0] == "automation" && method == http.MethodPost:
 		return route{kind: routeAutomation}
 	default:

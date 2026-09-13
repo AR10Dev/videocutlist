@@ -35,7 +35,7 @@ func (m MediaCatalog) List(ctx context.Context, cursor string, limit int) (proje
 	}
 	result := projects.MediaPage{Items: make([]projects.Media, 0, len(page.Items))}
 	for _, item := range page.Items {
-		result.Items = append(result.Items, media(item))
+		result.Items = append(result.Items, media(item, ""))
 	}
 	if page.NextCursor != "" {
 		result.NextCursor = &page.NextCursor
@@ -52,7 +52,7 @@ func (m MediaCatalog) Browse(ctx context.Context, folderID, cursor string, limit
 		page.Folders = append(page.Folders, projects.FolderNode{ID: folder.ID, Label: folder.Label})
 	}
 	for _, item := range items {
-		page.Items = append(page.Items, media(item))
+		page.Items = append(page.Items, media(item, ""))
 	}
 	if next != "" {
 		page.NextCursor = &next
@@ -64,7 +64,7 @@ func (m MediaCatalog) Get(ctx context.Context, id string) (projects.Media, error
 	if err != nil {
 		return projects.Media{}, err
 	}
-	return media(record.Media), nil
+	return media(record.Media, record.RootAlias), nil
 }
 func (m MediaCatalog) Refresh(ctx context.Context) error         { return m.Scanner.Refresh(ctx, m.Store) }
 func (m MediaCatalog) RootStatuses() map[string]index.RootStatus { return m.Scanner.RootStatuses() }
@@ -75,7 +75,11 @@ func (m MediaCatalog) Preview(ctx context.Context, request projects.PreviewSpec)
 	}
 	return preview(item.Media, request), nil
 }
-func media(item index.Media) projects.Media {
+func media(item index.Media, roots ...string) projects.Media {
+	rootID := ""
+	if len(roots) > 0 {
+		rootID = roots[0]
+	}
 	streams := map[string]any{}
 	if item.Metadata.Video != nil {
 		streams["video"] = item.Metadata.Video
@@ -84,7 +88,7 @@ func media(item index.Media) projects.Media {
 		streams["audio"] = item.Metadata.Audio
 	}
 	streams["tracks"] = item.Metadata.Streams
-	return projects.Media{ID: item.ID, Name: item.Name, DurationMS: item.Metadata.DurationMS, SizeBytes: item.SizeBytes, Container: item.Metadata.Container, Streams: streams, ETag: index.SourceFingerprint(item)}
+	return projects.Media{ID: item.ID, RootID: rootID, Name: item.Name, DurationMS: item.Metadata.DurationMS, SizeBytes: item.SizeBytes, Container: item.Metadata.Container, Streams: streams, ETag: index.SourceFingerprint(item)}
 }
 func preview(item index.Media, request projects.PreviewSpec) model.PreviewSpec {
 	return model.PreviewSpec{MediaID: item.ID, SizeBytes: item.SizeBytes, MtimeNS: item.MtimeNS, StartMS: request.StartMS, DurationMS: request.WindowMS, OffsetMS: request.OffsetMS, Width: 1280, Height: 720, FPS: 30, Audio: !request.Mute, Encoder: "software-h264-v1", EncoderImpl: "libx264"}

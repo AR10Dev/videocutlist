@@ -156,7 +156,7 @@ func (s Service) Run(ctx context.Context, source *os.File, document model.Docume
 	if len(document.Items) != 1 {
 		return Result{}, fmt.Errorf("%w: export requires one project item", ErrInvalidRequest)
 	}
-	segments := selectedSegments(document.Items[0].Segments, request.Selection, metadata.DurationMS)
+	segments := ResolveRanges(document.Items[0].Segments, request.Selection, metadata.DurationMS)
 	if len(segments) == 0 {
 		return Result{}, fmt.Errorf("%w: at least one segment is required", ErrInvalidRequest)
 	}
@@ -764,7 +764,8 @@ func validateStreamIndexes(indexes []int, streams []probe.Stream) error {
 	return nil
 }
 
-func selectedSegments(segments []model.Segment, selection string, duration int64) []model.Segment {
+// ResolveRanges freezes the exact included ranges for an export selection.
+func ResolveRanges(segments []model.Segment, selection string, duration int64) []model.Segment {
 	included := make([]model.Segment, 0, len(segments))
 	for _, segment := range segments {
 		if segment.IsIncluded() {
@@ -790,6 +791,12 @@ func selectedSegments(segments []model.Segment, selection string, duration int64
 		gaps = append(gaps, model.Segment{StartMS: cursor, EndMS: duration})
 	}
 	return gaps
+}
+
+// selectedSegments remains for existing package callers; new consumers use
+// ResolveRanges to make the frozen export selection explicit.
+func selectedSegments(segments []model.Segment, selection string, duration int64) []model.Segment {
+	return ResolveRanges(segments, selection, duration)
 }
 
 func segmentStrategies(requested string, segments []model.Segment, keyframes []int64) []AppliedStrategy {

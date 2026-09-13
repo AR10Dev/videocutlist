@@ -15,6 +15,7 @@ var ErrNoAudio = errors.New("no_audio")
 
 type Media struct {
 	ID         string         `json:"id"`
+	RootID     string         `json:"-"`
 	Name       string         `json:"name"`
 	DurationMS int64          `json:"durationMs"`
 	SizeBytes  int64          `json:"sizeBytes"`

@@ -19,7 +19,24 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 	if db == nil {
 		return errors.New("job database is required")
 	}
-	_, err := db.ExecContext(ctx, migration)
+	if _, err := db.ExecContext(ctx, migration); err != nil {
+		return err
+	}
+	for _, column := range []struct{ name, definition string }{
+		{"proposal_id", "TEXT"},
+		{"credential_id", "TEXT"},
+	} {
+		var present int
+		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('jobs') WHERE name = ?`, column.name).Scan(&present); err != nil {
+			return err
+		}
+		if present == 0 {
+			if _, err := db.ExecContext(ctx, `ALTER TABLE jobs ADD COLUMN `+column.name+` `+column.definition); err != nil {
+				return err
+			}
+		}
+	}
+	_, err := db.ExecContext(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS jobs_proposal_item ON jobs (proposal_id, project_item_id) WHERE proposal_id IS NOT NULL`)
 	return err
 }
 
@@ -54,6 +71,7 @@ var (
 // opaque JSON payloads; callers must only put safe identifiers and metadata in them.
 type Job struct {
 	ID, BatchID, ProjectID, ProjectItemID string
+	ProposalID, CredentialID              string
 	Kind                                  JobKind
 	State                                 JobState
 	RequestJSON                           string
@@ -81,7 +99,7 @@ func (s *JobsStore) Create(ctx context.Context, job Job) (Job, error) {
 		return Job{}, errors.New("library scan cannot reference a project item")
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err := s.db.ExecContext(ctx, `INSERT INTO jobs (id,batch_id,kind,project_id,project_item_id,state,request_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)`, job.ID, job.BatchID, job.Kind, nullString(job.ProjectID), nullString(job.ProjectItemID), JobQueued, job.RequestJSON, now, now)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO jobs (id,batch_id,kind,project_id,project_item_id,proposal_id,credential_id,state,request_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`, job.ID, job.BatchID, job.Kind, nullString(job.ProjectID), nullString(job.ProjectItemID), nullString(job.ProposalID), nullString(job.CredentialID), JobQueued, job.RequestJSON, now, now)
 	if err != nil {
 		return Job{}, fmt.Errorf("create job: %w", err)
 	}
@@ -104,7 +122,7 @@ func (s *JobsStore) CreateBatch(ctx context.Context, jobs []Job) ([]Job, error) 
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	for _, job := range jobs {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO jobs (id,batch_id,kind,project_id,project_item_id,state,request_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)`, job.ID, job.BatchID, job.Kind, job.ProjectID, job.ProjectItemID, JobQueued, job.RequestJSON, now, now); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO jobs (id,batch_id,kind,project_id,project_item_id,proposal_id,credential_id,state,request_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`, job.ID, job.BatchID, job.Kind, job.ProjectID, job.ProjectItemID, nullString(job.ProposalID), nullString(job.CredentialID), JobQueued, job.RequestJSON, now, now); err != nil {
 			return nil, fmt.Errorf("create batch: %w", err)
 		}
 	}
@@ -123,7 +141,7 @@ func (s *JobsStore) CreateBatch(ctx context.Context, jobs []Job) ([]Job, error) 
 }
 
 func (s *JobsStore) Get(ctx context.Context, id string) (Job, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id,batch_id,kind,COALESCE(project_id,''),COALESCE(project_item_id,''),state,request_json,result_json,error_code,created_at,updated_at FROM jobs WHERE id=?`, id)
+	row := s.db.QueryRowContext(ctx, `SELECT id,batch_id,kind,COALESCE(project_id,''),COALESCE(project_item_id,''),COALESCE(proposal_id,''),COALESCE(credential_id,''),state,request_json,result_json,error_code,created_at,updated_at FROM jobs WHERE id=?`, id)
 	return scanUnifiedJob(row)
 }
 
@@ -217,7 +235,7 @@ type unifiedJobScanner interface{ Scan(...any) error }
 func scanUnifiedJob(row unifiedJobScanner) (Job, error) {
 	var j Job
 	var c, u string
-	err := row.Scan(&j.ID, &j.BatchID, &j.Kind, &j.ProjectID, &j.ProjectItemID, &j.State, &j.RequestJSON, &j.ResultJSON, &j.ErrorCode, &c, &u)
+	err := row.Scan(&j.ID, &j.BatchID, &j.Kind, &j.ProjectID, &j.ProjectItemID, &j.ProposalID, &j.CredentialID, &j.State, &j.RequestJSON, &j.ResultJSON, &j.ErrorCode, &c, &u)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Job{}, ErrJobNotFound
 	}
