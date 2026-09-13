@@ -17,7 +17,7 @@ func TestLoadDefaults(t *testing.T) {
 	if c.ReadTimeout != 15*time.Second || c.WriteTimeout != 0 || c.IdleTimeout != time.Minute {
 		t.Fatalf("unexpected timeout defaults: %#v", c)
 	}
-	if c.AuthMode != "none" || c.PreviewGridMS != 500 {
+	if c.AuthMode != "none" || c.MCPEnabled || c.PreviewGridMS != 500 {
 		t.Fatalf("unexpected defaults: %#v", c)
 	}
 	if c.PublicBaseURL != "" || len(c.AllowedOrigins) != 0 {
@@ -28,6 +28,16 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if len(c.Destinations) != 2 || c.Destinations[1].ID != "server" || c.Destinations[1].Kind != "archive" {
 		t.Fatalf("destinations = %#v", c.Destinations)
+	}
+}
+
+func TestLoadMCPEnablement(t *testing.T) {
+	enabled, err := load(env(mergeEnv(baseEnv(), map[string]string{"VIDEOCUTLIST_MCP_ENABLED": "true"})))
+	if err != nil || !enabled.MCPEnabled {
+		t.Fatalf("enabled=%v err=%v", enabled.MCPEnabled, err)
+	}
+	if _, err := load(env(mergeEnv(baseEnv(), map[string]string{"VIDEOCUTLIST_MCP_ENABLED": "sometimes"}))); err == nil {
+		t.Fatal("invalid MCP enablement was accepted")
 	}
 }
 

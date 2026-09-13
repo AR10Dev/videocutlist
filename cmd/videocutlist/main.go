@@ -51,6 +51,10 @@ func run(ctx context.Context) error {
 		return err
 	}
 	defer db.Close()
+	mcpCredentials, err := mcp.NewCredentialStore(db)
+	if err != nil {
+		return err
+	}
 	runtimeSettingsStore, err := store.NewRuntimeSettingsStore(db)
 	if err != nil {
 		return err
@@ -246,7 +250,19 @@ func run(ctx context.Context) error {
 		return err
 	}
 
+	mcpTransport, err := mcp.NewTransport(mcp.TransportConfig{
+		Enabled: cfg.MCPEnabled, Credentials: mcpCredentials, AllowedOrigins: cfg.AllowedOrigins,
+		MaxConcurrentRequests: cfg.PreviewGlobalLimit,
+		RequestInfo: func(request *http.Request) mcp.RequestInfo {
+			forwarded := httpapi.GetForwardedInfo(request.Context())
+			return mcp.RequestInfo{ClientIP: forwarded.ClientIP, Host: forwarded.Host, Proto: forwarded.Proto}
+		},
+	})
+	if err != nil {
+		return err
+	}
 	mux := http.NewServeMux()
+	mux.Handle("/mcp", mcpTransport)
 	mux.Handle("/api/", apiServer)
 	mux.Handle("/metrics", apiServer)
 	mux.Handle("/", webassets.DefaultHandler())
