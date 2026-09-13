@@ -35,7 +35,11 @@ func (m MediaCatalog) List(ctx context.Context, cursor string, limit int) (proje
 	}
 	result := projects.MediaPage{Items: make([]projects.Media, 0, len(page.Items))}
 	for _, item := range page.Items {
-		result.Items = append(result.Items, media(item, ""))
+		record, err := m.Store.Get(ctx, item.ID)
+		if err != nil {
+			return projects.MediaPage{}, err
+		}
+		result.Items = append(result.Items, media(record.Media, record.RootAlias))
 	}
 	if page.NextCursor != "" {
 		result.NextCursor = &page.NextCursor

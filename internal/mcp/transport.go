@@ -34,6 +34,7 @@ type Tool struct {
 	Description string
 	InputSchema map[string]any
 	Permission  Permission
+	Resource    func(context Context, arguments json.RawMessage) (Resource, error)
 	Call        func(context Context, arguments json.RawMessage) (ToolResult, error)
 }
 
@@ -311,13 +312,29 @@ func (t *transport) callTool(r *http.Request, raw json.RawMessage, credential Cr
 		return nil, &rpcError{Code: -32602, Message: "Invalid params"}
 	}
 	for _, tool := range t.config.Tools {
-		if tool.Name != params.Name || !credential.HasPermission(tool.Permission) {
+		if tool.Name != params.Name {
 			continue
+		}
+		if tool.Resource == nil {
+			return nil, &rpcError{Code: -32603, Message: "Internal error"}
+		}
+		context := Context{Request: r, Credential: credential}
+		resource, err := tool.Resource(context, params.Arguments)
+		if err != nil {
+			return ToolResult{Content: []ToolContent{{Type: "text", Text: "Tool failed."}}, IsError: true}, nil
+		}
+		credential, err = t.config.Credentials.AuthorizeCredential(r.Context(), credential.ID, tool.Permission, resource)
+		if err != nil {
+			if errors.Is(err, ErrPermissionDenied) {
+				return nil, &rpcError{Code: -32602, Message: "Unknown or unauthorized tool"}
+			}
+			return ToolResult{Content: []ToolContent{{Type: "text", Text: "Tool failed."}}, IsError: true}, nil
 		}
 		if tool.Call == nil {
 			return nil, &rpcError{Code: -32603, Message: "Internal error"}
 		}
-		result, err := tool.Call(Context{Request: r, Credential: credential}, params.Arguments)
+		context.Credential = credential
+		result, err := tool.Call(context, params.Arguments)
 		if err != nil {
 			return ToolResult{Content: []ToolContent{{Type: "text", Text: "Tool failed."}}, IsError: true}, nil
 		}

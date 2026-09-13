@@ -39,12 +39,12 @@ func TestTransportInitializationNegotiationDiscoveryAndCall(t *testing.T) {
 	handler := newTransport(t, mcp.TransportConfig{
 		Enabled: true, Credentials: credentials,
 		Tools: []mcp.Tool{
-			{Name: "list_media", Description: "List permitted media", Permission: mcp.PermissionMediaRead, InputSchema: map[string]any{"type": "object"}, Call: func(ctx mcp.Context, arguments json.RawMessage) (mcp.ToolResult, error) {
+			{Name: "list_media", Description: "List permitted media", Permission: mcp.PermissionMediaRead, InputSchema: map[string]any{"type": "object"}, Resource: func(mcp.Context, json.RawMessage) (mcp.Resource, error) { return mcp.Resource{}, nil }, Call: func(ctx mcp.Context, arguments json.RawMessage) (mcp.ToolResult, error) {
 				called = ctx.Credential.ID != "" && string(arguments) == `{"query":"clip"}`
 				return mcp.ToolResult{Content: []mcp.ToolContent{{Type: "text", Text: "one item"}}, StructuredContent: map[string]any{"count": 1}}, nil
 			}},
-			{Name: "start_export", Permission: mcp.PermissionExportsRun, InputSchema: map[string]any{"type": "object"}},
-			{Name: "huge_result", Permission: mcp.PermissionMediaRead, InputSchema: map[string]any{"type": "object"}, Call: func(mcp.Context, json.RawMessage) (mcp.ToolResult, error) {
+			{Name: "start_export", Permission: mcp.PermissionExportsRun, InputSchema: map[string]any{"type": "object"}, Resource: func(mcp.Context, json.RawMessage) (mcp.Resource, error) { return mcp.Resource{}, nil }},
+			{Name: "huge_result", Permission: mcp.PermissionMediaRead, InputSchema: map[string]any{"type": "object"}, Resource: func(mcp.Context, json.RawMessage) (mcp.Resource, error) { return mcp.Resource{}, nil }, Call: func(mcp.Context, json.RawMessage) (mcp.ToolResult, error) {
 				return mcp.ToolResult{StructuredContent: map[string]any{"value": strings.Repeat("x", 2<<20)}}, nil
 			}},
 		},

@@ -589,7 +589,9 @@ func (c Credential) Allows(permission Permission, resource Resource) bool {
 		return false
 	}
 	switch permission {
-	case PermissionMediaRead, PermissionPreviewsCreate:
+	case PermissionMediaRead:
+		return resource.MediaID == "" || c.AllowsMedia(resource.MediaID, resource.RootID)
+	case PermissionPreviewsCreate:
 		return c.AllowsMedia(resource.MediaID, resource.RootID)
 	case PermissionDetectionRun:
 		if !c.AllowsMedia(resource.MediaID, resource.RootID) {

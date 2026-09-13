@@ -247,7 +247,7 @@ func run(ctx context.Context) error {
 	}
 
 	mcpTransport, err := mcp.NewTransport(mcp.TransportConfig{
-		Enabled: cfg.MCPEnabled, Credentials: mcpCredentials, AllowedOrigins: cfg.AllowedOrigins,
+		Enabled: cfg.MCPEnabled, Credentials: mcpCredentials, Tools: mcp.MediaTools(mediaService), AllowedOrigins: cfg.AllowedOrigins,
 		MaxConcurrentRequests: cfg.PreviewGlobalLimit,
 		RequestInfo: func(request *http.Request) mcp.RequestInfo {
 			forwarded := httpapi.GetForwardedInfo(request.Context())

@@ -132,6 +132,35 @@ func TestMediaCatalogPreviewUsesCatalogMetadata(t *testing.T) {
 	}
 }
 
+func TestMediaCatalogListRetainsInternalRootForScopedConsumers(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "clip.mp4"), []byte("media"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	scanner, err := index.NewScanner([]index.Root{{Alias: "camera", Path: root}}, adapterProbe{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	database, err := store.OpenDatabase(ctx, filepath.Join(t.TempDir(), "videocutlist.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	mediaStore, err := store.NewMediaStore(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog := MediaCatalog{Scanner: scanner, Store: mediaStore}
+	if err := catalog.Refresh(ctx); err != nil {
+		t.Fatal(err)
+	}
+	page, err := catalog.List(ctx, "", 1)
+	if err != nil || len(page.Items) != 1 || page.Items[0].RootID != "camera" {
+		t.Fatalf("List() = %#v, %v; want internal root ID", page, err)
+	}
+}
+
 func TestExportDownloadEnforcesDurableLifecycle(t *testing.T) {
 	ctx := context.Background()
 	root := t.TempDir()
