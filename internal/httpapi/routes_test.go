@@ -71,6 +71,7 @@ func TestRouteCoverageInventory(t *testing.T) {
 	job := "j_" + strings.Repeat("c", 12)
 	batch := "b_" + strings.Repeat("d", 12)
 	credential := "c_" + strings.Repeat("e", 12)
+	proposal := "ep_" + strings.Repeat("f", 12)
 	inventory := []struct {
 		method, path string
 		kind         routeKind
@@ -108,6 +109,8 @@ func TestRouteCoverageInventory(t *testing.T) {
 		{http.MethodGet, "/api/v1/destinations", routeListDestinations},
 		{http.MethodGet, "/api/v1/settings", routeGetSettings},
 		{http.MethodPut, "/api/v1/settings", routePutSettings},
+		{http.MethodGet, "/api/v1/export-proposals/" + proposal, routeGetExportProposal},
+		{http.MethodPost, "/api/v1/export-proposals/" + proposal + "/approval", routeApproveExportProposal},
 		{http.MethodGet, "/api/v1/settings/mcp", routeGetMCPSettings},
 		{http.MethodPost, "/api/v1/settings/mcp/credentials", routeCreateMCPCredential},
 		{http.MethodDelete, "/api/v1/settings/mcp/credentials/" + credential, routeRevokeMCPCredential},

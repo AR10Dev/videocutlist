@@ -67,10 +67,6 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("load runtime settings: %w", err)
 	}
 	runtimeState := store.NewRuntimeSettingsState(effectiveSettings.Settings)
-	mcpCredentials, err := mcp.NewCredentialStore(db)
-	if err != nil {
-		return err
-	}
 	projectStore, _ := store.NewProjectStore(db)
 	unifiedJobs, err := jobqueue.NewJobsStore(db)
 	if err != nil {
