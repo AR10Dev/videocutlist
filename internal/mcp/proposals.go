@@ -31,6 +31,8 @@ type ProposalRequest struct {
 	CredentialID    string
 	ProjectID       string
 	ProjectRevision int64
+	MediaID         string
+	Ranges          []model.Segment
 	Export          projects.ExportInput
 }
 
@@ -42,8 +44,9 @@ type proposalPayload struct {
 type ExportProposal struct {
 	ID                 string                    `json:"id"`
 	CredentialID       string                    `json:"credentialId"`
-	ProjectID          string                    `json:"projectId"`
+	ProjectID          string                    `json:"projectId,omitempty"`
 	ProjectRevision    int64                     `json:"projectRevision"`
+	MediaID            string                    `json:"mediaId,omitempty"`
 	Snapshots          []projects.ExportSnapshot `json:"snapshots"`
 	Findings           []projects.ExportFinding  `json:"findings"`
 	Allowed            bool                      `json:"allowed"`
@@ -73,8 +76,18 @@ func NewProposalService(db *sql.DB, credentials *CredentialStore, projectService
 }
 
 func (s *ProposalService) Prepare(ctx context.Context, request ProposalRequest) (ExportProposal, error) {
-	if request.CredentialID == "" || request.ProjectID == "" || request.ProjectRevision < 1 || request.Export.DestinationID != "" && request.Export.DestinationID != "download" {
-		return ExportProposal{}, ErrProposalBlocked
+	if request.CredentialID == "" || request.Export.DestinationID != "" && request.Export.DestinationID != "download" {
+		return ExportProposal{}, ErrInvalidInput
+	}
+	if request.ProjectID != "" {
+		return s.prepareProject(ctx, request)
+	}
+	return s.prepareMedia(ctx, request)
+}
+
+func (s *ProposalService) prepareProject(ctx context.Context, request ProposalRequest) (ExportProposal, error) {
+	if request.ProjectRevision < 1 || request.MediaID != "" || len(request.Ranges) != 0 {
+		return ExportProposal{}, ErrInvalidInput
 	}
 	project, err := s.Projects.Get(ctx, request.ProjectID)
 	if err != nil || project.Revision != request.ProjectRevision {
@@ -89,30 +102,79 @@ func (s *ProposalService) Prepare(ctx context.Context, request ProposalRequest) 
 	}
 	proposal := ExportProposal{CredentialID: request.CredentialID, ProjectID: project.ID, ProjectRevision: project.Revision, Allowed: true, DestinationID: "download"}
 	for index, item := range items {
-		item.ExportOptions = model.ExportOptions{
-			Mode: request.Export.Mode, Selection: request.Export.Selection, StreamIndexes: slices.Clone(request.Export.StreamIndexes),
-			CutStrategy: request.Export.CutStrategy, Container: request.Export.Container, DestinationID: "download", FilenameTemplate: request.Export.FilenameTemplate,
-		}
-		one := projects.Project{ID: project.ID, Revision: project.Revision, Document: model.Document{SchemaVersion: project.SchemaVersion, Name: project.Name, Items: []model.ProjectItem{item}}}
-		checked, err := s.Preflight.Preflight(ctx, project.ID, one, projects.ExportInput{
-			Mode: item.ExportOptions.Mode, Selection: item.ExportOptions.Selection, StreamIndexes: item.ExportOptions.StreamIndexes,
-			CutStrategy: item.ExportOptions.CutStrategy, Container: item.ExportOptions.Container, DestinationID: "download", FilenameTemplate: item.ExportOptions.FilenameTemplate,
-		})
+		checked, snapshot, err := s.snapshot(ctx, project.ID, project.Revision, project.SchemaVersion, project.Name, item, media[index], request.Export)
 		if err != nil {
 			return ExportProposal{}, err
 		}
 		proposal.Allowed = proposal.Allowed && checked.Allowed
 		proposal.Findings = append(proposal.Findings, checked.Findings...)
-		item.ExportOptions.StreamIndexes = slices.Clone(checked.Selection)
-		item.Segments = exporter.ResolveRanges(item.Segments, item.ExportOptions.Selection, media[index].DurationMS)
-		item.ExportOptions.Selection = "segments"
-		proposal.Snapshots = append(proposal.Snapshots, projects.ExportSnapshot{
-			ProjectRevision: project.Revision, MediaLabel: media[index].Name, Item: item,
-			Source: projects.SourceSnapshot{MediaID: media[index].ID, RootID: media[index].RootID, ETag: media[index].ETag, SizeBytes: media[index].SizeBytes, DurationMS: media[index].DurationMS},
-		})
+		proposal.Snapshots = append(proposal.Snapshots, snapshot)
 	}
-	proposal.RequiresReencoding = request.Export.CutStrategy == "precise_reencode" || request.Export.CutStrategy == "hybrid_smart_cut"
-	proposal.Accuracy = proposalAccuracy(request.Export.CutStrategy)
+	return s.savePrepared(ctx, proposal, request.Export.CutStrategy)
+}
+
+func (s *ProposalService) prepareMedia(ctx context.Context, request ProposalRequest) (ExportProposal, error) {
+	if request.MediaID == "" || request.ProjectRevision != 0 || len(request.Export.ItemIDs) != 0 || request.Export.Selection == "gaps" || !validRanges(request.Ranges) {
+		return ExportProposal{}, ErrInvalidInput
+	}
+	media, err := s.Media.Get(ctx, request.MediaID)
+	if err != nil || media.RootID == "" {
+		return ExportProposal{}, ErrProposalStale
+	}
+	for _, segment := range request.Ranges {
+		if segment.EndMS > media.DurationMS {
+			return ExportProposal{}, ErrInvalidInput
+		}
+	}
+	resource := Resource{ProjectMedia: []MediaResource{{ID: media.ID, RootID: media.RootID}}}
+	if _, err := s.Credentials.AuthorizeCredential(ctx, request.CredentialID, PermissionExportsPrepare, resource); err != nil {
+		return ExportProposal{}, err
+	}
+	if request.Export.Selection == "" {
+		request.Export.Selection = "segments"
+	}
+	itemID, err := randomIdentifier("i_", 18)
+	if err != nil {
+		return ExportProposal{}, err
+	}
+	item := model.ProjectItem{ID: itemID, MediaID: media.ID, Segments: slices.Clone(request.Ranges)}
+	proposal := ExportProposal{CredentialID: request.CredentialID, MediaID: media.ID, ProjectRevision: 0, Allowed: true, DestinationID: "download"}
+	checked, snapshot, err := s.snapshot(ctx, "", 0, model.ProjectSchemaVersion, "MCP export", item, media, request.Export)
+	if err != nil {
+		return ExportProposal{}, err
+	}
+	proposal.Allowed = checked.Allowed
+	proposal.Findings = checked.Findings
+	proposal.Snapshots = []projects.ExportSnapshot{snapshot}
+	return s.savePrepared(ctx, proposal, request.Export.CutStrategy)
+}
+
+func (s *ProposalService) snapshot(ctx context.Context, projectID string, revision int64, schemaVersion int, name string, item model.ProjectItem, media projects.Media, input projects.ExportInput) (projects.ExportPreflight, projects.ExportSnapshot, error) {
+	item.ExportOptions = model.ExportOptions{
+		Mode: input.Mode, Selection: input.Selection, StreamIndexes: slices.Clone(input.StreamIndexes),
+		CutStrategy: input.CutStrategy, Container: input.Container, DestinationID: "download", FilenameTemplate: input.FilenameTemplate,
+	}
+	one := projects.Project{ID: projectID, Revision: revision, Document: model.Document{SchemaVersion: schemaVersion, Name: name, Items: []model.ProjectItem{item}}}
+	checked, err := s.Preflight.Preflight(ctx, projectID, one, projects.ExportInput{
+		Mode: item.ExportOptions.Mode, Selection: item.ExportOptions.Selection, StreamIndexes: item.ExportOptions.StreamIndexes,
+		CutStrategy: item.ExportOptions.CutStrategy, Container: item.ExportOptions.Container, DestinationID: "download", FilenameTemplate: item.ExportOptions.FilenameTemplate,
+	})
+	if err != nil {
+		return projects.ExportPreflight{}, projects.ExportSnapshot{}, err
+	}
+	item.ExportOptions.StreamIndexes = slices.Clone(checked.Selection)
+	item.Segments = exporter.ResolveRanges(item.Segments, item.ExportOptions.Selection, media.DurationMS)
+	item.ExportOptions.Selection = "segments"
+	return checked, projects.ExportSnapshot{
+		ProjectRevision: revision, MediaLabel: media.Name, Item: item,
+		Source: projects.SourceSnapshot{MediaID: media.ID, RootID: media.RootID, ETag: media.ETag, SizeBytes: media.SizeBytes, DurationMS: media.DurationMS},
+	}, nil
+}
+
+func (s *ProposalService) savePrepared(ctx context.Context, proposal ExportProposal, strategy string) (ExportProposal, error) {
+	proposal.RequiresReencoding = strategy == "precise_reencode" || strategy == "hybrid_smart_cut"
+	proposal.Accuracy = proposalAccuracy(strategy)
+	var err error
 	proposal.ID, err = randomIdentifier("ep_", credentialIDBytes)
 	if err != nil {
 		return ExportProposal{}, err
@@ -132,20 +194,25 @@ func (s *ProposalService) Get(ctx context.Context, id string) (ExportProposal, e
 	var proposal ExportProposal
 	var payloadJSON, findingsJSON, expires, approved, created string
 	var approvedValue sql.NullString
+	var projectID sql.NullString
 	var reencoding int
 	err := s.db.QueryRowContext(ctx, `SELECT id,credential_id,project_id,project_revision,payload_json,findings_json,requires_reencoding,accuracy,destination_id,expires_at,approved_at,created_at FROM export_proposals WHERE id=?`, id).
-		Scan(&proposal.ID, &proposal.CredentialID, &proposal.ProjectID, &proposal.ProjectRevision, &payloadJSON, &findingsJSON, &reencoding, &proposal.Accuracy, &proposal.DestinationID, &expires, &approvedValue, &created)
+		Scan(&proposal.ID, &proposal.CredentialID, &projectID, &proposal.ProjectRevision, &payloadJSON, &findingsJSON, &reencoding, &proposal.Accuracy, &proposal.DestinationID, &expires, &approvedValue, &created)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ExportProposal{}, ErrProposalNotFound
 	}
 	if err != nil {
 		return ExportProposal{}, err
 	}
+	proposal.ProjectID = projectID.String
 	var payload proposalPayload
-	if decodeJSON(payloadJSON, &payload) != nil || decodeJSON(findingsJSON, &proposal.Findings) != nil || len(payload.Snapshots) == 0 || proposal.ProjectRevision < 1 || proposal.DestinationID != "download" || reencoding < 0 || reencoding > 1 {
+	if decodeJSON(payloadJSON, &payload) != nil || decodeJSON(findingsJSON, &proposal.Findings) != nil || len(payload.Snapshots) == 0 || proposal.DestinationID != "download" || reencoding < 0 || reencoding > 1 || proposal.ProjectID == "" && proposal.ProjectRevision != 0 || proposal.ProjectID != "" && proposal.ProjectRevision < 1 {
 		return ExportProposal{}, ErrProposalData
 	}
 	proposal.Snapshots = payload.Snapshots
+	if proposal.ProjectID == "" {
+		proposal.MediaID = payload.Snapshots[0].Source.MediaID
+	}
 	proposal.RequiresReencoding = reencoding == 1
 	proposal.Allowed = true
 	for _, finding := range proposal.Findings {
@@ -153,12 +220,13 @@ func (s *ProposalService) Get(ctx context.Context, id string) (ExportProposal, e
 			proposal.Allowed = false
 		}
 	}
-	proposal.ExpiresAt, err = parseTime(expires)
-	if err != nil {
+	var errParse error
+	proposal.ExpiresAt, errParse = parseTime(expires)
+	if errParse != nil {
 		return ExportProposal{}, ErrProposalData
 	}
-	proposal.CreatedAt, err = parseTime(created)
-	if err != nil {
+	proposal.CreatedAt, errParse = parseTime(created)
+	if errParse != nil {
 		return ExportProposal{}, ErrProposalData
 	}
 	approved = approvedValue.String
@@ -170,6 +238,40 @@ func (s *ProposalService) Get(ctx context.Context, id string) (ExportProposal, e
 		proposal.ApprovedAt = new(value)
 	}
 	return cloneProposal(proposal), nil
+}
+
+func (s *ProposalService) ListPending(ctx context.Context, limit int) ([]ExportProposal, error) {
+	if limit < 1 || limit > 100 {
+		limit = 25
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM export_proposals WHERE approved_at IS NULL AND expires_at > ? ORDER BY created_at DESC LIMIT ?`, formatTime(s.currentTime()), limit)
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			rows.Close()
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Close(); err != nil {
+		return nil, err
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	proposals := make([]ExportProposal, 0, len(ids))
+	for _, id := range ids {
+		proposal, err := s.Get(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		proposals = append(proposals, proposal)
+	}
+	return proposals, nil
 }
 
 func (s *ProposalService) Approve(ctx context.Context, id string) (ExportProposal, error) {
@@ -208,13 +310,16 @@ func (s *ProposalService) Execute(ctx context.Context, id, credentialID string) 
 	if !proposal.ExpiresAt.After(s.currentTime()) {
 		return "", nil, ErrProposalExpired
 	}
-	project, err := s.Projects.Get(ctx, proposal.ProjectID)
-	if err != nil || project.Revision != proposal.ProjectRevision {
-		return "", nil, ErrProposalStale
-	}
-	_, currentMedia, resource, err := s.resolveProject(ctx, project, nil)
+	resource, err := s.resourceForProposal(ctx, proposal)
 	if err != nil {
-		return "", nil, ErrProposalStale
+		return "", nil, err
+	}
+	var project projects.Project
+	if proposal.ProjectID != "" {
+		project, err = s.Projects.Get(ctx, proposal.ProjectID)
+		if err != nil || project.Revision != proposal.ProjectRevision {
+			return "", nil, ErrProposalStale
+		}
 	}
 	credential, err := s.Credentials.AuthorizeCredential(ctx, credentialID, PermissionExportsRun, resource)
 	if err != nil {
@@ -223,30 +328,40 @@ func (s *ProposalService) Execute(ctx context.Context, id, credentialID string) 
 	if proposal.ApprovedAt == nil && !credential.AllowsUnattendedExport() {
 		return "", nil, ErrProposalApprovalNeeded
 	}
-	byID := make(map[string]projects.Media, len(currentMedia))
-	for _, media := range currentMedia {
-		byID[media.ID] = media
-	}
 	jobs := make([]jobqueue.Job, 0, len(proposal.Snapshots))
 	batchID := deterministicIdentifier("b_", proposal.ID)
+	jobProjectID := proposal.ProjectID
+	if jobProjectID == "" {
+		jobProjectID = deterministicIdentifier("p_", proposal.ID)
+	}
 	for _, snapshot := range proposal.Snapshots {
-		media, ok := byID[snapshot.Source.MediaID]
-		if !ok || projects.ValidateSnapshot(snapshot, media) != nil || media.RootID != snapshot.Source.RootID {
+		media, err := s.Media.Get(ctx, snapshot.Source.MediaID)
+		if err != nil || projects.ValidateSnapshot(snapshot, media) != nil || media.RootID != snapshot.Source.RootID {
 			return "", nil, ErrProposalStale
 		}
-		one := projects.Project{ID: proposal.ProjectID, Revision: proposal.ProjectRevision, Document: model.Document{SchemaVersion: project.SchemaVersion, Name: project.Name, Items: []model.ProjectItem{snapshot.Item}}}
+		projectName, schemaVersion := "MCP export", model.ProjectSchemaVersion
+		if proposal.ProjectID != "" {
+			projectName, schemaVersion = project.Name, project.SchemaVersion
+		}
+		one := projects.Project{ID: proposal.ProjectID, Revision: proposal.ProjectRevision, Document: model.Document{SchemaVersion: schemaVersion, Name: projectName, Items: []model.ProjectItem{snapshot.Item}}}
 		checked, checkErr := s.Preflight.Preflight(ctx, proposal.ProjectID, one, projects.ExportInput{
 			Mode: snapshot.Item.ExportOptions.Mode, Selection: snapshot.Item.ExportOptions.Selection, StreamIndexes: snapshot.Item.ExportOptions.StreamIndexes,
 			CutStrategy: snapshot.Item.ExportOptions.CutStrategy, Container: snapshot.Item.ExportOptions.Container, DestinationID: proposal.DestinationID, FilenameTemplate: snapshot.Item.ExportOptions.FilenameTemplate,
 		})
-		if checkErr != nil || !checked.Allowed || !slices.Equal(checked.Selection, snapshot.Item.ExportOptions.StreamIndexes) {
+		if checkErr != nil {
+			return "", nil, checkErr
+		}
+		if !checked.Allowed {
+			return "", nil, ErrProposalBlocked
+		}
+		if !slices.Equal(checked.Selection, snapshot.Item.ExportOptions.StreamIndexes) {
 			return "", nil, ErrProposalStale
 		}
 		payload, marshalErr := json.Marshal(snapshot)
 		if marshalErr != nil {
 			return "", nil, marshalErr
 		}
-		jobs = append(jobs, jobqueue.Job{ID: deterministicIdentifier("j_", proposal.ID+"\x00"+snapshot.Item.ID), BatchID: batchID, Kind: jobqueue.JobExport, ProjectID: proposal.ProjectID, ProjectItemID: snapshot.Item.ID, ProposalID: proposal.ID, CredentialID: credentialID, RequestJSON: string(payload)})
+		jobs = append(jobs, jobqueue.Job{ID: deterministicIdentifier("j_", proposal.ID+"\x00"+snapshot.Item.ID), BatchID: batchID, Kind: jobqueue.JobExport, ProjectID: jobProjectID, ProjectItemID: snapshot.Item.ID, ProposalID: proposal.ID, CredentialID: credentialID, RequestJSON: string(payload)})
 	}
 	created, err := s.Scheduler.SubmitProposal(ctx, proposal.ID, credentialID, jobs)
 	if err != nil {
@@ -267,6 +382,25 @@ func (s *ProposalService) ResourceForProject(ctx context.Context, projectID stri
 	}
 	_, _, resource, err := s.resolveProject(ctx, project, nil)
 	return resource, err
+}
+
+func (s *ProposalService) ResourceForProposal(ctx context.Context, id string) (Resource, error) {
+	proposal, err := s.Get(ctx, id)
+	if err != nil {
+		return Resource{}, err
+	}
+	return s.resourceForProposal(ctx, proposal)
+}
+
+func (s *ProposalService) resourceForProposal(ctx context.Context, proposal ExportProposal) (Resource, error) {
+	if proposal.ProjectID != "" {
+		return s.ResourceForProject(ctx, proposal.ProjectID)
+	}
+	media := make([]MediaResource, 0, len(proposal.Snapshots))
+	for _, snapshot := range proposal.Snapshots {
+		media = append(media, MediaResource{ID: snapshot.Source.MediaID, RootID: snapshot.Source.RootID})
+	}
+	return Resource{ProjectMedia: media}, nil
 }
 
 func (s *ProposalService) resolveProject(ctx context.Context, project projects.Project, selectedIDs []string) ([]model.ProjectItem, []projects.Media, Resource, error) {
@@ -310,7 +444,7 @@ func (s *ProposalService) insert(ctx context.Context, proposal ExportProposal) e
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO export_proposals (id,credential_id,project_id,project_revision,payload_json,findings_json,requires_reencoding,accuracy,destination_id,expires_at,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`, proposal.ID, proposal.CredentialID, proposal.ProjectID, proposal.ProjectRevision, string(payload), string(findings), proposal.RequiresReencoding, proposal.Accuracy, proposal.DestinationID, formatTime(proposal.ExpiresAt), formatTime(proposal.CreatedAt))
+	_, err = s.db.ExecContext(ctx, `INSERT INTO export_proposals (id,credential_id,project_id,project_revision,payload_json,findings_json,requires_reencoding,accuracy,destination_id,expires_at,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`, proposal.ID, proposal.CredentialID, nullableString(proposal.ProjectID), proposal.ProjectRevision, string(payload), string(findings), proposal.RequiresReencoding, proposal.Accuracy, proposal.DestinationID, formatTime(proposal.ExpiresAt), formatTime(proposal.CreatedAt))
 	return err
 }
 
@@ -334,6 +468,18 @@ func deterministicIdentifier(prefix, value string) string {
 
 func validProposalID(value string) bool {
 	return len(value) > 3 && value[:3] == "ep_" && validSafeIdentifier(value)
+}
+
+func validRanges(ranges []model.Segment) bool {
+	if len(ranges) == 0 || len(ranges) > 100 {
+		return false
+	}
+	for _, segment := range ranges {
+		if segment.StartMS < 0 || segment.EndMS <= segment.StartMS || len(segment.ID) > 64 || len(segment.Label) > 120 {
+			return false
+		}
+	}
+	return true
 }
 
 func cloneProposal(value ExportProposal) ExportProposal {

@@ -60,6 +60,7 @@ export function createWorkspaceController() {
     saveDestinations,
     setMCPEnabled,
     createMCPCredential,
+    approveExportProposal,
     revokeMCPCredential,
     rescanLibrary,
   } = settingsFeature;
@@ -600,6 +601,7 @@ export function createWorkspaceController() {
     saveDestinations,
     setMCPEnabled,
     createMCPCredential,
+    approveExportProposal,
     revokeMCPCredential,
     rescanLibrary,
     updateTimeline,

@@ -16,6 +16,21 @@ import (
 
 const rpcHeaders = "application/json, text/event-stream"
 
+func TestTransportEnablementCanChangeWithoutRestart(t *testing.T) {
+	credentials, secret, _ := transportCredentials(t, time.Hour)
+	enabled := false
+	handler := newTransport(t, mcp.TransportConfig{EnabledFunc: func() bool { return enabled }, Credentials: credentials})
+	response := serve(handler, request(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}`, secret))
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("disabled status = %d", response.Code)
+	}
+	enabled = true
+	response = serve(handler, request(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}`, secret))
+	if response.Code != http.StatusOK || response.Header().Get("Mcp-Session-Id") == "" {
+		t.Fatalf("enabled status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
 func TestTransportDisabledAndAuthenticationAreIsolated(t *testing.T) {
 	credentials, secret, _ := transportCredentials(t, time.Hour)
 	disabled := newTransport(t, mcp.TransportConfig{Credentials: credentials})
@@ -125,6 +140,28 @@ func TestTransportRechecksRevocationAndExpiryForSessions(t *testing.T) {
 			t.Fatalf("expired status=%d body=%s", response.Code, response.Body.String())
 		}
 	})
+}
+
+func TestTransportRecordsAuditAndStableToolErrorCodes(t *testing.T) {
+	credentials, secret, _ := transportCredentials(t, time.Hour)
+	handler := newTransport(t, mcp.TransportConfig{Enabled: true, Credentials: credentials, Tools: []mcp.Tool{{Name: "list_media", Permission: mcp.PermissionMediaRead, InputSchema: map[string]any{"type": "object"}, Resource: func(mcp.Context, json.RawMessage) (mcp.Resource, error) {
+		return mcp.Resource{MediaID: "m_media", RootID: "root_a"}, nil
+	}, Call: func(mcp.Context, json.RawMessage) (mcp.ToolResult, error) {
+		return mcp.ToolResult{}, mcp.ErrProposalApprovalNeeded
+	}}}})
+	session := initialize(t, handler, secret)
+	response := serve(handler, sessionRequest(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_media","arguments":{}}}`, secret, session))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"code":"missing_approval"`) {
+		t.Fatalf("tool error status=%d body=%s", response.Code, response.Body.String())
+	}
+	credential, err := credentials.Authenticate(t.Context(), secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := credentials.ListAudit(t.Context(), credential.ID, 1)
+	if err != nil || len(entries) != 1 || entries[0].Operation != "list_media" || entries[0].Outcome != "missing_approval" {
+		t.Fatalf("audit entries=%#v err=%v", entries, err)
+	}
 }
 
 func TestTransportBoundsAndSafeErrors(t *testing.T) {

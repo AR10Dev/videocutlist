@@ -142,6 +142,7 @@ type Config struct {
 	Settings             *store.RuntimeSettingsStore
 	RuntimeSettings      *store.RuntimeSettingsState
 	MCPCredentials       *mcp.CredentialStore
+	ExportProposals      *mcp.ProposalService
 	ApplyRuntimeSettings func(store.RuntimeSettings) error
 	SettingsAllowlist    []string
 	Destinations         []DestinationMetadata
@@ -253,6 +254,12 @@ func (s *Server) dispatch(writer http.ResponseWriter, request *http.Request, id 
 	case routeRevokeMCPCredential:
 		s.revokeMCPCredential(writer, request, r.id, id)
 		return "/api/v1/settings/mcp/credentials/{credentialId}", ""
+	case routeGetExportProposal:
+		s.getExportProposal(writer, request, r.id, id)
+		return "/api/v1/export-proposals/{proposalId}", ""
+	case routeApproveExportProposal:
+		s.approveExportProposal(writer, request, r.id, id)
+		return "/api/v1/export-proposals/{proposalId}/approval", ""
 	case routeListMedia:
 		s.listMedia(writer, request, id)
 		return "/api/v1/media", ""

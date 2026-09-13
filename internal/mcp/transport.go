@@ -13,6 +13,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	jobqueue "videocutlist/internal/jobs"
 )
 
 const (
@@ -57,6 +59,7 @@ type ToolContent struct {
 
 type TransportConfig struct {
 	Enabled               bool
+	EnabledFunc           func() bool
 	Credentials           *CredentialStore
 	Tools                 []Tool
 	AllowedOrigins        []string
@@ -135,8 +138,15 @@ func NewTransport(config TransportConfig) (http.Handler, error) {
 	return &transport{config: config, allowed: allowed, slots: make(chan struct{}, config.MaxConcurrentRequests), sessions: make(map[string]session), rates: make(map[string]rate)}, nil
 }
 
+func (t *transport) enabled() bool {
+	if t.config.EnabledFunc != nil {
+		return t.config.EnabledFunc()
+	}
+	return t.config.Enabled
+}
+
 func (t *transport) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if !t.config.Enabled {
+	if !t.enabled() {
 		http.NotFound(w, r)
 		return
 	}
@@ -321,17 +331,20 @@ func (t *transport) callTool(r *http.Request, raw json.RawMessage, credential Cr
 		if tool.Resource == nil {
 			return nil, &rpcError{Code: -32603, Message: "Internal error"}
 		}
+		credentialID := credential.ID
 		context := Context{Request: r, Credential: credential}
 		resource, err := tool.Resource(context, params.Arguments)
 		if err != nil {
-			return ToolResult{Content: []ToolContent{{Type: "text", Text: "Tool failed."}}, IsError: true}, nil
+			t.recordAudit(r, credentialID, tool.Name, toolErrorCode(err), resource, "")
+			return toolError(err), nil
 		}
-		credential, err = t.config.Credentials.AuthorizeCredential(r.Context(), credential.ID, tool.Permission, resource)
+		credential, err = t.config.Credentials.AuthorizeCredential(r.Context(), credentialID, tool.Permission, resource)
 		if err != nil {
+			t.recordAudit(r, credentialID, tool.Name, toolErrorCode(err), resource, "")
 			if errors.Is(err, ErrPermissionDenied) {
 				return nil, &rpcError{Code: -32602, Message: "Unknown or unauthorized tool"}
 			}
-			return ToolResult{Content: []ToolContent{{Type: "text", Text: "Tool failed."}}, IsError: true}, nil
+			return toolError(err), nil
 		}
 		if tool.Call == nil {
 			return nil, &rpcError{Code: -32603, Message: "Internal error"}
@@ -339,15 +352,95 @@ func (t *transport) callTool(r *http.Request, raw json.RawMessage, credential Cr
 		context.Credential = credential
 		result, err := tool.Call(context, params.Arguments)
 		if err != nil {
-			return ToolResult{Content: []ToolContent{{Type: "text", Text: "Tool failed."}}, IsError: true}, nil
+			code := toolErrorCode(err)
+			t.recordAudit(r, credentialID, tool.Name, code, resource, "")
+			return toolError(err), nil
 		}
 		encoded, err := json.Marshal(result)
 		if err != nil || len(encoded) > maxResultBytes {
 			return nil, &rpcError{Code: -32603, Message: "Tool result exceeded the server limit"}
 		}
+		t.recordAudit(r, credentialID, tool.Name, "success", resource, resultJobID(result))
 		return result, nil
 	}
 	return nil, &rpcError{Code: -32602, Message: "Unknown or unauthorized tool"}
+}
+
+func (t *transport) recordAudit(r *http.Request, credentialID, operation, outcome string, resource Resource, jobID string) {
+	if t.config.Credentials == nil {
+		return
+	}
+	_, _ = t.config.Credentials.RecordAudit(r.Context(), credentialID, AuditInput{Operation: operation, Outcome: outcome, ResourceIDs: auditResourceIDs(resource), JobID: jobID})
+}
+
+func auditResourceIDs(resource Resource) []string {
+	ids := make([]string, 0, 1+len(resource.ProjectMedia))
+	seen := map[string]bool{}
+	add := func(value string) {
+		if value != "" && validSafeIdentifier(value) && !seen[value] {
+			seen[value] = true
+			ids = append(ids, value)
+		}
+	}
+	add(resource.ProjectID)
+	add(resource.MediaID)
+	for _, item := range resource.ProjectMedia {
+		add(item.ID)
+		add(item.RootID)
+	}
+	return ids
+}
+
+func resultJobID(result ToolResult) string {
+	for _, key := range []string{"jobId", "id", "batchId"} {
+		if value, ok := result.StructuredContent[key].(string); ok && validSafeIdentifier(value) {
+			return value
+		}
+	}
+	if jobs, ok := result.StructuredContent["jobs"].([]any); ok && len(jobs) > 0 {
+		if job, ok := jobs[0].(map[string]any); ok {
+			if value, ok := job["id"].(string); ok && validSafeIdentifier(value) {
+				return value
+			}
+		}
+	}
+	return ""
+}
+
+func toolErrorCode(err error) string {
+	switch {
+	case errors.Is(err, ErrInvalidInput):
+		return "invalid_input"
+	case errors.Is(err, ErrResourceDenied), errors.Is(err, ErrPermissionDenied), errors.Is(err, ErrCredentialUnauthorized), errors.Is(err, ErrProposalNotFound):
+		return "access_denied"
+	case errors.Is(err, ErrProposalStale), errors.Is(err, jobqueue.ErrSourceChanged):
+		return "stale_or_changed_source"
+	case errors.Is(err, ErrProposalBlocked):
+		return "incompatibility"
+	case errors.Is(err, ErrProposalApprovalNeeded):
+		return "missing_approval"
+	case errors.Is(err, ErrProposalExpired):
+		return "expiry"
+	case errors.Is(err, jobqueue.ErrQueueFull):
+		return "capacity"
+	default:
+		return "internal_error"
+	}
+}
+
+func toolError(err error) ToolResult {
+	code := toolErrorCode(err)
+	message := map[string]string{
+		"invalid_input":            "Tool input is invalid.",
+		"access_denied":            "Resource is unavailable or unauthorized.",
+		"stale_or_changed_source":  "Source or revision changed; request a new proposal.",
+		"incompatibility":          "Export is incompatible with the requested options.",
+		"missing_approval":         "App approval is required before starting this export.",
+		"expiry":                   "The proposal expired; request a new proposal.",
+		"capacity":                 "Server capacity is exhausted; retry later.",
+		"internal_error":           "Tool failed.",
+	}[code]
+	return ToolResult{Content: []ToolContent{{Type: "text", Text: "Tool failed."}}, StructuredContent: map[string]any{"error": map[string]any{"code": code, "message": message}}, IsError: true}
 }
 
 func (t *transport) requestInfo(r *http.Request) RequestInfo {

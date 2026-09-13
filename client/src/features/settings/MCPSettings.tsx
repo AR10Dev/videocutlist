@@ -24,6 +24,7 @@ export function MCPSettings() {
     revealedMCPSecret,
     setMCPEnabled,
     createMCPCredential,
+    approveExportProposal,
     revokeMCPCredential,
   } = useWorkspace();
   const [name, setName] = createSignal("");
@@ -277,6 +278,92 @@ export function MCPSettings() {
                 </div>
               </div>
             </form>
+            <h4>Export proposals</h4>
+            <Show
+              when={settings().proposals.length > 0}
+              fallback={<p>No export proposals are awaiting approval.</p>}
+            >
+              <ul aria-label="MCP export proposals">
+                <For each={settings().proposals}>
+                  {(proposal) => (
+                    <li class="card card-border card-sm my-2">
+                      <div class="card-body">
+                        <div class="flex flex-wrap items-center gap-2">
+                          <strong>Proposal {proposal.id}</strong>
+                          <span
+                            class="badge badge-sm"
+                            classList={{
+                              "badge-success": Boolean(proposal.approvedAt),
+                              "badge-warning": !proposal.approvedAt,
+                              "badge-error": !proposal.allowed,
+                            }}
+                          >
+                            {proposal.approvedAt
+                              ? "approved"
+                              : proposal.allowed
+                                ? "pending"
+                                : "blocked"}
+                          </span>
+                        </div>
+                        <p>
+                          Source:{" "}
+                          {proposal.projectId
+                            ? `Project ${proposal.projectId}`
+                            : `Media ${proposal.mediaId}`}
+                          <Show when={proposal.projectRevision > 0}>
+                            {" "}
+                            revision {proposal.projectRevision}
+                          </Show>
+                        </p>
+                        <p>
+                          Destination: {proposal.destinationId}; accuracy: {proposal.accuracy};
+                          re-encoding: {proposal.requiresReencoding ? "yes" : "no"}
+                        </p>
+                        <p>Expires: {new Date(proposal.expiresAt).toLocaleString()}</p>
+                        <ul class="list-disc pl-5">
+                          <For each={proposal.snapshots}>
+                            {(snapshot) => (
+                              <li>
+                                {snapshot.mediaLabel} ({snapshot.source.mediaId}) ranges{" "}
+                                {snapshot.item.segments
+                                  .map((segment) => `${segment.startMs}–${segment.endMs} ms`)
+                                  .join(", ") || "none"}
+                                ; container {snapshot.item.exportOptions.container ?? "mkv"};
+                                strategy{" "}
+                                {snapshot.item.exportOptions.cutStrategy ?? "stream_copy_preferred"}
+                              </li>
+                            )}
+                          </For>
+                        </ul>
+                        <Show when={proposal.findings.length > 0}>
+                          <ul class="list-disc pl-5" aria-label="Proposal findings">
+                            <For each={proposal.findings}>
+                              {(finding) => (
+                                <li>
+                                  {finding.severity}: {finding.code} — {finding.message}
+                                </li>
+                              )}
+                            </For>
+                          </ul>
+                        </Show>
+                        <Show when={!proposal.approvedAt && proposal.allowed}>
+                          <div class="card-actions">
+                            <button
+                              class="btn btn-primary btn-sm"
+                              type="button"
+                              disabled={mcpPending()}
+                              onClick={() => void approveExportProposal(proposal.id)}
+                            >
+                              Approve exact proposal
+                            </button>
+                          </div>
+                        </Show>
+                      </div>
+                    </li>
+                  )}
+                </For>
+              </ul>
+            </Show>
             <h4>Credentials</h4>
             <Show
               when={settings().credentials.length > 0}

@@ -14,6 +14,7 @@ type ServerSettings = components["schemas"]["SettingsResponse"];
 type MCPSettings = components["schemas"]["MCPSettingsResponse"];
 type MCPCredentialCreate = components["schemas"]["MCPCredentialCreate"];
 type MCPCredentialCreated = components["schemas"]["MCPCredentialCreated"];
+type ExportProposal = components["schemas"]["ExportProposal"];
 
 export function createSettingsController(api: ApiClient) {
   const [settings, setSettings] = createSignal(storedSettings(localStorage));
@@ -163,6 +164,30 @@ export function createSettingsController(api: ApiClient) {
       setMCPPending(false);
     }
   };
+  const approveExportProposal = async (proposalId: string) => {
+    if (mcpPending()) return false;
+    setMCPPending(true);
+    try {
+      const response = await api.request(
+        `export-proposals/${encodeURIComponent(proposalId)}/approval`,
+        {
+          method: "POST",
+        },
+      );
+      if (!response.ok) throw new Error("Export proposal could not be approved.");
+      const approved = (await response.json()) as ExportProposal;
+      await loadMCPSettings();
+      setServerSettingsStatus(`Export proposal ${approved.id} approved.`);
+      return true;
+    } catch (error) {
+      setServerSettingsStatus(
+        error instanceof Error ? error.message : "Export proposal could not be approved.",
+      );
+      return false;
+    } finally {
+      setMCPPending(false);
+    }
+  };
   const revokeMCPCredential = async (credentialId: string) => {
     if (mcpPending()) return;
     setMCPPending(true);
@@ -230,6 +255,7 @@ export function createSettingsController(api: ApiClient) {
     saveDestinations,
     setMCPEnabled,
     createMCPCredential,
+    approveExportProposal,
     revokeMCPCredential,
     rescanLibrary,
   };

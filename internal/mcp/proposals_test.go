@@ -170,6 +170,29 @@ func TestProposalExpiryBoundaryAndChangedInputs(t *testing.T) {
 	}
 }
 
+func TestProposalSupportsExplicitMediaRangesWithoutProjectWrite(t *testing.T) {
+	service, _, _, credentialID, _ := newProposalTestService(t, false)
+	proposal, err := service.Prepare(t.Context(), ProposalRequest{
+		CredentialID: credentialID,
+		MediaID:      "m_proposaltest01",
+		Ranges:       []model.Segment{{StartMS: 1000, EndMS: 2000}},
+		Export:       projects.ExportInput{Mode: "merge", Selection: "segments", CutStrategy: "stream_copy_preferred", Container: "mp4", DestinationID: "download"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if proposal.ProjectID != "" || proposal.MediaID != "m_proposaltest01" || proposal.ProjectRevision != 0 || len(proposal.Snapshots) != 1 || proposal.Snapshots[0].Item.Segments[0].StartMS != 1000 {
+		t.Fatalf("media proposal = %#v", proposal)
+	}
+	if _, err := service.Approve(t.Context(), proposal.ID); err != nil {
+		t.Fatal(err)
+	}
+	batch, jobs, err := service.Execute(t.Context(), proposal.ID, credentialID)
+	if err != nil || batch == "" || len(jobs) != 1 {
+		t.Fatalf("execute explicit media = %q %#v %v", batch, jobs, err)
+	}
+}
+
 func TestProposalUnattendedCredentialBypassesOnlyApproval(t *testing.T) {
 	service, _, _, credentialID, _ := newProposalTestService(t, true)
 	proposal := prepareProposal(t, service, credentialID)

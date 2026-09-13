@@ -573,6 +573,44 @@ paths:
           $ref: "#/components/responses/Error"
         "422":
           $ref: "#/components/responses/Error"
+  /export-proposals/{proposalId}:
+    parameters:
+      - name: proposalId
+        in: path
+        required: true
+        schema: {type: string, pattern: '^ep_[A-Za-z0-9_-]{12,64}$'}
+    get:
+      summary: Read exact MCP export proposal details
+      operationId: getExportProposal
+      responses:
+        "200":
+          description: Exact export proposal awaiting or carrying approval
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExportProposal"
+        "404":
+          $ref: "#/components/responses/Error"
+  /export-proposals/{proposalId}/approval:
+    parameters:
+      - name: proposalId
+        in: path
+        required: true
+        schema: {type: string, pattern: '^ep_[A-Za-z0-9_-]{12,64}$'}
+    post:
+      summary: Approve exact MCP export proposal details
+      operationId: approveExportProposal
+      responses:
+        "200":
+          description: Approved export proposal
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExportProposal"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
   /settings/mcp/credentials/{credentialId}:
     parameters:
       - name: credentialId
@@ -759,7 +797,7 @@ components:
     MCPSettingsResponse:
       type: object
       additionalProperties: false
-      required: [enabled, endpoint, authentication, remoteAccessGuidance, clientCompatibility, permissions, roots, credentials]
+      required: [enabled, endpoint, authentication, remoteAccessGuidance, clientCompatibility, permissions, roots, credentials, proposals]
       properties:
         enabled: {type: boolean}
         endpoint: {type: string}
@@ -781,6 +819,10 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/MCPCredential"
+        proposals:
+          type: array
+          items:
+            $ref: "#/components/schemas/ExportProposal"
         nextCursor: {type: string}
     SettingsResponse:
       type: object
@@ -1284,25 +1326,72 @@ components:
         findings:
           type: array
           items:
-            type: object
-            required:
-              - severity
-              - code
-              - message
-            properties:
-              severity:
-                type: string
-                enum:
-                  - allowed
-                  - warn
-                  - blocked
-              code:
-                type: string
-              message:
-                type: string
-              streamIndex:
-                type: integer
-                minimum: 0
+            $ref: "#/components/schemas/ExportFinding"
+    ExportFinding:
+      type: object
+      required:
+        - severity
+        - code
+        - message
+      properties:
+        severity:
+          type: string
+          enum:
+            - allowed
+            - warn
+            - blocked
+        code:
+          type: string
+        message:
+          type: string
+        streamIndex:
+          type: integer
+          minimum: 0
+    SourceSnapshot:
+      type: object
+      required: [mediaId, etag, sizeBytes, durationMs]
+      properties:
+        mediaId: {type: string}
+        rootId: {type: string}
+        etag: {type: string}
+        sizeBytes: {type: integer}
+        durationMs: {type: integer}
+    ExportSnapshot:
+      type: object
+      required: [projectRevision, mediaLabel, item, source]
+      properties:
+        projectRevision: {type: integer}
+        mediaLabel: {type: string}
+        item:
+          $ref: "#/components/schemas/ProjectItem"
+        source:
+          $ref: "#/components/schemas/SourceSnapshot"
+    ExportProposal:
+      type: object
+      required: [id, credentialId, projectRevision, snapshots, findings, allowed, requiresReencoding, accuracy, destinationId, expiresAt, createdAt]
+      properties:
+        id: {type: string}
+        credentialId: {type: string}
+        projectId: {type: string}
+        projectRevision: {type: integer}
+        mediaId: {type: string}
+        snapshots:
+          type: array
+          items:
+            $ref: "#/components/schemas/ExportSnapshot"
+        findings:
+          type: array
+          items:
+            $ref: "#/components/schemas/ExportFinding"
+        allowed: {type: boolean}
+        requiresReencoding: {type: boolean}
+        accuracy:
+          type: string
+          enum: [frame_exact, keyframe_limited, mixed]
+        destinationId: {type: string}
+        expiresAt: {type: string, format: date-time}
+        approvedAt: {type: string, format: date-time}
+        createdAt: {type: string, format: date-time}
     Job:
       type: object
       required:

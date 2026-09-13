@@ -16,19 +16,6 @@ import (
 
 const maxMCPCredentialBodyBytes = 64 << 10
 
-var mcpPermissions = []mcp.Permission{
-	mcp.PermissionMediaRead,
-	mcp.PermissionProjectsRead,
-	mcp.PermissionProjectsWrite,
-	mcp.PermissionPreviewsCreate,
-	mcp.PermissionDetectionRun,
-	mcp.PermissionExportsPrepare,
-	mcp.PermissionExportsRun,
-	mcp.PermissionJobsRead,
-	mcp.PermissionJobsCancel,
-	mcp.PermissionExportsDownload,
-}
-
 type mcpCredentialCreateRequest struct {
 	Name              string           `json:"name"`
 	Permissions       []mcp.Permission `json:"permissions"`
@@ -72,6 +59,14 @@ func (s *Server) getMCPSettings(w http.ResponseWriter, r *http.Request, id strin
 		httpx.Error(w, http.StatusBadRequest, "invalid_query", "Query parameters are invalid.", id)
 		return
 	}
+	proposals := []mcp.ExportProposal{}
+	if s.config.ExportProposals != nil {
+		proposals, err = s.config.ExportProposals.ListPending(r.Context(), 25)
+		if err != nil {
+			httpx.Error(w, http.StatusInternalServerError, "export_proposals_unavailable", "Export proposals are temporarily unavailable.", id)
+			return
+		}
+	}
 	views := make([]mcpCredentialView, 0, len(credentials))
 	now := time.Now().UTC()
 	for _, credential := range credentials {
@@ -94,9 +89,10 @@ func (s *Server) getMCPSettings(w http.ResponseWriter, r *http.Request, id strin
 		"authentication":       "Bearer token",
 		"remoteAccessGuidance": "Keep the server loopback-only unless remote access is deliberately configured. Use HTTPS for every remote connection.",
 		"clientCompatibility":  "Tested with MCP Inspector using Streamable HTTP bearer tokens (protocol 2025-06-18). OAuth-only clients are not supported.",
-		"permissions":          mcpPermissions,
+		"permissions":          mcp.KnownPermissions(),
 		"roots":                roots,
 		"credentials":          views,
+		"proposals":            proposals,
 		"nextCursor":           next,
 	})
 }

@@ -233,10 +233,14 @@ func run(ctx context.Context) error {
 			},
 		)
 	}
+	proposalService, err := mcp.NewProposalService(db, mcpCredentials, projectService, mediaCatalog, exportExecutor, scheduler)
+	if err != nil {
+		return err
+	}
 	apiServer, err := httpapi.New(httpapi.Config{
 		Authenticator: authenticator, Media: mediaService, Preview: previewService, Assets: assetService,
 		Projects: projectService, BatchExports: batchExports, Preflight: exportExecutor, Jobs: jobService, Detection: detectionService, Download: exportExecutor, MediaImport: mediaService,
-		Settings: runtimeSettingsStore, RuntimeSettings: runtimeState, ApplyRuntimeSettings: applyRuntime, MCPCredentials: mcpCredentials,
+		Settings: runtimeSettingsStore, RuntimeSettings: runtimeState, ApplyRuntimeSettings: applyRuntime, MCPCredentials: mcpCredentials, ExportProposals: proposalService,
 		Destinations: destinationMetadata(cfg.Destinations),
 		Ready:        db.PingContext, Logger: logger, Metrics: httpapi.NewMetrics(),
 		BeforeMS: int64(cfg.PreviewBeforeMS), AfterMS: int64(cfg.PreviewAfterMS),
@@ -246,15 +250,11 @@ func run(ctx context.Context) error {
 		return err
 	}
 
-	proposalService, err := mcp.NewProposalService(db, mcpCredentials, projectService, mediaCatalog, exportExecutor, scheduler)
-	if err != nil {
-		return err
-	}
 	mcpTools := append(mcp.MediaTools(mediaService), mcp.ExportTools(proposalService, scheduler, exportExecutor)...)
 	mcpTools = append(mcpTools, mcp.ProjectTools(projectService, mediaService, mcpCredentials)...)
 	mcpTools = append(mcpTools, mcp.PreviewDetectionTools(mediaService, previewService, detectionService, projectService)...)
 	mcpTransportConfig := mcp.TransportConfig{
-		Enabled: cfg.MCPEnabled, Credentials: mcpCredentials, Tools: mcpTools, AllowedOrigins: cfg.AllowedOrigins,
+		Enabled: cfg.MCPEnabled, EnabledFunc: func() bool { return runtimeState.Snapshot().MCPEnabled }, Credentials: mcpCredentials, Tools: mcpTools, AllowedOrigins: cfg.AllowedOrigins,
 		MaxConcurrentRequests: cfg.PreviewGlobalLimit,
 		RequestInfo: func(request *http.Request) mcp.RequestInfo {
 			forwarded := httpapi.GetForwardedInfo(request.Context())

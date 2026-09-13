@@ -4,1634 +4,1756 @@
  */
 
 export interface paths {
-    "/metrics": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Read service metrics */
-        get: operations["metrics"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+  "/metrics": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/health": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Check process health */
-        get: operations["health"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    /** Read service metrics */
+    get: operations["metrics"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/health": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/ready": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Check dependency readiness */
-        get: operations["ready"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    /** Check process health */
+    get: operations["health"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/ready": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/media": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List indexed media */
-        get: operations["listMedia"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    /** Check dependency readiness */
+    get: operations["ready"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/media": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/media/tree": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Browse indexed media folders and items */
-        get: operations["browseMediaTree"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    /** List indexed media */
+    get: operations["listMedia"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/media/tree": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/media/status": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Read media-library status */
-        get: operations["mediaLibraryStatus"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    /** Browse indexed media folders and items */
+    get: operations["browseMediaTree"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/media/status": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/media/refresh": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Refresh the media index */
-        post: operations["refreshMedia"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    /** Read media-library status */
+    get: operations["mediaLibraryStatus"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/media/refresh": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/media/{mediaId}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                mediaId: components["parameters"]["MediaId"];
-            };
-            cookie?: never;
-        };
-        /** Read media metadata */
-        get: operations["getMedia"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    get?: never;
+    put?: never;
+    /** Refresh the media index */
+    post: operations["refreshMedia"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/media/{mediaId}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        mediaId: components["parameters"]["MediaId"];
+      };
+      cookie?: never;
     };
-    "/media/{mediaId}/preview": {
-        parameters: {
-            query: {
-                centerMs: number;
-                beforeMs?: number;
-                afterMs?: number;
-                mute?: boolean;
-            };
-            header?: never;
-            path: {
-                mediaId: components["parameters"]["MediaId"];
-            };
-            cookie?: never;
-        };
-        /** Stream a normalized preview */
-        get: operations["streamPreview"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        /** Check for a cached preview */
-        head: operations["previewStatus"];
-        patch?: never;
-        trace?: never;
+    /** Read media metadata */
+    get: operations["getMedia"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/media/{mediaId}/preview": {
+    parameters: {
+      query: {
+        centerMs: number;
+        beforeMs?: number;
+        afterMs?: number;
+        mute?: boolean;
+      };
+      header?: never;
+      path: {
+        mediaId: components["parameters"]["MediaId"];
+      };
+      cookie?: never;
     };
-    "/projects": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List saved projects */
-        get: operations["listProjects"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    /** Stream a normalized preview */
+    get: operations["streamPreview"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    /** Check for a cached preview */
+    head: operations["previewStatus"];
+    patch?: never;
+    trace?: never;
+  };
+  "/projects": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/projects/{projectId}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                projectId: components["parameters"]["ProjectId"];
-            };
-            cookie?: never;
-        };
-        /** Read a project */
-        get: operations["getProject"];
-        /** Save a project */
-        put: operations["putProject"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    /** List saved projects */
+    get: operations["listProjects"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/projects/{projectId}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        projectId: components["parameters"]["ProjectId"];
+      };
+      cookie?: never;
     };
-    "/projects/{projectId}/detections": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                projectId: components["parameters"]["ProjectId"];
-            };
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Start media detection */
-        post: operations["createDetection"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    /** Read a project */
+    get: operations["getProject"];
+    /** Save a project */
+    put: operations["putProject"];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/projects/{projectId}/detections": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        projectId: components["parameters"]["ProjectId"];
+      };
+      cookie?: never;
     };
-    "/projects/{projectId}/exports": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                projectId: components["parameters"]["ProjectId"];
-            };
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Create a durable export */
-        post: operations["createExport"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    get?: never;
+    put?: never;
+    /** Start media detection */
+    post: operations["createDetection"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/projects/{projectId}/exports": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        projectId: components["parameters"]["ProjectId"];
+      };
+      cookie?: never;
     };
-    "/batches": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List durable batches */
-        get: operations["listBatches"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    get?: never;
+    put?: never;
+    /** Create a durable export */
+    post: operations["createExport"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/batches": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/batches/{batchId}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                batchId: string;
-            };
-            cookie?: never;
-        };
-        /** Get durable batch export progress */
-        get: operations["getBatchProgress"];
-        put?: never;
-        post?: never;
-        /** Cancel a batch export */
-        delete: operations["cancelBatch"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    /** List durable batches */
+    get: operations["listBatches"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/batches/{batchId}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        batchId: string;
+      };
+      cookie?: never;
     };
-    "/batches/{batchId}/download": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                batchId: string;
-            };
-            cookie?: never;
-        };
-        /** Download all completed browser outputs as an archive */
-        get: operations["downloadBatchOutputs"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    /** Get durable batch export progress */
+    get: operations["getBatchProgress"];
+    put?: never;
+    post?: never;
+    /** Cancel a batch export */
+    delete: operations["cancelBatch"];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/batches/{batchId}/download": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        batchId: string;
+      };
+      cookie?: never;
     };
-    "/projects/{projectId}/exports/preflight": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                projectId: components["parameters"]["ProjectId"];
-            };
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Validate export selection without queueing */
-        post: operations["preflightExport"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    /** Download all completed browser outputs as an archive */
+    get: operations["downloadBatchOutputs"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/projects/{projectId}/exports/preflight": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        projectId: components["parameters"]["ProjectId"];
+      };
+      cookie?: never;
     };
-    "/destinations": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List configured export destinations */
-        get: operations["listDestinations"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    get?: never;
+    put?: never;
+    /** Validate export selection without queueing */
+    post: operations["preflightExport"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/destinations": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/jobs/{jobId}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                jobId: components["parameters"]["JobId"];
-            };
-            cookie?: never;
-        };
-        /** Read a job */
-        get: operations["getJob"];
-        put?: never;
-        post?: never;
-        /** Cancel a job */
-        delete: operations["cancelJob"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    /** List configured export destinations */
+    get: operations["listDestinations"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/jobs/{jobId}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        jobId: components["parameters"]["JobId"];
+      };
+      cookie?: never;
     };
-    "/jobs/{jobId}/retry": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                jobId: components["parameters"]["JobId"];
-            };
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Retry a failed export as a new job */
-        post: operations["retryJob"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    /** Read a job */
+    get: operations["getJob"];
+    put?: never;
+    post?: never;
+    /** Cancel a job */
+    delete: operations["cancelJob"];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/jobs/{jobId}/retry": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        jobId: components["parameters"]["JobId"];
+      };
+      cookie?: never;
     };
-    "/jobs/{jobId}/outputs/{position}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                jobId: components["parameters"]["JobId"];
-                position: number;
-            };
-            cookie?: never;
-        };
-        /** Download one completed output */
-        get: operations["downloadJobOutput"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    get?: never;
+    put?: never;
+    /** Retry a failed export as a new job */
+    post: operations["retryJob"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/jobs/{jobId}/outputs/{position}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        jobId: components["parameters"]["JobId"];
+        position: number;
+      };
+      cookie?: never;
     };
-    "/settings": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Read runtime settings and safe root diagnostics */
-        get: operations["getSettings"];
-        /** Replace runtime settings */
-        put: operations["updateSettings"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    /** Download one completed output */
+    get: operations["downloadJobOutput"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/settings": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/settings/mcp": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Read MCP administration status and safe credential metadata */
-        get: operations["getMCPSettings"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    /** Read runtime settings and safe root diagnostics */
+    get: operations["getSettings"];
+    /** Replace runtime settings */
+    put: operations["updateSettings"];
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/settings/mcp": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/settings/mcp/credentials": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Create a scoped MCP bearer credential */
-        post: operations["createMCPCredential"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    /** Read MCP administration status and safe credential metadata */
+    get: operations["getMCPSettings"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/settings/mcp/credentials": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    "/settings/mcp/credentials/{credentialId}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                credentialId: string;
-            };
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        /** Revoke an MCP credential immediately */
-        delete: operations["revokeMCPCredential"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    get?: never;
+    put?: never;
+    /** Create a scoped MCP bearer credential */
+    post: operations["createMCPCredential"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/export-proposals/{proposalId}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        proposalId: string;
+      };
+      cookie?: never;
     };
-    "/settings/media/refresh": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Queue a media library refresh */
-        post: operations["refreshSettingsMedia"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
+    /** Read exact MCP export proposal details */
+    get: operations["getExportProposal"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/export-proposals/{proposalId}/approval": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        proposalId: string;
+      };
+      cookie?: never;
     };
+    get?: never;
+    put?: never;
+    /** Approve exact MCP export proposal details */
+    post: operations["approveExportProposal"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/settings/mcp/credentials/{credentialId}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        credentialId: string;
+      };
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    /** Revoke an MCP credential immediately */
+    delete: operations["revokeMCPCredential"];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/settings/media/refresh": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Queue a media library refresh */
+    post: operations["refreshSettingsMedia"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
 }
 export type webhooks = Record<string, never>;
 export interface components {
-    schemas: {
-        SettingsUpdate: {
-            revision: number;
-            settings: {
-                [key: string]: unknown;
-            };
-        };
-        RuntimeDestination: {
-            id: string;
-            label: string;
-            description?: string;
-            /** @enum {string} */
-            kind: "download" | "archive" | "source_adjacent";
-            retention?: string;
-        };
-        RuntimeSettings: {
-            destinations?: components["schemas"]["RuntimeDestination"][];
-            exportLimit?: number;
-            cacheMaxBytes?: number;
-            previewGlobalLimit?: number;
-            previewBeforeMs?: number;
-            previewAfterMs?: number;
-            previewMaxMs?: number;
-            previewGridMs?: number;
-            mediaMaxFiles?: number;
-            mediaMaxDepth?: number;
-            mcpEnabled?: boolean;
-        };
-        MCPMediaScope: {
-            /** @enum {string} */
-            kind: "all" | "roots" | "media";
-            rootIds?: string[];
-            mediaIds?: string[];
-        };
-        MCPProjectScope: {
-            /** @enum {string} */
-            kind: "all" | "projects";
-            projectIds?: string[];
-        };
-        MCPCredential: {
-            id: string;
-            tokenIdentifier: string;
-            name: string;
-            permissions: string[];
-            mediaScope: components["schemas"]["MCPMediaScope"];
-            projectScope: components["schemas"]["MCPProjectScope"];
-            /** Format: date-time */
-            expiresAt?: string;
-            /** Format: date-time */
-            revokedAt?: string;
-            unattendedExports: boolean;
-            /** Format: date-time */
-            createdAt: string;
-            /** Format: date-time */
-            lastUsedAt?: string;
-            /** @enum {string} */
-            status?: "active" | "expired" | "revoked";
-        };
-        MCPCredentialCreated: components["schemas"]["MCPCredential"] & {
-            secret: string;
-        };
-        MCPCredentialCreate: {
-            name: string;
-            permissions: string[];
-            mediaScope: components["schemas"]["MCPMediaScope"];
-            projectScope: components["schemas"]["MCPProjectScope"];
-            /** Format: date-time */
-            expiresAt?: string;
-            allowNonExpiring?: boolean;
-            unattendedExports?: boolean;
-        };
-        MCPSettingsResponse: {
-            enabled: boolean;
-            endpoint: string;
-            authentication: string;
-            remoteAccessGuidance: string;
-            clientCompatibility: string;
-            permissions: string[];
-            roots: {
-                id: string;
-                label: string;
-            }[];
-            credentials: components["schemas"]["MCPCredential"][];
-            nextCursor?: string;
-        };
-        SettingsResponse: {
-            settings: components["schemas"]["RuntimeSettings"];
-            revision: number;
-            schemaVersion: number;
-            /** Format: date-time */
-            updatedAt: string;
-            pathsConstrained: boolean;
-            roots: {
-                [key: string]: {
-                    /** @enum {string} */
-                    state?: "ready" | "unavailable";
-                    message?: string;
-                };
-            };
-        };
-        Error: {
-            error: {
-                code: string;
-                message: string;
-                requestId: string;
-            };
-        };
-        Media: {
-            id: string;
-            name: string;
-            durationMs: number;
-            sizeBytes: number;
-            container: string;
-            streams: {
-                [key: string]: unknown;
-            };
-            etag: string;
-        };
-        FolderNode: {
-            id: string;
-            label: string;
-        };
-        FolderPage: {
-            folders: components["schemas"]["FolderNode"][];
-            items: components["schemas"]["Media"][];
-            nextCursor?: string | null;
-        };
-        MediaPage: {
-            items: components["schemas"]["Media"][];
-            nextCursor?: string | null;
-        };
-        LibraryStatus: {
-            /** @enum {string} */
-            state: "unconfigured" | "scanning" | "ready_empty" | "ready_with_media" | "failed";
-            message: string;
-        };
-        ProjectInput: {
-            revision: number;
-            /** @constant */
-            schemaVersion: 2;
-            name: string;
-            items: components["schemas"]["ProjectItem"][];
-        };
-        ProjectSummary: {
-            id: string;
-            name: string;
-            revision: number;
-            /** Format: date-time */
-            updatedAt: string;
-        };
-        ProjectPage: {
-            items: components["schemas"]["ProjectSummary"][];
-            nextCursor: string | null;
-        };
-        Project: components["schemas"]["ProjectInput"] & {
-            id: string;
-            /** Format: date-time */
-            updatedAt: string;
-        };
-        ProjectItem: {
-            id: string;
-            mediaId: string;
-            segments: components["schemas"]["Segment"][];
-            editorState?: components["schemas"]["UIState"];
-            exportOptions: components["schemas"]["ProjectExportOptions"];
-        };
-        ProjectExportOptions: {
-            /** @enum {string} */
-            mode?: "merge" | "separate";
-            /** @enum {string} */
-            selection?: "segments" | "gaps";
-            streamIndexes?: number[];
-            /** @enum {string} */
-            cutStrategy?: "stream_copy_preferred" | "precise_reencode" | "hybrid_smart_cut";
-            /** @enum {string} */
-            container?: "mkv" | "mp4" | "mov";
-            destinationId?: string;
-            filenameTemplate?: string;
-        };
-        Segment: {
-            id?: string;
-            startMs: number;
-            endMs: number;
-            label?: string;
-            /** @default true */
-            included?: boolean;
-        };
-        UIState: {
-            playheadMs: number;
-            zoom: number;
-            muted: boolean;
-        };
-        DetectionInput: {
-            mediaId: string;
-            projectItemId: string;
-            projectRevision: number;
-            /** @enum {string} */
-            kind: "silence" | "black" | "scene";
-            sourceFingerprint?: string;
-            noiseDb?: number;
-            minDurationMs?: number;
-            sceneThreshold?: number;
-        };
-        DetectionCandidate: components["schemas"]["DetectionRangeCandidate"] | components["schemas"]["DetectionPointCandidate"];
-        DetectionRangeCandidate: {
-            id: string;
-            mediaId: string;
-            projectId: string;
-            projectRevision: number;
-            startMs: number;
-            endMs: number;
-            /** @enum {string} */
-            source: "silence" | "black";
-        };
-        DetectionPointCandidate: {
-            id: string;
-            mediaId: string;
-            projectId: string;
-            projectRevision: number;
-            pointMs: number;
-            /** @enum {string} */
-            source: "scene";
-        };
-        DetectionJob: {
-            id: string;
-            /** @enum {string} */
-            type: "detection";
-            /** @enum {string} */
-            state: "queued" | "running" | "succeeded" | "failed" | "cancelled";
-            mediaId: string;
-            projectId: string;
-            projectRevision: number;
-            /** @enum {string} */
-            kind: "silence" | "black" | "scene";
-            candidates?: components["schemas"]["DetectionCandidate"][];
-            errorCode?: string;
-        };
-        ExportInput: {
-            /** @enum {string} */
-            mode: "merge" | "separate";
-            /**
-             * @default segments
-             * @enum {string}
-             */
-            selection: "segments" | "gaps";
-            streamIndexes?: number[];
-            /** @enum {string} */
-            cutStrategy: "stream_copy_preferred" | "precise_reencode" | "hybrid_smart_cut";
-            /** @enum {string} */
-            container: "mkv" | "mp4" | "mov";
-            /** @description Opaque configured destination ID; never a filesystem path. */
-            destinationId?: string;
-            /** @description Restricted template using documented variables only. */
-            filenameTemplate?: string;
-            /** @description Optional ordered project-item selection; omitted selects all. */
-            itemIds?: string[];
-        };
-        BatchExportSubmission: {
-            batchId: string;
-            jobs: components["schemas"]["Job"][];
-        };
-        Batch: {
-            batchId: string;
-            projectId?: string;
-            projectRevision?: number;
-            /** @enum {string} */
-            state: "queued" | "running" | "succeeded" | "failed" | "cancelled";
-            progress: number;
-            jobs: components["schemas"]["Job"][];
-        };
-        BatchPage: {
-            items: components["schemas"]["Batch"][];
-        };
-        Destination: {
-            id: string;
-            label: string;
-            description?: string;
-            /** @enum {string} */
-            kind: "download" | "archive" | "source_adjacent";
-            retention?: string;
-        };
-        DestinationCapabilities: {
-            /** @description True only when deployment configuration explicitly includes a source_adjacent destination. No filesystem path is exposed. */
-            saveBesideSource: boolean;
-        };
-        ExportPreflight: {
-            allowed: boolean;
-            selection: number[];
-            findings: {
-                /** @enum {string} */
-                severity: "allowed" | "warn" | "blocked";
-                code: string;
-                message: string;
-                streamIndex?: number;
-            }[];
-        };
-        Job: {
-            id: string;
-            batchId?: string;
-            projectItemId?: string;
-            mediaLabel?: string;
-            mediaId?: string;
-            projectId?: string;
-            projectRevision?: number;
-            kind?: string;
-            /** @enum {string} */
-            type: "export" | "detection" | "library_scan";
-            /** @enum {string} */
-            state: "queued" | "running" | "succeeded" | "failed" | "cancelled";
-            progress?: number;
-            /** @description Present only when an export job succeeded. */
-            result?: {
-                /**
-                 * @description Published output container.
-                 * @enum {string}
-                 */
-                container?: "mkv" | "mp4" | "mov";
-                /** @description Published merged-export filename, never a filesystem path. */
-                outputName?: string;
-                /** @description Published separate-export filenames, never filesystem paths. */
-                outputNames?: string[];
-                /** @description Per-segment failures when a separate export partially succeeds. */
-                outputFailures?: {
-                    segment: number;
-                    code: string;
-                    message: string;
-                }[];
-                /** Format: int64 */
-                sizeBytes: number;
-                /** Format: date-time */
-                retainUntil: string;
-                destinationId?: string;
-                /** @enum {string} */
-                destinationKind?: "download" | "archive" | "source_adjacent";
-                /** @description Strategy used for each selected segment; outputName identifies separately published outputs. */
-                appliedStrategies?: {
-                    segment: number;
-                    /** @description Published separate-export filename, never a filesystem path. */
-                    outputName?: string;
-                    strategy: string;
-                }[];
-            };
-            /** @description Requested cut strategy. */
-            strategy?: string;
-            /**
-             * @description Requested output container.
-             * @enum {string}
-             */
-            container?: "mkv" | "mp4" | "mov";
-            /**
-             * @description Requested output arrangement.
-             * @enum {string}
-             */
-            mode?: "merge" | "separate";
-            /**
-             * @description Requested ranges (included cuts or gaps between cuts).
-             * @enum {string}
-             */
-            selection?: "segments" | "gaps";
-            /** @description Resolved stream indexes used by the export job. */
-            selectedStreams?: number[];
-            /** @description Strategy used by every selected segment; omitted when segments use different strategies. See result.appliedStrategies for per-segment values. */
-            appliedStrategy?: string;
-            warnings?: string[];
-            warningDetails?: {
-                severity: string;
-                code: string;
-                message: string;
-                streamIndex?: number;
-            }[];
-            /** @description False when the output requires human inspection. */
-            verified?: boolean;
-            /** @description Stable export failure code; present only when state is failed. */
-            errorCode?: string;
-            /** Format: date-time */
-            createdAt: string;
-            /** Format: date-time */
-            updatedAt: string;
-        };
+  schemas: {
+    SettingsUpdate: {
+      revision: number;
+      settings: {
+        [key: string]: unknown;
+      };
     };
-    responses: {
-        /** @description Safe error */
-        Error: {
-            headers: {
-                [name: string]: unknown;
-            };
-            content: {
-                "application/json": components["schemas"]["Error"];
-            };
+    RuntimeDestination: {
+      id: string;
+      label: string;
+      description?: string;
+      /** @enum {string} */
+      kind: "download" | "archive" | "source_adjacent";
+      retention?: string;
+    };
+    RuntimeSettings: {
+      destinations?: components["schemas"]["RuntimeDestination"][];
+      exportLimit?: number;
+      cacheMaxBytes?: number;
+      previewGlobalLimit?: number;
+      previewBeforeMs?: number;
+      previewAfterMs?: number;
+      previewMaxMs?: number;
+      previewGridMs?: number;
+      mediaMaxFiles?: number;
+      mediaMaxDepth?: number;
+      mcpEnabled?: boolean;
+    };
+    MCPMediaScope: {
+      /** @enum {string} */
+      kind: "all" | "roots" | "media";
+      rootIds?: string[];
+      mediaIds?: string[];
+    };
+    MCPProjectScope: {
+      /** @enum {string} */
+      kind: "all" | "projects";
+      projectIds?: string[];
+    };
+    MCPCredential: {
+      id: string;
+      tokenIdentifier: string;
+      name: string;
+      permissions: string[];
+      mediaScope: components["schemas"]["MCPMediaScope"];
+      projectScope: components["schemas"]["MCPProjectScope"];
+      /** Format: date-time */
+      expiresAt?: string;
+      /** Format: date-time */
+      revokedAt?: string;
+      unattendedExports: boolean;
+      /** Format: date-time */
+      createdAt: string;
+      /** Format: date-time */
+      lastUsedAt?: string;
+      /** @enum {string} */
+      status?: "active" | "expired" | "revoked";
+    };
+    MCPCredentialCreated: components["schemas"]["MCPCredential"] & {
+      secret: string;
+    };
+    MCPCredentialCreate: {
+      name: string;
+      permissions: string[];
+      mediaScope: components["schemas"]["MCPMediaScope"];
+      projectScope: components["schemas"]["MCPProjectScope"];
+      /** Format: date-time */
+      expiresAt?: string;
+      allowNonExpiring?: boolean;
+      unattendedExports?: boolean;
+    };
+    MCPSettingsResponse: {
+      enabled: boolean;
+      endpoint: string;
+      authentication: string;
+      remoteAccessGuidance: string;
+      clientCompatibility: string;
+      permissions: string[];
+      roots: {
+        id: string;
+        label: string;
+      }[];
+      credentials: components["schemas"]["MCPCredential"][];
+      proposals: components["schemas"]["ExportProposal"][];
+      nextCursor?: string;
+    };
+    SettingsResponse: {
+      settings: components["schemas"]["RuntimeSettings"];
+      revision: number;
+      schemaVersion: number;
+      /** Format: date-time */
+      updatedAt: string;
+      pathsConstrained: boolean;
+      roots: {
+        [key: string]: {
+          /** @enum {string} */
+          state?: "ready" | "unavailable";
+          message?: string;
         };
+      };
     };
-    parameters: {
-        MediaId: string;
-        ProjectId: string;
-        JobId: string;
+    Error: {
+      error: {
+        code: string;
+        message: string;
+        requestId: string;
+      };
     };
-    requestBodies: never;
-    headers: never;
-    pathItems: never;
+    Media: {
+      id: string;
+      name: string;
+      durationMs: number;
+      sizeBytes: number;
+      container: string;
+      streams: {
+        [key: string]: unknown;
+      };
+      etag: string;
+    };
+    FolderNode: {
+      id: string;
+      label: string;
+    };
+    FolderPage: {
+      folders: components["schemas"]["FolderNode"][];
+      items: components["schemas"]["Media"][];
+      nextCursor?: string | null;
+    };
+    MediaPage: {
+      items: components["schemas"]["Media"][];
+      nextCursor?: string | null;
+    };
+    LibraryStatus: {
+      /** @enum {string} */
+      state: "unconfigured" | "scanning" | "ready_empty" | "ready_with_media" | "failed";
+      message: string;
+    };
+    ProjectInput: {
+      revision: number;
+      /** @constant */
+      schemaVersion: 2;
+      name: string;
+      items: components["schemas"]["ProjectItem"][];
+    };
+    ProjectSummary: {
+      id: string;
+      name: string;
+      revision: number;
+      /** Format: date-time */
+      updatedAt: string;
+    };
+    ProjectPage: {
+      items: components["schemas"]["ProjectSummary"][];
+      nextCursor: string | null;
+    };
+    Project: components["schemas"]["ProjectInput"] & {
+      id: string;
+      /** Format: date-time */
+      updatedAt: string;
+    };
+    ProjectItem: {
+      id: string;
+      mediaId: string;
+      segments: components["schemas"]["Segment"][];
+      editorState?: components["schemas"]["UIState"];
+      exportOptions: components["schemas"]["ProjectExportOptions"];
+    };
+    ProjectExportOptions: {
+      /** @enum {string} */
+      mode?: "merge" | "separate";
+      /** @enum {string} */
+      selection?: "segments" | "gaps";
+      streamIndexes?: number[];
+      /** @enum {string} */
+      cutStrategy?: "stream_copy_preferred" | "precise_reencode" | "hybrid_smart_cut";
+      /** @enum {string} */
+      container?: "mkv" | "mp4" | "mov";
+      destinationId?: string;
+      filenameTemplate?: string;
+    };
+    Segment: {
+      id?: string;
+      startMs: number;
+      endMs: number;
+      label?: string;
+      /** @default true */
+      included?: boolean;
+    };
+    UIState: {
+      playheadMs: number;
+      zoom: number;
+      muted: boolean;
+    };
+    DetectionInput: {
+      mediaId: string;
+      projectItemId: string;
+      projectRevision: number;
+      /** @enum {string} */
+      kind: "silence" | "black" | "scene";
+      sourceFingerprint?: string;
+      noiseDb?: number;
+      minDurationMs?: number;
+      sceneThreshold?: number;
+    };
+    DetectionCandidate:
+      | components["schemas"]["DetectionRangeCandidate"]
+      | components["schemas"]["DetectionPointCandidate"];
+    DetectionRangeCandidate: {
+      id: string;
+      mediaId: string;
+      projectId: string;
+      projectRevision: number;
+      startMs: number;
+      endMs: number;
+      /** @enum {string} */
+      source: "silence" | "black";
+    };
+    DetectionPointCandidate: {
+      id: string;
+      mediaId: string;
+      projectId: string;
+      projectRevision: number;
+      pointMs: number;
+      /** @enum {string} */
+      source: "scene";
+    };
+    DetectionJob: {
+      id: string;
+      /** @enum {string} */
+      type: "detection";
+      /** @enum {string} */
+      state: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+      mediaId: string;
+      projectId: string;
+      projectRevision: number;
+      /** @enum {string} */
+      kind: "silence" | "black" | "scene";
+      candidates?: components["schemas"]["DetectionCandidate"][];
+      errorCode?: string;
+    };
+    ExportInput: {
+      /** @enum {string} */
+      mode: "merge" | "separate";
+      /**
+       * @default segments
+       * @enum {string}
+       */
+      selection: "segments" | "gaps";
+      streamIndexes?: number[];
+      /** @enum {string} */
+      cutStrategy: "stream_copy_preferred" | "precise_reencode" | "hybrid_smart_cut";
+      /** @enum {string} */
+      container: "mkv" | "mp4" | "mov";
+      /** @description Opaque configured destination ID; never a filesystem path. */
+      destinationId?: string;
+      /** @description Restricted template using documented variables only. */
+      filenameTemplate?: string;
+      /** @description Optional ordered project-item selection; omitted selects all. */
+      itemIds?: string[];
+    };
+    BatchExportSubmission: {
+      batchId: string;
+      jobs: components["schemas"]["Job"][];
+    };
+    Batch: {
+      batchId: string;
+      projectId?: string;
+      projectRevision?: number;
+      /** @enum {string} */
+      state: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+      progress: number;
+      jobs: components["schemas"]["Job"][];
+    };
+    BatchPage: {
+      items: components["schemas"]["Batch"][];
+    };
+    Destination: {
+      id: string;
+      label: string;
+      description?: string;
+      /** @enum {string} */
+      kind: "download" | "archive" | "source_adjacent";
+      retention?: string;
+    };
+    DestinationCapabilities: {
+      /** @description True only when deployment configuration explicitly includes a source_adjacent destination. No filesystem path is exposed. */
+      saveBesideSource: boolean;
+    };
+    ExportPreflight: {
+      allowed: boolean;
+      selection: number[];
+      findings: components["schemas"]["ExportFinding"][];
+    };
+    ExportFinding: {
+      /** @enum {string} */
+      severity: "allowed" | "warn" | "blocked";
+      code: string;
+      message: string;
+      streamIndex?: number;
+    };
+    SourceSnapshot: {
+      mediaId: string;
+      rootId?: string;
+      etag: string;
+      sizeBytes: number;
+      durationMs: number;
+    };
+    ExportSnapshot: {
+      projectRevision: number;
+      mediaLabel: string;
+      item: components["schemas"]["ProjectItem"];
+      source: components["schemas"]["SourceSnapshot"];
+    };
+    ExportProposal: {
+      id: string;
+      credentialId: string;
+      projectId?: string;
+      projectRevision: number;
+      mediaId?: string;
+      snapshots: components["schemas"]["ExportSnapshot"][];
+      findings: components["schemas"]["ExportFinding"][];
+      allowed: boolean;
+      requiresReencoding: boolean;
+      /** @enum {string} */
+      accuracy: "frame_exact" | "keyframe_limited" | "mixed";
+      destinationId: string;
+      /** Format: date-time */
+      expiresAt: string;
+      /** Format: date-time */
+      approvedAt?: string;
+      /** Format: date-time */
+      createdAt: string;
+    };
+    Job: {
+      id: string;
+      batchId?: string;
+      projectItemId?: string;
+      mediaLabel?: string;
+      mediaId?: string;
+      projectId?: string;
+      projectRevision?: number;
+      kind?: string;
+      /** @enum {string} */
+      type: "export" | "detection" | "library_scan";
+      /** @enum {string} */
+      state: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+      progress?: number;
+      /** @description Present only when an export job succeeded. */
+      result?: {
+        /**
+         * @description Published output container.
+         * @enum {string}
+         */
+        container?: "mkv" | "mp4" | "mov";
+        /** @description Published merged-export filename, never a filesystem path. */
+        outputName?: string;
+        /** @description Published separate-export filenames, never filesystem paths. */
+        outputNames?: string[];
+        /** @description Per-segment failures when a separate export partially succeeds. */
+        outputFailures?: {
+          segment: number;
+          code: string;
+          message: string;
+        }[];
+        /** Format: int64 */
+        sizeBytes: number;
+        /** Format: date-time */
+        retainUntil: string;
+        destinationId?: string;
+        /** @enum {string} */
+        destinationKind?: "download" | "archive" | "source_adjacent";
+        /** @description Strategy used for each selected segment; outputName identifies separately published outputs. */
+        appliedStrategies?: {
+          segment: number;
+          /** @description Published separate-export filename, never a filesystem path. */
+          outputName?: string;
+          strategy: string;
+        }[];
+      };
+      /** @description Requested cut strategy. */
+      strategy?: string;
+      /**
+       * @description Requested output container.
+       * @enum {string}
+       */
+      container?: "mkv" | "mp4" | "mov";
+      /**
+       * @description Requested output arrangement.
+       * @enum {string}
+       */
+      mode?: "merge" | "separate";
+      /**
+       * @description Requested ranges (included cuts or gaps between cuts).
+       * @enum {string}
+       */
+      selection?: "segments" | "gaps";
+      /** @description Resolved stream indexes used by the export job. */
+      selectedStreams?: number[];
+      /** @description Strategy used by every selected segment; omitted when segments use different strategies. See result.appliedStrategies for per-segment values. */
+      appliedStrategy?: string;
+      warnings?: string[];
+      warningDetails?: {
+        severity: string;
+        code: string;
+        message: string;
+        streamIndex?: number;
+      }[];
+      /** @description False when the output requires human inspection. */
+      verified?: boolean;
+      /** @description Stable export failure code; present only when state is failed. */
+      errorCode?: string;
+      /** Format: date-time */
+      createdAt: string;
+      /** Format: date-time */
+      updatedAt: string;
+    };
+  };
+  responses: {
+    /** @description Safe error */
+    Error: {
+      headers: {
+        [name: string]: unknown;
+      };
+      content: {
+        "application/json": components["schemas"]["Error"];
+      };
+    };
+  };
+  parameters: {
+    MediaId: string;
+    ProjectId: string;
+    JobId: string;
+  };
+  requestBodies: never;
+  headers: never;
+  pathItems: never;
 }
 export type $defs = Record<string, never>;
 export interface operations {
-    metrics: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Prometheus text exposition */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "text/plain": string;
-                };
-            };
-        };
+  metrics: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    health: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
+    requestBody?: never;
+    responses: {
+      /** @description Prometheus text exposition */
+      200: {
+        headers: {
+          [name: string]: unknown;
         };
-        requestBody?: never;
-        responses: {
-            /** @description Alive */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
+        content: {
+          "text/plain": string;
         };
+      };
     };
-    ready: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Ready */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            503: components["responses"]["Error"];
-        };
+  };
+  health: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    listMedia: {
-        parameters: {
-            query?: {
-                limit?: number;
-                cursor?: string;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
+    requestBody?: never;
+    responses: {
+      /** @description Alive */
+      200: {
+        headers: {
+          [name: string]: unknown;
         };
-        requestBody?: never;
-        responses: {
-            /** @description Media page */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MediaPage"];
-                };
-            };
-        };
+        content?: never;
+      };
     };
-    browseMediaTree: {
-        parameters: {
-            query?: {
-                folderId?: string;
-                cursor?: string;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Media folder page */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["FolderPage"];
-                };
-            };
-            400: components["responses"]["Error"];
-            404: components["responses"]["Error"];
-        };
+  };
+  ready: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    mediaLibraryStatus: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
+    requestBody?: never;
+    responses: {
+      /** @description Ready */
+      200: {
+        headers: {
+          [name: string]: unknown;
         };
-        requestBody?: never;
-        responses: {
-            /** @description Safe media-library status */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["LibraryStatus"];
-                };
-            };
-        };
+        content?: never;
+      };
+      503: components["responses"]["Error"];
     };
-    refreshMedia: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Durable library scan job accepted */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Job"];
-                };
-            };
-            403: components["responses"]["Error"];
-        };
+  };
+  listMedia: {
+    parameters: {
+      query?: {
+        limit?: number;
+        cursor?: string;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    getMedia: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                mediaId: components["parameters"]["MediaId"];
-            };
-            cookie?: never;
+    requestBody?: never;
+    responses: {
+      /** @description Media page */
+      200: {
+        headers: {
+          [name: string]: unknown;
         };
-        requestBody?: never;
-        responses: {
-            /** @description Media metadata */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Media"];
-                };
-            };
-            404: components["responses"]["Error"];
+        content: {
+          "application/json": components["schemas"]["MediaPage"];
         };
+      };
     };
-    streamPreview: {
-        parameters: {
-            query: {
-                centerMs: number;
-                beforeMs?: number;
-                afterMs?: number;
-                mute?: boolean;
-            };
-            header?: never;
-            path: {
-                mediaId: components["parameters"]["MediaId"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Fragmented MP4 preview */
-            200: {
-                headers: {
-                    "X-Preview-Start"?: number;
-                    "X-Preview-Duration"?: number;
-                    "X-Preview-Offset"?: number;
-                    "X-Preview-Cache"?: "hit" | "miss";
-                    "X-Request-ID"?: string;
-                    [name: string]: unknown;
-                };
-                content: {
-                    "video/mp4": string;
-                };
-            };
-            403: components["responses"]["Error"];
-            404: components["responses"]["Error"];
-            422: components["responses"]["Error"];
-            429: components["responses"]["Error"];
-        };
+  };
+  browseMediaTree: {
+    parameters: {
+      query?: {
+        folderId?: string;
+        cursor?: string;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    previewStatus: {
-        parameters: {
-            query: {
-                centerMs: number;
-                beforeMs?: number;
-                afterMs?: number;
-                mute?: boolean;
-            };
-            header?: never;
-            path: {
-                mediaId: components["parameters"]["MediaId"];
-            };
-            cookie?: never;
+    requestBody?: never;
+    responses: {
+      /** @description Media folder page */
+      200: {
+        headers: {
+          [name: string]: unknown;
         };
-        requestBody?: never;
-        responses: {
-            /** @description Complete cached preview exists */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description No complete cached preview */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
+        content: {
+          "application/json": components["schemas"]["FolderPage"];
         };
+      };
+      400: components["responses"]["Error"];
+      404: components["responses"]["Error"];
     };
-    listProjects: {
-        parameters: {
-            query?: {
-                limit?: number;
-                cursor?: string;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Project page */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ProjectPage"];
-                };
-            };
-            400: components["responses"]["Error"];
-        };
+  };
+  mediaLibraryStatus: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    getProject: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                projectId: components["parameters"]["ProjectId"];
-            };
-            cookie?: never;
+    requestBody?: never;
+    responses: {
+      /** @description Safe media-library status */
+      200: {
+        headers: {
+          [name: string]: unknown;
         };
-        requestBody?: never;
-        responses: {
-            /** @description Project */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Project"];
-                };
-            };
-            404: components["responses"]["Error"];
+        content: {
+          "application/json": components["schemas"]["LibraryStatus"];
         };
+      };
     };
-    putProject: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                projectId: components["parameters"]["ProjectId"];
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ProjectInput"];
-            };
-        };
-        responses: {
-            /** @description Saved project */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Project"];
-                };
-            };
-            409: components["responses"]["Error"];
-            422: components["responses"]["Error"];
-        };
+  };
+  refreshMedia: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    createDetection: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                projectId: components["parameters"]["ProjectId"];
-            };
-            cookie?: never;
+    requestBody?: never;
+    responses: {
+      /** @description Durable library scan job accepted */
+      202: {
+        headers: {
+          [name: string]: unknown;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["DetectionInput"];
-            };
+        content: {
+          "application/json": components["schemas"]["Job"];
         };
-        responses: {
-            /** @description Detection queued */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DetectionJob"];
-                };
-            };
-            404: components["responses"]["Error"];
-            409: components["responses"]["Error"];
-            422: components["responses"]["Error"];
-        };
+      };
+      403: components["responses"]["Error"];
     };
-    createExport: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                projectId: components["parameters"]["ProjectId"];
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ExportInput"];
-            };
-        };
-        responses: {
-            /** @description Batch export queued */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BatchExportSubmission"];
-                };
-            };
-            403: components["responses"]["Error"];
-            404: components["responses"]["Error"];
-            422: components["responses"]["Error"];
-            429: components["responses"]["Error"];
-        };
+  };
+  getMedia: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        mediaId: components["parameters"]["MediaId"];
+      };
+      cookie?: never;
     };
-    listBatches: {
-        parameters: {
-            query?: {
-                limit?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
+    requestBody?: never;
+    responses: {
+      /** @description Media metadata */
+      200: {
+        headers: {
+          [name: string]: unknown;
         };
-        requestBody?: never;
-        responses: {
-            /** @description Recent durable batches */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BatchPage"];
-                };
-            };
-            400: components["responses"]["Error"];
+        content: {
+          "application/json": components["schemas"]["Media"];
         };
+      };
+      404: components["responses"]["Error"];
     };
-    getBatchProgress: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                batchId: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Batch progress */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Batch"];
-                };
-            };
-            404: components["responses"]["Error"];
-        };
+  };
+  streamPreview: {
+    parameters: {
+      query: {
+        centerMs: number;
+        beforeMs?: number;
+        afterMs?: number;
+        mute?: boolean;
+      };
+      header?: never;
+      path: {
+        mediaId: components["parameters"]["MediaId"];
+      };
+      cookie?: never;
     };
-    cancelBatch: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                batchId: string;
-            };
-            cookie?: never;
+    requestBody?: never;
+    responses: {
+      /** @description Fragmented MP4 preview */
+      200: {
+        headers: {
+          "X-Preview-Start"?: number;
+          "X-Preview-Duration"?: number;
+          "X-Preview-Offset"?: number;
+          "X-Preview-Cache"?: "hit" | "miss";
+          "X-Request-ID"?: string;
+          [name: string]: unknown;
         };
-        requestBody?: never;
-        responses: {
-            /** @description Batch cancellation requested */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            404: components["responses"]["Error"];
+        content: {
+          "video/mp4": string;
         };
+      };
+      403: components["responses"]["Error"];
+      404: components["responses"]["Error"];
+      422: components["responses"]["Error"];
+      429: components["responses"]["Error"];
     };
-    downloadBatchOutputs: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                batchId: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Authenticated ZIP archive of verified browser-download outputs */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/zip": string;
-                };
-            };
-            404: components["responses"]["Error"];
-        };
+  };
+  previewStatus: {
+    parameters: {
+      query: {
+        centerMs: number;
+        beforeMs?: number;
+        afterMs?: number;
+        mute?: boolean;
+      };
+      header?: never;
+      path: {
+        mediaId: components["parameters"]["MediaId"];
+      };
+      cookie?: never;
     };
-    preflightExport: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                projectId: components["parameters"]["ProjectId"];
-            };
-            cookie?: never;
+    requestBody?: never;
+    responses: {
+      /** @description Complete cached preview exists */
+      200: {
+        headers: {
+          [name: string]: unknown;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ExportInput"];
-            };
+        content?: never;
+      };
+      /** @description No complete cached preview */
+      404: {
+        headers: {
+          [name: string]: unknown;
         };
-        responses: {
-            /** @description Structured export findings and deterministic selection */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ExportPreflight"];
-                };
-            };
-            422: components["responses"]["Error"];
-        };
+        content?: never;
+      };
     };
-    listDestinations: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Public destination metadata; roots are never returned */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": {
-                        destinations: components["schemas"]["Destination"][];
-                        capabilities: components["schemas"]["DestinationCapabilities"];
-                    };
-                };
-            };
-        };
+  };
+  listProjects: {
+    parameters: {
+      query?: {
+        limit?: number;
+        cursor?: string;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
     };
-    getJob: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                jobId: components["parameters"]["JobId"];
-            };
-            cookie?: never;
+    requestBody?: never;
+    responses: {
+      /** @description Project page */
+      200: {
+        headers: {
+          [name: string]: unknown;
         };
-        requestBody?: never;
-        responses: {
-            /** @description Job */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Job"];
-                };
-            };
-            404: components["responses"]["Error"];
+        content: {
+          "application/json": components["schemas"]["ProjectPage"];
         };
+      };
+      400: components["responses"]["Error"];
     };
-    cancelJob: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                jobId: components["parameters"]["JobId"];
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Cancelled or already terminal */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            404: components["responses"]["Error"];
-        };
+  };
+  getProject: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        projectId: components["parameters"]["ProjectId"];
+      };
+      cookie?: never;
     };
-    retryJob: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                jobId: components["parameters"]["JobId"];
-            };
-            cookie?: never;
+    requestBody?: never;
+    responses: {
+      /** @description Project */
+      200: {
+        headers: {
+          [name: string]: unknown;
         };
-        requestBody?: never;
-        responses: {
-            /** @description New retry batch */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Batch"];
-                };
-            };
-            404: components["responses"]["Error"];
-            409: components["responses"]["Error"];
-            429: components["responses"]["Error"];
+        content: {
+          "application/json": components["schemas"]["Project"];
         };
+      };
+      404: components["responses"]["Error"];
     };
-    downloadJobOutput: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                jobId: components["parameters"]["JobId"];
-                position: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Authenticated attachment; only persisted download outputs are eligible */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "video/x-matroska": string;
-                    "video/mp4": string;
-                    "video/quicktime": string;
-                };
-            };
-            404: components["responses"]["Error"];
-        };
+  };
+  putProject: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        projectId: components["parameters"]["ProjectId"];
+      };
+      cookie?: never;
     };
-    getSettings: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Effective settings with safe labels; raw paths are never returned */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SettingsResponse"];
-                };
-            };
-            403: components["responses"]["Error"];
-        };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["ProjectInput"];
+      };
     };
-    updateSettings: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
+    responses: {
+      /** @description Saved project */
+      200: {
+        headers: {
+          [name: string]: unknown;
         };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SettingsUpdate"];
-            };
+        content: {
+          "application/json": components["schemas"]["Project"];
         };
-        responses: {
-            /** @description Updated settings */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            403: components["responses"]["Error"];
-            409: components["responses"]["Error"];
-            422: components["responses"]["Error"];
-        };
+      };
+      409: components["responses"]["Error"];
+      422: components["responses"]["Error"];
     };
-    getMCPSettings: {
-        parameters: {
-            query?: {
-                cursor?: string;
-                limit?: number;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description MCP status, connection guidance, and credentials without secrets */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MCPSettingsResponse"];
-                };
-            };
-            403: components["responses"]["Error"];
-        };
+  };
+  createDetection: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        projectId: components["parameters"]["ProjectId"];
+      };
+      cookie?: never;
     };
-    createMCPCredential: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["MCPCredentialCreate"];
-            };
-        };
-        responses: {
-            /** @description Created credential with its one-time bearer secret */
-            201: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MCPCredentialCreated"];
-                };
-            };
-            403: components["responses"]["Error"];
-            422: components["responses"]["Error"];
-        };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["DetectionInput"];
+      };
     };
-    revokeMCPCredential: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                credentialId: string;
-            };
-            cookie?: never;
+    responses: {
+      /** @description Detection queued */
+      202: {
+        headers: {
+          [name: string]: unknown;
         };
-        requestBody?: never;
-        responses: {
-            /** @description Revoked credential metadata */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["MCPCredential"];
-                };
-            };
-            403: components["responses"]["Error"];
-            404: components["responses"]["Error"];
+        content: {
+          "application/json": components["schemas"]["DetectionJob"];
         };
+      };
+      404: components["responses"]["Error"];
+      409: components["responses"]["Error"];
+      422: components["responses"]["Error"];
     };
-    refreshSettingsMedia: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Durable library scan job accepted */
-            202: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Job"];
-                };
-            };
-            403: components["responses"]["Error"];
-            409: components["responses"]["Error"];
-        };
+  };
+  createExport: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        projectId: components["parameters"]["ProjectId"];
+      };
+      cookie?: never;
     };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["ExportInput"];
+      };
+    };
+    responses: {
+      /** @description Batch export queued */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["BatchExportSubmission"];
+        };
+      };
+      403: components["responses"]["Error"];
+      404: components["responses"]["Error"];
+      422: components["responses"]["Error"];
+      429: components["responses"]["Error"];
+    };
+  };
+  listBatches: {
+    parameters: {
+      query?: {
+        limit?: number;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Recent durable batches */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["BatchPage"];
+        };
+      };
+      400: components["responses"]["Error"];
+    };
+  };
+  getBatchProgress: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        batchId: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Batch progress */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Batch"];
+        };
+      };
+      404: components["responses"]["Error"];
+    };
+  };
+  cancelBatch: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        batchId: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Batch cancellation requested */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      404: components["responses"]["Error"];
+    };
+  };
+  downloadBatchOutputs: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        batchId: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Authenticated ZIP archive of verified browser-download outputs */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/zip": string;
+        };
+      };
+      404: components["responses"]["Error"];
+    };
+  };
+  preflightExport: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        projectId: components["parameters"]["ProjectId"];
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["ExportInput"];
+      };
+    };
+    responses: {
+      /** @description Structured export findings and deterministic selection */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ExportPreflight"];
+        };
+      };
+      422: components["responses"]["Error"];
+    };
+  };
+  listDestinations: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Public destination metadata; roots are never returned */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": {
+            destinations: components["schemas"]["Destination"][];
+            capabilities: components["schemas"]["DestinationCapabilities"];
+          };
+        };
+      };
+    };
+  };
+  getJob: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        jobId: components["parameters"]["JobId"];
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Job */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Job"];
+        };
+      };
+      404: components["responses"]["Error"];
+    };
+  };
+  cancelJob: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        jobId: components["parameters"]["JobId"];
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Cancelled or already terminal */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      404: components["responses"]["Error"];
+    };
+  };
+  retryJob: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        jobId: components["parameters"]["JobId"];
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description New retry batch */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Batch"];
+        };
+      };
+      404: components["responses"]["Error"];
+      409: components["responses"]["Error"];
+      429: components["responses"]["Error"];
+    };
+  };
+  downloadJobOutput: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        jobId: components["parameters"]["JobId"];
+        position: number;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Authenticated attachment; only persisted download outputs are eligible */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "video/x-matroska": string;
+          "video/mp4": string;
+          "video/quicktime": string;
+        };
+      };
+      404: components["responses"]["Error"];
+    };
+  };
+  getSettings: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Effective settings with safe labels; raw paths are never returned */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["SettingsResponse"];
+        };
+      };
+      403: components["responses"]["Error"];
+    };
+  };
+  updateSettings: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["SettingsUpdate"];
+      };
+    };
+    responses: {
+      /** @description Updated settings */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      403: components["responses"]["Error"];
+      409: components["responses"]["Error"];
+      422: components["responses"]["Error"];
+    };
+  };
+  getMCPSettings: {
+    parameters: {
+      query?: {
+        cursor?: string;
+        limit?: number;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description MCP status, connection guidance, and credentials without secrets */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["MCPSettingsResponse"];
+        };
+      };
+      403: components["responses"]["Error"];
+    };
+  };
+  createMCPCredential: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["MCPCredentialCreate"];
+      };
+    };
+    responses: {
+      /** @description Created credential with its one-time bearer secret */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["MCPCredentialCreated"];
+        };
+      };
+      403: components["responses"]["Error"];
+      422: components["responses"]["Error"];
+    };
+  };
+  getExportProposal: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        proposalId: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Exact export proposal awaiting or carrying approval */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ExportProposal"];
+        };
+      };
+      404: components["responses"]["Error"];
+    };
+  };
+  approveExportProposal: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        proposalId: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Approved export proposal */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ExportProposal"];
+        };
+      };
+      404: components["responses"]["Error"];
+      409: components["responses"]["Error"];
+    };
+  };
+  revokeMCPCredential: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        credentialId: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Revoked credential metadata */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["MCPCredential"];
+        };
+      };
+      403: components["responses"]["Error"];
+      404: components["responses"]["Error"];
+    };
+  };
+  refreshSettingsMedia: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Durable library scan job accepted */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Job"];
+        };
+      };
+      403: components["responses"]["Error"];
+      409: components["responses"]["Error"];
+    };
+  };
 }

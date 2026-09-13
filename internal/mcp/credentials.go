@@ -52,6 +52,7 @@ var (
 	ErrAuditInvalid                  = errors.New("invalid mcp audit entry")
 	ErrAuditData                     = errors.New("invalid stored mcp audit entry")
 	ErrCredentialData                = errors.New("invalid stored mcp credential")
+	ErrInvalidInput                  = errors.New("invalid mcp input")
 )
 
 // Permission is an operation granted to a scoped credential.
@@ -82,6 +83,9 @@ var knownPermissions = []Permission{
 	PermissionJobsCancel,
 	PermissionExportsDownload,
 }
+
+// KnownPermissions returns the complete grant inventory in display order.
+func KnownPermissions() []Permission { return slices.Clone(knownPermissions) }
 
 // MediaScopeKind identifies which media a credential can reference.
 type MediaScopeKind string
@@ -656,10 +660,13 @@ func (c Credential) Allows(permission Permission, resource Resource) bool {
 		}
 		return c.allowsProjectResource(resource)
 	case PermissionExportsPrepare, PermissionExportsRun, PermissionExportsDownload:
-		return c.allowsProjectResource(resource)
+		return c.allowsExportResource(resource)
 	case PermissionJobsRead, PermissionJobsCancel:
 		if resource.ProjectID != "" {
 			return c.allowsProjectResource(resource)
+		}
+		if len(resource.ProjectMedia) > 0 {
+			return c.allowsAllMedia(resource.ProjectMedia)
 		}
 		if resource.MediaID != "" {
 			return c.AllowsMedia(resource.MediaID, resource.RootID)
@@ -668,6 +675,16 @@ func (c Credential) Allows(permission Permission, resource Resource) bool {
 	default:
 		return false
 	}
+}
+
+func (c Credential) allowsExportResource(resource Resource) bool {
+	if resource.ProjectID != "" {
+		return c.allowsProjectResource(resource)
+	}
+	if len(resource.ProjectMedia) > 0 {
+		return c.inMediaScope(resource.ProjectMedia)
+	}
+	return resource.MediaID != "" && c.AllowsMedia(resource.MediaID, resource.RootID)
 }
 
 func (c Credential) allowsProjectResource(resource Resource) bool {
@@ -681,6 +698,18 @@ func (c Credential) allowsProjectResource(resource Resource) bool {
 		return false
 	}
 	return resource.MediaID == "" || c.AllowsMedia(resource.MediaID, resource.RootID)
+}
+
+func (c Credential) inMediaScope(media []MediaResource) bool {
+	if len(media) == 0 {
+		return false
+	}
+	for _, item := range media {
+		if !c.AllowsMedia(item.ID, item.RootID) {
+			return false
+		}
+	}
+	return true
 }
 
 func (c Credential) allowsAllMedia(media []MediaResource) bool {

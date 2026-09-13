@@ -38,6 +38,9 @@ var mcpCredentialsMigration string
 //go:embed migrations/008_export_proposals.sql
 var exportProposalsMigration string
 
+//go:embed migrations/009_export_proposals_media_source.sql
+var exportProposalsMediaSourceMigration string
+
 // OpenDatabase opens the single-host SQLite store and applies ordered,
 // idempotent migrations.
 func OpenDatabase(ctx context.Context, path string) (*sql.DB, error) {
@@ -64,6 +67,7 @@ func OpenDatabase(ctx context.Context, path string) (*sql.DB, error) {
 		runtimeSettingsMigration,
 		mcpCredentialsMigration,
 		exportProposalsMigration,
+		exportProposalsMediaSourceMigration,
 	} {
 		if _, err := db.ExecContext(ctx, statement); err != nil {
 			_ = db.Close()

@@ -12,6 +12,7 @@ import (
 	"videocutlist/internal/exportpolicy"
 	jobqueue "videocutlist/internal/jobs"
 	"videocutlist/internal/projects"
+	"videocutlist/internal/projects/model"
 )
 
 const exportDownloadPath = "/mcp/download/"
@@ -31,13 +32,20 @@ func ExportTools(proposals *ProposalService, jobs interface {
 			if err != nil {
 				return Resource{}, err
 			}
-			return proposals.ResourceForProject(ctx.Request.Context(), args.ProjectID)
+			if args.ProjectID != "" {
+				return proposals.ResourceForProject(ctx.Request.Context(), args.ProjectID)
+			}
+			media, err := proposals.Media.Get(ctx.Request.Context(), args.MediaID)
+			if err != nil {
+				return Resource{}, ErrResourceDenied
+			}
+			return Resource{ProjectMedia: []MediaResource{{ID: media.ID, RootID: media.RootID}}}, nil
 		}, Call: func(ctx Context, raw json.RawMessage) (ToolResult, error) {
 			args, err := proposalArguments(raw)
 			if err != nil {
 				return ToolResult{}, err
 			}
-			proposal, err := proposals.Prepare(ctx.Request.Context(), ProposalRequest{CredentialID: ctx.Credential.ID, ProjectID: args.ProjectID, ProjectRevision: args.ProjectRevision, Export: args.Export})
+			proposal, err := proposals.Prepare(ctx.Request.Context(), ProposalRequest{CredentialID: ctx.Credential.ID, ProjectID: args.ProjectID, ProjectRevision: args.ProjectRevision, MediaID: args.MediaID, Ranges: args.Ranges, Export: args.Export})
 			if err != nil {
 				return ToolResult{}, err
 			}
@@ -50,9 +58,9 @@ func ExportTools(proposals *ProposalService, jobs interface {
 			}
 			proposal, err := proposals.Get(ctx.Request.Context(), id)
 			if err != nil || proposal.CredentialID != ctx.Credential.ID {
-				return Resource{}, errors.New("proposal unavailable")
+				return Resource{}, ErrResourceDenied
 			}
-			return proposals.ResourceForProject(ctx.Request.Context(), proposal.ProjectID)
+			return proposals.ResourceForProposal(ctx.Request.Context(), proposal.ID)
 		}, Call: func(ctx Context, raw json.RawMessage) (ToolResult, error) {
 			id, err := proposalIDArgument(raw)
 			if err != nil {
@@ -100,21 +108,31 @@ func ExportTools(proposals *ProposalService, jobs interface {
 }
 
 type exportProposalArguments struct {
-	ProjectID       string               `json:"projectId"`
-	ProjectRevision int64                `json:"projectRevision"`
-	Export          projects.ExportInput `json:"export"`
+	ProjectID       string                  `json:"projectId"`
+	ProjectRevision int64                   `json:"projectRevision"`
+	MediaID         string                  `json:"mediaId"`
+	Ranges          []model.Segment         `json:"ranges"`
+	Export          projects.ExportInput    `json:"export"`
 }
 
 func proposalArguments(raw json.RawMessage) (exportProposalArguments, error) {
 	var args exportProposalArguments
-	if err := decodeToolArguments(raw, &args); err != nil || !validSafeIdentifier(args.ProjectID) || args.ProjectRevision < 1 || !validMCPExport(args.Export) {
-		return exportProposalArguments{}, errors.New("invalid export proposal")
+	if err := decodeToolArguments(raw, &args); err != nil || !validMCPExport(args.Export) {
+		return exportProposalArguments{}, ErrInvalidInput
+	}
+	projectSource := args.ProjectID != "" && validSafeIdentifier(args.ProjectID) && args.ProjectRevision >= 1 && args.MediaID == "" && len(args.Ranges) == 0
+	mediaSource := args.ProjectID == "" && args.ProjectRevision == 0 && validSafeIdentifier(args.MediaID) && validRanges(args.Ranges) && args.Export.Selection != "gaps" && len(args.Export.ItemIDs) == 0
+	if projectSource == mediaSource {
+		return exportProposalArguments{}, ErrInvalidInput
 	}
 	return args, nil
 }
 
 func validMCPExport(value projects.ExportInput) bool {
-	if value.DestinationID != "download" || value.Mode != "merge" && value.Mode != "separate" || value.Selection != "" && value.Selection != "segments" && value.Selection != "gaps" || value.CutStrategy != "stream_copy_preferred" && value.CutStrategy != "precise_reencode" && value.CutStrategy != "hybrid_smart_cut" || !strings.Contains("|mkv|mp4|mov|", "|"+value.Container+"|") || len(value.ItemIDs) > 100 || len(value.StreamIndexes) > 100 || len(value.FilenameTemplate) > 160 || strings.ContainsAny(value.FilenameTemplate, "\\/\x00") {
+	if _, ok := exportpolicy.For(value.Container); !ok {
+		return false
+	}
+	if value.DestinationID != "download" || value.Mode != "merge" && value.Mode != "separate" || value.Selection != "" && value.Selection != "segments" && value.Selection != "gaps" || value.CutStrategy != "stream_copy_preferred" && value.CutStrategy != "precise_reencode" && value.CutStrategy != "hybrid_smart_cut" || len(value.ItemIDs) > 100 || len(value.StreamIndexes) > 100 || len(value.FilenameTemplate) > 160 || strings.ContainsAny(value.FilenameTemplate, "\\/\x00") {
 		return false
 	}
 	seenItems := make(map[string]struct{}, len(value.ItemIDs))
@@ -145,7 +163,7 @@ func proposalIDArgument(raw json.RawMessage) (string, error) {
 		ProposalID string `json:"proposalId"`
 	}
 	if err := decodeToolArguments(raw, &args); err != nil || !validProposalID(args.ProposalID) {
-		return "", errors.New("invalid proposal ID")
+		return "", ErrInvalidInput
 	}
 	return args.ProposalID, nil
 }
@@ -155,7 +173,7 @@ func jobIDArgument(raw json.RawMessage) (string, error) {
 		JobID string `json:"jobId"`
 	}
 	if err := decodeToolArguments(raw, &args); err != nil || !strings.HasPrefix(args.JobID, "j_") || !validSafeIdentifier(args.JobID) {
-		return "", errors.New("invalid job ID")
+		return "", ErrInvalidInput
 	}
 	return args.JobID, nil
 }
@@ -166,7 +184,7 @@ func downloadPosition(raw json.RawMessage) (int, error) {
 		Position int    `json:"position"`
 	}
 	if err := decodeToolArguments(raw, &args); err != nil || !strings.HasPrefix(args.JobID, "j_") || !validSafeIdentifier(args.JobID) || args.Position < 0 || args.Position > 99 {
-		return 0, errors.New("invalid download")
+		return 0, ErrInvalidInput
 	}
 	return args.Position, nil
 }
@@ -179,6 +197,9 @@ func ownedJobResource(proposals *ProposalService, jobs interface {
 		job, err := ownedMCPJob(ctx.Request.Context(), jobs, ctx.Credential.ID, raw, download)
 		if err != nil {
 			return Resource{}, err
+		}
+		if job.ProposalID != "" {
+			return proposals.ResourceForProposal(ctx.Request.Context(), job.ProposalID)
 		}
 		return proposals.ResourceForProject(ctx.Request.Context(), job.ProjectID)
 	}
@@ -193,6 +214,9 @@ func authorizeOwnedJob(ctx Context, proposals *ProposalService, jobs interface {
 		return jobqueue.Job{}, err
 	}
 	resource, err := proposals.ResourceForProject(ctx.Request.Context(), job.ProjectID)
+	if job.ProposalID != "" {
+		resource, err = proposals.ResourceForProposal(ctx.Request.Context(), job.ProposalID)
+	}
 	if err != nil {
 		return jobqueue.Job{}, err
 	}
@@ -211,14 +235,14 @@ func ownedMCPJob(ctx context.Context, jobs interface {
 		Position *int   `json:"position"`
 	}
 	if err := decodeToolArguments(raw, &args); err != nil || !strings.HasPrefix(args.JobID, "j_") || !validSafeIdentifier(args.JobID) || download && (args.Position == nil || *args.Position < 0 || *args.Position > 99) || !download && args.Position != nil {
-		return jobqueue.Job{}, errors.New("invalid job ID")
+		return jobqueue.Job{}, ErrInvalidInput
 	}
 	job, err := jobs.Get(ctx, args.JobID)
 	if err != nil || job.CredentialID != credentialID || job.ProjectID == "" {
-		return jobqueue.Job{}, errors.New("job unavailable")
+		return jobqueue.Job{}, ErrResourceDenied
 	}
 	if job.Kind != jobqueue.JobExport && job.Kind != jobqueue.JobDetect || download && job.Kind != jobqueue.JobExport {
-		return jobqueue.Job{}, errors.New("job unavailable")
+		return jobqueue.Job{}, ErrResourceDenied
 	}
 	return job, nil
 }
@@ -252,7 +276,8 @@ func ExportDownloadHandler(config TransportConfig, proposals *ProposalService, j
 		return nil, err
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !config.Enabled {
+		transport := handler.(*transport)
+		if !transport.enabled() {
 			http.NotFound(w, r)
 			return
 		}
@@ -261,7 +286,6 @@ func ExportDownloadHandler(config TransportConfig, proposals *ProposalService, j
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		transport := handler.(*transport)
 		if !transport.validTransport(r, transport.requestInfo(r)) {
 			http.Error(w, "forbidden", http.StatusForbidden)
 			return
@@ -324,7 +348,7 @@ func toolData(text string, value any) ToolResult {
 }
 
 func proposeExportSchema() map[string]any {
-	return map[string]any{"type": "object", "additionalProperties": false, "required": []string{"projectId", "projectRevision", "export"}, "properties": map[string]any{"projectId": map[string]any{"type": "string"}, "projectRevision": map[string]any{"type": "integer", "minimum": 1}, "export": map[string]any{"type": "object"}}}
+	return map[string]any{"type": "object", "additionalProperties": false, "required": []string{"export"}, "properties": map[string]any{"projectId": map[string]any{"type": "string"}, "projectRevision": map[string]any{"type": "integer", "minimum": 1}, "mediaId": map[string]any{"type": "string"}, "ranges": map[string]any{"type": "array", "items": map[string]any{"type": "object"}}, "export": map[string]any{"type": "object"}}}
 }
 func proposalIDSchema() map[string]any {
 	return map[string]any{"type": "object", "additionalProperties": false, "required": []string{"proposalId"}, "properties": map[string]any{"proposalId": map[string]any{"type": "string"}}}
