@@ -18,6 +18,7 @@ import (
 	"videocutlist/internal/db"
 	"videocutlist/internal/exportpolicy"
 	jobqueue "videocutlist/internal/jobs"
+	"videocutlist/internal/mcp"
 	"videocutlist/internal/projects"
 	"videocutlist/internal/projects/interchange"
 	"videocutlist/internal/projects/model"
@@ -140,6 +141,7 @@ type Config struct {
 	Download             projects.ExportDownloadService
 	Settings             *store.RuntimeSettingsStore
 	RuntimeSettings      *store.RuntimeSettingsState
+	MCPCredentials       *mcp.CredentialStore
 	ApplyRuntimeSettings func(store.RuntimeSettings) error
 	SettingsAllowlist    []string
 	Destinations         []DestinationMetadata
@@ -242,6 +244,15 @@ func (s *Server) dispatch(writer http.ResponseWriter, request *http.Request, id 
 	case routeRefreshSettings:
 		s.refreshSettings(writer, request, id)
 		return "/api/v1/settings/media/refresh", ""
+	case routeGetMCPSettings:
+		s.getMCPSettings(writer, request, id)
+		return "/api/v1/settings/mcp", ""
+	case routeCreateMCPCredential:
+		s.createMCPCredential(writer, request, id)
+		return "/api/v1/settings/mcp/credentials", ""
+	case routeRevokeMCPCredential:
+		s.revokeMCPCredential(writer, request, r.id, id)
+		return "/api/v1/settings/mcp/credentials/{credentialId}", ""
 	case routeListMedia:
 		s.listMedia(writer, request, id)
 		return "/api/v1/media", ""

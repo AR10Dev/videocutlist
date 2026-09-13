@@ -8,11 +8,12 @@ import (
 )
 
 var (
-	mediaIDPattern   = regexp.MustCompile(`^m_[A-Za-z0-9_-]{43}$`)
-	folderIDPattern  = regexp.MustCompile(`^f_[A-Za-z0-9_-]{43}$`)
-	projectIDPattern = regexp.MustCompile(`^p_[A-Za-z0-9_-]{12,64}$`)
-	jobIDPattern     = regexp.MustCompile(`^j_[A-Za-z0-9_-]{12,64}$`)
-	batchIDPattern   = regexp.MustCompile(`^b_[A-Za-z0-9_-]{12,64}$`)
+	mediaIDPattern      = regexp.MustCompile(`^m_[A-Za-z0-9_-]{43}$`)
+	folderIDPattern     = regexp.MustCompile(`^f_[A-Za-z0-9_-]{43}$`)
+	projectIDPattern    = regexp.MustCompile(`^p_[A-Za-z0-9_-]{12,64}$`)
+	jobIDPattern        = regexp.MustCompile(`^j_[A-Za-z0-9_-]{12,64}$`)
+	batchIDPattern      = regexp.MustCompile(`^b_[A-Za-z0-9_-]{12,64}$`)
+	credentialIDPattern = regexp.MustCompile(`^c_[A-Za-z0-9_-]{12,64}$`)
 )
 
 type routeKind uint8
@@ -53,6 +54,9 @@ const (
 	routeRetryJob
 	routeGetExportProposal
 	routeApproveExportProposal
+	routeGetMCPSettings
+	routeCreateMCPCredential
+	routeRevokeMCPCredential
 )
 
 type route struct {
@@ -70,7 +74,7 @@ func RouteCoverageKinds() []string {
 		"import_interchange", "export_interchange", "create_detection", "get_job", "cancel_job",
 		"automation", "list_destinations", "get_settings", "put_settings", "refresh_settings",
 		"download_output", "download_batch", "list_batches", "get_batch", "cancel_batch", "retry_job",
-		"get_export_proposal", "approve_export_proposal",
+		"get_export_proposal", "approve_export_proposal", "get_mcp_settings", "create_mcp_credential", "revoke_mcp_credential",
 	}
 }
 
@@ -84,11 +88,12 @@ func RouteCoverageKind(method, path string) string {
 	return kinds[r.kind-1]
 }
 
-func validMediaID(value string) bool   { return mediaIDPattern.MatchString(value) }
-func validFolderID(value string) bool  { return folderIDPattern.MatchString(value) }
-func validProjectID(value string) bool { return projectIDPattern.MatchString(value) }
-func validJobID(value string) bool     { return jobIDPattern.MatchString(value) }
-func validBatchID(value string) bool   { return batchIDPattern.MatchString(value) }
+func validMediaID(value string) bool      { return mediaIDPattern.MatchString(value) }
+func validFolderID(value string) bool     { return folderIDPattern.MatchString(value) }
+func validProjectID(value string) bool    { return projectIDPattern.MatchString(value) }
+func validJobID(value string) bool        { return jobIDPattern.MatchString(value) }
+func validBatchID(value string) bool      { return batchIDPattern.MatchString(value) }
+func validCredentialID(value string) bool { return credentialIDPattern.MatchString(value) }
 func validProposalID(value string) bool {
 	return strings.HasPrefix(value, "ep_") && len(value) >= 15 && len(value) <= 67 && regexp.MustCompile(`^[A-Za-z0-9_-]+$`).MatchString(value)
 }
@@ -120,6 +125,12 @@ func parseRoute(method, path string) route {
 		return route{kind: routePutSettings}
 	case len(parts) == 3 && parts[0] == "settings" && parts[1] == "media" && parts[2] == "refresh" && method == http.MethodPost:
 		return route{kind: routeRefreshSettings}
+	case len(parts) == 2 && parts[0] == "settings" && parts[1] == "mcp" && method == http.MethodGet:
+		return route{kind: routeGetMCPSettings}
+	case len(parts) == 3 && parts[0] == "settings" && parts[1] == "mcp" && parts[2] == "credentials" && method == http.MethodPost:
+		return route{kind: routeCreateMCPCredential}
+	case len(parts) == 4 && parts[0] == "settings" && parts[1] == "mcp" && parts[2] == "credentials" && validCredentialID(parts[3]) && method == http.MethodDelete:
+		return route{kind: routeRevokeMCPCredential, id: parts[3]}
 	case len(parts) == 2 && parts[0] == "media" && parts[1] == "refresh" && method == http.MethodPost:
 		return route{kind: routeRefreshMedia}
 	case len(parts) == 2 && parts[0] == "media" && parts[1] == "import" && method == http.MethodPost:

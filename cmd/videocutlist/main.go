@@ -22,6 +22,7 @@ import (
 	jobqueue "videocutlist/internal/jobs"
 	"videocutlist/internal/library/media/index"
 	"videocutlist/internal/library/media/probe"
+	"videocutlist/internal/mcp"
 	"videocutlist/internal/preview/cache"
 	"videocutlist/internal/preview/ffmpeg"
 	"videocutlist/internal/projects"
@@ -62,6 +63,10 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("load runtime settings: %w", err)
 	}
 	runtimeState := store.NewRuntimeSettingsState(effectiveSettings.Settings)
+	mcpCredentials, err := mcp.NewCredentialStore(db)
+	if err != nil {
+		return err
+	}
 	projectStore, _ := store.NewProjectStore(db)
 	unifiedJobs, err := jobqueue.NewJobsStore(db)
 	if err != nil {
@@ -231,7 +236,7 @@ func run(ctx context.Context) error {
 	apiServer, err := httpapi.New(httpapi.Config{
 		Authenticator: authenticator, Media: mediaService, Preview: previewService, Assets: assetService,
 		Projects: projectService, BatchExports: batchExports, Preflight: exportExecutor, Jobs: jobService, Detection: detectionService, Download: exportExecutor, MediaImport: mediaService,
-		Settings: runtimeSettingsStore, RuntimeSettings: runtimeState, ApplyRuntimeSettings: applyRuntime,
+		Settings: runtimeSettingsStore, RuntimeSettings: runtimeState, ApplyRuntimeSettings: applyRuntime, MCPCredentials: mcpCredentials,
 		Destinations: destinationMetadata(cfg.Destinations),
 		Ready:        db.PingContext, Logger: logger, Metrics: httpapi.NewMetrics(),
 		BeforeMS: int64(cfg.PreviewBeforeMS), AfterMS: int64(cfg.PreviewAfterMS),

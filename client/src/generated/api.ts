@@ -411,6 +411,59 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/settings/mcp": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Read MCP administration status and safe credential metadata */
+    get: operations["getMCPSettings"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/settings/mcp/credentials": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Create a scoped MCP bearer credential */
+    post: operations["createMCPCredential"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/settings/mcp/credentials/{credentialId}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        credentialId: string;
+      };
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    /** Revoke an MCP credential immediately */
+    delete: operations["revokeMCPCredential"];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/settings/media/refresh": {
     parameters: {
       query?: never;
@@ -457,6 +510,64 @@ export interface components {
       previewGridMs?: number;
       mediaMaxFiles?: number;
       mediaMaxDepth?: number;
+      mcpEnabled?: boolean;
+    };
+    MCPMediaScope: {
+      /** @enum {string} */
+      kind: "all" | "roots" | "media";
+      rootIds?: string[];
+      mediaIds?: string[];
+    };
+    MCPProjectScope: {
+      /** @enum {string} */
+      kind: "all" | "projects";
+      projectIds?: string[];
+    };
+    MCPCredential: {
+      id: string;
+      tokenIdentifier: string;
+      name: string;
+      permissions: string[];
+      mediaScope: components["schemas"]["MCPMediaScope"];
+      projectScope: components["schemas"]["MCPProjectScope"];
+      /** Format: date-time */
+      expiresAt?: string;
+      /** Format: date-time */
+      revokedAt?: string;
+      unattendedExports: boolean;
+      /** Format: date-time */
+      createdAt: string;
+      /** Format: date-time */
+      lastUsedAt?: string;
+      /** @enum {string} */
+      status?: "active" | "expired" | "revoked";
+    };
+    MCPCredentialCreated: components["schemas"]["MCPCredential"] & {
+      secret: string;
+    };
+    MCPCredentialCreate: {
+      name: string;
+      permissions: string[];
+      mediaScope: components["schemas"]["MCPMediaScope"];
+      projectScope: components["schemas"]["MCPProjectScope"];
+      /** Format: date-time */
+      expiresAt?: string;
+      allowNonExpiring?: boolean;
+      unattendedExports?: boolean;
+    };
+    MCPSettingsResponse: {
+      enabled: boolean;
+      endpoint: string;
+      authentication: string;
+      remoteAccessGuidance: string;
+      clientCompatibility: string;
+      permissions: string[];
+      roots: {
+        id: string;
+        label: string;
+      }[];
+      credentials: components["schemas"]["MCPCredential"][];
+      nextCursor?: string;
     };
     SettingsResponse: {
       settings: components["schemas"]["RuntimeSettings"];
@@ -1427,6 +1538,80 @@ export interface operations {
       403: components["responses"]["Error"];
       409: components["responses"]["Error"];
       422: components["responses"]["Error"];
+    };
+  };
+  getMCPSettings: {
+    parameters: {
+      query?: {
+        cursor?: string;
+        limit?: number;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description MCP status, connection guidance, and credentials without secrets */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["MCPSettingsResponse"];
+        };
+      };
+      403: components["responses"]["Error"];
+    };
+  };
+  createMCPCredential: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["MCPCredentialCreate"];
+      };
+    };
+    responses: {
+      /** @description Created credential with its one-time bearer secret */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["MCPCredentialCreated"];
+        };
+      };
+      403: components["responses"]["Error"];
+      422: components["responses"]["Error"];
+    };
+  };
+  revokeMCPCredential: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        credentialId: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Revoked credential metadata */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["MCPCredential"];
+        };
+      };
+      403: components["responses"]["Error"];
+      404: components["responses"]["Error"];
     };
   };
   refreshSettingsMedia: {

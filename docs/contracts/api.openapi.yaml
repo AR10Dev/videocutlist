@@ -532,6 +532,67 @@ paths:
           $ref: "#/components/responses/Error"
         "422":
           $ref: "#/components/responses/Error"
+  /settings/mcp:
+    get:
+      summary: Read MCP administration status and safe credential metadata
+      operationId: getMCPSettings
+      parameters:
+        - name: cursor
+          in: query
+          schema: {type: string}
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 100}
+      responses:
+        "200":
+          description: MCP status, connection guidance, and credentials without secrets
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MCPSettingsResponse"
+        "403":
+          $ref: "#/components/responses/Error"
+  /settings/mcp/credentials:
+    post:
+      summary: Create a scoped MCP bearer credential
+      operationId: createMCPCredential
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MCPCredentialCreate"
+      responses:
+        "201":
+          description: Created credential with its one-time bearer secret
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MCPCredentialCreated"
+        "403":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /settings/mcp/credentials/{credentialId}:
+    parameters:
+      - name: credentialId
+        in: path
+        required: true
+        schema: {type: string, pattern: '^c_[A-Za-z0-9_-]{12,64}$'}
+    delete:
+      summary: Revoke an MCP credential immediately
+      operationId: revokeMCPCredential
+      responses:
+        "200":
+          description: Revoked credential metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MCPCredential"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
   /settings/media/refresh:
     post:
       summary: Queue a media library refresh
@@ -628,6 +689,99 @@ components:
           type: integer
         mediaMaxDepth:
           type: integer
+        mcpEnabled:
+          type: boolean
+    MCPMediaScope:
+      type: object
+      additionalProperties: false
+      required: [kind]
+      properties:
+        kind: {type: string, enum: [all, roots, media]}
+        rootIds:
+          type: array
+          items: {type: string}
+        mediaIds:
+          type: array
+          items: {type: string}
+    MCPProjectScope:
+      type: object
+      additionalProperties: false
+      required: [kind]
+      properties:
+        kind: {type: string, enum: [all, projects]}
+        projectIds:
+          type: array
+          items: {type: string}
+    MCPCredential:
+      type: object
+      additionalProperties: false
+      required: [id, tokenIdentifier, name, permissions, mediaScope, projectScope, unattendedExports, createdAt]
+      properties:
+        id: {type: string}
+        tokenIdentifier: {type: string}
+        name: {type: string}
+        permissions:
+          type: array
+          items: {type: string}
+        mediaScope:
+          $ref: "#/components/schemas/MCPMediaScope"
+        projectScope:
+          $ref: "#/components/schemas/MCPProjectScope"
+        expiresAt: {type: string, format: date-time}
+        revokedAt: {type: string, format: date-time}
+        unattendedExports: {type: boolean}
+        createdAt: {type: string, format: date-time}
+        lastUsedAt: {type: string, format: date-time}
+        status: {type: string, enum: [active, expired, revoked]}
+    MCPCredentialCreated:
+      allOf:
+        - $ref: "#/components/schemas/MCPCredential"
+        - type: object
+          required: [secret]
+          properties:
+            secret: {type: string}
+    MCPCredentialCreate:
+      type: object
+      additionalProperties: false
+      required: [name, permissions, mediaScope, projectScope]
+      properties:
+        name: {type: string, maxLength: 120}
+        permissions:
+          type: array
+          items: {type: string}
+        mediaScope:
+          $ref: "#/components/schemas/MCPMediaScope"
+        projectScope:
+          $ref: "#/components/schemas/MCPProjectScope"
+        expiresAt: {type: string, format: date-time}
+        allowNonExpiring: {type: boolean}
+        unattendedExports: {type: boolean}
+    MCPSettingsResponse:
+      type: object
+      additionalProperties: false
+      required: [enabled, endpoint, authentication, remoteAccessGuidance, clientCompatibility, permissions, roots, credentials]
+      properties:
+        enabled: {type: boolean}
+        endpoint: {type: string}
+        authentication: {type: string}
+        remoteAccessGuidance: {type: string}
+        clientCompatibility: {type: string}
+        permissions:
+          type: array
+          items: {type: string}
+        roots:
+          type: array
+          items:
+            type: object
+            required: [id, label]
+            properties:
+              id: {type: string}
+              label: {type: string}
+        credentials:
+          type: array
+          items:
+            $ref: "#/components/schemas/MCPCredential"
+        nextCursor: {type: string}
     SettingsResponse:
       type: object
       required:

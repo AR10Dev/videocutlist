@@ -9,6 +9,7 @@ import {
   type Appearance,
 } from "./model";
 import { useWorkspace } from "../app/WorkspaceContext";
+import { MCPSettings } from "./MCPSettings";
 
 export function SettingsView(props: { onClose?: () => void } = {}) {
   const {
@@ -235,6 +236,7 @@ export function SettingsView(props: { onClose?: () => void } = {}) {
           </fieldset>
         </Show>
       </section>
+      <MCPSettings />
       <section class="server-settings" aria-labelledby="processing-settings-heading">
         <details>
           <summary id="processing-settings-heading">Server processing</summary>

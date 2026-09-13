@@ -20,6 +20,7 @@ func TestParseRoute(t *testing.T) {
 	project := "p_" + strings.Repeat("b", 12)
 	job := "j_" + strings.Repeat("c", 12)
 	batch := "b_" + strings.Repeat("d", 12)
+	credential := "c_" + strings.Repeat("e", 12)
 	tests := []struct {
 		name, method, path string
 		kind               routeKind
@@ -32,6 +33,9 @@ func TestParseRoute(t *testing.T) {
 		{"settings get", http.MethodGet, "/api/v1/settings", routeGetSettings, ""},
 		{"settings put", http.MethodPut, "/api/v1/settings", routePutSettings, ""},
 		{"settings refresh", http.MethodPost, "/api/v1/settings/media/refresh", routeRefreshSettings, ""},
+		{"mcp settings", http.MethodGet, "/api/v1/settings/mcp", routeGetMCPSettings, ""},
+		{"mcp credential create", http.MethodPost, "/api/v1/settings/mcp/credentials", routeCreateMCPCredential, ""},
+		{"mcp credential revoke", http.MethodDelete, "/api/v1/settings/mcp/credentials/" + credential, routeRevokeMCPCredential, credential},
 		{"media", http.MethodGet, "/api/v1/media/" + media, routeGetMedia, media},
 		{"preview head", http.MethodHead, "/api/v1/media/" + media + "/preview", routePreview, media},
 		{"thumbnails", http.MethodGet, "/api/v1/media/" + media + "/thumbnails", routeThumbnails, media},
@@ -66,6 +70,7 @@ func TestRouteCoverageInventory(t *testing.T) {
 	project := "p_" + strings.Repeat("b", 12)
 	job := "j_" + strings.Repeat("c", 12)
 	batch := "b_" + strings.Repeat("d", 12)
+	credential := "c_" + strings.Repeat("e", 12)
 	inventory := []struct {
 		method, path string
 		kind         routeKind
@@ -103,6 +108,9 @@ func TestRouteCoverageInventory(t *testing.T) {
 		{http.MethodGet, "/api/v1/destinations", routeListDestinations},
 		{http.MethodGet, "/api/v1/settings", routeGetSettings},
 		{http.MethodPut, "/api/v1/settings", routePutSettings},
+		{http.MethodGet, "/api/v1/settings/mcp", routeGetMCPSettings},
+		{http.MethodPost, "/api/v1/settings/mcp/credentials", routeCreateMCPCredential},
+		{http.MethodDelete, "/api/v1/settings/mcp/credentials/" + credential, routeRevokeMCPCredential},
 	}
 	seen := make(map[routeKind]bool, len(inventory))
 	for _, entry := range inventory {
@@ -111,13 +119,13 @@ func TestRouteCoverageInventory(t *testing.T) {
 		}
 		seen[entry.kind] = true
 	}
-	for kind := routeListMedia; kind <= routeRetryJob; kind++ {
+	for kind := routeListMedia; kind <= routeRevokeMCPCredential; kind++ {
 		if !seen[kind] {
 			t.Errorf("route kind %d is missing from the production route inventory", kind)
 		}
 	}
-	if len(seen) != int(routeRetryJob) {
-		t.Fatalf("route inventory accounts for %d kinds, want %d", len(seen), routeRetryJob)
+	if len(seen) != int(routeRevokeMCPCredential) {
+		t.Fatalf("route inventory accounts for %d kinds, want %d", len(seen), routeRevokeMCPCredential)
 	}
 }
 
