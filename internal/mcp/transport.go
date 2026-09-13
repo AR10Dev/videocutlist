@@ -431,14 +431,14 @@ func toolErrorCode(err error) string {
 func toolError(err error) ToolResult {
 	code := toolErrorCode(err)
 	message := map[string]string{
-		"invalid_input":            "Tool input is invalid.",
-		"access_denied":            "Resource is unavailable or unauthorized.",
-		"stale_or_changed_source":  "Source or revision changed; request a new proposal.",
-		"incompatibility":          "Export is incompatible with the requested options.",
-		"missing_approval":         "App approval is required before starting this export.",
-		"expiry":                   "The proposal expired; request a new proposal.",
-		"capacity":                 "Server capacity is exhausted; retry later.",
-		"internal_error":           "Tool failed.",
+		"invalid_input":           "Tool input is invalid.",
+		"access_denied":           "Resource is unavailable or unauthorized.",
+		"stale_or_changed_source": "Source or revision changed; request a new proposal.",
+		"incompatibility":         "Export is incompatible with the requested options.",
+		"missing_approval":        "App approval is required before starting this export.",
+		"expiry":                  "The proposal expired; request a new proposal.",
+		"capacity":                "Server capacity is exhausted; retry later.",
+		"internal_error":          "Tool failed.",
 	}[code]
 	return ToolResult{Content: []ToolContent{{Type: "text", Text: "Tool failed."}}, StructuredContent: map[string]any{"error": map[string]any{"code": code, "message": message}}, IsError: true}
 }

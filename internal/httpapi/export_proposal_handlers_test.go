@@ -19,7 +19,9 @@ type proposalHTTPProjects struct{ project projects.Project }
 func (p proposalHTTPProjects) Create(context.Context, string, projects.ProjectInput) (projects.Project, error) {
 	return projects.Project{}, nil
 }
-func (p proposalHTTPProjects) Get(context.Context, string) (projects.Project, error) { return p.project, nil }
+func (p proposalHTTPProjects) Get(context.Context, string) (projects.Project, error) {
+	return p.project, nil
+}
 func (p proposalHTTPProjects) Save(context.Context, string, projects.ProjectInput) (projects.Project, error) {
 	return projects.Project{}, nil
 }

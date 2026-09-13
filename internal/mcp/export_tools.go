@@ -108,11 +108,11 @@ func ExportTools(proposals *ProposalService, jobs interface {
 }
 
 type exportProposalArguments struct {
-	ProjectID       string                  `json:"projectId"`
-	ProjectRevision int64                   `json:"projectRevision"`
-	MediaID         string                  `json:"mediaId"`
-	Ranges          []model.Segment         `json:"ranges"`
-	Export          projects.ExportInput    `json:"export"`
+	ProjectID       string               `json:"projectId"`
+	ProjectRevision int64                `json:"projectRevision"`
+	MediaID         string               `json:"mediaId"`
+	Ranges          []model.Segment      `json:"ranges"`
+	Export          projects.ExportInput `json:"export"`
 }
 
 func proposalArguments(raw json.RawMessage) (exportProposalArguments, error) {
