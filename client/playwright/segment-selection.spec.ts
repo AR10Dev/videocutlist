@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import type { components } from "../src/generated/api";
 
 const media = {
   id: "m_0123456789012345678901234567890123456789012",
@@ -100,6 +101,20 @@ test.beforeEach(async ({ page }) => {
   await page.route(`${apiOrigin}/api/v1/**`, async (route) => {
     const request = route.request();
     const url = new URL(request.url());
+    if (url.pathname === "/api/v1/settings/mcp")
+      return route.fulfill({
+        json: {
+          enabled: false,
+          endpoint: "/mcp",
+          credentials: [],
+          permissions: [],
+          roots: [],
+          proposals: [],
+          authentication: "Bearer token",
+          remoteAccessGuidance: "Use HTTPS for remote access.",
+          clientCompatibility: "Streamable HTTP bearer-token clients only.",
+        } satisfies components["schemas"]["MCPSettingsResponse"],
+      });
     if (url.pathname === "/api/v1/media/status")
       return route.fulfill({
         json: { state: "ready_with_media", message: "Media library is ready." },
@@ -2506,6 +2521,17 @@ test("adds, selects, splits, and safely removes cuts with the redesigned control
   await expect(page.getByLabel(/Output arrangement/)).toContainText("Combine selected cuts");
   await expect(page.getByLabel("Processing")).toContainText("Fast copy");
   await expect(page.getByText(/not frame-exact/)).toBeVisible();
+});
+
+test("MCP settings renders an empty proposal list without a page error", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings" }).click();
+  await expect(page.getByRole("heading", { name: "MCP access" })).toBeVisible();
+  await expect(page.getByText("No export proposals are awaiting approval.")).toBeVisible();
+  await expect(page.getByLabel("Enable MCP", { exact: true })).not.toBeChecked();
+  expect(errors).toEqual([]);
 });
 
 test("persists appearance and recovers from invalid stored values", async ({ page }) => {
