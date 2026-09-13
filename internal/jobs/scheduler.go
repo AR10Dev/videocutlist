@@ -219,6 +219,11 @@ func (s *Scheduler) CancelBatch(ctx context.Context, batchID string) error {
 	return nil
 }
 
+// Get returns the durable record while keeping MCP job control on the scheduler.
+func (s *Scheduler) Get(ctx context.Context, id string) (Job, error) {
+	return s.jobs.Get(ctx, id)
+}
+
 func (s *Scheduler) Cancel(ctx context.Context, id string) (Job, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

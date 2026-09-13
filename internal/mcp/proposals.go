@@ -259,6 +259,16 @@ func (s *ProposalService) Execute(ctx context.Context, id, credentialID string) 
 	return batchID, result, nil
 }
 
+// ResourceForProject resolves the complete current project scope for a tool authorization check.
+func (s *ProposalService) ResourceForProject(ctx context.Context, projectID string) (Resource, error) {
+	project, err := s.Projects.Get(ctx, projectID)
+	if err != nil {
+		return Resource{}, err
+	}
+	_, _, resource, err := s.resolveProject(ctx, project, nil)
+	return resource, err
+}
+
 func (s *ProposalService) resolveProject(ctx context.Context, project projects.Project, selectedIDs []string) ([]model.ProjectItem, []projects.Media, Resource, error) {
 	selected := make(map[string]struct{}, len(selectedIDs))
 	for _, id := range selectedIDs {

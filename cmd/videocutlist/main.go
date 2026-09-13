@@ -246,8 +246,13 @@ func run(ctx context.Context) error {
 		return err
 	}
 
+	proposalService, err := mcp.NewProposalService(db, mcpCredentials, projectService, mediaCatalog, exportExecutor, scheduler)
+	if err != nil {
+		return err
+	}
+	mcpTools := append(mcp.MediaTools(mediaService), mcp.ExportTools(proposalService, scheduler, exportExecutor)...)
 	mcpTransport, err := mcp.NewTransport(mcp.TransportConfig{
-		Enabled: cfg.MCPEnabled, Credentials: mcpCredentials, Tools: mcp.MediaTools(mediaService), AllowedOrigins: cfg.AllowedOrigins,
+		Enabled: cfg.MCPEnabled, Credentials: mcpCredentials, Tools: mcpTools, AllowedOrigins: cfg.AllowedOrigins,
 		MaxConcurrentRequests: cfg.PreviewGlobalLimit,
 		RequestInfo: func(request *http.Request) mcp.RequestInfo {
 			forwarded := httpapi.GetForwardedInfo(request.Context())
