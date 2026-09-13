@@ -172,6 +172,8 @@ export function createWorkspaceController() {
     setExportSelection,
     cutStrategy,
     setCutStrategy,
+    exportContainer,
+    setExportContainer,
     streamIndexes,
     setStreamIndexes,
     destinations,
@@ -219,7 +221,7 @@ export function createWorkspaceController() {
               selection: exportSelection(),
               streamIndexes: streamIndexes(),
               cutStrategy: cutStrategy(),
-              container: "mkv" as const,
+              container: exportContainer(),
               destinationId: destinationId(),
               filenameTemplate: filenameTemplate(),
             },
@@ -238,6 +240,7 @@ export function createWorkspaceController() {
     setExportSelection(item.exportOptions.selection ?? "segments");
     setStreamIndexes(item.exportOptions.streamIndexes ?? []);
     setCutStrategy(item.exportOptions.cutStrategy ?? settings().cutStrategy);
+    setExportContainer(item.exportOptions.container ?? "mkv");
     setDestinationId(item.exportOptions.destinationId ?? "download");
     setFilenameTemplate(item.exportOptions.filenameTemplate ?? settings().filenameTemplate);
     setDiagnostics();
@@ -337,6 +340,7 @@ export function createWorkspaceController() {
     setExportSelection("segments");
     setStreamIndexes([]);
     setCutStrategy(settings().cutStrategy);
+    setExportContainer("mkv");
     setDestinationId(lastDestinationId() ?? "download");
     setFilenameTemplate(settings().filenameTemplate);
     setDiagnostics();
@@ -447,6 +451,7 @@ export function createWorkspaceController() {
     setExportSelection,
     setStreamIndexes,
     setCutStrategy,
+    setExportContainer,
     setDestinationId,
     setFilenameTemplate,
     editableItems,
@@ -529,6 +534,8 @@ export function createWorkspaceController() {
     setExportSelection,
     cutStrategy,
     setCutStrategy,
+    exportContainer,
+    setExportContainer,
     streamIndexes,
     setStreamIndexes,
     destinations,

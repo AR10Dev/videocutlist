@@ -2,7 +2,7 @@ import { createEffect, createSignal, onCleanup, type Accessor, type Setter } fro
 import { useQuery, type QueryClient } from "@tanstack/solid-query";
 import type { ApiClient } from "../../api";
 import type { components } from "../../generated/api";
-import type { EditableProjectItem } from "../projects/model";
+import type { EditableProjectItem, ExportContainer } from "../projects/model";
 import type { Segment } from "../preview/model";
 import type { AppSettings } from "../settings/model";
 import { abortAndClear, cancellationIsCurrent } from "../queue/cancellation";
@@ -63,6 +63,7 @@ export function createExportController(deps: {
   const [exportMode, setExportMode] = createSignal<"merge" | "separate">("merge");
   const [exportSelection, setExportSelection] = createSignal<"segments" | "gaps">("segments");
   const [cutStrategy, setCutStrategy] = createSignal(deps.settings().cutStrategy);
+  const [exportContainer, setExportContainer] = createSignal<ExportContainer>("mkv");
   const [streamIndexes, setStreamIndexes] = createSignal<number[]>([]);
   const [destinations, setDestinations] = createSignal<Destination[]>([]);
   const [destinationCapabilities, setDestinationCapabilities] = createSignal<
@@ -210,7 +211,7 @@ export function createExportController(deps: {
       selection,
       streamIndexes: indexes,
       cutStrategy: strategy,
-      container: "mkv" as const,
+      container: exportContainer(),
       destinationId: destination,
       filenameTemplate: template,
       itemIds: [...preflightItemIDs],
@@ -304,7 +305,7 @@ export function createExportController(deps: {
         selection: exportSelection(),
         streamIndexes: [...streamIndexes()],
         cutStrategy: cutStrategy(),
-        container: "mkv" as const,
+        container: exportContainer(),
         destinationId: destinationId(),
         filenameTemplate: filenameTemplate(),
         itemIds:
@@ -529,6 +530,8 @@ export function createExportController(deps: {
     setExportSelection,
     cutStrategy,
     setCutStrategy,
+    exportContainer,
+    setExportContainer,
     streamIndexes,
     setStreamIndexes,
     destinations,
@@ -592,6 +595,11 @@ export function createExportController(deps: {
     setStrategy: (value: AppSettings["cutStrategy"]) => {
       setCutStrategy(value);
       deps.saveSettings({ cutStrategy: value });
+      deps.markDirty();
+      deps.setDirty(true);
+    },
+    setContainer: (value: ExportContainer) => {
+      setExportContainer(value);
       deps.markDirty();
       deps.setDirty(true);
     },

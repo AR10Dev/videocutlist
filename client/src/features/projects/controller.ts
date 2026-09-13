@@ -10,7 +10,12 @@ import {
   validProjectId,
   parseProjectJson,
 } from "./lifecycle";
-import { restoreProjectItem, serializeProjectItem, type EditableProjectItem } from "./model";
+import {
+  restoreProjectItem,
+  serializeProjectItem,
+  type EditableProjectItem,
+  type ExportContainer,
+} from "./model";
 import { validateSegments } from "../preview/model";
 import type { TimelineHistory } from "../editor/timeline";
 import type { AppSettings } from "../settings/model";
@@ -88,6 +93,7 @@ export type ProjectsControllerDeps = {
   setExportSelection: Setter<"segments" | "gaps">;
   setStreamIndexes: Setter<number[]>;
   setCutStrategy: Setter<AppSettings["cutStrategy"]>;
+  setExportContainer: Setter<ExportContainer>;
   setDestinationId: Setter<string>;
   setFilenameTemplate: Setter<string>;
   editableItems: () => EditableProjectItem[];
@@ -389,6 +395,7 @@ export function createProjectsController(deps: ProjectsControllerDeps) {
       deps.setExportSelection(first.exportOptions.selection ?? "segments");
       deps.setStreamIndexes(first.exportOptions.streamIndexes ?? []);
       deps.setCutStrategy(first.exportOptions.cutStrategy ?? deps.settings().cutStrategy);
+      deps.setExportContainer(first.exportOptions.container ?? "mkv");
       deps.setDestinationId(first.exportOptions.destinationId ?? "download");
       deps.setFilenameTemplate(
         first.exportOptions.filenameTemplate ?? deps.settings().filenameTemplate,

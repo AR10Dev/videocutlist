@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"videocutlist/internal/db"
+	"videocutlist/internal/exportpolicy"
 	jobqueue "videocutlist/internal/jobs"
 	"videocutlist/internal/projects"
 	"videocutlist/internal/projects/interchange"
@@ -390,7 +391,10 @@ func previewHeaders(writer http.ResponseWriter, spec PreviewSpec, cache string) 
 	writer.Header().Set("X-Preview-Cache", cache)
 }
 func validExport(input ExportInput) bool {
-	if (input.Mode != "merge" && input.Mode != "separate") || (input.Selection != "" && input.Selection != "segments" && input.Selection != "gaps") || (input.CutStrategy != "stream_copy_preferred" && input.CutStrategy != "precise_reencode" && input.CutStrategy != "hybrid_smart_cut") || input.Container != "mkv" {
+	if (input.Mode != "merge" && input.Mode != "separate") || (input.Selection != "" && input.Selection != "segments" && input.Selection != "gaps") || (input.CutStrategy != "stream_copy_preferred" && input.CutStrategy != "precise_reencode" && input.CutStrategy != "hybrid_smart_cut") {
+		return false
+	}
+	if _, ok := exportpolicy.For(input.Container); !ok {
 		return false
 	}
 	if len(input.DestinationID) > 64 || len(input.FilenameTemplate) > 160 || strings.ContainsAny(input.DestinationID, "/\\") || strings.ContainsAny(input.FilenameTemplate, "\x00") || strings.IndexFunc(input.DestinationID, func(r rune) bool { return r < 32 || r == 127 }) >= 0 {

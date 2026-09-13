@@ -68,6 +68,7 @@ describe("projects controller", () => {
     const [, setExportSelection] = createSignal<"segments" | "gaps">("segments");
     const [, setStreamIndexes] = createSignal<number[]>([]);
     const [, setCutStrategy] = createSignal(defaultSettings.cutStrategy);
+    const [, setExportContainer] = createSignal<"mkv" | "mp4" | "mov">("mkv");
     const [, setDestinationId] = createSignal("download");
     const [, setFilenameTemplate] = createSignal(defaultSettings.filenameTemplate);
     let editorVersion = 0;
@@ -99,6 +100,7 @@ describe("projects controller", () => {
       setExportSelection,
       setStreamIndexes,
       setCutStrategy,
+      setExportContainer,
       setDestinationId,
       setFilenameTemplate,
       editableItems: projectItems,
@@ -182,6 +184,7 @@ describe("projects controller", () => {
     const [, setDestinationId] = createSignal("download");
     const [, setFilenameTemplate] = createSignal(defaultSettings.filenameTemplate);
     const editorVersion = 1;
+    const [, setExportContainer] = createSignal<"mkv" | "mp4" | "mov">("mkv");
     let requests = 0;
     const api: ApiClient = {
       url: (path) => path,
@@ -233,6 +236,7 @@ describe("projects controller", () => {
       setExportSelection,
       setStreamIndexes,
       setCutStrategy,
+      setExportContainer,
       setDestinationId,
       setFilenameTemplate,
       editableItems: () => projectItems(),

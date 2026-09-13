@@ -56,6 +56,9 @@ export const strategyLabel = (value?: string) => {
 const selectionLabel = (value?: string) =>
   value === "gaps" ? "Gaps between cuts" : value === "segments" ? "Included cuts" : "Not reported";
 
+const containerLabel = (value?: string) =>
+  value === "mp4" ? "MP4" : value === "mov" ? "MOV" : value === "mkv" ? "MKV" : "Not reported";
+
 const destinationKindLabel = (value?: string) => {
   switch (value) {
     case "download":
@@ -194,6 +197,8 @@ export function ExportJobCard(props: {
               </span>
             </div>
             <dl class="export-job-facts">
+              <dt>Container</dt>
+              <dd>{containerLabel(result().container ?? props.job.container)}</dd>
               <dt>Destination</dt>
               <dd>{destination()}</dd>
               <dt>Destination type</dt>

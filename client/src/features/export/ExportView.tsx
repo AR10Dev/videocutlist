@@ -15,6 +15,7 @@ import { useWorkspace } from "../app/WorkspaceContext";
 import { summarizeExports } from "./summary";
 import { QueueView } from "../queue/QueueView";
 import { ExportJobCard } from "./ExportJobCard";
+import type { ExportContainer } from "../projects/model";
 
 type ExportFinding = {
   severity: "allowed" | "warn" | "blocked";
@@ -45,6 +46,17 @@ const trackLabel = (track: Track) => `${trackTypeLabel(track.type)}: ${track.cod
 const trackDetails = (track: Track) => {
   const details = [track.language, ...(track.disposition ?? [])].filter(Boolean);
   return details.length ? details.join(" · ") : "Supported stream";
+};
+
+const containerLabel = (container?: ExportContainer) => {
+  switch (container) {
+    case "mp4":
+      return "MP4";
+    case "mov":
+      return "MOV";
+    default:
+      return "MKV";
+  }
 };
 
 const destinationTypeLabel = (kind?: string) => {
@@ -96,6 +108,7 @@ export function ExportView(props: ExportViewProps = {}) {
     exportMode,
     exportSelection,
     cutStrategy,
+    exportContainer,
     streamIndexes,
     destinations,
     destinationCapabilities,
@@ -184,7 +197,9 @@ export function ExportView(props: ExportViewProps = {}) {
       <header class="export-heading-row export-page-heading">
         <div>
           <h2 id={headingId}>{props.dialog ? "Export clips" : "Export"}</h2>
-          <p>Turn the saved cut list into verified MKV artifacts.</p>
+          <p>
+            Turn the saved cut list into verified {containerLabel(exportContainer())} artifacts.
+          </p>
         </div>
         <Show when={props.onClose}>
           <button class="btn btn-ghost btn-sm" type="button" onClick={props.onClose}>
@@ -229,6 +244,8 @@ export function ExportView(props: ExportViewProps = {}) {
             </dd>
             <dt>Arrangement</dt>
             <dd>{exportMode() === "merge" ? "One clip per media item" : "One clip per cut"}</dd>
+            <dt>Container</dt>
+            <dd>{containerLabel(exportContainer())}</dd>
             <dt>Destination</dt>
             <dd>{selectedDestination()?.label ?? (destinationId() || "Not selected")}</dd>
             <dt>Expected outputs</dt>
@@ -480,6 +497,28 @@ export function ExportView(props: ExportViewProps = {}) {
               </select>
             </label>
             <label>
+              Output container
+              <select
+                class="select select-bordered select-sm"
+                aria-label="Output container"
+                value={exportContainer()}
+                onChange={(event) =>
+                  exportFeature.setContainer(event.currentTarget.value as ExportContainer)
+                }
+              >
+                <option value="mkv">MKV (default)</option>
+                <option value="mp4">MP4</option>
+                <option value="mov">MOV</option>
+              </select>
+            </label>
+            <Show when={exportContainer() !== "mkv"}>
+              <p class="control-help">
+                {containerLabel(exportContainer())} stream copy accepts H.264 video and AAC audio;
+                subtitles and other codecs require explicit stream changes or precise encoding.
+              </p>
+            </Show>
+
+            <label>
               What to export
               <select
                 class="select select-bordered select-sm"
@@ -689,7 +728,8 @@ export function ExportView(props: ExportViewProps = {}) {
           <div>
             <strong>{planReady() ? "Ready to queue" : "Resolve before queueing"}</strong>
             <span>
-              {expectedOutputs()} expected output{expectedOutputs() === 1 ? "" : "s"} · MKV only
+              {expectedOutputs()} expected output{expectedOutputs() === 1 ? "" : "s"} ·{" "}
+              {containerLabel(exportContainer())}
             </span>
             <Show when={planBlocker()}>
               <p role="status">{planBlocker()}</p>

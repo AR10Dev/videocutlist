@@ -548,7 +548,7 @@ export interface components {
       /** @enum {string} */
       cutStrategy?: "stream_copy_preferred" | "precise_reencode" | "hybrid_smart_cut";
       /** @enum {string} */
-      container?: "mkv";
+      container?: "mkv" | "mp4" | "mov";
       destinationId?: string;
       filenameTemplate?: string;
     };
@@ -624,7 +624,7 @@ export interface components {
       /** @enum {string} */
       cutStrategy: "stream_copy_preferred" | "precise_reencode" | "hybrid_smart_cut";
       /** @enum {string} */
-      container: "mkv";
+      container: "mkv" | "mp4" | "mov";
       /** @description Opaque configured destination ID; never a filesystem path. */
       destinationId?: string;
       /** @description Restricted template using documented variables only. */
@@ -687,6 +687,11 @@ export interface components {
       progress?: number;
       /** @description Present only when an export job succeeded. */
       result?: {
+        /**
+         * @description Published output container.
+         * @enum {string}
+         */
+        container?: "mkv" | "mp4" | "mov";
         /** @description Published merged-export filename, never a filesystem path. */
         outputName?: string;
         /** @description Published separate-export filenames, never filesystem paths. */
@@ -714,6 +719,11 @@ export interface components {
       };
       /** @description Requested cut strategy. */
       strategy?: string;
+      /**
+       * @description Requested output container.
+       * @enum {string}
+       */
+      container?: "mkv" | "mp4" | "mov";
       /**
        * @description Requested output arrangement.
        * @enum {string}
@@ -1359,13 +1369,15 @@ export interface operations {
     };
     requestBody?: never;
     responses: {
-      /** @description MKV attachment; only persisted download outputs are eligible */
+      /** @description Authenticated attachment; only persisted download outputs are eligible */
       200: {
         headers: {
           [name: string]: unknown;
         };
         content: {
           "video/x-matroska": string;
+          "video/mp4": string;
+          "video/quicktime": string;
         };
       };
       404: components["responses"]["Error"];

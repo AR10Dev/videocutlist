@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc --noEmit && vite build && node scripts/compress.mjs",
-    "api:generate": "openapi-typescript ../docs/contracts/api.openapi.yaml -o src/generated/api.ts",
+    "api:generate": "openapi-typescript ../docs/contracts/api.openapi.yaml -o src/generated/api.ts --default-non-nullable false",
     "dev": "vite",
     "lint": "oxlint .",
     "format": "oxfmt --write .",

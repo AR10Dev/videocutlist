@@ -484,9 +484,17 @@ paths:
       responses:
         "200":
           description: >-
-            MKV attachment; only persisted download outputs are eligible
+            Authenticated attachment; only persisted download outputs are eligible
           content:
             video/x-matroska:
+              schema:
+                type: string
+                format: binary
+            video/mp4:
+              schema:
+                type: string
+                format: binary
+            video/quicktime:
               schema:
                 type: string
                 format: binary
@@ -859,7 +867,7 @@ components:
           enum: [stream_copy_preferred, precise_reencode, hybrid_smart_cut]
         container:
           type: string
-          enum: [mkv]
+          enum: [mkv, mp4, mov]
         destinationId:
           type: string
           maxLength: 64
@@ -1009,6 +1017,8 @@ components:
           type: string
           enum:
             - mkv
+            - mp4
+            - mov
         destinationId:
           type: string
           maxLength: 64
@@ -1190,6 +1200,10 @@ components:
             - sizeBytes
             - retainUntil
           properties:
+            container:
+              type: string
+              enum: [mkv, mp4, mov]
+              description: Published output container.
             outputName:
               type: string
               description: >-
@@ -1256,6 +1270,10 @@ components:
         strategy:
           type: string
           description: Requested cut strategy.
+        container:
+          type: string
+          enum: [mkv, mp4, mov]
+          description: Requested output container.
         mode:
           type: string
           enum: [merge, separate]
