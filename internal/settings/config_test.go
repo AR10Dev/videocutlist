@@ -33,8 +33,8 @@ func TestLoadDefaults(t *testing.T) {
 
 func TestLoadMCPEnablement(t *testing.T) {
 	enabled, err := load(env(mergeEnv(baseEnv(), map[string]string{"VIDEOCUTLIST_MCP_ENABLED": "true"})))
-	if err != nil || !enabled.MCPEnabled {
-		t.Fatalf("enabled=%v err=%v", enabled.MCPEnabled, err)
+	if err != nil || !enabled.MCPEnabled || !enabled.RuntimeSettings().MCPEnabled {
+		t.Fatalf("enabled=%v runtime=%v err=%v", enabled.MCPEnabled, enabled.RuntimeSettings().MCPEnabled, err)
 	}
 	if _, err := load(env(mergeEnv(baseEnv(), map[string]string{"VIDEOCUTLIST_MCP_ENABLED": "sometimes"}))); err == nil {
 		t.Fatal("invalid MCP enablement was accepted")

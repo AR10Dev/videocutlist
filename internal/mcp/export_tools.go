@@ -2,10 +2,11 @@ package mcp
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
+	"net/http"
+	"strconv"
 	"strings"
 
 	"videocutlist/internal/exportpolicy"
@@ -13,7 +14,7 @@ import (
 	"videocutlist/internal/projects"
 )
 
-const maxDownloadBytes = 512 << 10
+const exportDownloadPath = "/mcp/download/"
 
 // ExportTools wires the existing proposal, job, and download services into the
 // small, scoped MCP export workflow.
@@ -84,7 +85,7 @@ func ExportTools(proposals *ProposalService, jobs interface {
 			}
 			return toolData("Job cancelled.", safeJob(job)), nil
 		}},
-		{Name: "get_export_download", Description: "Retrieve a completed, authorized export download.", Permission: PermissionExportsDownload, InputSchema: downloadSchema(), Resource: ownedJobResource(proposals, jobs, true), Call: func(ctx Context, raw json.RawMessage) (ToolResult, error) {
+		{Name: "get_export_download", Description: "Return a protected URL for a completed, authorized export download.", Permission: PermissionExportsDownload, InputSchema: downloadSchema(), Resource: ownedJobResource(proposals, jobs, true), Call: func(ctx Context, raw json.RawMessage) (ToolResult, error) {
 			job, err := authorizeOwnedJob(ctx, proposals, jobs, raw, PermissionExportsDownload, true)
 			if err != nil {
 				return ToolResult{}, err
@@ -93,16 +94,7 @@ func ExportTools(proposals *ProposalService, jobs interface {
 			if err != nil {
 				return ToolResult{}, err
 			}
-			file, name, err := downloads.Download(ctx.Request.Context(), job.ID, position)
-			if err != nil || !safeDownloadName(name) {
-				return ToolResult{}, errors.New("download unavailable")
-			}
-			defer file.Close()
-			data, err := io.ReadAll(io.LimitReader(file, maxDownloadBytes+1))
-			if err != nil || len(data) > maxDownloadBytes {
-				return ToolResult{}, errors.New("download exceeds MCP result limit")
-			}
-			return toolData("Export downloaded.", map[string]any{"name": name, "mimeType": exportpolicy.MIMEForOutputName(name), "data": base64.StdEncoding.EncodeToString(data)}), nil
+			return toolData("Download with the same bearer token.", map[string]any{"url": exportDownloadPath + job.ID + "/" + strconv.Itoa(position)}), nil
 		}},
 	}
 }
@@ -243,6 +235,73 @@ func safeJob(job jobqueue.Job) map[string]any {
 		result["errorCode"] = job.ErrorCode.String
 	}
 	return result
+}
+
+// ExportDownloadHandler streams an owned export after rechecking the bearer
+// credential, permission, and current resource scope. It deliberately does not
+// use a URL token, so revocation takes effect before every artifact download.
+func ExportDownloadHandler(config TransportConfig, proposals *ProposalService, jobs interface {
+	Get(context.Context, string) (jobqueue.Job, error)
+	Cancel(context.Context, string) (jobqueue.Job, error)
+}, downloads projects.ExportDownloadService) (http.Handler, error) {
+	if proposals == nil || jobs == nil || downloads == nil {
+		return nil, errors.New("mcp download dependencies are required")
+	}
+	handler, err := NewTransport(config)
+	if err != nil {
+		return nil, err
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !config.Enabled {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Method != http.MethodGet {
+			w.Header().Set("Allow", http.MethodGet)
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		transport := handler.(*transport)
+		if !transport.validTransport(r, transport.requestInfo(r)) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		token, ok := bearerToken(r.Header.Values("Authorization"))
+		if !ok {
+			unauthorized(w)
+			return
+		}
+		credential, err := config.Credentials.Authenticate(r.Context(), token)
+		if err != nil {
+			unauthorized(w)
+			return
+		}
+		parts := strings.Split(strings.TrimPrefix(r.URL.Path, exportDownloadPath), "/")
+		if len(parts) != 2 || !strings.HasPrefix(parts[0], "j_") || !validSafeIdentifier(parts[0]) {
+			http.NotFound(w, r)
+			return
+		}
+		position, err := strconv.Atoi(parts[1])
+		if err != nil || position < 0 || position > 99 {
+			http.NotFound(w, r)
+			return
+		}
+		raw := json.RawMessage(`{"jobId":` + strconv.Quote(parts[0]) + `,"position":` + strconv.Itoa(position) + `}`)
+		job, err := authorizeOwnedJob(Context{Request: r, Credential: credential}, proposals, jobs, raw, PermissionExportsDownload, true)
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		file, name, err := downloads.Download(r.Context(), job.ID, position)
+		if err != nil || !safeDownloadName(name) {
+			http.NotFound(w, r)
+			return
+		}
+		defer file.Close()
+		w.Header().Set("Content-Type", exportpolicy.MIMEForOutputName(name))
+		w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
+		_, _ = io.Copy(w, file)
+	}), nil
 }
 
 func safeDownloadName(name string) bool {

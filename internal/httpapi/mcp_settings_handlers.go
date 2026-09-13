@@ -93,7 +93,7 @@ func (s *Server) getMCPSettings(w http.ResponseWriter, r *http.Request, id strin
 		"endpoint":             "/mcp",
 		"authentication":       "Bearer token",
 		"remoteAccessGuidance": "Keep the server loopback-only unless remote access is deliberately configured. Use HTTPS for every remote connection.",
-		"clientCompatibility":  "Use a Streamable HTTP MCP client that accepts a bearer token. OAuth-only clients are not supported.",
+		"clientCompatibility":  "Tested with MCP Inspector using Streamable HTTP bearer tokens (protocol 2025-06-18). OAuth-only clients are not supported.",
 		"permissions":          mcpPermissions,
 		"roots":                roots,
 		"credentials":          views,

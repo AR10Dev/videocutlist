@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
+	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
@@ -12,10 +14,10 @@ import (
 	"videocutlist/internal/projects"
 )
 
-type exportToolDownload struct{}
+type exportToolDownload struct{ data []byte }
 
-func (exportToolDownload) Download(context.Context, string, int) (io.ReadCloser, string, error) {
-	return io.NopCloser(bytes.NewReader([]byte("validated export"))), "cut.mp4", nil
+func (d exportToolDownload) Download(context.Context, string, int) (io.ReadCloser, string, error) {
+	return io.NopCloser(bytes.NewReader(d.data)), "cut.mp4", nil
 }
 
 func TestExportToolsKeepJobsOwnedAndDownloadsRevocable(t *testing.T) {
@@ -36,7 +38,8 @@ func TestExportToolsKeepJobsOwnedAndDownloadsRevocable(t *testing.T) {
 	if err != nil || len(created) != 1 {
 		t.Fatalf("execute = %#v, %v", created, err)
 	}
-	tools := ExportTools(service, service.Scheduler, exportToolDownload{})
+	downloads := exportToolDownload{data: bytes.Repeat([]byte("x"), 1<<20)}
+	tools := ExportTools(service, service.Scheduler, downloads)
 	ownerContext := Context{Request: httptest.NewRequest("POST", "/mcp", nil), Credential: owner.Credential}
 	getJob := toolNamed(t, tools, "get_job")
 	result, err := getJob.Call(ownerContext, []byte(`{"jobId":"`+created[0].ID+`"}`))
@@ -45,8 +48,23 @@ func TestExportToolsKeepJobsOwnedAndDownloadsRevocable(t *testing.T) {
 	}
 	download := toolNamed(t, tools, "get_export_download")
 	result, err = download.Call(ownerContext, []byte(`{"jobId":"`+created[0].ID+`","position":0}`))
-	if err != nil || result.StructuredContent["name"] != "cut.mp4" || result.StructuredContent["data"] == "" {
+	url, _ := result.StructuredContent["url"].(string)
+	if err != nil || url != exportDownloadPath+created[0].ID+"/0" {
 		t.Fatalf("owned download = %#v, %v", result, err)
+	}
+	downloadHandler, err := ExportDownloadHandler(TransportConfig{
+		Enabled: true, Credentials: service.Credentials,
+		RequestInfo: func(*http.Request) RequestInfo { return RequestInfo{ClientIP: net.ParseIP("127.0.0.1"), Proto: "http"} },
+	}, service, service.Scheduler, downloads)
+	if err != nil {
+		t.Fatal(err)
+	}
+	downloadRequest := httptest.NewRequest(http.MethodGet, url, nil)
+	downloadRequest.Header.Set("Authorization", "Bearer "+owner.Secret)
+	downloadResponse := httptest.NewRecorder()
+	downloadHandler.ServeHTTP(downloadResponse, downloadRequest)
+	if downloadResponse.Code != http.StatusOK || downloadResponse.Body.Len() != len(downloads.data) || downloadResponse.Header().Get("Content-Type") != "video/mp4" {
+		t.Fatalf("large protected download status=%d size=%d headers=%v", downloadResponse.Code, downloadResponse.Body.Len(), downloadResponse.Header())
 	}
 	other, err := service.Credentials.Create(t.Context(), CredentialInput{
 		Name: "other owner", Permissions: []Permission{PermissionJobsRead}, MediaScope: MediaScope{Kind: MediaScopeAll}, ProjectScope: ProjectScope{Kind: ProjectScopeAll}, ExpiresAt: &expires,
@@ -64,6 +82,11 @@ func TestExportToolsKeepJobsOwnedAndDownloadsRevocable(t *testing.T) {
 	_, err = download.Call(ownerContext, []byte(`{"jobId":"`+created[0].ID+`","position":0}`))
 	if !errors.Is(err, ErrCredentialUnauthorized) {
 		t.Fatalf("revoked download error = %v", err)
+	}
+	downloadResponse = httptest.NewRecorder()
+	downloadHandler.ServeHTTP(downloadResponse, downloadRequest)
+	if downloadResponse.Code != http.StatusUnauthorized {
+		t.Fatalf("revoked protected download status=%d", downloadResponse.Code)
 	}
 }
 

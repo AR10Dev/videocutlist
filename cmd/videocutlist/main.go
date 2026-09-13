@@ -253,18 +253,24 @@ func run(ctx context.Context) error {
 	mcpTools := append(mcp.MediaTools(mediaService), mcp.ExportTools(proposalService, scheduler, exportExecutor)...)
 	mcpTools = append(mcpTools, mcp.ProjectTools(projectService, mediaService, mcpCredentials)...)
 	mcpTools = append(mcpTools, mcp.PreviewDetectionTools(mediaService, previewService, detectionService, projectService)...)
-	mcpTransport, err := mcp.NewTransport(mcp.TransportConfig{
+	mcpTransportConfig := mcp.TransportConfig{
 		Enabled: cfg.MCPEnabled, Credentials: mcpCredentials, Tools: mcpTools, AllowedOrigins: cfg.AllowedOrigins,
 		MaxConcurrentRequests: cfg.PreviewGlobalLimit,
 		RequestInfo: func(request *http.Request) mcp.RequestInfo {
 			forwarded := httpapi.GetForwardedInfo(request.Context())
 			return mcp.RequestInfo{ClientIP: forwarded.ClientIP, Host: forwarded.Host, Proto: forwarded.Proto}
 		},
-	})
+	}
+	mcpTransport, err := mcp.NewTransport(mcpTransportConfig)
+	if err != nil {
+		return err
+	}
+	mcpDownloads, err := mcp.ExportDownloadHandler(mcpTransportConfig, proposalService, scheduler, exportExecutor)
 	if err != nil {
 		return err
 	}
 	mux := http.NewServeMux()
+	mux.Handle("/mcp/download/", mcpDownloads)
 	mux.Handle("/mcp", mcpTransport)
 	mux.Handle("/api/", apiServer)
 	mux.Handle("/metrics", apiServer)
