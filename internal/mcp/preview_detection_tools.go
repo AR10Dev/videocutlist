@@ -43,7 +43,7 @@ func PreviewDetectionTools(media MediaReader, preview interface {
 			if err != nil {
 				return ToolResult{}, err
 			}
-			defer result.Reader.Close()
+			defer func() { _ = result.Reader.Close() }()
 			data, err := io.ReadAll(io.LimitReader(result.Reader, int64(base64.StdEncoding.DecodedLen(maxPreviewBase64Bytes)+1)))
 			if err != nil || base64.StdEncoding.EncodedLen(len(data)) > maxPreviewBase64Bytes {
 				return ToolResult{}, errors.New("preview exceeds MCP result limit")

@@ -112,7 +112,7 @@ func (s *Scheduler) SubmitProposal(ctx context.Context, proposalID, credentialID
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	var existing int
 	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM jobs WHERE proposal_id = ?`, proposalID).Scan(&existing); err != nil {
 		return nil, err

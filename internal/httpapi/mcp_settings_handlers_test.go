@@ -18,7 +18,11 @@ func TestMCPAdministrationRequiresDeploymentAuthAndRevealsSecretOnce(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer database.Close()
+	defer func() {
+		if err := database.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	runtimeSettings, err := store.NewRuntimeSettingsStore(database)
 	if err != nil {
 		t.Fatal(err)
@@ -101,7 +105,11 @@ func TestMCPEnablementUsesPersistedRuntimeSettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer database.Close()
+	defer func() {
+		if err := database.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	runtimeSettings, _ := store.NewRuntimeSettingsStore(database)
 	record, err := runtimeSettings.Seed(t.Context(), testRuntimeSettings())
 	if err != nil {

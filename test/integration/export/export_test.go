@@ -140,7 +140,11 @@ func TestMP4MOVContainerPolicyProducesVerifiedArtifacts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer source.Close()
+	defer func() {
+		if err := source.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	service := export.Service{FFmpegPath: ffmpeg, FFprobePath: ffprobe, OutputDir: filepath.Join(directory, "exports")}
 	for _, test := range []struct {
 		name, container, mode, strategy string

@@ -133,7 +133,7 @@ func TestMediaCatalogPreviewUsesCatalogMetadata(t *testing.T) {
 }
 
 func TestMediaCatalogListRetainsInternalRootForScopedConsumers(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "clip.mp4"), []byte("media"), 0o600); err != nil {
 		t.Fatal(err)
@@ -146,7 +146,11 @@ func TestMediaCatalogListRetainsInternalRootForScopedConsumers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer database.Close()
+	defer func() {
+		if err := database.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	mediaStore, err := store.NewMediaStore(database)
 	if err != nil {
 		t.Fatal(err)

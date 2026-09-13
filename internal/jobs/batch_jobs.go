@@ -59,7 +59,7 @@ func (s *JobsStore) ListByProposal(ctx context.Context, proposalID string) ([]Jo
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var result []Job
 	for rows.Next() {
 		job, err := scanUnifiedJob(rows)

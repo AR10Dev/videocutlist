@@ -168,16 +168,6 @@ func proposalIDArgument(raw json.RawMessage) (string, error) {
 	return args.ProposalID, nil
 }
 
-func jobIDArgument(raw json.RawMessage) (string, error) {
-	var args struct {
-		JobID string `json:"jobId"`
-	}
-	if err := decodeToolArguments(raw, &args); err != nil || !strings.HasPrefix(args.JobID, "j_") || !validSafeIdentifier(args.JobID) {
-		return "", ErrInvalidInput
-	}
-	return args.JobID, nil
-}
-
 func downloadPosition(raw json.RawMessage) (int, error) {
 	var args struct {
 		JobID    string `json:"jobId"`
@@ -321,7 +311,7 @@ func ExportDownloadHandler(config TransportConfig, proposals *ProposalService, j
 			http.NotFound(w, r)
 			return
 		}
-		defer file.Close()
+		defer func() { _ = file.Close() }()
 		w.Header().Set("Content-Type", exportpolicy.MIMEForOutputName(name))
 		w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
 		_, _ = io.Copy(w, file)
