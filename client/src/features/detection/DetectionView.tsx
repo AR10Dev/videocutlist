@@ -12,23 +12,33 @@ import {
   X,
 } from "lucide-solid";
 import { canStreamPreview, formatTime } from "../preview/model";
-import type { Candidate, DetectionKind } from "./model";
+import { candidatePointMs, candidateRange, type Candidate, type DetectionKind } from "./model";
 import { useWorkspace } from "../app/WorkspaceContext";
 
 const kindLabel: Record<DetectionKind, string> = {
-  silence: "Silence",
-  black: "Black frames",
+  silence: "Pauses",
+  black: "Black sections",
   scene: "Scene changes",
 };
 
 const kindDescription: Record<DetectionKind, string> = {
-  silence: "Find quiet ranges to remove or review.",
+  silence: "Find quiet ranges to review before removing.",
   black: "Find sustained black ranges in the picture.",
-  scene: "Find cut points between visual scenes.",
+  scene: "Find visual change points without adding segments.",
 };
 
-const formatCandidateDuration = (candidate: Candidate) =>
-  formatTime(candidate.endMs - candidate.startMs, candidate.endMs - candidate.startMs);
+const candidateLabel = (candidate: Candidate, durationMs: number) => {
+  const pointMs = candidatePointMs(candidate);
+  if (pointMs !== undefined) return `Scene change at ${formatTime(pointMs, durationMs)}`;
+  const range = candidateRange(candidate);
+  if (!range) return "Invalid candidate";
+  return `${formatTime(range.startMs, durationMs)} – ${formatTime(range.endMs, durationMs)}`;
+};
+
+const formatCandidateDuration = (candidate: Candidate) => {
+  const range = candidateRange(candidate);
+  return range ? formatTime(range.endMs - range.startMs, range.endMs - range.startMs) : "Point";
+};
 
 export function DetectionView() {
   const workspace = useWorkspace();
@@ -74,12 +84,29 @@ export function DetectionView() {
   };
   const preview = (candidate: Candidate, index: number) => {
     setReviewIndex(index);
+    const pointMs = candidatePointMs(candidate);
+    if (pointMs !== undefined) {
+      workspace.setDetectionStatus(`Previewing scene change ${index + 1}.`);
+      workspace.playDetectionPoint(pointMs);
+      return;
+    }
+    const range = candidateRange(candidate);
+    if (!range) {
+      workspace.setDetectionStatus("That candidate has invalid playback bounds.");
+      return;
+    }
     workspace.setDetectionStatus(`Previewing candidate ${index + 1}.`);
     workspace.playDetectionCandidate({
-      startMs: candidate.startMs,
-      endMs: candidate.endMs,
+      ...range,
       label: candidate.source,
+      included: true,
     });
+  };
+  const seek = (candidate: Candidate) => {
+    const pointMs = candidatePointMs(candidate);
+    if (pointMs === undefined) return;
+    workspace.seekDetectionPoint(pointMs);
+    workspace.setDetectionStatus("Scene change selected; dismiss it or keep reviewing.");
   };
   const updateOption = (key: "noiseDb" | "minDurationMs" | "sceneThreshold", value: string) => {
     setOptions((current) => ({
@@ -165,7 +192,8 @@ export function DetectionView() {
         <div>
           <h2 id="detection-heading">Auto-detect</h2>
           <p id="detection-description">
-            Scan the active media item, then make every proposed range a deliberate edit.
+            Scan the active media item, then review every proposed range or scene point
+            deliberately.
           </p>
         </div>
         <Show when={workspace.detectionCandidates().length > 0}>
@@ -212,47 +240,19 @@ export function DetectionView() {
         <div class="detection-workflow-group">
           <div class="detection-section-label">
             <div>
-              <h3>Start with an outcome</h3>
-              <p>These actions also set the matching export workflow for you.</p>
-            </div>
-            <Sparkles size={16} aria-hidden="true" />
-          </div>
-          <div class="detection-workflow-grid" aria-label="Detection outcomes">
-            <div class="detection-workflow-card">
-              <button
-                class="btn btn-primary btn-sm"
-                disabled={!canStart()}
-                onClick={() => void start("silence")}
-              >
-                <Sparkles size={15} aria-hidden="true" /> Remove silence
-              </button>
-              <p>Mark quiet ranges so exports can keep the rest.</p>
-            </div>
-            <div class="detection-workflow-card">
-              <button class="btn btn-sm" disabled={!canStart()} onClick={() => void start("scene")}>
-                <Crosshair size={15} aria-hidden="true" /> Split scenes
-              </button>
-              <p>Find visual change points to build a cut list.</p>
-            </div>
-          </div>
-        </div>
-
-        <div class="detection-workflow-group">
-          <div class="detection-section-label">
-            <div>
               <h3>Find candidates</h3>
-              <p>Review each bounded result before adding it to the timeline.</p>
+              <p>Choose one deliberate scan; reviewing results never changes export selection.</p>
             </div>
             <Search size={16} aria-hidden="true" />
           </div>
           <div class="detection-methods" aria-label="Detection methods">
             <div class="detection-method-row">
               <button
-                class="btn btn-ghost btn-sm"
+                class="btn btn-primary btn-sm"
                 disabled={!canStart()}
                 onClick={() => void start("silence")}
               >
-                Find silence
+                <Sparkles size={15} aria-hidden="true" /> Find pauses
               </button>
               <span>{kindDescription.silence}</span>
             </div>
@@ -262,7 +262,7 @@ export function DetectionView() {
                 disabled={!canStart()}
                 onClick={() => void start("black")}
               >
-                Find black frames
+                <ScanLine size={15} aria-hidden="true" /> Find black sections
               </button>
               <span>{kindDescription.black}</span>
             </div>
@@ -272,7 +272,7 @@ export function DetectionView() {
                 disabled={!canStart()}
                 onClick={() => void start("scene")}
               >
-                Find scene changes
+                <Crosshair size={15} aria-hidden="true" /> Find scene changes
               </button>
               <span>{kindDescription.scene}</span>
             </div>
@@ -343,7 +343,7 @@ export function DetectionView() {
 
         <details class="detection-options">
           <summary>
-            <SlidersHorizontal size={15} aria-hidden="true" /> Detection sensitivity
+            <SlidersHorizontal size={15} aria-hidden="true" /> Advanced
           </summary>
           <fieldset
             ref={(element) => {
@@ -380,7 +380,7 @@ export function DetectionView() {
                 onInput={(event) => updateOption("minDurationMs", event.currentTarget.value)}
               />
               <span class="control-help">
-                Used for silence and black-frame ranges; maximum 24 hours.
+                Used for pause and black-section ranges; maximum 24 hours.
               </span>
             </label>
             <label>
@@ -399,7 +399,7 @@ export function DetectionView() {
             </label>
             <div class="detection-option-actions">
               <span class="control-help">
-                Blank fields and zero values use the server defaults.
+                Detection sensitivity overrides; blank fields and zero values use server defaults.
               </span>
               <button
                 class="btn btn-ghost btn-xs"
@@ -435,7 +435,7 @@ export function DetectionView() {
               <div>
                 <h3>Review candidates</h3>
                 <p>
-                  Accepting adds a segment to the timeline. Dismissing leaves the source untouched.
+                  Review ranges before adding a segment; scene points can be previewed or dismissed.
                 </p>
               </div>
               <button
@@ -459,23 +459,18 @@ export function DetectionView() {
                     ref={(element) => candidateRows.set(candidate.id, element)}
                     tabIndex={index() === reviewIndex() ? 0 : -1}
                     aria-current={index() === reviewIndex() ? "true" : undefined}
-                    aria-label={`Detection candidate ${index() + 1}: ${formatTime(candidate.startMs, workspace.duration())} to ${formatTime(candidate.endMs, workspace.duration())}`}
+                    aria-label={`Detection candidate ${index() + 1}: ${candidateLabel(candidate, workspace.duration())}`}
                     data-detection-candidate={candidate.id}
                     onFocus={() => setReviewIndex(index())}
                   >
                     <div class="detection-candidate-copy">
                       <div class="detection-candidate-title">
                         <span class="badge badge-sm">{kindLabel[candidate.source]}</span>
-                        <strong>
-                          {formatTime(candidate.startMs, workspace.duration())} –{" "}
-                          {formatTime(candidate.endMs, workspace.duration())}
-                        </strong>
+                        <strong>{candidateLabel(candidate, workspace.duration())}</strong>
                       </div>
                       <dl>
-                        <dt>Duration</dt>
+                        <dt>{candidate.source === "scene" ? "Point" : "Duration"}</dt>
                         <dd>{formatCandidateDuration(candidate)}</dd>
-                        <dt>Confidence</dt>
-                        <dd>{Math.round(candidate.confidence * 100)}%</dd>
                         <dt>Candidate ID</dt>
                         <dd>
                           <code>{candidate.id}</code>
@@ -493,21 +488,38 @@ export function DetectionView() {
                       >
                         <Play size={15} aria-hidden="true" /> Preview
                       </button>
-                      <button
-                        class="btn btn-sm"
-                        type="button"
-                        title="Accept candidate"
-                        aria-label="Add segment"
-                        aria-keyshortcuts="A Enter"
-                        data-action="accept-candidate"
-                        onClick={() => accept(candidate)}
+                      <Show
+                        when={
+                          candidate.source === "scene" && candidatePointMs(candidate) !== undefined
+                        }
                       >
-                        <CheckCircle2 size={15} aria-hidden="true" /> Add segment
-                      </button>
+                        <button
+                          class="btn btn-ghost btn-sm"
+                          type="button"
+                          title="Seek to scene change"
+                          aria-label="Seek to point"
+                          onClick={() => seek(candidate)}
+                        >
+                          <Crosshair size={15} aria-hidden="true" /> Seek to point
+                        </button>
+                      </Show>
+                      <Show when={candidate.source !== "scene"}>
+                        <button
+                          class="btn btn-sm"
+                          type="button"
+                          title="Accept candidate"
+                          aria-label="Add segment"
+                          aria-keyshortcuts="A Enter"
+                          data-action="accept-candidate"
+                          onClick={() => accept(candidate)}
+                        >
+                          <CheckCircle2 size={15} aria-hidden="true" /> Add segment
+                        </button>
+                      </Show>
                       <button
                         class="btn btn-ghost btn-sm"
                         type="button"
-                        title="Reject candidate"
+                        title="Dismiss candidate"
                         aria-label="Dismiss"
                         aria-keyshortcuts="R X N Delete Backspace"
                         data-action="reject-candidate"

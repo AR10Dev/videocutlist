@@ -321,14 +321,14 @@ test("detection sends sensitivity settings and rejects invalid values", async ({
   await chooseMedia(page);
   await page.getByRole("button", { name: "Add to project" }).click();
   await page.getByRole("tab", { name: "Auto-detect" }).click();
-  await page.getByText("Detection sensitivity").click();
+  await page.getByText("Advanced", { exact: true }).click();
   await page.getByLabel("Silence threshold (dB)").fill("-35");
   await page.getByLabel("Minimum duration (ms)").fill("750");
   await page.getByLabel("Scene threshold", { exact: true }).fill("2");
-  await page.getByRole("button", { name: "Find silence" }).click();
+  await page.getByRole("button", { name: "Find pauses" }).click();
   expect(body).toBeUndefined();
   await page.getByLabel("Scene threshold", { exact: true }).fill("0.4");
-  await page.getByRole("button", { name: "Find silence" }).click();
+  await page.getByRole("button", { name: "Find pauses" }).click();
   await expect
     .poll(() => body)
     .toMatchObject({ kind: "silence", noiseDb: -35, minDurationMs: 750, sceneThreshold: 0.4 });

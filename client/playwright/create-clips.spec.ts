@@ -87,9 +87,7 @@ test("rebuilt detection sends source identity and completes candidate review", a
         type: "detection",
         state: "succeeded",
         kind: "black",
-        candidates: [
-          { id: "candidate-1", source: "black", startMs: 100, endMs: 800, confidence: 0.9 },
-        ],
+        candidates: [{ id: "candidate-1", source: "black", startMs: 100, endMs: 800 }],
       },
     });
   });
@@ -97,13 +95,13 @@ test("rebuilt detection sends source identity and completes candidate review", a
   await page.getByRole("button", { name: "Select camera.mp4" }).click();
   await addToProject(page);
   await page.getByRole("tab", { name: "Auto-detect", exact: true }).click();
-  await page.getByText("Detection sensitivity", { exact: true }).click();
+  await page.getByText("Advanced", { exact: true }).click();
   await page.getByLabel("Minimum duration (ms)").fill("750");
-  await page.getByRole("button", { name: "Find black frames", exact: true }).click();
+  await page.getByRole("button", { name: "Find black sections", exact: true }).click();
   await expect
     .poll(() => input)
     .toMatchObject({ kind: "black", minDurationMs: 750, sourceFingerprint: "v1" });
-  await expect(page.getByText("90%", { exact: true })).toBeVisible();
+  await expect(page.getByText("Confidence", { exact: true })).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath("detection.png"), fullPage: true });
   await page.getByRole("button", { name: "Dismiss", exact: true }).click();
   await expect(page.getByText("All candidates reviewed", { exact: true })).toBeVisible();
@@ -114,7 +112,9 @@ test("rebuilt detection sends source identity and completes candidate review", a
     .click({ position: { x: 385, y: 800 } });
   await page.getByRole("button", { name: "Show editing tools", exact: true }).click();
   await page.getByRole("tab", { name: "Auto-detect", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Find black frames", exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Find black sections", exact: true }),
+  ).toBeVisible();
   await page.screenshot({ path: testInfo.outputPath("detection-mobile.png"), fullPage: true });
   await page.getByRole("tab", { name: "Export", exact: true }).click();
   await expect(page.getByLabel("Output arrangement", { exact: true })).toBeVisible();

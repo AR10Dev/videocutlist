@@ -404,10 +404,6 @@ export function createWorkspaceController() {
     saveProject: () => projectsFeature.saveProject(),
     updateSegments: (segments) => updateTimeline({ segments }),
     markDirty,
-    setExportSelection: (selection) => {
-      if (exportSelection() !== selection) exportFeature.setSelection(selection);
-    },
-    onSegmentsAccepted: () => selectActiveExportItem.current?.(),
   });
   const {
     detectionJob,
@@ -632,6 +628,8 @@ export function createWorkspaceController() {
     playActiveSegment: initializedPreviewFeature.playActiveSegment,
     playOrderedSegments: initializedPreviewFeature.playOrderedSegments,
     playDetectionCandidate: playSegment,
+    playDetectionPoint: initializedPreviewFeature.playDetectionPoint,
+    seekDetectionPoint: initializedPreviewFeature.seekDetectionPoint,
     undo: editorFeature.undo,
     redo: editorFeature.redo,
   };

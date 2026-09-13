@@ -930,25 +930,32 @@ components:
           minimum: 0
           maximum: 1
     DetectionCandidate:
+      oneOf:
+        - $ref: "#/components/schemas/DetectionRangeCandidate"
+        - $ref: "#/components/schemas/DetectionPointCandidate"
+    DetectionRangeCandidate:
       type: object
-      required:
-        - id
-        - mediaId
-        - projectId
-        - projectRevision
-        - startMs
-        - endMs
-        - source
-        - confidence
+      additionalProperties: false
+      required: [id, mediaId, projectId, projectRevision, startMs, endMs, source]
       properties:
         id: {type: string}
         mediaId: {type: string}
         projectId: {type: string}
         projectRevision: {type: integer}
-        startMs: {type: integer}
-        endMs: {type: integer}
-        source: {type: string, enum: [silence, black, scene]}
-        confidence: {type: number}
+        startMs: {type: integer, minimum: 0}
+        endMs: {type: integer, minimum: 1}
+        source: {type: string, enum: [silence, black]}
+    DetectionPointCandidate:
+      type: object
+      additionalProperties: false
+      required: [id, mediaId, projectId, projectRevision, pointMs, source]
+      properties:
+        id: {type: string}
+        mediaId: {type: string}
+        projectId: {type: string}
+        projectRevision: {type: integer}
+        pointMs: {type: integer, minimum: 0}
+        source: {type: string, enum: [scene]}
     DetectionJob:
       type: object
       required: [id, type, state, mediaId, projectId, projectRevision, kind]

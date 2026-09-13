@@ -337,7 +337,7 @@ func (d *routeTestDetection) Get(context.Context, string) (DetectionJob, error) 
 	return DetectionJob{
 		ID: "j_detection", Type: "detection", State: "succeeded",
 		MediaID: "m_media", ProjectID: "p_project", ProjectRevision: 7, Kind: model.DetectSilence,
-		Candidates: []model.Candidate{{ID: "c_candidate", MediaID: "m_media", ProjectID: "p_project", ProjectRevision: 7, StartMS: 100, EndMS: 200, Source: model.DetectSilence, Confidence: 0.9}},
+		Candidates: []model.Candidate{{ID: "c_candidate", MediaID: "m_media", ProjectID: "p_project", ProjectRevision: 7, StartMS: 100, EndMS: 200, Source: model.DetectSilence}},
 	}, nil
 }
 func (d *routeTestDetection) Cancel(context.Context, string) error {
@@ -353,7 +353,7 @@ func TestDetectionJobsDispatchThroughDetectionService(t *testing.T) {
 	detection := &routeTestDetection{}
 	jobs := &routeTestJobs{job: Job{
 		ID: "j_detection", Type: "detection", State: "succeeded", MediaID: "m_media", ProjectID: "p_project", ProjectRevision: 7, Kind: model.DetectSilence,
-		Candidates: []model.Candidate{{ID: "c_candidate", MediaID: "m_media", ProjectID: "p_project", ProjectRevision: 7, StartMS: 100, EndMS: 200, Source: model.DetectSilence, Confidence: 0.9}},
+		Candidates: []model.Candidate{{ID: "c_candidate", MediaID: "m_media", ProjectID: "p_project", ProjectRevision: 7, StartMS: 100, EndMS: 200, Source: model.DetectSilence}},
 	}}
 	server, err := New(Config{Authenticator: authenticator, Media: &routeTestMedia{}, Preview: routeTestPreview{}, Projects: routeTestProjects{}, BatchExports: &routeTestBatchExports{}, Detection: detection, Jobs: jobs})
 	if err != nil {
@@ -388,10 +388,13 @@ func TestDetectionJobsDispatchThroughDetectionService(t *testing.T) {
 				t.Fatalf("candidates=%#v", body["candidates"])
 			}
 			candidate := candidates[0].(map[string]any)
-			for _, key := range []string{"id", "mediaId", "projectId", "projectRevision", "startMs", "endMs", "source", "confidence"} {
+			for _, key := range []string{"id", "mediaId", "projectId", "projectRevision", "startMs", "endMs", "source"} {
 				if _, ok := candidate[key]; !ok {
 					t.Errorf("candidate missing JSON field %q: %#v", key, candidate)
 				}
+			}
+			if _, ok := candidate["confidence"]; ok {
+				t.Error("detection response exposes fabricated confidence")
 			}
 		}
 	}

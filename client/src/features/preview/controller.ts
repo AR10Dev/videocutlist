@@ -417,6 +417,42 @@ export function createPreviewController(
     }
     startPlayback(loop ? "active-segment-loop" : "active-segment", segment.startMs, segment);
   };
+  const playDetectionPoint = (pointMs: number) => {
+    const item = dependencies.selected();
+    if (!canStreamPreview()) {
+      setPreviewStatus(
+        "Preview is unavailable in this browser. Use the timeline to seek to this point instead.",
+      );
+      return;
+    }
+    if (!item || !Number.isInteger(pointMs) || pointMs < 0 || pointMs > item.durationMs) {
+      setPreviewStatus("That scene point has invalid playback bounds.");
+      return;
+    }
+    const segment = {
+      startMs: Math.max(0, pointMs - 2_000),
+      endMs: Math.min(item.durationMs, pointMs + 2_000),
+      label: "scene change",
+      included: true,
+    };
+    if (segment.startMs >= segment.endMs) {
+      setPreviewStatus("That scene point has invalid playback bounds.");
+      return;
+    }
+    startPlayback("active-segment", pointMs, segment);
+  };
+  const seekDetectionPoint = (pointMs: number) => {
+    const item = dependencies.selected();
+    if (!item || !Number.isInteger(pointMs) || pointMs < 0 || pointMs > item.durationMs) {
+      setPreviewStatus("That scene point has invalid playback bounds.");
+      return;
+    }
+    setPlaybackIntent(false);
+    setPlaybackMode("whole-media");
+    setBoundedSegment();
+    dependencies.updatePlaybackPosition(pointMs);
+    restartPreview(pointMs);
+  };
   const setLoopSelectedSegment = (enabled: boolean) => {
     setLoopSelectedSegmentState(enabled);
     try {
@@ -523,5 +559,7 @@ export function createPreviewController(
     playActiveSegment,
     playOrderedSegments,
     playSegment,
+    playDetectionPoint,
+    seekDetectionPoint,
   };
 }

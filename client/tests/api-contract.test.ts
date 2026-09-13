@@ -28,6 +28,15 @@ describe("generated API contract", () => {
     }
   });
 
+  it("models scene changes as points without active confidence fields", () => {
+    expect(contract).toContain("DetectionPointCandidate");
+    expect(contract).toContain("pointMs");
+    expect(generated).toContain("DetectionPointCandidate");
+    expect(generated).toContain("pointMs: number");
+    expect(contract).not.toContain("confidence");
+    expect(generated).not.toContain("confidence");
+  });
+
   it("does not expose deployment filesystem paths in browser settings schemas", () => {
     expect(generated).toContain("SettingsResponse");
     expect(generated).not.toMatch(/RuntimeDestination:[\\s\\S]*?root\\?:/);

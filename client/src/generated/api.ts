@@ -576,7 +576,10 @@ export interface components {
       minDurationMs?: number;
       sceneThreshold?: number;
     };
-    DetectionCandidate: {
+    DetectionCandidate:
+      | components["schemas"]["DetectionRangeCandidate"]
+      | components["schemas"]["DetectionPointCandidate"];
+    DetectionRangeCandidate: {
       id: string;
       mediaId: string;
       projectId: string;
@@ -584,8 +587,16 @@ export interface components {
       startMs: number;
       endMs: number;
       /** @enum {string} */
-      source: "silence" | "black" | "scene";
-      confidence: number;
+      source: "silence" | "black";
+    };
+    DetectionPointCandidate: {
+      id: string;
+      mediaId: string;
+      projectId: string;
+      projectRevision: number;
+      pointMs: number;
+      /** @enum {string} */
+      source: "scene";
     };
     DetectionJob: {
       id: string;
