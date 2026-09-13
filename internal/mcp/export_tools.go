@@ -184,7 +184,7 @@ func ownedJobResource(proposals *ProposalService, jobs interface {
 	Cancel(context.Context, string) (jobqueue.Job, error)
 }, download bool) func(Context, json.RawMessage) (Resource, error) {
 	return func(ctx Context, raw json.RawMessage) (Resource, error) {
-		job, err := ownedExportJob(ctx.Request.Context(), jobs, ctx.Credential.ID, raw, download)
+		job, err := ownedMCPJob(ctx.Request.Context(), jobs, ctx.Credential.ID, raw, download)
 		if err != nil {
 			return Resource{}, err
 		}
@@ -196,7 +196,7 @@ func authorizeOwnedJob(ctx Context, proposals *ProposalService, jobs interface {
 	Get(context.Context, string) (jobqueue.Job, error)
 	Cancel(context.Context, string) (jobqueue.Job, error)
 }, raw json.RawMessage, permission Permission, download bool) (jobqueue.Job, error) {
-	job, err := ownedExportJob(ctx.Request.Context(), jobs, ctx.Credential.ID, raw, download)
+	job, err := ownedMCPJob(ctx.Request.Context(), jobs, ctx.Credential.ID, raw, download)
 	if err != nil {
 		return jobqueue.Job{}, err
 	}
@@ -210,7 +210,7 @@ func authorizeOwnedJob(ctx Context, proposals *ProposalService, jobs interface {
 	return job, nil
 }
 
-func ownedExportJob(ctx context.Context, jobs interface {
+func ownedMCPJob(ctx context.Context, jobs interface {
 	Get(context.Context, string) (jobqueue.Job, error)
 	Cancel(context.Context, string) (jobqueue.Job, error)
 }, credentialID string, raw json.RawMessage, download bool) (jobqueue.Job, error) {
@@ -222,7 +222,10 @@ func ownedExportJob(ctx context.Context, jobs interface {
 		return jobqueue.Job{}, errors.New("invalid job ID")
 	}
 	job, err := jobs.Get(ctx, args.JobID)
-	if err != nil || job.Kind != jobqueue.JobExport || job.CredentialID != credentialID || job.ProjectID == "" {
+	if err != nil || job.CredentialID != credentialID || job.ProjectID == "" {
+		return jobqueue.Job{}, errors.New("job unavailable")
+	}
+	if job.Kind != jobqueue.JobExport && job.Kind != jobqueue.JobDetect || download && job.Kind != jobqueue.JobExport {
 		return jobqueue.Job{}, errors.New("job unavailable")
 	}
 	return job, nil

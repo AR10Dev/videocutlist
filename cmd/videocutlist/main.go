@@ -252,6 +252,7 @@ func run(ctx context.Context) error {
 	}
 	mcpTools := append(mcp.MediaTools(mediaService), mcp.ExportTools(proposalService, scheduler, exportExecutor)...)
 	mcpTools = append(mcpTools, mcp.ProjectTools(projectService, mediaService, mcpCredentials)...)
+	mcpTools = append(mcpTools, mcp.PreviewDetectionTools(mediaService, previewService, detectionService, projectService)...)
 	mcpTransport, err := mcp.NewTransport(mcp.TransportConfig{
 		Enabled: cfg.MCPEnabled, Credentials: mcpCredentials, Tools: mcpTools, AllowedOrigins: cfg.AllowedOrigins,
 		MaxConcurrentRequests: cfg.PreviewGlobalLimit,
