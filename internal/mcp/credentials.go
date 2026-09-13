@@ -314,7 +314,7 @@ FROM mcp_credentials WHERE id > ? ORDER BY id LIMIT ?`, cursor, limit+1)
 		return nil, nil, fmt.Errorf("list mcp credentials: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
-	credentials := make([]Credential, 0, min(limit, 16))
+	credentials := make([]Credential, 0, 16)
 	for rows.Next() {
 		record, err := scanCredential(rows)
 		if err != nil {
