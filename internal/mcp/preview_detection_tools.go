@@ -11,7 +11,7 @@ import (
 	"videocutlist/internal/projects/model"
 )
 
-const maxPreviewBytes = 512 << 10
+const maxPreviewBase64Bytes = 512 << 10
 
 // PreviewDetectionTools exposes bounded, scoped preview generation and detection.
 func PreviewDetectionTools(media MediaReader, preview interface {
@@ -44,8 +44,8 @@ func PreviewDetectionTools(media MediaReader, preview interface {
 				return ToolResult{}, err
 			}
 			defer result.Reader.Close()
-			data, err := io.ReadAll(io.LimitReader(result.Reader, maxPreviewBytes+1))
-			if err != nil || len(data) > maxPreviewBytes {
+			data, err := io.ReadAll(io.LimitReader(result.Reader, int64(base64.StdEncoding.DecodedLen(maxPreviewBase64Bytes)+1)))
+			if err != nil || base64.StdEncoding.EncodedLen(len(data)) > maxPreviewBase64Bytes {
 				return ToolResult{}, errors.New("preview exceeds MCP result limit")
 			}
 			return toolData("Preview created.", map[string]any{"mimeType": "video/mp4", "data": base64.StdEncoding.EncodeToString(data), "startMs": result.StartMS, "durationMs": result.DurationMS, "offsetMs": result.OffsetMS}), nil

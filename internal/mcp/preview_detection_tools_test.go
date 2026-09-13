@@ -3,6 +3,7 @@ package mcp
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"io"
 	"net/http"
@@ -25,10 +26,10 @@ func (m previewToolMedia) Get(_ context.Context, id string) (projects.Media, err
 	return m.item, nil
 }
 
-type previewToolPreview struct{}
+type previewToolPreview struct{ data []byte }
 
-func (previewToolPreview) Start(context.Context, projects.PreviewSpec) (projects.PreviewResult, error) {
-	return projects.PreviewResult{Reader: io.NopCloser(bytes.NewReader([]byte("preview"))), StartMS: 0, DurationMS: 1000}, nil
+func (p previewToolPreview) Start(context.Context, projects.PreviewSpec) (projects.PreviewResult, error) {
+	return projects.PreviewResult{Reader: io.NopCloser(bytes.NewReader(p.data)), StartMS: 0, DurationMS: 1000}, nil
 }
 
 type previewToolDetection struct{ request projects.DetectionRequest }
@@ -58,7 +59,7 @@ func TestPreviewDetectionToolsUseBoundedOpaqueInputs(t *testing.T) {
 	media := previewToolMedia{item: projects.Media{ID: mediaID, RootID: "root", DurationMS: 10_000}}
 	project := previewToolProjects{project: projects.Project{ID: "p_test", Revision: 1, Document: model.Document{Items: []model.ProjectItem{{ID: "i_aaaaaaaaaaaaaaaaaaaaaaaa", MediaID: mediaID}}}}}
 	detection := &previewToolDetection{}
-	tools := PreviewDetectionTools(media, previewToolPreview{}, detection, project)
+	tools := PreviewDetectionTools(media, previewToolPreview{data: []byte("preview")}, detection, project)
 	preview := toolNamed(t, tools, "create_preview")
 	if preview.Permission != PermissionPreviewsCreate {
 		t.Fatalf("preview permission = %q", preview.Permission)
@@ -70,6 +71,10 @@ func TestPreviewDetectionToolsUseBoundedOpaqueInputs(t *testing.T) {
 	}
 	if _, err := preview.Call(ctx, []byte(`{"mediaId":"/tmp/clip","centerMs":0,"beforeMs":1,"afterMs":1,"mute":true}`)); err == nil {
 		t.Fatal("path-like media ID accepted")
+	}
+	tooLarge := PreviewDetectionTools(media, previewToolPreview{data: make([]byte, base64.StdEncoding.DecodedLen(maxPreviewBase64Bytes)+1)}, detection, project)
+	if _, err := toolNamed(t, tooLarge, "create_preview").Call(ctx, []byte(`{"mediaId":"`+mediaID+`","centerMs":1000,"beforeMs":500,"afterMs":500,"mute":true}`)); err == nil {
+		t.Fatal("oversize base64 preview accepted")
 	}
 	start := toolNamed(t, tools, "start_detection")
 	result, err = start.Call(ctx, []byte(`{"projectId":"p_test","projectItemId":"i_aaaaaaaaaaaaaaaaaaaaaaaa","mediaId":"`+mediaID+`","projectRevision":1,"kind":"scene"}`))
