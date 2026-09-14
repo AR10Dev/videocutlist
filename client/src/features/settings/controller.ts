@@ -1,4 +1,4 @@
-import { createSignal } from "solid-js";
+import { createSignal, type Setter } from "solid-js";
 import type { ApiClient } from "../../api";
 import type { components } from "../../generated/api";
 import { settingsKey, storedSettings, type AppSettings, type Appearance } from "./model";
@@ -8,7 +8,6 @@ type LibraryRoot = {
   state?: "ready" | "unavailable";
   message?: string;
 };
-type RuntimeDestination = components["schemas"]["RuntimeDestination"];
 type ServerRuntimeSettings = components["schemas"]["RuntimeSettings"];
 type ServerSettings = components["schemas"]["SettingsResponse"];
 type MCPSettings = components["schemas"]["MCPSettingsResponse"];
@@ -19,7 +18,7 @@ type ExportProposal = components["schemas"]["ExportProposal"];
 export function createSettingsController(api: ApiClient) {
   const [settings, setSettings] = createSignal(storedSettings(localStorage));
   const [appearance, setAppearance] = createSignal<Appearance>(settings().appearance);
-  const [settingsOpen, setSettingsOpen] = createSignal(false);
+  const [settingsOpen, setOpen] = createSignal(false);
   const [serverSettingsStatus, setServerSettingsStatus] = createSignal("");
   const [libraryRoots, setLibraryRoots] = createSignal<LibraryRoot[]>([]);
   const [settingsRevision, setSettingsRevision] = createSignal(0);
@@ -29,6 +28,20 @@ export function createSettingsController(api: ApiClient) {
   const [mcpSettings, setMCPSettings] = createSignal<MCPSettings>();
   const [mcpPending, setMCPPending] = createSignal(false);
   const [revealedMCPSecret, setRevealedMCPSecret] = createSignal("");
+
+  const [mcpStatus, setMCPStatus] = createSignal("");
+  const [mcpLoadError, setMCPLoadError] = createSignal("");
+  const [mcpLoading, setMCPLoading] = createSignal(false);
+  let disclosureSession = 0;
+  const setSettingsOpen: Setter<boolean> = (value) => {
+    const next = setOpen(value);
+    if (!next) {
+      disclosureSession++;
+      setRevealedMCPSecret("");
+      setMCPStatus("");
+    }
+    return next;
+  };
 
   const saveSettings = (changes: Partial<AppSettings>) => {
     const next = { ...settings(), ...changes };
@@ -58,19 +71,36 @@ export function createSettingsController(api: ApiClient) {
       );
     }
   };
-  const loadMCPSettings = async () => {
+  const loadMCPSettings = async (cursor?: string) => {
+    if (mcpLoading()) return false;
+    setMCPLoading(true);
+    setMCPLoadError("");
     try {
-      const response = await api.request("settings/mcp");
-      if (!response.ok) throw new Error("MCP settings are unavailable on this server.");
-      const value = (await response.json()) as MCPSettings;
-      setMCPSettings({
-        ...value,
-        endpoint: new URL(value.endpoint, api.url("settings")).toString(),
-      });
-    } catch (error) {
-      setServerSettingsStatus(
-        error instanceof Error ? error.message : "MCP settings are unavailable on this server.",
+      const response = await api.request(
+        `settings/mcp${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`,
       );
+      if (!response.ok)
+        throw new Error(
+          "MCP settings could not be refreshed. Displayed data may be outdated. Retry refresh.",
+        );
+      const value = (await response.json()) as MCPSettings;
+      setMCPSettings((current) => ({
+        ...value,
+        credentials: cursor
+          ? [...(current?.credentials ?? []), ...value.credentials]
+          : value.credentials,
+        endpoint: new URL(value.endpoint, api.url("settings")).toString(),
+      }));
+      return true;
+    } catch (error) {
+      setMCPLoadError(
+        error instanceof Error
+          ? error.message
+          : "MCP settings could not be refreshed. Retry refresh.",
+      );
+      return false;
+    } finally {
+      setMCPLoading(false);
     }
   };
   const openSettings = async () => {
@@ -116,21 +146,6 @@ export function createSettingsController(api: ApiClient) {
       setSettingsPending(false);
     }
   };
-  const updateDestination = (id: string, changes: Partial<RuntimeDestination>) => {
-    const current = runtimeSettings();
-    if (!current?.destinations) return;
-    setRuntimeSettings({
-      ...current,
-      destinations: current.destinations.map((destination) =>
-        destination.id === id ? { ...destination, ...changes } : destination,
-      ),
-    });
-  };
-  const saveDestinations = () =>
-    void saveRuntimeSettings(
-      { destinations: runtimeSettings()?.destinations },
-      "Export destination settings saved.",
-    );
   const setMCPEnabled = async (enabled: boolean) => {
     if (
       await saveRuntimeSettings({ mcpEnabled: enabled }, `MCP ${enabled ? "enabled" : "disabled"}.`)
@@ -138,9 +153,10 @@ export function createSettingsController(api: ApiClient) {
       setMCPSettings((current) => (current ? { ...current, enabled } : current));
   };
   const createMCPCredential = async (input: MCPCredentialCreate) => {
-    if (mcpPending()) return false;
+    if (mcpPending() || mcpLoading()) return false;
     setMCPPending(true);
     setRevealedMCPSecret("");
+    const session = disclosureSession;
     try {
       const response = await api.request("settings/mcp/credentials", {
         method: "POST",
@@ -149,23 +165,23 @@ export function createSettingsController(api: ApiClient) {
       });
       if (!response.ok) throw new Error("Credential settings were rejected.");
       const created = (await response.json()) as MCPCredentialCreated;
-      setRevealedMCPSecret(created.secret);
+      if (settingsOpen() && session === disclosureSession) setRevealedMCPSecret(created.secret);
       await loadMCPSettings();
-      setServerSettingsStatus(
-        "MCP credential created. Copy the secret now; it will not be shown again.",
+      setMCPStatus(
+        revealedMCPSecret()
+          ? "MCP credential created. Copy the secret now; it will not be shown again."
+          : "MCP credential created. Secret disclosure was dismissed; revoke and recreate if needed.",
       );
       return true;
     } catch (error) {
-      setServerSettingsStatus(
-        error instanceof Error ? error.message : "Credential could not be created.",
-      );
+      setMCPStatus(error instanceof Error ? error.message : "Credential could not be created.");
       return false;
     } finally {
       setMCPPending(false);
     }
   };
   const approveExportProposal = async (proposalId: string) => {
-    if (mcpPending()) return false;
+    if (mcpPending() || mcpLoading()) return false;
     setMCPPending(true);
     try {
       const response = await api.request(
@@ -177,10 +193,10 @@ export function createSettingsController(api: ApiClient) {
       if (!response.ok) throw new Error("Export proposal could not be approved.");
       const approved = (await response.json()) as ExportProposal;
       await loadMCPSettings();
-      setServerSettingsStatus(`Export proposal ${approved.id} approved.`);
+      setMCPStatus(`Export proposal ${approved.id} approved.`);
       return true;
     } catch (error) {
-      setServerSettingsStatus(
+      setMCPStatus(
         error instanceof Error ? error.message : "Export proposal could not be approved.",
       );
       return false;
@@ -189,7 +205,7 @@ export function createSettingsController(api: ApiClient) {
     }
   };
   const revokeMCPCredential = async (credentialId: string) => {
-    if (mcpPending()) return;
+    if (mcpPending() || mcpLoading()) return;
     setMCPPending(true);
     try {
       const response = await api.request(
@@ -198,11 +214,9 @@ export function createSettingsController(api: ApiClient) {
       );
       if (!response.ok) throw new Error("Credential could not be revoked.");
       await loadMCPSettings();
-      setServerSettingsStatus("MCP credential revoked.");
+      setMCPStatus("MCP credential revoked.");
     } catch (error) {
-      setServerSettingsStatus(
-        error instanceof Error ? error.message : "Credential could not be revoked.",
-      );
+      setMCPStatus(error instanceof Error ? error.message : "Credential could not be revoked.");
     } finally {
       setMCPPending(false);
     }
@@ -245,14 +259,16 @@ export function createSettingsController(api: ApiClient) {
     rescanPending,
     setRescanPending,
     mcpSettings,
+    mcpStatus,
+    mcpLoadError,
+    mcpLoading,
+    loadMCPSettings,
     mcpPending,
     revealedMCPSecret,
     saveSettings,
     loadServerSettings,
     openSettings,
     saveRuntimeSettings,
-    updateDestination,
-    saveDestinations,
     setMCPEnabled,
     createMCPCredential,
     approveExportProposal,

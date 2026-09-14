@@ -91,6 +91,29 @@ func TestMCPAdministrationRequiresDeploymentAuthAndRevealsSecretOnce(t *testing.
 		}
 	}
 
+	if strings.Contains(listed, `"nextCursor"`) {
+		t.Fatalf("final page must omit nextCursor: %s", listed)
+	}
+	second := mcpAdminRequest(server, http.MethodPost, "/api/v1/settings/mcp/credentials", body, "deployment-admin")
+	if second.Code != http.StatusCreated {
+		t.Fatalf("second create status=%d", second.Code)
+	}
+	firstPage := mcpAdminRequest(server, http.MethodGet, "/api/v1/settings/mcp?limit=1", "", "deployment-admin")
+	var page struct {
+		Credentials []mcpCredentialView `json:"credentials"`
+		NextCursor  string              `json:"nextCursor"`
+	}
+	if err := json.Unmarshal(firstPage.Body.Bytes(), &page); err != nil {
+		t.Fatal(err)
+	}
+	if firstPage.Code != http.StatusOK || len(page.Credentials) != 1 || page.NextCursor == "" {
+		t.Fatalf("first page=%s", firstPage.Body.String())
+	}
+	lastPage := mcpAdminRequest(server, http.MethodGet, "/api/v1/settings/mcp?limit=1&cursor="+page.NextCursor, "", "deployment-admin")
+	if lastPage.Code != http.StatusOK || strings.Contains(lastPage.Body.String(), `"nextCursor"`) || strings.Contains(lastPage.Body.String(), page.Credentials[0].ID) {
+		t.Fatalf("last page=%s", lastPage.Body.String())
+	}
+
 	revokeResponse := mcpAdminRequest(server, http.MethodDelete, "/api/v1/settings/mcp/credentials/"+created.ID, "", "deployment-admin")
 	if revokeResponse.Code != http.StatusOK || !strings.Contains(revokeResponse.Body.String(), `"status":"revoked"`) {
 		t.Fatalf("revoke status=%d body=%s", revokeResponse.Code, revokeResponse.Body.String())

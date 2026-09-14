@@ -1,4 +1,5 @@
 import { createSignal, For, Show } from "solid-js";
+import { exportRanges } from "../export/summary";
 import { useWorkspace } from "../app/WorkspaceContext";
 
 const permissionLabels: Record<string, string> = {
@@ -20,6 +21,10 @@ export function MCPSettings() {
   const {
     mcpSettings,
     mcpPending,
+    mcpStatus,
+    mcpLoadError,
+    mcpLoading,
+    loadMCPSettings,
     settingsPending,
     revealedMCPSecret,
     setMCPEnabled,
@@ -84,7 +89,24 @@ export function MCPSettings() {
   return (
     <section aria-labelledby="mcp-settings-heading">
       <h3 id="mcp-settings-heading">MCP access</h3>
-      <Show when={mcpSettings()} fallback={<p>Loading MCP administration settings…</p>}>
+      <button
+        class="btn btn-sm"
+        type="button"
+        disabled={mcpLoading() || mcpPending()}
+        onClick={() => void loadMCPSettings()}
+      >
+        Refresh MCP settings
+      </button>
+      <Show when={mcpLoading()}>
+        <p role="status">Loading MCP administration settings…</p>
+      </Show>
+      <Show when={mcpStatus()}>
+        <p role="status">{mcpStatus()}</p>
+      </Show>
+      <Show when={mcpLoadError()}>
+        <p role="alert">{mcpLoadError()}</p>
+      </Show>
+      <Show when={mcpSettings()}>
         {(settings) => (
           <>
             <label>
@@ -272,7 +294,7 @@ export function MCPSettings() {
                   limits.
                 </p>
                 <div class="card-actions">
-                  <button class="btn btn-sm" type="submit" disabled={mcpPending()}>
+                  <button class="btn btn-sm" type="submit" disabled={mcpPending() || mcpLoading()}>
                     {mcpPending() ? "Creating…" : "Create credential"}
                   </button>
                 </div>
@@ -319,18 +341,46 @@ export function MCPSettings() {
                           Destination: {proposal.destinationId}; accuracy: {proposal.accuracy};
                           re-encoding: {proposal.requiresReencoding ? "yes" : "no"}
                         </p>
+                        <p>Requesting credential: {proposal.credentialId}</p>
                         <p>Expires: {new Date(proposal.expiresAt).toLocaleString()}</p>
                         <ul class="list-disc pl-5">
                           <For each={proposal.snapshots}>
                             {(snapshot) => (
                               <li>
-                                {snapshot.mediaLabel} ({snapshot.source.mediaId}) ranges{" "}
+                                {snapshot.mediaLabel} ({snapshot.source.mediaId}) segments{" "}
                                 {snapshot.item.segments
-                                  .map((segment) => `${segment.startMs}–${segment.endMs} ms`)
+                                  .map(
+                                    (segment) =>
+                                      `${segment.startMs}–${segment.endMs} ms (${segment.included === false ? "excluded" : "included"})`,
+                                  )
                                   .join(", ") || "none"}
                                 ; container {snapshot.item.exportOptions.container ?? "mkv"};
                                 strategy{" "}
                                 {snapshot.item.exportOptions.cutStrategy ?? "stream_copy_preferred"}
+                                <p>
+                                  Selection: {snapshot.item.exportOptions.selection ?? "segments"};
+                                  arrangement: {snapshot.item.exportOptions.mode ?? "merge"}
+                                </p>
+                                <p>
+                                  Selected streams:{" "}
+                                  {snapshot.item.exportOptions.streamIndexes?.join(", ") ||
+                                    "automatic default selection"}
+                                </p>
+                                <p>
+                                  Filename template:{" "}
+                                  {snapshot.item.exportOptions.filenameTemplate ||
+                                    "automatic unique cut filename"}
+                                </p>
+                                <p>
+                                  Effective output ranges:{" "}
+                                  {exportRanges(
+                                    snapshot.item.segments,
+                                    snapshot.item.exportOptions.selection ?? "segments",
+                                    snapshot.source.durationMs,
+                                  )
+                                    .map((range) => `${range.startMs}–${range.endMs} ms`)
+                                    .join(", ") || "none"}
+                                </p>
                               </li>
                             )}
                           </For>
@@ -351,7 +401,7 @@ export function MCPSettings() {
                             <button
                               class="btn btn-primary btn-sm"
                               type="button"
-                              disabled={mcpPending()}
+                              disabled={mcpPending() || mcpLoading()}
                               onClick={() => void approveExportProposal(proposal.id)}
                             >
                               Approve exact proposal
@@ -365,6 +415,16 @@ export function MCPSettings() {
               </ul>
             </Show>
             <h4>Credentials</h4>
+            <Show when={settings().nextCursor}>
+              <button
+                class="btn btn-sm"
+                type="button"
+                disabled={mcpLoading() || mcpPending()}
+                onClick={() => void loadMCPSettings(settings().nextCursor)}
+              >
+                Load more credentials
+              </button>
+            </Show>
             <Show
               when={settings().credentials.length > 0}
               fallback={<p>No MCP credentials created.</p>}
@@ -387,6 +447,27 @@ export function MCPSettings() {
                             {credential.status}
                           </span>
                         </div>
+                        <p>
+                          Media scope: {credential.mediaScope.kind}
+                          {credential.mediaScope.rootIds?.length
+                            ? ` — roots: ${credential.mediaScope.rootIds.join(", ")}`
+                            : ""}
+                          {credential.mediaScope.mediaIds?.length
+                            ? ` — media IDs: ${credential.mediaScope.mediaIds.join(", ")}`
+                            : ""}
+                        </p>
+                        <p>
+                          Project scope: {credential.projectScope.kind}
+                          {credential.projectScope.projectIds?.length
+                            ? ` — project IDs: ${credential.projectScope.projectIds.join(", ")}`
+                            : ""}
+                        </p>
+                        <p>
+                          Unattended exports:{" "}
+                          {credential.unattendedExports
+                            ? "allowed (no in-app approval)"
+                            : "not allowed (in-app approval required)"}
+                        </p>
                         <p>Token ID: {credential.tokenIdentifier}</p>
                         <p>Permissions: {credential.permissions.join(", ") || "none"}</p>
                         <p>
@@ -406,7 +487,7 @@ export function MCPSettings() {
                             <button
                               class="btn btn-error btn-outline btn-sm"
                               type="button"
-                              disabled={mcpPending()}
+                              disabled={mcpPending() || mcpLoading()}
                               onClick={() => void revokeMCPCredential(credential.id)}
                             >
                               Revoke {credential.name}

@@ -83,7 +83,7 @@ func (s *Server) getMCPSettings(w http.ResponseWriter, r *http.Request, id strin
 	for _, rootID := range rootIDs {
 		roots = append(roots, map[string]string{"id": rootID, "label": rootID})
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{
+	response := map[string]any{
 		"enabled":              settings.Settings.MCPEnabled,
 		"endpoint":             "/mcp",
 		"authentication":       "Bearer token",
@@ -93,8 +93,11 @@ func (s *Server) getMCPSettings(w http.ResponseWriter, r *http.Request, id strin
 		"roots":                roots,
 		"credentials":          views,
 		"proposals":            proposals,
-		"nextCursor":           next,
-	})
+	}
+	if next != nil {
+		response["nextCursor"] = *next
+	}
+	httpx.WriteJSON(w, http.StatusOK, response)
 }
 
 func (s *Server) createMCPCredential(w http.ResponseWriter, r *http.Request, id string) {
