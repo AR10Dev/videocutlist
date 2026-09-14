@@ -1,7 +1,44 @@
 import { createEffect, createSignal, For, Show } from "solid-js";
+import {
+  CheckCircle2,
+  CircleAlert,
+  Crosshair,
+  LoaderCircle,
+  Play,
+  ScanLine,
+  Search,
+  SlidersHorizontal,
+  Sparkles,
+  X,
+} from "lucide-solid";
 import { canStreamPreview, formatTime } from "../preview/model";
-import type { Candidate } from "./model";
+import { candidatePointMs, candidateRange, type Candidate, type DetectionKind } from "./model";
 import { useWorkspace } from "../app/WorkspaceContext";
+
+const kindLabel: Record<DetectionKind, string> = {
+  silence: "Pauses",
+  black: "Black sections",
+  scene: "Scene changes",
+};
+
+const kindDescription: Record<DetectionKind, string> = {
+  silence: "Find quiet ranges to review before removing.",
+  black: "Find sustained black ranges in the picture.",
+  scene: "Find visual change points without adding segments.",
+};
+
+const candidateLabel = (candidate: Candidate, durationMs: number) => {
+  const pointMs = candidatePointMs(candidate);
+  if (pointMs !== undefined) return `Scene change at ${formatTime(pointMs, durationMs)}`;
+  const range = candidateRange(candidate);
+  if (!range) return "Invalid candidate";
+  return `${formatTime(range.startMs, durationMs)} – ${formatTime(range.endMs, durationMs)}`;
+};
+
+const formatCandidateDuration = (candidate: Candidate) => {
+  const range = candidateRange(candidate);
+  return range ? formatTime(range.endMs - range.startMs, range.endMs - range.startMs) : "Point";
+};
 
 export function DetectionView() {
   const workspace = useWorkspace();
@@ -47,14 +84,37 @@ export function DetectionView() {
   };
   const preview = (candidate: Candidate, index: number) => {
     setReviewIndex(index);
+    const pointMs = candidatePointMs(candidate);
+    if (pointMs !== undefined) {
+      workspace.setDetectionStatus(`Previewing scene change ${index + 1}.`);
+      workspace.playDetectionPoint(pointMs);
+      return;
+    }
+    const range = candidateRange(candidate);
+    if (!range) {
+      workspace.setDetectionStatus("That candidate has invalid playback bounds.");
+      return;
+    }
     workspace.setDetectionStatus(`Previewing candidate ${index + 1}.`);
     workspace.playDetectionCandidate({
-      startMs: candidate.startMs,
-      endMs: candidate.endMs,
+      ...range,
       label: candidate.source,
+      included: true,
     });
   };
-  const start = async (kind: "silence" | "black" | "scene") => {
+  const seek = (candidate: Candidate) => {
+    const pointMs = candidatePointMs(candidate);
+    if (pointMs === undefined) return;
+    workspace.seekDetectionPoint(pointMs);
+    workspace.setDetectionStatus("Scene change selected; dismiss it or keep reviewing.");
+  };
+  const updateOption = (key: "noiseDb" | "minDurationMs" | "sceneThreshold", value: string) => {
+    setOptions((current) => ({
+      ...current,
+      [key]: value === "" ? undefined : Number(value),
+    }));
+  };
+  const start = async (kind: DetectionKind) => {
     if (starting()) return;
     const invalid = optionsElement?.querySelector<HTMLInputElement>("input:invalid");
     if (invalid) {
@@ -73,6 +133,7 @@ export function DetectionView() {
     starting() ||
     workspace.detectionJob()?.state === "queued" ||
     workspace.detectionJob()?.state === "running";
+  const canStart = () => Boolean(workspace.selected() && workspace.activeItemId()) && !active();
   const acceptAll = () => {
     const candidates = workspace.detectionCandidates();
     if (!candidates.length) return;
@@ -113,190 +174,371 @@ export function DetectionView() {
     }
   };
 
+  const job = () => workspace.detectionJob();
+  const jobState = () => job()?.state;
+  const jobKind = () => job()?.kind;
+  const jobIsTerminal = () => {
+    const state = jobState();
+    return state === "succeeded" || state === "failed" || state === "cancelled";
+  };
+
   return (
     <section
       class="detection-panel"
       aria-labelledby="detection-heading"
       onKeyDown={handleReviewKeyDown}
     >
-      <h2 id="detection-heading">Auto-detect</h2>
-      <p>
-        Start a goal-oriented scan, preview each bounded candidate, then accept only the cuts you
-        want.
-      </p>
-      <p role="status" aria-live="polite">
+      <header class="task-heading detection-heading">
+        <div>
+          <h2 id="detection-heading">Auto-detect</h2>
+          <p id="detection-description">
+            Scan the active media item, then review every proposed range or scene point
+            deliberately.
+          </p>
+        </div>
+        <Show when={workspace.detectionCandidates().length > 0}>
+          <span class="badge badge-sm badge-neutral">
+            {workspace.detectionCandidates().length} pending
+          </span>
+        </Show>
+      </header>
+
+      <Show
+        when={workspace.selected() && workspace.activeItemId()}
+        fallback={
+          <div class="detection-empty-state" role="status">
+            <CircleAlert size={18} aria-hidden="true" />
+            <div>
+              <strong>Add a media item first</strong>
+              <p>Auto-detect works on the active project item and its saved revision.</p>
+            </div>
+          </div>
+        }
+      >
+        <div class="detection-source-strip" aria-label="Detection source">
+          <div class="detection-source-icon" aria-hidden="true">
+            <ScanLine size={18} />
+          </div>
+          <div class="detection-source-copy">
+            <strong>{workspace.selected()!.name}</strong>
+            <span>
+              {formatTime(workspace.duration(), workspace.duration())} · project revision{" "}
+              {workspace.revision() || "not saved"}
+            </span>
+          </div>
+        </div>
+
+        <Show when={workspace.detectionQueryError()}>
+          {(message) => (
+            <div class="alert alert-error alert-soft" role="alert">
+              <CircleAlert size={16} aria-hidden="true" />
+              <span>{message()}</span>
+            </div>
+          )}
+        </Show>
+
+        <div class="detection-workflow-group">
+          <div class="detection-section-label">
+            <div>
+              <h3>Find candidates</h3>
+              <p>Choose one deliberate scan; reviewing results never changes export selection.</p>
+            </div>
+            <Search size={16} aria-hidden="true" />
+          </div>
+          <div class="detection-methods" aria-label="Detection methods">
+            <div class="detection-method-row">
+              <button
+                class="btn btn-primary btn-sm"
+                disabled={!canStart()}
+                onClick={() => void start("silence")}
+              >
+                <Sparkles size={15} aria-hidden="true" /> Find pauses
+              </button>
+              <span>{kindDescription.silence}</span>
+            </div>
+            <div class="detection-method-row">
+              <button
+                class="btn btn-ghost btn-sm"
+                disabled={!canStart()}
+                onClick={() => void start("black")}
+              >
+                <ScanLine size={15} aria-hidden="true" /> Find black sections
+              </button>
+              <span>{kindDescription.black}</span>
+            </div>
+            <div class="detection-method-row">
+              <button
+                class="btn btn-ghost btn-sm"
+                disabled={!canStart()}
+                onClick={() => void start("scene")}
+              >
+                <Crosshair size={15} aria-hidden="true" /> Find scene changes
+              </button>
+              <span>{kindDescription.scene}</span>
+            </div>
+          </div>
+        </div>
+
+        <Show when={jobState() === "queued" || jobState() === "running" || starting()}>
+          <div class="detection-job-state" aria-busy="true" role="status">
+            <div class="detection-job-state-main">
+              <LoaderCircle class="spin" size={18} aria-hidden="true" />
+              <div>
+                <strong>
+                  {starting()
+                    ? "Preparing detection…"
+                    : jobState() === "queued"
+                      ? "Detection queued"
+                      : "Detection running"}
+                </strong>
+                <span>
+                  {jobKind() ? `${kindLabel[jobKind()!]} · ` : ""}
+                  {workspace.detectionStatus() || "The server is scanning this media item."}
+                </span>
+              </div>
+            </div>
+            <Show when={!starting() && (jobState() === "queued" || jobState() === "running")}>
+              <button
+                class="btn btn-ghost btn-sm"
+                type="button"
+                onClick={() => void workspace.cancelDetection()}
+              >
+                <X size={15} aria-hidden="true" /> Cancel detection
+              </button>
+            </Show>
+          </div>
+        </Show>
+
+        <Show when={jobIsTerminal()}>
+          <div
+            class={`detection-job-state detection-job-state-${jobState()}`}
+            role={jobState() === "failed" ? "alert" : "status"}
+          >
+            <div class="detection-job-state-main">
+              {jobState() === "succeeded" ? (
+                <CheckCircle2 size={18} aria-hidden="true" />
+              ) : (
+                <CircleAlert size={18} aria-hidden="true" />
+              )}
+              <div>
+                <strong>
+                  {jobState() === "succeeded"
+                    ? "Detection complete"
+                    : jobState() === "cancelled"
+                      ? "Detection cancelled"
+                      : "Detection failed"}
+                </strong>
+                <span>
+                  {jobKind() ? `${kindLabel[jobKind()!]} · ` : ""}
+                  {workspace.detectionStatus()}
+                  <Show when={job()?.errorCode}> · code: {job()!.errorCode}</Show>
+                </span>
+              </div>
+            </div>
+            <Show when={workspace.detectionLoading()}>
+              <LoaderCircle class="spin" size={15} aria-label="Updating detection status" />
+            </Show>
+          </div>
+        </Show>
+
+        <details class="detection-options">
+          <summary>
+            <SlidersHorizontal size={15} aria-hidden="true" /> Advanced
+          </summary>
+          <fieldset
+            ref={(element) => {
+              optionsElement = element;
+            }}
+            class="option-fields"
+            disabled={active()}
+          >
+            <legend>Optional overrides</legend>
+            <label>
+              Silence threshold (dB)
+              <input
+                class="input input-bordered input-sm"
+                type="number"
+                min="-100"
+                max="0"
+                step="1"
+                value={options().noiseDb ?? ""}
+                placeholder="Server default"
+                onInput={(event) => updateOption("noiseDb", event.currentTarget.value)}
+              />
+              <span class="control-help">Lower values require quieter audio.</span>
+            </label>
+            <label>
+              Minimum duration (ms)
+              <input
+                class="input input-bordered input-sm"
+                type="number"
+                min="0"
+                max="86400000"
+                step="1"
+                value={options().minDurationMs ?? ""}
+                placeholder="Server default"
+                onInput={(event) => updateOption("minDurationMs", event.currentTarget.value)}
+              />
+              <span class="control-help">
+                Used for pause and black-section ranges; maximum 24 hours.
+              </span>
+            </label>
+            <label>
+              Scene threshold
+              <input
+                class="input input-bordered input-sm"
+                type="number"
+                min="0"
+                max="1"
+                step="0.01"
+                value={options().sceneThreshold ?? ""}
+                placeholder="Server default"
+                onInput={(event) => updateOption("sceneThreshold", event.currentTarget.value)}
+              />
+              <span class="control-help">Range 0–1. Higher values find fewer changes.</span>
+            </label>
+            <div class="detection-option-actions">
+              <span class="control-help">
+                Detection sensitivity overrides; blank fields and zero values use server defaults.
+              </span>
+              <button
+                class="btn btn-ghost btn-xs"
+                type="button"
+                disabled={active() || Object.keys(options()).length === 0}
+                onClick={() => setOptions({})}
+              >
+                Reset overrides
+              </button>
+            </div>
+          </fieldset>
+        </details>
+
+        <Show when={jobState() === "succeeded" && workspace.detectionCandidates().length === 0}>
+          <div class="detection-empty-state detection-empty-state-result" role="status">
+            <CheckCircle2 size={18} aria-hidden="true" />
+            <div>
+              <strong>
+                {job()?.candidates?.length ? "All candidates reviewed" : "No candidates found"}
+              </strong>
+              <p>
+                {job()?.candidates?.length
+                  ? "Save the project to keep accepted edits."
+                  : "Try a different sensitivity or scan another detection method."}
+              </p>
+            </div>
+          </div>
+        </Show>
+
+        <Show when={workspace.detectionCandidates().length > 0}>
+          <div class="detection-review" aria-label="Detection review">
+            <div class="detection-review-heading">
+              <div>
+                <h3>Review candidates</h3>
+                <p>
+                  Review ranges before adding a segment; scene points can be previewed or dismissed.
+                </p>
+              </div>
+              <button
+                class="btn btn-sm"
+                type="button"
+                title="Accept all valid candidates"
+                disabled={active()}
+                onClick={acceptAll}
+              >
+                <CheckCircle2 size={15} aria-hidden="true" /> Accept all valid
+              </button>
+            </div>
+            <p class="shortcut-help">
+              Candidate {reviewIndex() + 1} of {workspace.detectionCandidates().length}. Use A or
+              Enter to accept, R/X/N to dismiss.
+            </p>
+            <ol aria-label="Detection candidates">
+              <For each={workspace.detectionCandidates()}>
+                {(candidate, index) => (
+                  <li
+                    ref={(element) => candidateRows.set(candidate.id, element)}
+                    tabIndex={index() === reviewIndex() ? 0 : -1}
+                    aria-current={index() === reviewIndex() ? "true" : undefined}
+                    aria-label={`Detection candidate ${index() + 1}: ${candidateLabel(candidate, workspace.duration())}`}
+                    data-detection-candidate={candidate.id}
+                    onFocus={() => setReviewIndex(index())}
+                  >
+                    <div class="detection-candidate-copy">
+                      <div class="detection-candidate-title">
+                        <span class="badge badge-sm">{kindLabel[candidate.source]}</span>
+                        <strong>{candidateLabel(candidate, workspace.duration())}</strong>
+                      </div>
+                      <dl>
+                        <dt>{candidate.source === "scene" ? "Point" : "Duration"}</dt>
+                        <dd>{formatCandidateDuration(candidate)}</dd>
+                        <dt>Candidate ID</dt>
+                        <dd>
+                          <code>{candidate.id}</code>
+                        </dd>
+                      </dl>
+                    </div>
+                    <div class="detection-candidate-actions">
+                      <button
+                        class="btn btn-ghost btn-sm"
+                        type="button"
+                        title="Preview candidate"
+                        aria-label={`Preview candidate ${index() + 1}`}
+                        disabled={!canStreamPreview()}
+                        onClick={() => preview(candidate, index())}
+                      >
+                        <Play size={15} aria-hidden="true" /> Preview
+                      </button>
+                      <Show
+                        when={
+                          candidate.source === "scene" && candidatePointMs(candidate) !== undefined
+                        }
+                      >
+                        <button
+                          class="btn btn-ghost btn-sm"
+                          type="button"
+                          title="Seek to scene change"
+                          aria-label="Seek to point"
+                          onClick={() => seek(candidate)}
+                        >
+                          <Crosshair size={15} aria-hidden="true" /> Seek to point
+                        </button>
+                      </Show>
+                      <Show when={candidate.source !== "scene"}>
+                        <button
+                          class="btn btn-sm"
+                          type="button"
+                          title="Accept candidate"
+                          aria-label="Add segment"
+                          aria-keyshortcuts="A Enter"
+                          data-action="accept-candidate"
+                          onClick={() => accept(candidate)}
+                        >
+                          <CheckCircle2 size={15} aria-hidden="true" /> Add segment
+                        </button>
+                      </Show>
+                      <button
+                        class="btn btn-ghost btn-sm"
+                        type="button"
+                        title="Dismiss candidate"
+                        aria-label="Dismiss"
+                        aria-keyshortcuts="R X N Delete Backspace"
+                        data-action="reject-candidate"
+                        onClick={() => reject(candidate)}
+                      >
+                        <X size={15} aria-hidden="true" /> Dismiss
+                      </button>
+                    </div>
+                  </li>
+                )}
+              </For>
+            </ol>
+          </div>
+        </Show>
+      </Show>
+
+      <p class="detection-status" role="status" aria-live="polite">
         {workspace.detectionStatus()}
       </p>
-      <div class="detection-methods" aria-label="Detection workflows">
-        <h3 class="sr-only">Goal-oriented workflows</h3>
-        <button class="btn btn-sm" disabled={active()} onClick={() => void start("silence")}>
-          Remove silence
-        </button>
-        <button class="btn btn-sm" disabled={active()} onClick={() => void start("scene")}>
-          Split into scenes
-        </button>
-        <button
-          class="btn btn-ghost btn-sm"
-          disabled={active()}
-          onClick={() => void start("silence")}
-        >
-          Find silence
-        </button>
-        <button
-          class="btn btn-ghost btn-sm"
-          disabled={active()}
-          onClick={() => void start("black")}
-        >
-          Find black frames
-        </button>
-        <button
-          class="btn btn-ghost btn-sm"
-          disabled={active()}
-          onClick={() => void start("scene")}
-        >
-          Find scene changes
-        </button>
-        <Show when={!starting() && active()}>
-          <button class="btn btn-ghost btn-sm" onClick={() => void workspace.cancelDetection()}>
-            Cancel detection
-          </button>
-        </Show>
-      </div>
-      <details>
-        <summary>Detection sensitivity</summary>
-        <fieldset
-          ref={(element) => {
-            optionsElement = element;
-          }}
-          class="option-fields"
-          disabled={active()}
-        >
-          <legend>Optional overrides</legend>
-          <For
-            each={[
-              {
-                key: "noiseDb" as const,
-                label: "Silence threshold (dB)",
-                min: -100,
-                max: 0,
-                step: 1,
-              },
-              {
-                key: "minDurationMs" as const,
-                label: "Minimum duration (ms)",
-                min: 0,
-                max: 86400000,
-                step: 1,
-              },
-              {
-                key: "sceneThreshold" as const,
-                label: "Scene threshold",
-                min: 0,
-                max: 1,
-                step: 0.01,
-              },
-            ]}
-          >
-            {(field) => (
-              <label>
-                {field.label}
-                <input
-                  class="input input-sm w-full"
-                  type="number"
-                  min={field.min}
-                  max={field.max}
-                  step={field.step}
-                  placeholder="Server default"
-                  onInput={(event) =>
-                    setOptions((current) => ({
-                      ...current,
-                      [field.key]:
-                        event.currentTarget.value === ""
-                          ? undefined
-                          : event.currentTarget.valueAsNumber,
-                    }))
-                  }
-                />
-              </label>
-            )}
-          </For>
-          <p>
-            Leave blank to use the server defaults. Scene threshold ranges from 0 to 1; higher
-            values find fewer changes.
-          </p>
-        </fieldset>
-      </details>
-      <Show when={workspace.detectionCandidates().length > 0}>
-        <div class="detection-review" aria-label="Detection review">
-          <div class="flex flex-wrap items-center justify-between gap-2">
-            <h3 class="m-0">Review candidates</h3>
-            <button
-              class="btn btn-sm"
-              type="button"
-              title="Accept all valid candidates"
-              disabled={active()}
-              onClick={acceptAll}
-            >
-              Accept all valid
-            </button>
-          </div>
-          <p class="shortcut-help">
-            Focus a candidate to review it. Accepting or rejecting advances to the next candidate.
-          </p>
-          <ol aria-label="Detection candidates">
-            <For each={workspace.detectionCandidates()}>
-              {(candidate, index) => (
-                <li
-                  ref={(element) => candidateRows.set(candidate.id, element)}
-                  tabIndex={index() === reviewIndex() ? 0 : -1}
-                  aria-current={index() === reviewIndex() ? "true" : undefined}
-                  aria-label={`Detection candidate ${index() + 1}: ${formatTime(candidate.startMs, workspace.duration())} to ${formatTime(candidate.endMs, workspace.duration())}`}
-                  data-detection-candidate={candidate.id}
-                  onFocus={() => setReviewIndex(index())}
-                >
-                  <span>
-                    {candidate.source} · {formatTime(candidate.startMs, workspace.duration())}–
-                    {formatTime(candidate.endMs, workspace.duration())} ·{" "}
-                    {Math.round(candidate.confidence * 100)}%
-                  </span>{" "}
-                  <button
-                    class="btn btn-ghost btn-sm"
-                    type="button"
-                    title="Preview candidate"
-                    aria-label={`Preview candidate ${index() + 1}`}
-                    disabled={!canStreamPreview()}
-                    onClick={() => preview(candidate, index())}
-                  >
-                    Preview
-                  </button>{" "}
-                  <button
-                    class="btn btn-ghost btn-sm"
-                    type="button"
-                    title="Accept candidate"
-                    aria-label="Add segment"
-                    aria-keyshortcuts="A Enter"
-                    data-action="accept-candidate"
-                    onClick={() => accept(candidate)}
-                  >
-                    Add segment
-                  </button>{" "}
-                  <button
-                    class="btn btn-ghost btn-sm"
-                    type="button"
-                    title="Reject candidate"
-                    aria-label="Dismiss"
-                    aria-keyshortcuts="R X N Delete Backspace"
-                    data-action="reject-candidate"
-                    onClick={() => reject(candidate)}
-                  >
-                    Dismiss
-                  </button>
-                </li>
-              )}
-            </For>
-          </ol>
-        </div>
-      </Show>
     </section>
   );
 }

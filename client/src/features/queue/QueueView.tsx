@@ -1,16 +1,12 @@
 import { For, Show } from "solid-js";
+import { CircleAlert, LoaderCircle, RefreshCw } from "lucide-solid";
 import type { components } from "../../generated/api";
 import { useWorkspace } from "../app/WorkspaceContext";
+import { ExportJobCard, jobOutputNames } from "../export/ExportJobCard";
 import { BatchDownload } from "../export/BatchDownload";
-import { OutputDownload } from "../export/OutputDownload";
 
 type Batch = components["schemas"]["Batch"];
-type Job = components["schemas"]["Job"];
 type Destination = components["schemas"]["Destination"];
-
-function outputNames(job: Job): string[] {
-  return job.result?.outputNames ?? (job.result?.outputName ? [job.result.outputName] : []);
-}
 
 function BatchCard(props: {
   batch: Batch;
@@ -21,25 +17,12 @@ function BatchCard(props: {
   retryChildJob: (id: string) => Promise<unknown>;
 }) {
   const completedJobs = () => props.batch.jobs.filter((job) => job.state === "succeeded");
-  const outputs = () => completedJobs().flatMap((job) => outputNames(job));
-  const warnings = () => [...new Set(props.batch.jobs.flatMap((job) => job.warnings ?? []))];
-  const outputFailures = () =>
-    props.batch.jobs.flatMap((job) =>
-      (job.result?.outputFailures ?? []).map((failure) => ({
-        ...failure,
-        mediaLabel: job.mediaLabel,
-      })),
+  const outputs = () => completedJobs().flatMap((job) => jobOutputNames(job));
+  const allDownloadable = () =>
+    props.batch.jobs.length > 0 &&
+    props.batch.jobs.every(
+      (job) => job.state === "succeeded" && job.result?.destinationKind === "download",
     );
-  const destinationLabel = (job: Job) =>
-    props.destinations().find((destination) => destination.id === job.result?.destinationId)
-      ?.label ?? "the configured server destination";
-  const destinationsForBatch = () => [
-    ...new Set(
-      completedJobs()
-        .filter((job) => job.result?.destinationKind)
-        .map((job) => destinationLabel(job)),
-    ),
-  ];
   const serverDestinations = () => [
     ...new Set(
       completedJobs()
@@ -47,130 +30,100 @@ function BatchCard(props: {
           (job) =>
             job.result?.destinationKind !== undefined && job.result.destinationKind !== "download",
         )
-        .map((job) => destinationLabel(job)),
+        .map(
+          (job) =>
+            props.destinations().find((destination) => destination.id === job.result?.destinationId)
+              ?.label ?? "the configured server destination",
+        ),
     ),
   ];
-  const downloadable = () =>
-    outputs().length > 1 &&
-    props.batch.jobs.some((job) => outputNames(job).length > 0) &&
-    props.batch.jobs.every(
-      (job) => job.state === "succeeded" && job.result?.destinationKind === "download",
-    );
 
   return (
-    <article class="card card-border card-sm" aria-label={`Export batch ${props.ordinal}`}>
-      <div class="card-body">
-        <h3 class="card-title text-base">Export batch {props.ordinal}</h3>
-        <p role="status">
-          {props.batch.state} · {Math.round(props.batch.progress * 100)}%
-        </p>
+    <article class="queue-batch" aria-label={`Export batch ${props.ordinal}`}>
+      <header class="queue-batch-heading">
+        <div>
+          <h3>Export batch</h3>
+          <p>
+            <code>{props.batch.batchId}</code>
+            <Show when={props.batch.projectRevision}>
+              {" "}
+              · revision {props.batch.projectRevision}
+            </Show>
+          </p>
+        </div>
+        <span
+          class={`badge badge-sm ${
+            props.batch.state === "succeeded"
+              ? "badge-success"
+              : props.batch.state === "failed"
+                ? "badge-error"
+                : props.batch.state === "cancelled"
+                  ? "badge-warning"
+                  : "badge-neutral"
+          }`}
+        >
+          {props.batch.state}
+        </span>
+      </header>
+      <div class="queue-batch-progress" aria-label={`Export batch ${props.ordinal} progress`}>
         <progress
           class="progress progress-primary"
           value={Math.round(props.batch.progress * 100)}
           max="100"
-          aria-label={`Export batch ${props.ordinal} progress`}
         />
-        <Show when={props.batch.state === "queued" || props.batch.state === "running"}>
-          <div class="card-actions">
-            <button
-              class="btn btn-ghost btn-sm"
-              type="button"
-              onClick={() => void props.cancelBatch(props.batch.batchId)}
-            >
-              Cancel batch
-            </button>
-          </div>
-        </Show>
-        <Show when={props.batch.state === "succeeded"}>
-          <div class="export-completion" aria-label="Export completion summary">
-            <p role="status">
-              {outputs().length} clip{outputs().length === 1 ? "" : "s"} ready.
-            </p>
-            <Show when={destinationsForBatch().length > 0}>
-              <p>Destination: {destinationsForBatch().join(", ")}</p>
-            </Show>
-            <For each={serverDestinations()}>
-              {(destination) => <p role="status">Clips created in {destination}.</p>}
-            </For>
-            <For each={warnings()}>{(warning) => <p role="status">Warning: {warning}</p>}</For>
-            <Show when={outputFailures().length > 0}>
-              <div role="alert">
-                Some clips were not saved. Completed outputs are listed above.
-                <ul>
-                  <For each={outputFailures()}>
-                    {(failure) => (
-                      <li>
-                        {failure.mediaLabel ? `${failure.mediaLabel}: ` : ""}Segment{" "}
-                        {failure.segment}: {failure.message}
-                      </li>
-                    )}
-                  </For>
-                </ul>
-              </div>
-            </Show>
-            <Show when={downloadable()}>
-              <BatchDownload batchId={props.batch.batchId} outputCount={outputs().length} />
-            </Show>
-            <For each={completedJobs().filter((job) => job.result?.destinationKind === "download")}>
-              {(job) => (
-                <For each={outputNames(job)}>
-                  {(name, position) => (
-                    <OutputDownload jobId={job.id} position={position()} name={name} />
-                  )}
-                </For>
-              )}
-            </For>
-          </div>
-        </Show>
-        <details>
-          <summary>Job details</summary>
-          <ul class="list" aria-label="Export batch jobs">
-            <For each={props.batch.jobs}>
-              {(job) => (
-                <li class="list-row">
-                  <span>
-                    {job.type} · {job.mediaLabel ?? job.projectItemId ?? "media"} · {job.state}
-                    {job.progress !== undefined ? ` · ${Math.round(job.progress * 100)}%` : ""}
-                    {job.errorCode ? ` · ${job.errorCode}` : ""}
-                    {job.warnings?.length ? ` · ${job.warnings.join(", ")}` : ""}
-                    {job.result?.outputFailures?.length
-                      ? ` · ${job.result.outputFailures.length} output failure${job.result.outputFailures.length === 1 ? "" : "s"}`
-                      : ""}
-                    {job.result?.outputName ? ` · ${job.result.outputName}` : ""}
-                    {job.result?.outputNames?.length
-                      ? ` · ${job.result.outputNames.join(", ")}`
-                      : ""}
-                  </span>
-                  <Show when={job.state === "queued" || job.state === "running"}>
-                    <button
-                      class="btn btn-ghost btn-sm"
-                      type="button"
-                      onClick={() => void props.cancelChildJob(job.id)}
-                    >
-                      Cancel job
-                    </button>
-                  </Show>
-                  <Show when={job.state === "failed" && job.type === "export"}>
-                    <button
-                      class="btn btn-ghost btn-sm"
-                      type="button"
-                      onClick={() => void props.retryChildJob(job.id)}
-                    >
-                      Retry
-                    </button>
-                  </Show>
-                </li>
-              )}
-            </For>
-          </ul>
-        </details>
+        <span>{Math.round(props.batch.progress * 100)}%</span>
       </div>
+      <p class="queue-batch-summary">
+        {props.batch.jobs.length} job{props.batch.jobs.length === 1 ? "" : "s"} · {outputs().length}{" "}
+        output{outputs().length === 1 ? "" : "s"} published
+      </p>
+
+      <Show when={props.batch.state === "queued" || props.batch.state === "running"}>
+        <div class="queue-batch-actions">
+          <button
+            class="btn btn-ghost btn-sm"
+            type="button"
+            onClick={() => void props.cancelBatch(props.batch.batchId)}
+          >
+            Cancel batch
+          </button>
+        </div>
+      </Show>
+      <Show when={allDownloadable() && outputs().length > 1}>
+        <BatchDownload batchId={props.batch.batchId} outputCount={outputs().length} />
+      </Show>
+      <Show when={serverDestinations().length > 0}>
+        <div class="queue-destination-notes" aria-label="Server destination results">
+          <For each={serverDestinations()}>
+            {(destination) => <p role="status">Clips created in {destination}.</p>}
+          </For>
+        </div>
+      </Show>
+
+      <div class="queue-job-list" aria-label="Export batch jobs">
+        <For each={props.batch.jobs}>
+          {(job, index) => (
+            <ExportJobCard
+              job={job}
+              ordinal={index() + 1}
+              batchId={props.batch.batchId}
+              destinations={props.destinations}
+              onCancel={props.cancelChildJob}
+              onRetry={props.retryChildJob}
+            />
+          )}
+        </For>
+      </div>
+      <Show when={props.batch.jobs.length === 0}>
+        <p class="export-muted-note">This batch has no child jobs.</p>
+      </Show>
     </article>
   );
 }
 
 export function QueueView() {
-  const { batches, destinations, cancelBatch, cancelChildJob, retryChildJob } = useWorkspace();
+  const workspace = useWorkspace();
+  const { batches, destinations, cancelBatch, cancelChildJob, retryChildJob } = workspace;
   const activeOrRecent = () => {
     const current = batches();
     const visible = current.filter(
@@ -188,46 +141,86 @@ export function QueueView() {
   };
 
   return (
-    <section class="queue-panel flex flex-col gap-4 p-4" aria-labelledby="queue-heading">
+    <section class="queue-panel" aria-labelledby="queue-heading">
       <header class="queue-heading-row">
         <div>
           <h2 id="queue-heading">Export queue</h2>
           <p class="queue-description">Exports continue while you keep editing.</p>
         </div>
-        <span class="badge badge-sm">{batches().length} total</span>
+        <div class="queue-heading-actions">
+          <span class="badge badge-sm">{batches().length} total</span>
+          <button
+            class="btn btn-ghost btn-sm btn-square"
+            type="button"
+            title="Refresh export queue"
+            aria-label="Refresh export queue"
+            disabled={workspace.batchesRefreshing()}
+            onClick={workspace.refreshBatches}
+          >
+            <RefreshCw
+              classList={{ spin: workspace.batchesRefreshing() }}
+              size={15}
+              aria-hidden="true"
+            />
+          </button>
+        </div>
       </header>
+      <Show when={workspace.batchesError()}>
+        {(message) => (
+          <div class="alert alert-error alert-soft" role="alert">
+            <CircleAlert size={16} aria-hidden="true" />
+            <span>{message()}</span>
+            <button class="btn btn-ghost btn-xs" type="button" onClick={workspace.refreshBatches}>
+              Retry
+            </button>
+          </div>
+        )}
+      </Show>
+      <Show when={workspace.batchesLoading() && !batches().length}>
+        <div class="export-loading" role="status" aria-busy="true">
+          <LoaderCircle class="spin" size={16} aria-hidden="true" /> Loading export queue…
+        </div>
+      </Show>
       <Show
         when={batches().length > 0}
-        fallback={<p role="status">No export jobs yet. Submitted clips will appear here.</p>}
+        fallback={
+          <Show when={!workspace.batchesLoading()}>
+            <p role="status">No export jobs yet. Submitted clips will appear here.</p>
+          </Show>
+        }
       >
-        <For each={activeOrRecent()}>
-          {(batch, index) => (
-            <BatchCard
-              batch={batch}
-              ordinal={index() + 1}
-              destinations={destinations}
-              cancelBatch={cancelBatch}
-              cancelChildJob={cancelChildJob}
-              retryChildJob={retryChildJob}
-            />
-          )}
-        </For>
+        <div class="queue-batch-list">
+          <For each={activeOrRecent()}>
+            {(batch, index) => (
+              <BatchCard
+                batch={batch}
+                ordinal={index() + 1}
+                destinations={destinations}
+                cancelBatch={cancelBatch}
+                cancelChildJob={cancelChildJob}
+                retryChildJob={retryChildJob}
+              />
+            )}
+          </For>
+        </div>
         <Show when={history().length > 0}>
-          <details class="collapse collapse-arrow">
+          <details class="collapse collapse-arrow queue-history">
             <summary class="collapse-title">Completed history ({history().length})</summary>
             <div class="collapse-content">
-              <For each={history()}>
-                {(batch, index) => (
-                  <BatchCard
-                    batch={batch}
-                    ordinal={activeOrRecent().length + index() + 1}
-                    destinations={destinations}
-                    cancelBatch={cancelBatch}
-                    cancelChildJob={cancelChildJob}
-                    retryChildJob={retryChildJob}
-                  />
-                )}
-              </For>
+              <div class="queue-batch-list">
+                <For each={history()}>
+                  {(batch, index) => (
+                    <BatchCard
+                      batch={batch}
+                      ordinal={activeOrRecent().length + index() + 1}
+                      destinations={destinations}
+                      cancelBatch={cancelBatch}
+                      cancelChildJob={cancelChildJob}
+                      retryChildJob={retryChildJob}
+                    />
+                  )}
+                </For>
+              </div>
             </div>
           </details>
         </Show>

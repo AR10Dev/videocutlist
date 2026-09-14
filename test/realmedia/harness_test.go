@@ -264,6 +264,7 @@ func startProcessWithEnv(t *testing.T, root string, overrides map[string]string)
 	})
 	client := &http.Client{Timeout: time.Second}
 	deadline := time.Now().Add(startupWait)
+	mediaState := "not requested"
 	for time.Now().Before(deadline) {
 		if p.base == "" {
 			if match := regexp.MustCompile(`"listen_addr":"(127\.0\.0\.1:[0-9]+)"`).FindStringSubmatch(logBuffer.Snapshot()); len(match) == 2 {
@@ -276,14 +277,40 @@ func startProcessWithEnv(t *testing.T, root string, overrides map[string]string)
 		}
 		resp, err := client.Get(p.base + "/api/v1/ready")
 		if err == nil {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
-				return p
+				// Dependency readiness does not imply the initial library scan is complete.
+				request, err := http.NewRequestWithContext(ctx, http.MethodGet, p.base+"/api/v1/media/status", nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				request.Header.Set("Authorization", "Bearer "+bearerToken)
+				status, err := client.Do(request)
+				if err == nil {
+					var library struct {
+						State string `json:"state"`
+					}
+					decodeErr := json.NewDecoder(status.Body).Decode(&library)
+					_ = status.Body.Close()
+					mediaState = fmt.Sprintf("HTTP %d, state %q", status.StatusCode, library.State)
+					// Auth-boundary tests deliberately deny library access.
+					if overrides["VIDEOCUTLIST_AUTH_MODE"] == "trusted_proxy" && status.StatusCode == http.StatusUnauthorized {
+						return p
+					}
+					if status.StatusCode == http.StatusOK && decodeErr == nil {
+						switch library.State {
+						case "ready_with_media", "ready_empty", "unconfigured", "failed":
+							return p
+						}
+					}
+				} else {
+					mediaState = err.Error()
+				}
 			}
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	t.Fatalf("production process did not become ready\n%s", boundedLog(p.log.Snapshot()))
+	t.Fatalf("production process did not become ready (media: %s)\n%s", mediaState, boundedLog(p.log.Snapshot()))
 	return nil
 }
 

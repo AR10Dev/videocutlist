@@ -144,6 +144,7 @@ VIDEOCUTLIST_DESTINATIONS_JSON
 VIDEOCUTLIST_MEDIA_ROOTS_JSON
 VIDEOCUTLIST_AUTH_MODE=none|bearer|trusted_proxy
 VIDEOCUTLIST_BEARER_TOKEN
+VIDEOCUTLIST_MCP_ENABLED=false
 VIDEOCUTLIST_TRUSTED_PROXY_CIDRS
 VIDEOCUTLIST_FFMPEG_PATH
 VIDEOCUTLIST_FFPROBE_PATH
@@ -159,6 +160,12 @@ VIDEOCUTLIST_PREVIEW_GRID_MS
 Listener addresses are IP literals and are joined to the port with
 `net.JoinHostPort`. Production mode permits explicit non-loopback binding;
 development mode remains loopback-only.
+
+The Streamable HTTP MCP endpoint is `/mcp` and is disabled unless
+`VIDEOCUTLIST_MCP_ENABLED=true`. It implements MCP `2025-06-18`, requires a
+separately issued scoped MCP bearer credential on every request, and does not
+accept the deployment bearer token. Remote clients require HTTPS; browser
+origins must be same-origin or exactly allowed by `VIDEOCUTLIST_ALLOWED_ORIGINS`.
 
 Public base URLs and allowed origins accept only absolute HTTP(S) values
 without credentials, query, or fragment; origins also have no path.

@@ -68,6 +68,25 @@ func TestVerifyOutputAcceptsSelectedStreamCombinations(t *testing.T) {
 	}
 }
 
+func TestVerifyOutputAcceptsMP4MOVFormatAliases(t *testing.T) {
+	source := sourceStreams()
+	for _, test := range []struct {
+		container string
+		format    string
+	}{
+		{"mp4", "mov,mp4,m4a,3gp,3g2,mj2"},
+		{"mov", "mov,mp4,m4a,3gp,3g2,mj2"},
+		{"mp4", "mp4"},
+		{"mov", "mov"},
+	} {
+		t.Run(test.container+"/"+test.format, func(t *testing.T) {
+			if err := validateOutput(probe.Metadata{Container: test.format, DurationMS: 1000, Streams: []probe.Stream{source.Streams[0]}}, source, []int{0}, 1000, test.container); err != nil {
+				t.Fatalf("format alias rejected: %v", err)
+			}
+		})
+	}
+}
+
 func TestVerifyOutputRejectsInvalidArtifacts(t *testing.T) {
 	source := sourceStreams()
 	tests := []struct {

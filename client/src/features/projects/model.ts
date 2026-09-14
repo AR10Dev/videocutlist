@@ -6,6 +6,7 @@ export type Media = components["schemas"]["Media"];
 export type Project = components["schemas"]["Project"];
 export type ProjectItem = components["schemas"]["ProjectItem"];
 export type ProjectExportOptions = components["schemas"]["ProjectExportOptions"];
+export type ExportContainer = NonNullable<ProjectExportOptions["container"]>;
 
 export type EditableProjectItem = {
   id: string;

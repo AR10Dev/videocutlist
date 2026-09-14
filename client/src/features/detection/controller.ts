@@ -27,8 +27,6 @@ type DetectionDependencies = {
   saveProject: () => Promise<Project | undefined>;
   updateSegments: (segments: Segment[]) => void;
   markDirty: () => void;
-  setExportSelection?: (selection: "segments" | "gaps") => void;
-  onSegmentsAccepted?: () => void;
 };
 
 export function createDetectionController(
@@ -68,6 +66,14 @@ export function createDetectionController(
     if (!reviewedCandidateIDs.size)
       setDetectionStatus(`${candidates.length} candidates found. Review each before accepting.`);
   };
+  createEffect(() => {
+    const error = detectionStatusQuery.error;
+    if (error && detectionJob()?.id) {
+      setDetectionStatus(
+        error instanceof Error ? error.message : "Detection status could not be updated.",
+      );
+    }
+  });
   createEffect(() => {
     const next = detectionStatusQuery.data;
     if (!next || next.id !== detectionJob()?.id) return;
@@ -112,8 +118,6 @@ export function createDetectionController(
       "noiseDb" | "minDurationMs" | "sceneThreshold"
     > = {},
   ) => {
-    if (kind === "silence") dependencies.setExportSelection?.("gaps");
-    else if (kind === "scene") dependencies.setExportSelection?.("segments");
     const request = ++detectionRequest;
     detectionController?.abort();
     detectionController = undefined;
@@ -143,6 +147,7 @@ export function createDetectionController(
           projectItemId: dependencies.activeItemId(),
           projectRevision: saved.revision,
           kind,
+          sourceFingerprint: selected.etag,
           ...options,
         }),
         signal: controller.signal,
@@ -152,7 +157,11 @@ export function createDetectionController(
         setDetectionStatus(
           response.status === 409
             ? "Detection is stale; save or reload the project."
-            : "Detection could not be started.",
+            : response.status === 429
+              ? "Detection capacity is busy. Try again shortly."
+              : response.status === 422
+                ? "Detection settings were rejected. Check the sensitivity values."
+                : "Detection could not be started.",
         );
         return;
       }
@@ -225,12 +234,14 @@ export function createDetectionController(
   const acceptDetection = (candidate: Candidate): CandidateAcceptance => {
     const result = acceptanceFor([candidate]);
     if (!result.accepted.length) {
-      setDetectionStatus("Candidate is stale, invalid, or overlaps an existing segment.");
+      setDetectionStatus(
+        candidate.source === "scene"
+          ? "Scene changes are points; preview or dismiss them instead of adding a segment."
+          : "Candidate is stale, invalid, or overlaps an existing segment.",
+      );
       return result;
     }
-    if (candidate.source === "silence") dependencies.setExportSelection?.("gaps");
     dependencies.updateSegments(result.segments);
-    dependencies.onSegmentsAccepted?.();
     dependencies.markDirty();
     reviewedCandidateIDs.add(candidate.id);
     setDetectionCandidates((items: Candidate[]) =>
@@ -256,10 +267,7 @@ export function createDetectionController(
       );
       return result;
     }
-    if (result.accepted.some((candidate) => candidate.source === "silence"))
-      dependencies.setExportSelection?.("gaps");
     dependencies.updateSegments(result.segments);
-    dependencies.onSegmentsAccepted?.();
     dependencies.markDirty();
     for (const candidate of result.accepted) reviewedCandidateIDs.add(candidate.id);
     const acceptedIDs = new Set(result.accepted.map((candidate) => candidate.id));
@@ -282,6 +290,13 @@ export function createDetectionController(
     setDetectionStatus,
     detectionCandidates,
     setDetectionCandidates,
+    detectionLoading: () => Boolean(detectionJob()?.id) && detectionStatusQuery.isFetching,
+    detectionQueryError: () =>
+      detectionStatusQuery.error instanceof Error
+        ? detectionStatusQuery.error.message
+        : detectionStatusQuery.error
+          ? "Detection status could not be updated."
+          : "",
     clearDetectionContext,
     startDetection,
     cancelDetection,

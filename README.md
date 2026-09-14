@@ -62,6 +62,24 @@ Open <http://127.0.0.1:8787>. The default port binding is loopback-only; set
 `VIDEOCUTLIST_BIND_ADDRESS=0.0.0.0` only with authentication and a firewall.
 See the [container deployment guide](docs/runbooks/containers.md).
 
+## MCP clients
+
+MCP is disabled by default. Enable it in **Settings → MCP access**, create a scoped
+credential, and connect a Streamable HTTP client to `http://127.0.0.1:8787/mcp`
+with `Authorization: Bearer <one-time-secret>`. The pinned protocol version is
+`2025-06-18`; the server returns that version during `initialize` and requires it
+on subsequent session requests.
+
+The bearer-token Streamable HTTP flow is tested with MCP Inspector. OAuth-only
+clients are not supported because VideoCutlist does not provide an OAuth
+authorization server or callback flow. The listener remains loopback-only by
+default. A deliberately remote deployment must terminate HTTPS and retain bearer
+authentication; plain HTTP is rejected for non-loopback clients.
+
+`get_export_download` returns a protected `/mcp/download/...` URL rather than
+embedding an artifact in the MCP response. Fetch it with the same bearer token;
+each download rechecks the credential, scope, and revocation state.
+
 ## Development
 
 ```bash

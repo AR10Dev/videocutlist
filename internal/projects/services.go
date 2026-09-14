@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"videocutlist/internal/db"
+	"videocutlist/internal/exportpolicy"
 	jobqueue "videocutlist/internal/jobs"
 	"videocutlist/internal/library/media/index"
 	"videocutlist/internal/projects/model"
@@ -487,15 +488,28 @@ func jobResult(record jobqueue.Job) Job {
 	}
 	job := Job{ID: record.ID, Type: "export", State: string(record.State), Progress: progress, CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt}
 	var request ExportInput
-	if json.Unmarshal([]byte(record.RequestJSON), &request) == nil {
-		job.Strategy, job.Mode, job.Selection, job.SelectedStreams = request.CutStrategy, request.Mode, request.Selection, slices.Clone(request.StreamIndexes)
+	if json.Unmarshal([]byte(record.RequestJSON), &request) != nil || request.Mode == "" && request.CutStrategy == "" && request.Container == "" {
+		var snapshot ExportSnapshot
+		if json.Unmarshal([]byte(record.RequestJSON), &snapshot) == nil {
+			request = ExportInput{
+				Mode: snapshot.Item.ExportOptions.Mode, Selection: snapshot.Item.ExportOptions.Selection,
+				StreamIndexes: snapshot.Item.ExportOptions.StreamIndexes, CutStrategy: snapshot.Item.ExportOptions.CutStrategy,
+				Container: snapshot.Item.ExportOptions.Container,
+			}
+		}
 	}
+	if request.Container == "" {
+		policy, _ := exportpolicy.For("")
+		request.Container = policy.Name
+	}
+	job.Strategy, job.Mode, job.Selection, job.SelectedStreams, job.Container = request.CutStrategy, request.Mode, request.Selection, slices.Clone(request.StreamIndexes), request.Container
 	if record.State == jobqueue.JobFailed && record.ErrorCode.Valid {
 		value := record.ErrorCode.String
 		job.ErrorCode = &value
 	}
 	if record.State == jobqueue.JobSucceeded && record.ResultJSON.Valid {
 		var result struct {
+			Container         string            `json:"container"`
 			OutputName        string            `json:"outputName"`
 			OutputNames       []string          `json:"outputNames"`
 			OutputFailures    []OutputFailure   `json:"outputFailures"`
@@ -511,8 +525,12 @@ func jobResult(record jobqueue.Job) Job {
 			} `json:"warnings"`
 			Verified bool `json:"verified"`
 		}
-		if json.Unmarshal([]byte(record.ResultJSON.String), &result) == nil && safeOutputNames(result.OutputName, result.OutputNames) && safeOutputFailures(result.OutputFailures) && safeAppliedStrategies(result.AppliedStrategies) && result.SizeBytes >= 0 && !result.RetainUntil.IsZero() {
-			job.Result = &JobResult{OutputName: result.OutputName, OutputNames: result.OutputNames, OutputFailures: result.OutputFailures, AppliedStrategies: result.AppliedStrategies, SizeBytes: result.SizeBytes, RetainUntil: result.RetainUntil, DestinationID: result.DestinationID, DestinationKind: result.DestinationKind}
+		if json.Unmarshal([]byte(record.ResultJSON.String), &result) == nil && safeOutputNames(result.OutputName, result.OutputNames) && safeOutputFailures(result.OutputFailures) && safeAppliedStrategies(result.AppliedStrategies) && safeResultContainer(result.Container, result.OutputName, result.OutputNames) && result.SizeBytes >= 0 && !result.RetainUntil.IsZero() {
+			container := result.Container
+			if container == "" {
+				container = inferredOutputContainer(result.OutputName, result.OutputNames)
+			}
+			job.Result = &JobResult{Container: container, OutputName: result.OutputName, OutputNames: result.OutputNames, OutputFailures: result.OutputFailures, AppliedStrategies: result.AppliedStrategies, SizeBytes: result.SizeBytes, RetainUntil: result.RetainUntil, DestinationID: result.DestinationID, DestinationKind: result.DestinationKind}
 			job.AppliedStrategy = result.AppliedStrategy
 			job.Verified = result.Verified
 			for _, warning := range result.Warnings {
@@ -539,6 +557,41 @@ func safeOutputNames(name string, names []string) bool {
 	}
 	for _, output := range names {
 		if !safeOutputName(output) {
+			return false
+		}
+	}
+	return true
+}
+
+func inferredOutputContainer(name string, names []string) string {
+	if name != "" {
+		if policy, ok := exportpolicy.ForFilename(name); ok {
+			return policy.Name
+		}
+	}
+	for _, output := range names {
+		if policy, ok := exportpolicy.ForFilename(output); ok {
+			return policy.Name
+		}
+	}
+	return ""
+}
+
+func safeResultContainer(container, name string, names []string) bool {
+	if container == "" {
+		return inferredOutputContainer(name, names) != ""
+	}
+	policy, ok := exportpolicy.For(container)
+	if !ok {
+		return false
+	}
+	outputs := names
+	if name != "" {
+		outputs = []string{name}
+	}
+	for _, output := range outputs {
+		inferred, ok := exportpolicy.ForFilename(output)
+		if !ok || inferred.Name != policy.Name {
 			return false
 		}
 	}

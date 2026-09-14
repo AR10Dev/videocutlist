@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"videocutlist/internal/exportpolicy"
 	jobqueue "videocutlist/internal/jobs"
 	"videocutlist/internal/library/media/probe"
 )
@@ -39,13 +40,41 @@ type artifactManifest struct {
 	JobID       string   `json:"jobId"`
 	OutputNames []string `json:"outputNames"`
 	Kind        string   `json:"kind"`
+	Container   string   `json:"container,omitempty"`
 	Expires     string   `json:"expires"`
+}
+
+func manifestContainer(outputNames []string, containers ...string) (string, error) {
+	if len(containers) > 1 {
+		return "", errors.New("multiple artifact containers")
+	}
+	requested := ""
+	if len(containers) == 1 {
+		requested = containers[0]
+	}
+	policy, ok := exportpolicy.For(requested)
+	if requested == "" && len(outputNames) > 0 {
+		if inferred, inferredOK := exportpolicy.ForFilename(outputNames[0]); inferredOK {
+			policy = inferred
+			ok = true
+		}
+	}
+	if !ok {
+		return "", errors.New("unsupported artifact container")
+	}
+	for _, name := range outputNames {
+		if inferred, ok := exportpolicy.ForFilename(name); ok && inferred.Name != policy.Name {
+			return "", errors.New("artifact container does not match output name")
+		}
+	}
+	return policy.Name, nil
 }
 
 // WriteManifest records ownership before any publication. The manifest is
 // published atomically and contains only opaque job metadata and basenames.
-func WriteManifest(directory, jobID, kind string, outputNames []string, expires time.Time) (string, error) {
-	if jobID == "" || kind == "" || len(outputNames) == 0 {
+func WriteManifest(directory, jobID, kind string, outputNames []string, expires time.Time, containers ...string) (string, error) {
+	container, err := manifestContainer(outputNames, containers...)
+	if err != nil || jobID == "" || kind == "" || len(outputNames) == 0 {
 		return "", errors.New("invalid artifact manifest")
 	}
 	for _, name := range outputNames {
@@ -53,7 +82,7 @@ func WriteManifest(directory, jobID, kind string, outputNames []string, expires 
 			return "", errors.New("invalid artifact name")
 		}
 	}
-	manifest := artifactManifest{JobID: jobID, OutputNames: slices.Clone(outputNames), Kind: kind, Expires: expires.UTC().Format(time.RFC3339Nano)}
+	manifest := artifactManifest{JobID: jobID, OutputNames: slices.Clone(outputNames), Kind: kind, Container: container, Expires: expires.UTC().Format(time.RFC3339Nano)}
 	data, err := json.Marshal(manifest)
 	if err != nil {
 		return "", err
@@ -85,8 +114,9 @@ func WriteManifest(directory, jobID, kind string, outputNames []string, expires 
 // writeManifestAt is the descriptor-relative variant used for an export that
 // has already validated its destination root. The caller still gets the
 // absolute path for artifact bookkeeping, but no write is performed through it.
-func writeManifestAt(root *os.Root, directory, jobID, kind string, outputNames []string, expires time.Time) (string, error) {
-	if root == nil || directory == "" || jobID == "" || kind == "" || len(outputNames) == 0 {
+func writeManifestAt(root *os.Root, directory, jobID, kind string, outputNames []string, expires time.Time, containers ...string) (string, error) {
+	container, err := manifestContainer(outputNames, containers...)
+	if root == nil || directory == "" || jobID == "" || kind == "" || len(outputNames) == 0 || err != nil {
 		return "", errors.New("invalid artifact manifest")
 	}
 	for _, name := range outputNames {
@@ -94,7 +124,7 @@ func writeManifestAt(root *os.Root, directory, jobID, kind string, outputNames [
 			return "", errors.New("invalid artifact name")
 		}
 	}
-	manifest := artifactManifest{JobID: jobID, OutputNames: slices.Clone(outputNames), Kind: kind, Expires: expires.UTC().Format(time.RFC3339Nano)}
+	manifest := artifactManifest{JobID: jobID, OutputNames: slices.Clone(outputNames), Kind: kind, Container: container, Expires: expires.UTC().Format(time.RFC3339Nano)}
 	data, err := json.Marshal(manifest)
 	if err != nil {
 		return "", err
@@ -174,7 +204,7 @@ func (s *ArtifactStore) Reconcile(ctx context.Context, jobs *jobqueue.JobsStore,
 					break
 				}
 				output := filepath.Join(filepath.Dir(path), name)
-				if err := VerifyArtifact(ctx, ffprobePath, output); err != nil {
+				if err := VerifyArtifact(ctx, ffprobePath, output, manifest.Container); err != nil {
 					valid = false
 					break
 				}
@@ -190,7 +220,11 @@ func (s *ArtifactStore) Reconcile(ctx context.Context, jobs *jobqueue.JobsStore,
 				return nil
 			}
 			s.Put(manifest.JobID, values)
-			result, _ := json.Marshal(Result{OutputName: manifest.OutputNames[0], OutputNames: manifest.OutputNames, DestinationKind: manifest.Kind, Verified: true})
+			container := manifest.Container
+			if container == "" {
+				container, _ = manifestContainer(manifest.OutputNames)
+			}
+			result, _ := json.Marshal(Result{OutputName: manifest.OutputNames[0], OutputNames: manifest.OutputNames, Container: container, DestinationKind: manifest.Kind, Verified: true})
 			if _, err := jobs.Succeed(ctx, manifest.JobID, string(result)); err == nil {
 				removeManifest(path)
 			}
@@ -225,7 +259,17 @@ func manifestDirectories(destinations []Destination) []string {
 
 // VerifyArtifact performs the minimal independent FFprobe validation available
 // during restart; full source-aware validation already happened pre-publication.
-func VerifyArtifact(ctx context.Context, ffprobePath, path string) error {
+func VerifyArtifact(ctx context.Context, ffprobePath, path string, containers ...string) error {
+	if len(containers) > 1 {
+		return ErrOutputUnavailable
+	}
+	policy, ok := exportpolicy.ForFilename(path)
+	if len(containers) == 1 && containers[0] != "" {
+		policy, ok = exportpolicy.For(containers[0])
+	}
+	if !ok {
+		return ErrOutputUnavailable
+	}
 	pathInfo, err := os.Lstat(path)
 	if err != nil || pathInfo.Mode()&os.ModeSymlink != 0 || !pathInfo.Mode().IsRegular() || pathInfo.Size() == 0 {
 		return ErrOutputUnavailable
@@ -240,7 +284,7 @@ func VerifyArtifact(ctx context.Context, ffprobePath, path string) error {
 		return ErrOutputUnavailable
 	}
 	metadata, err := (probe.Client{Path: ffprobePath}).ProbeFile(ctx, file)
-	if err != nil || metadata.DurationMS <= 0 || !strings.Contains(metadata.Container, "matroska") {
+	if err != nil || metadata.DurationMS <= 0 || !policy.MatchesFormat(metadata.Container) {
 		return ErrOutputUnavailable
 	}
 	return nil

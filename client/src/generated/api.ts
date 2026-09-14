@@ -411,6 +411,97 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/settings/mcp": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Read MCP administration status and safe credential metadata */
+    get: operations["getMCPSettings"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/settings/mcp/credentials": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Create a scoped MCP bearer credential */
+    post: operations["createMCPCredential"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/export-proposals/{proposalId}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        proposalId: string;
+      };
+      cookie?: never;
+    };
+    /** Read exact MCP export proposal details */
+    get: operations["getExportProposal"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/export-proposals/{proposalId}/approval": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        proposalId: string;
+      };
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Approve exact MCP export proposal details */
+    post: operations["approveExportProposal"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/settings/mcp/credentials/{credentialId}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        credentialId: string;
+      };
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    post?: never;
+    /** Revoke an MCP credential immediately */
+    delete: operations["revokeMCPCredential"];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/settings/media/refresh": {
     parameters: {
       query?: never;
@@ -457,6 +548,65 @@ export interface components {
       previewGridMs?: number;
       mediaMaxFiles?: number;
       mediaMaxDepth?: number;
+      mcpEnabled?: boolean;
+    };
+    MCPMediaScope: {
+      /** @enum {string} */
+      kind: "all" | "roots" | "media";
+      rootIds?: string[];
+      mediaIds?: string[];
+    };
+    MCPProjectScope: {
+      /** @enum {string} */
+      kind: "all" | "projects";
+      projectIds?: string[];
+    };
+    MCPCredential: {
+      id: string;
+      tokenIdentifier: string;
+      name: string;
+      permissions: string[];
+      mediaScope: components["schemas"]["MCPMediaScope"];
+      projectScope: components["schemas"]["MCPProjectScope"];
+      /** Format: date-time */
+      expiresAt?: string;
+      /** Format: date-time */
+      revokedAt?: string;
+      unattendedExports: boolean;
+      /** Format: date-time */
+      createdAt: string;
+      /** Format: date-time */
+      lastUsedAt?: string;
+      /** @enum {string} */
+      status?: "active" | "expired" | "revoked";
+    };
+    MCPCredentialCreated: components["schemas"]["MCPCredential"] & {
+      secret: string;
+    };
+    MCPCredentialCreate: {
+      name: string;
+      permissions: string[];
+      mediaScope: components["schemas"]["MCPMediaScope"];
+      projectScope: components["schemas"]["MCPProjectScope"];
+      /** Format: date-time */
+      expiresAt?: string;
+      allowNonExpiring?: boolean;
+      unattendedExports?: boolean;
+    };
+    MCPSettingsResponse: {
+      enabled: boolean;
+      endpoint: string;
+      authentication: string;
+      remoteAccessGuidance: string;
+      clientCompatibility: string;
+      permissions: string[];
+      roots: {
+        id: string;
+        label: string;
+      }[];
+      credentials: components["schemas"]["MCPCredential"][];
+      proposals: components["schemas"]["ExportProposal"][];
+      nextCursor?: string;
     };
     SettingsResponse: {
       settings: components["schemas"]["RuntimeSettings"];
@@ -548,7 +698,7 @@ export interface components {
       /** @enum {string} */
       cutStrategy?: "stream_copy_preferred" | "precise_reencode" | "hybrid_smart_cut";
       /** @enum {string} */
-      container?: "mkv";
+      container?: "mkv" | "mp4" | "mov";
       destinationId?: string;
       filenameTemplate?: string;
     };
@@ -557,6 +707,7 @@ export interface components {
       startMs: number;
       endMs: number;
       label?: string;
+      /** @default true */
       included?: boolean;
     };
     UIState: {
@@ -575,7 +726,10 @@ export interface components {
       minDurationMs?: number;
       sceneThreshold?: number;
     };
-    DetectionCandidate: {
+    DetectionCandidate:
+      | components["schemas"]["DetectionRangeCandidate"]
+      | components["schemas"]["DetectionPointCandidate"];
+    DetectionRangeCandidate: {
       id: string;
       mediaId: string;
       projectId: string;
@@ -583,8 +737,16 @@ export interface components {
       startMs: number;
       endMs: number;
       /** @enum {string} */
-      source: "silence" | "black" | "scene";
-      confidence: number;
+      source: "silence" | "black";
+    };
+    DetectionPointCandidate: {
+      id: string;
+      mediaId: string;
+      projectId: string;
+      projectRevision: number;
+      pointMs: number;
+      /** @enum {string} */
+      source: "scene";
     };
     DetectionJob: {
       id: string;
@@ -612,7 +774,7 @@ export interface components {
       /** @enum {string} */
       cutStrategy: "stream_copy_preferred" | "precise_reencode" | "hybrid_smart_cut";
       /** @enum {string} */
-      container: "mkv";
+      container: "mkv" | "mp4" | "mov";
       /** @description Opaque configured destination ID; never a filesystem path. */
       destinationId?: string;
       /** @description Restricted template using documented variables only. */
@@ -651,13 +813,47 @@ export interface components {
     ExportPreflight: {
       allowed: boolean;
       selection: number[];
-      findings: {
-        /** @enum {string} */
-        severity: "allowed" | "warn" | "blocked";
-        code: string;
-        message: string;
-        streamIndex?: number;
-      }[];
+      findings: components["schemas"]["ExportFinding"][];
+    };
+    ExportFinding: {
+      /** @enum {string} */
+      severity: "allowed" | "warn" | "blocked";
+      code: string;
+      message: string;
+      streamIndex?: number;
+    };
+    SourceSnapshot: {
+      mediaId: string;
+      rootId?: string;
+      etag: string;
+      sizeBytes: number;
+      durationMs: number;
+    };
+    ExportSnapshot: {
+      projectRevision: number;
+      mediaLabel: string;
+      item: components["schemas"]["ProjectItem"];
+      source: components["schemas"]["SourceSnapshot"];
+    };
+    ExportProposal: {
+      id: string;
+      credentialId: string;
+      projectId?: string;
+      projectRevision: number;
+      mediaId?: string;
+      snapshots: components["schemas"]["ExportSnapshot"][];
+      findings: components["schemas"]["ExportFinding"][];
+      allowed: boolean;
+      requiresReencoding: boolean;
+      /** @enum {string} */
+      accuracy: "frame_exact" | "keyframe_limited" | "mixed";
+      destinationId: string;
+      /** Format: date-time */
+      expiresAt: string;
+      /** Format: date-time */
+      approvedAt?: string;
+      /** Format: date-time */
+      createdAt: string;
     };
     Job: {
       id: string;
@@ -675,6 +871,11 @@ export interface components {
       progress?: number;
       /** @description Present only when an export job succeeded. */
       result?: {
+        /**
+         * @description Published output container.
+         * @enum {string}
+         */
+        container?: "mkv" | "mp4" | "mov";
         /** @description Published merged-export filename, never a filesystem path. */
         outputName?: string;
         /** @description Published separate-export filenames, never filesystem paths. */
@@ -702,6 +903,23 @@ export interface components {
       };
       /** @description Requested cut strategy. */
       strategy?: string;
+      /**
+       * @description Requested output container.
+       * @enum {string}
+       */
+      container?: "mkv" | "mp4" | "mov";
+      /**
+       * @description Requested output arrangement.
+       * @enum {string}
+       */
+      mode?: "merge" | "separate";
+      /**
+       * @description Requested ranges (included cuts or gaps between cuts).
+       * @enum {string}
+       */
+      selection?: "segments" | "gaps";
+      /** @description Resolved stream indexes used by the export job. */
+      selectedStreams?: number[];
       /** @description Strategy used by every selected segment; omitted when segments use different strategies. See result.appliedStrategies for per-segment values. */
       appliedStrategy?: string;
       warnings?: string[];
@@ -1335,13 +1553,15 @@ export interface operations {
     };
     requestBody?: never;
     responses: {
-      /** @description MKV attachment; only persisted download outputs are eligible */
+      /** @description Authenticated attachment; only persisted download outputs are eligible */
       200: {
         headers: {
           [name: string]: unknown;
         };
         content: {
           "video/x-matroska": string;
+          "video/mp4": string;
+          "video/quicktime": string;
         };
       };
       404: components["responses"]["Error"];
@@ -1391,6 +1611,127 @@ export interface operations {
       403: components["responses"]["Error"];
       409: components["responses"]["Error"];
       422: components["responses"]["Error"];
+    };
+  };
+  getMCPSettings: {
+    parameters: {
+      query?: {
+        cursor?: string;
+        limit?: number;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description MCP status, connection guidance, and credentials without secrets */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["MCPSettingsResponse"];
+        };
+      };
+      403: components["responses"]["Error"];
+    };
+  };
+  createMCPCredential: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["MCPCredentialCreate"];
+      };
+    };
+    responses: {
+      /** @description Created credential with its one-time bearer secret */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["MCPCredentialCreated"];
+        };
+      };
+      403: components["responses"]["Error"];
+      422: components["responses"]["Error"];
+    };
+  };
+  getExportProposal: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        proposalId: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Exact export proposal awaiting or carrying approval */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ExportProposal"];
+        };
+      };
+      404: components["responses"]["Error"];
+    };
+  };
+  approveExportProposal: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        proposalId: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Approved export proposal */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ExportProposal"];
+        };
+      };
+      404: components["responses"]["Error"];
+      409: components["responses"]["Error"];
+    };
+  };
+  revokeMCPCredential: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        credentialId: string;
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Revoked credential metadata */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["MCPCredential"];
+        };
+      };
+      403: components["responses"]["Error"];
+      404: components["responses"]["Error"];
     };
   };
   refreshSettingsMedia: {

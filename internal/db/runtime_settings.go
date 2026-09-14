@@ -39,6 +39,7 @@ type RuntimeSettings struct {
 	PreviewGridMS      int                  `json:"previewGridMs"`
 	MediaMaxFiles      int                  `json:"mediaMaxFiles"`
 	MediaMaxDepth      int                  `json:"mediaMaxDepth"`
+	MCPEnabled         bool                 `json:"mcpEnabled"`
 }
 
 type RuntimeSettingsRecord struct {

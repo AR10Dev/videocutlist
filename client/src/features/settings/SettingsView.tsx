@@ -9,6 +9,7 @@ import {
   type Appearance,
 } from "./model";
 import { useWorkspace } from "../app/WorkspaceContext";
+import { MCPSettings } from "./MCPSettings";
 
 export function SettingsView(props: { onClose?: () => void } = {}) {
   const {
@@ -32,8 +33,6 @@ export function SettingsView(props: { onClose?: () => void } = {}) {
     setFilenameTemplate,
     saveSettings,
     saveRuntimeSettings,
-    updateDestination,
-    saveDestinations,
     rescanLibrary,
   } = useWorkspace();
   return (
@@ -170,71 +169,23 @@ export function SettingsView(props: { onClose?: () => void } = {}) {
       </section>
       <section aria-labelledby="destinations-settings-heading">
         <h3 id="destinations-settings-heading">Destinations</h3>
-        <p>Original media is never modified.</p>
-        <Show when={runtimeSettings()?.destinations?.length}>
-          <fieldset
-            class="fieldset border-0 p-0"
-            disabled={settingsPending()}
-            aria-label="Destination settings"
-          >
-            <ul>
-              <For each={runtimeSettings()?.destinations}>
-                {(destination) => (
-                  <li>
-                    <label>
-                      Name
-                      <input
-                        class="input input-bordered input-sm mt-1 w-full"
-                        value={destination.label}
-                        onChange={(event) =>
-                          updateDestination(destination.id, { label: event.currentTarget.value })
-                        }
-                      />
-                    </label>
-                    <label>
-                      Description
-                      <input
-                        class="input input-bordered input-sm mt-1 w-full"
-                        value={destination.description ?? ""}
-                        onChange={(event) =>
-                          updateDestination(destination.id, {
-                            description: event.currentTarget.value,
-                          })
-                        }
-                      />
-                    </label>
-                    <label>
-                      Retention
-                      <input
-                        class="input input-bordered input-sm mt-1 w-full"
-                        value={destination.retention ?? ""}
-                        placeholder="for example 30d"
-                        onChange={(event) =>
-                          updateDestination(destination.id, {
-                            retention: event.currentTarget.value,
-                          })
-                        }
-                      />
-                    </label>
-                    <span>
-                      {destination.kind === "download" ? "Browser download" : "Saved export"} ·{" "}
-                      {destination.retention ?? "durable"}
-                    </span>
-                  </li>
-                )}
-              </For>
-            </ul>
-            <button
-              class="btn btn-ghost btn-sm"
-              type="button"
-              onClick={saveDestinations}
-              disabled={settingsPending()}
-            >
-              {settingsPending() ? "Saving…" : "Save destination settings"}
-            </button>
-          </fieldset>
-        </Show>
+        <p>Destinations are deployment-managed and read-only. Original media is never modified.</p>
+        <ul aria-label="Destination settings">
+          <For each={runtimeSettings()?.destinations}>
+            {(destination) => (
+              <li>
+                <strong>{destination.label}</strong>
+                <p>{destination.description}</p>
+                <p>
+                  {destination.kind === "download" ? "Browser download" : "Saved export"} ·
+                  Retention: {destination.retention ?? "durable"}
+                </p>
+              </li>
+            )}
+          </For>
+        </ul>
       </section>
+      <MCPSettings />
       <section class="server-settings" aria-labelledby="processing-settings-heading">
         <details>
           <summary id="processing-settings-heading">Server processing</summary>

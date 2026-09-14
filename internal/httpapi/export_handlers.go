@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"videocutlist/internal/exportpolicy"
 )
 
 func (s *Server) downloadOutput(w http.ResponseWriter, r *http.Request, encoded, id string) {
@@ -34,7 +36,7 @@ func (s *Server) downloadOutput(w http.ResponseWriter, r *http.Request, encoded,
 		notFound(w, id)
 		return
 	}
-	w.Header().Set("Content-Type", "video/x-matroska")
+	w.Header().Set("Content-Type", exportpolicy.MIMEForOutputName(name))
 	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.Copy(w, file)

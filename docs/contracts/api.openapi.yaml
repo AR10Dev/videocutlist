@@ -484,9 +484,17 @@ paths:
       responses:
         "200":
           description: >-
-            MKV attachment; only persisted download outputs are eligible
+            Authenticated attachment; only persisted download outputs are eligible
           content:
             video/x-matroska:
+              schema:
+                type: string
+                format: binary
+            video/mp4:
+              schema:
+                type: string
+                format: binary
+            video/quicktime:
               schema:
                 type: string
                 format: binary
@@ -523,6 +531,105 @@ paths:
         "409":
           $ref: "#/components/responses/Error"
         "422":
+          $ref: "#/components/responses/Error"
+  /settings/mcp:
+    get:
+      summary: Read MCP administration status and safe credential metadata
+      operationId: getMCPSettings
+      parameters:
+        - name: cursor
+          in: query
+          schema: {type: string}
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 100}
+      responses:
+        "200":
+          description: MCP status, connection guidance, and credentials without secrets
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MCPSettingsResponse"
+        "403":
+          $ref: "#/components/responses/Error"
+  /settings/mcp/credentials:
+    post:
+      summary: Create a scoped MCP bearer credential
+      operationId: createMCPCredential
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MCPCredentialCreate"
+      responses:
+        "201":
+          description: Created credential with its one-time bearer secret
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MCPCredentialCreated"
+        "403":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+  /export-proposals/{proposalId}:
+    parameters:
+      - name: proposalId
+        in: path
+        required: true
+        schema: {type: string, pattern: '^ep_[A-Za-z0-9_-]{12,64}$'}
+    get:
+      summary: Read exact MCP export proposal details
+      operationId: getExportProposal
+      responses:
+        "200":
+          description: Exact export proposal awaiting or carrying approval
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExportProposal"
+        "404":
+          $ref: "#/components/responses/Error"
+  /export-proposals/{proposalId}/approval:
+    parameters:
+      - name: proposalId
+        in: path
+        required: true
+        schema: {type: string, pattern: '^ep_[A-Za-z0-9_-]{12,64}$'}
+    post:
+      summary: Approve exact MCP export proposal details
+      operationId: approveExportProposal
+      responses:
+        "200":
+          description: Approved export proposal
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExportProposal"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+  /settings/mcp/credentials/{credentialId}:
+    parameters:
+      - name: credentialId
+        in: path
+        required: true
+        schema: {type: string, pattern: '^c_[A-Za-z0-9_-]{12,64}$'}
+    delete:
+      summary: Revoke an MCP credential immediately
+      operationId: revokeMCPCredential
+      responses:
+        "200":
+          description: Revoked credential metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MCPCredential"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
           $ref: "#/components/responses/Error"
   /settings/media/refresh:
     post:
@@ -620,6 +727,103 @@ components:
           type: integer
         mediaMaxDepth:
           type: integer
+        mcpEnabled:
+          type: boolean
+    MCPMediaScope:
+      type: object
+      additionalProperties: false
+      required: [kind]
+      properties:
+        kind: {type: string, enum: [all, roots, media]}
+        rootIds:
+          type: array
+          items: {type: string}
+        mediaIds:
+          type: array
+          items: {type: string}
+    MCPProjectScope:
+      type: object
+      additionalProperties: false
+      required: [kind]
+      properties:
+        kind: {type: string, enum: [all, projects]}
+        projectIds:
+          type: array
+          items: {type: string}
+    MCPCredential:
+      type: object
+      additionalProperties: false
+      required: [id, tokenIdentifier, name, permissions, mediaScope, projectScope, unattendedExports, createdAt]
+      properties:
+        id: {type: string}
+        tokenIdentifier: {type: string}
+        name: {type: string}
+        permissions:
+          type: array
+          items: {type: string}
+        mediaScope:
+          $ref: "#/components/schemas/MCPMediaScope"
+        projectScope:
+          $ref: "#/components/schemas/MCPProjectScope"
+        expiresAt: {type: string, format: date-time}
+        revokedAt: {type: string, format: date-time}
+        unattendedExports: {type: boolean}
+        createdAt: {type: string, format: date-time}
+        lastUsedAt: {type: string, format: date-time}
+        status: {type: string, enum: [active, expired, revoked]}
+    MCPCredentialCreated:
+      allOf:
+        - $ref: "#/components/schemas/MCPCredential"
+        - type: object
+          required: [secret]
+          properties:
+            secret: {type: string}
+    MCPCredentialCreate:
+      type: object
+      additionalProperties: false
+      required: [name, permissions, mediaScope, projectScope]
+      properties:
+        name: {type: string, maxLength: 120}
+        permissions:
+          type: array
+          items: {type: string}
+        mediaScope:
+          $ref: "#/components/schemas/MCPMediaScope"
+        projectScope:
+          $ref: "#/components/schemas/MCPProjectScope"
+        expiresAt: {type: string, format: date-time}
+        allowNonExpiring: {type: boolean}
+        unattendedExports: {type: boolean}
+    MCPSettingsResponse:
+      type: object
+      additionalProperties: false
+      required: [enabled, endpoint, authentication, remoteAccessGuidance, clientCompatibility, permissions, roots, credentials, proposals]
+      properties:
+        enabled: {type: boolean}
+        endpoint: {type: string}
+        authentication: {type: string}
+        remoteAccessGuidance: {type: string}
+        clientCompatibility: {type: string}
+        permissions:
+          type: array
+          items: {type: string}
+        roots:
+          type: array
+          items:
+            type: object
+            required: [id, label]
+            properties:
+              id: {type: string}
+              label: {type: string}
+        credentials:
+          type: array
+          items:
+            $ref: "#/components/schemas/MCPCredential"
+        proposals:
+          type: array
+          items:
+            $ref: "#/components/schemas/ExportProposal"
+        nextCursor: {type: string}
     SettingsResponse:
       type: object
       required:
@@ -859,7 +1063,7 @@ components:
           enum: [stream_copy_preferred, precise_reencode, hybrid_smart_cut]
         container:
           type: string
-          enum: [mkv]
+          enum: [mkv, mp4, mov]
         destinationId:
           type: string
           maxLength: 64
@@ -930,25 +1134,32 @@ components:
           minimum: 0
           maximum: 1
     DetectionCandidate:
+      oneOf:
+        - $ref: "#/components/schemas/DetectionRangeCandidate"
+        - $ref: "#/components/schemas/DetectionPointCandidate"
+    DetectionRangeCandidate:
       type: object
-      required:
-        - id
-        - mediaId
-        - projectId
-        - projectRevision
-        - startMs
-        - endMs
-        - source
-        - confidence
+      additionalProperties: false
+      required: [id, mediaId, projectId, projectRevision, startMs, endMs, source]
       properties:
         id: {type: string}
         mediaId: {type: string}
         projectId: {type: string}
         projectRevision: {type: integer}
-        startMs: {type: integer}
-        endMs: {type: integer}
-        source: {type: string, enum: [silence, black, scene]}
-        confidence: {type: number}
+        startMs: {type: integer, minimum: 0}
+        endMs: {type: integer, minimum: 1}
+        source: {type: string, enum: [silence, black]}
+    DetectionPointCandidate:
+      type: object
+      additionalProperties: false
+      required: [id, mediaId, projectId, projectRevision, pointMs, source]
+      properties:
+        id: {type: string}
+        mediaId: {type: string}
+        projectId: {type: string}
+        projectRevision: {type: integer}
+        pointMs: {type: integer, minimum: 0}
+        source: {type: string, enum: [scene]}
     DetectionJob:
       type: object
       required: [id, type, state, mediaId, projectId, projectRevision, kind]
@@ -1002,6 +1213,8 @@ components:
           type: string
           enum:
             - mkv
+            - mp4
+            - mov
         destinationId:
           type: string
           maxLength: 64
@@ -1113,25 +1326,72 @@ components:
         findings:
           type: array
           items:
-            type: object
-            required:
-              - severity
-              - code
-              - message
-            properties:
-              severity:
-                type: string
-                enum:
-                  - allowed
-                  - warn
-                  - blocked
-              code:
-                type: string
-              message:
-                type: string
-              streamIndex:
-                type: integer
-                minimum: 0
+            $ref: "#/components/schemas/ExportFinding"
+    ExportFinding:
+      type: object
+      required:
+        - severity
+        - code
+        - message
+      properties:
+        severity:
+          type: string
+          enum:
+            - allowed
+            - warn
+            - blocked
+        code:
+          type: string
+        message:
+          type: string
+        streamIndex:
+          type: integer
+          minimum: 0
+    SourceSnapshot:
+      type: object
+      required: [mediaId, etag, sizeBytes, durationMs]
+      properties:
+        mediaId: {type: string}
+        rootId: {type: string}
+        etag: {type: string}
+        sizeBytes: {type: integer}
+        durationMs: {type: integer}
+    ExportSnapshot:
+      type: object
+      required: [projectRevision, mediaLabel, item, source]
+      properties:
+        projectRevision: {type: integer}
+        mediaLabel: {type: string}
+        item:
+          $ref: "#/components/schemas/ProjectItem"
+        source:
+          $ref: "#/components/schemas/SourceSnapshot"
+    ExportProposal:
+      type: object
+      required: [id, credentialId, projectRevision, snapshots, findings, allowed, requiresReencoding, accuracy, destinationId, expiresAt, createdAt]
+      properties:
+        id: {type: string}
+        credentialId: {type: string}
+        projectId: {type: string}
+        projectRevision: {type: integer}
+        mediaId: {type: string}
+        snapshots:
+          type: array
+          items:
+            $ref: "#/components/schemas/ExportSnapshot"
+        findings:
+          type: array
+          items:
+            $ref: "#/components/schemas/ExportFinding"
+        allowed: {type: boolean}
+        requiresReencoding: {type: boolean}
+        accuracy:
+          type: string
+          enum: [frame_exact, keyframe_limited, mixed]
+        destinationId: {type: string}
+        expiresAt: {type: string, format: date-time}
+        approvedAt: {type: string, format: date-time}
+        createdAt: {type: string, format: date-time}
     Job:
       type: object
       required:
@@ -1183,6 +1443,10 @@ components:
             - sizeBytes
             - retainUntil
           properties:
+            container:
+              type: string
+              enum: [mkv, mp4, mov]
+              description: Published output container.
             outputName:
               type: string
               description: >-
@@ -1249,6 +1513,24 @@ components:
         strategy:
           type: string
           description: Requested cut strategy.
+        container:
+          type: string
+          enum: [mkv, mp4, mov]
+          description: Requested output container.
+        mode:
+          type: string
+          enum: [merge, separate]
+          description: Requested output arrangement.
+        selection:
+          type: string
+          enum: [segments, gaps]
+          description: Requested ranges (included cuts or gaps between cuts).
+        selectedStreams:
+          type: array
+          items:
+            type: integer
+            minimum: 0
+          description: Resolved stream indexes used by the export job.
         appliedStrategy:
           type: string
           description: >-

@@ -50,11 +50,20 @@ export function createWorkspaceController() {
     runtimeSettings,
     settingsPending,
     rescanPending,
+    mcpSettings,
+    mcpStatus,
+    mcpLoadError,
+    mcpLoading,
+    loadMCPSettings,
+    mcpPending,
+    revealedMCPSecret,
     saveSettings,
     openSettings,
     saveRuntimeSettings,
-    updateDestination,
-    saveDestinations,
+    setMCPEnabled,
+    createMCPCredential,
+    approveExportProposal,
+    revokeMCPCredential,
     rescanLibrary,
   } = settingsFeature;
   const [muted, setMuted] = createSignal(settings().muted);
@@ -172,6 +181,8 @@ export function createWorkspaceController() {
     setExportSelection,
     cutStrategy,
     setCutStrategy,
+    exportContainer,
+    setExportContainer,
     streamIndexes,
     setStreamIndexes,
     destinations,
@@ -181,7 +192,19 @@ export function createWorkspaceController() {
     setFilenameTemplate,
     preflight,
     preflightPending,
+    preflightError,
     exportPending,
+    destinationsLoading,
+    destinationsError,
+    retryDestinations,
+    batchesLoading,
+    batchesRefreshing,
+    batchesError,
+    refreshBatches,
+    batchLoading,
+    batchError,
+    exportJobLoading,
+    exportJobError,
     destinationStatus,
     exportProject,
     cancelExport,
@@ -207,7 +230,7 @@ export function createWorkspaceController() {
               selection: exportSelection(),
               streamIndexes: streamIndexes(),
               cutStrategy: cutStrategy(),
-              container: "mkv" as const,
+              container: exportContainer(),
               destinationId: destinationId(),
               filenameTemplate: filenameTemplate(),
             },
@@ -226,6 +249,7 @@ export function createWorkspaceController() {
     setExportSelection(item.exportOptions.selection ?? "segments");
     setStreamIndexes(item.exportOptions.streamIndexes ?? []);
     setCutStrategy(item.exportOptions.cutStrategy ?? settings().cutStrategy);
+    setExportContainer(item.exportOptions.container ?? "mkv");
     setDestinationId(item.exportOptions.destinationId ?? "download");
     setFilenameTemplate(item.exportOptions.filenameTemplate ?? settings().filenameTemplate);
     setDiagnostics();
@@ -325,6 +349,7 @@ export function createWorkspaceController() {
     setExportSelection("segments");
     setStreamIndexes([]);
     setCutStrategy(settings().cutStrategy);
+    setExportContainer("mkv");
     setDestinationId(lastDestinationId() ?? "download");
     setFilenameTemplate(settings().filenameTemplate);
     setDiagnostics();
@@ -392,10 +417,6 @@ export function createWorkspaceController() {
     saveProject: () => projectsFeature.saveProject(),
     updateSegments: (segments) => updateTimeline({ segments }),
     markDirty,
-    setExportSelection: (selection) => {
-      if (exportSelection() !== selection) exportFeature.setSelection(selection);
-    },
-    onSegmentsAccepted: () => selectActiveExportItem.current?.(),
   });
   const {
     detectionJob,
@@ -403,6 +424,8 @@ export function createWorkspaceController() {
     setDetectionStatus,
     detectionCandidates,
     setDetectionCandidates,
+    detectionLoading,
+    detectionQueryError,
     clearDetectionContext,
     startDetection,
     cancelDetection,
@@ -437,6 +460,7 @@ export function createWorkspaceController() {
     setExportSelection,
     setStreamIndexes,
     setCutStrategy,
+    setExportContainer,
     setDestinationId,
     setFilenameTemplate,
     editableItems,
@@ -483,6 +507,13 @@ export function createWorkspaceController() {
     runtimeSettings,
     settingsPending,
     rescanPending,
+    mcpSettings,
+    mcpStatus,
+    mcpLoadError,
+    mcpLoading,
+    loadMCPSettings,
+    mcpPending,
+    revealedMCPSecret,
     muted,
     setMuted,
     diagnostics,
@@ -519,6 +550,8 @@ export function createWorkspaceController() {
     setExportSelection,
     cutStrategy,
     setCutStrategy,
+    exportContainer,
+    setExportContainer,
     streamIndexes,
     setStreamIndexes,
     destinations,
@@ -529,13 +562,27 @@ export function createWorkspaceController() {
     setFilenameTemplate,
     preflight,
     preflightPending,
+    preflightError,
     exportPending,
+    destinationsLoading,
+    destinationsError,
+    retryDestinations,
+    batchesLoading,
+    batchesRefreshing,
+    batchesError,
+    refreshBatches,
+    batchLoading,
+    batchError,
+    exportJobLoading,
+    exportJobError,
     destinationStatus,
     detectionJob,
     detectionStatus,
     setDetectionStatus,
     detectionCandidates,
     setDetectionCandidates,
+    detectionLoading,
+    detectionQueryError,
     timeline,
     setTimeline,
     visibleTimelineRange,
@@ -556,8 +603,10 @@ export function createWorkspaceController() {
     saveSettings,
     openSettings,
     saveRuntimeSettings,
-    updateDestination,
-    saveDestinations,
+    setMCPEnabled,
+    createMCPCredential,
+    approveExportProposal,
+    revokeMCPCredential,
     rescanLibrary,
     updateTimeline,
     loadFolder,
@@ -604,6 +653,8 @@ export function createWorkspaceController() {
     playActiveSegment: initializedPreviewFeature.playActiveSegment,
     playOrderedSegments: initializedPreviewFeature.playOrderedSegments,
     playDetectionCandidate: playSegment,
+    playDetectionPoint: initializedPreviewFeature.playDetectionPoint,
+    seekDetectionPoint: initializedPreviewFeature.seekDetectionPoint,
     undo: editorFeature.undo,
     redo: editorFeature.redo,
   };

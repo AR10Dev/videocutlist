@@ -50,6 +50,7 @@ type Config struct {
 	MediaRoots         map[string]string
 	AuthMode           string
 	BearerToken        string
+	MCPEnabled         bool
 	TrustedProxyCIDRs  []string
 	FFmpegPath         string
 	FFprobePath        string
@@ -144,6 +145,9 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 		if c.BearerToken == "" || containsControl(c.BearerToken) {
 			return Config{}, fmt.Errorf("VIDEOCUTLIST_BEARER_TOKEN must be non-empty and control-free in bearer mode")
 		}
+	}
+	if c.MCPEnabled, err = boolean(lookup, "VIDEOCUTLIST_MCP_ENABLED", false); err != nil {
+		return Config{}, err
 	}
 	trusted := value(lookup, "VIDEOCUTLIST_TRUSTED_PROXY_CIDRS", defaultTrustedProxies)
 	for _, cidr := range strings.Split(trusted, ",") {
@@ -314,6 +318,14 @@ func value(lookup func(string) (string, bool), key, fallback string) string {
 
 func required(lookup func(string) (string, bool), key string) string {
 	return value(lookup, key, "")
+}
+
+func boolean(lookup func(string) (string, bool), key string, fallback bool) (bool, error) {
+	v, err := strconv.ParseBool(value(lookup, key, strconv.FormatBool(fallback)))
+	if err != nil {
+		return false, fmt.Errorf("%s must be a boolean", key)
+	}
+	return v, nil
 }
 
 func positiveInt(lookup func(string) (string, bool), key string, fallback int) (int, error) {

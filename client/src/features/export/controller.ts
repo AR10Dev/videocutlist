@@ -2,7 +2,7 @@ import { createEffect, createSignal, onCleanup, type Accessor, type Setter } fro
 import { useQuery, type QueryClient } from "@tanstack/solid-query";
 import type { ApiClient } from "../../api";
 import type { components } from "../../generated/api";
-import type { EditableProjectItem } from "../projects/model";
+import type { EditableProjectItem, ExportContainer } from "../projects/model";
 import type { Segment } from "../preview/model";
 import type { AppSettings } from "../settings/model";
 import { abortAndClear, cancellationIsCurrent } from "../queue/cancellation";
@@ -15,6 +15,10 @@ type Media = components["schemas"]["Media"];
 type Destination = components["schemas"]["Destination"];
 type ExportJob = components["schemas"]["Job"];
 type Batch = components["schemas"]["Batch"];
+type DestinationResponse = {
+  destinations?: Destination[];
+  capabilities?: components["schemas"]["DestinationCapabilities"];
+};
 type Track = {
   index: number;
   type: string;
@@ -59,11 +63,13 @@ export function createExportController(deps: {
   const [exportMode, setExportMode] = createSignal<"merge" | "separate">("merge");
   const [exportSelection, setExportSelection] = createSignal<"segments" | "gaps">("segments");
   const [cutStrategy, setCutStrategy] = createSignal(deps.settings().cutStrategy);
+  const [exportContainer, setExportContainer] = createSignal<ExportContainer>("mkv");
   const [streamIndexes, setStreamIndexes] = createSignal<number[]>([]);
   const [destinations, setDestinations] = createSignal<Destination[]>([]);
   const [destinationCapabilities, setDestinationCapabilities] = createSignal<
     components["schemas"]["DestinationCapabilities"]
   >({ saveBesideSource: false });
+  const [preflightError, setPreflightError] = createSignal("");
   const [destinationId, setDestinationId] = createSignal(lastDestinationId() ?? "download");
   const [destinationStatus, setDestinationStatus] = createSignal("");
   const [filenameTemplate, setFilenameTemplate] = createSignal(deps.settings().filenameTemplate);
@@ -91,6 +97,7 @@ export function createExportController(deps: {
   const batchProgressQuery = useBatchQuery(deps.api, batchId);
   const batchListQuery = useBatchListQuery(deps.api);
   const exportStatusQuery = useExportJobQuery(deps.api, exportJob);
+  const destinationsQuery = useDestinationsQuery(deps.api);
   createEffect(() => {
     const page = batchListQuery.data;
     if (!page) return;
@@ -145,12 +152,9 @@ export function createExportController(deps: {
       void deps.queryClient.invalidateQueries({ queryKey: ["media"] });
     }
   });
-  void deps.api.request("destinations").then(async (response) => {
-    if (!response.ok) return;
-    const value = (await response.json()) as {
-      destinations?: Destination[];
-      capabilities?: components["schemas"]["DestinationCapabilities"];
-    };
+  createEffect(() => {
+    const value = destinationsQuery.data;
+    if (!value) return;
     const configured = Array.isArray(value.destinations) ? value.destinations : [];
     setDestinations(configured);
     setDestinationCapabilities(
@@ -190,6 +194,7 @@ export function createExportController(deps: {
     if (!item || !currentItem || preflightItemIDs.length === 0) {
       cancelPreflight();
       setPreflight();
+      setPreflightError("");
       setPreflightPending(false);
       return;
     }
@@ -197,6 +202,7 @@ export function createExportController(deps: {
     if (workflowActive || deps.dirty()) {
       cancelPreflight();
       setPreflight();
+      setPreflightError("");
       if (!workflowActive) setPreflightPending(false);
       return;
     }
@@ -205,7 +211,7 @@ export function createExportController(deps: {
       selection,
       streamIndexes: indexes,
       cutStrategy: strategy,
-      container: "mkv" as const,
+      container: exportContainer(),
       destinationId: destination,
       filenameTemplate: template,
       itemIds: [...preflightItemIDs],
@@ -226,11 +232,16 @@ export function createExportController(deps: {
         if (version !== preflightVersion) return;
         if (!response.ok) {
           setPreflight();
+          setPreflightError(`Export preflight failed (${response.status}). Try again.`);
           setExportStatus("Export preflight failed. Try again.");
-        } else setPreflight((await response.json()) as components["schemas"]["ExportPreflight"]);
+        } else {
+          setPreflight((await response.json()) as components["schemas"]["ExportPreflight"]);
+          setPreflightError("");
+        }
       } catch {
         if (version === preflightVersion && !controller.signal.aborted) {
           setPreflight();
+          setPreflightError("Export preflight could not be reached. Try again.");
           setExportStatus("Export preflight failed. Try again.");
         }
       }
@@ -294,7 +305,7 @@ export function createExportController(deps: {
         selection: exportSelection(),
         streamIndexes: [...streamIndexes()],
         cutStrategy: cutStrategy(),
-        container: "mkv" as const,
+        container: exportContainer(),
         destinationId: destinationId(),
         filenameTemplate: filenameTemplate(),
         itemIds:
@@ -324,6 +335,7 @@ export function createExportController(deps: {
     let submitted = false;
     cancelPreflight();
     setPreflight();
+    setPreflightError("");
     setPreflightPending(true);
     setExportPending(true);
     setExportStatus(deps.dirty() ? "Saving project…" : "Checking export requirements…");
@@ -359,6 +371,7 @@ export function createExportController(deps: {
       }
       if (!preflightResponse.ok) {
         setPreflight();
+        setPreflightError(`Export preflight failed (${preflightResponse.status}). Try again.`);
         setExportStatus("Export preflight failed. Try again.");
         return;
       }
@@ -368,6 +381,7 @@ export function createExportController(deps: {
         return;
       }
       setPreflight(fresh);
+      setPreflightError("");
       if (!fresh.allowed) {
         setExportStatus("");
         return;
@@ -516,6 +530,8 @@ export function createExportController(deps: {
     setExportSelection,
     cutStrategy,
     setCutStrategy,
+    exportContainer,
+    setExportContainer,
     streamIndexes,
     setStreamIndexes,
     destinations,
@@ -526,7 +542,39 @@ export function createExportController(deps: {
     setFilenameTemplate,
     preflight,
     preflightPending,
+    preflightError,
     exportPending,
+    destinationsLoading: () => destinationsQuery.isPending || destinationsQuery.isFetching,
+    destinationsError: () =>
+      destinationsQuery.error instanceof Error
+        ? destinationsQuery.error.message
+        : destinationsQuery.error
+          ? "Destinations could not be loaded."
+          : "",
+    retryDestinations: () => void destinationsQuery.refetch(),
+    batchesLoading: () => batchListQuery.isPending,
+    batchesRefreshing: () => batchListQuery.isFetching,
+    batchesError: () =>
+      batchListQuery.error instanceof Error
+        ? batchListQuery.error.message
+        : batchListQuery.error
+          ? "Export queue could not be loaded."
+          : "",
+    refreshBatches: () => void batchListQuery.refetch(),
+    batchLoading: () => Boolean(batchId()) && batchProgressQuery.isFetching,
+    batchError: () =>
+      batchProgressQuery.error instanceof Error
+        ? batchProgressQuery.error.message
+        : batchProgressQuery.error
+          ? "Export batch status could not be updated."
+          : "",
+    exportJobLoading: () => Boolean(exportJob()?.id) && exportStatusQuery.isFetching,
+    exportJobError: () =>
+      exportStatusQuery.error instanceof Error
+        ? exportStatusQuery.error.message
+        : exportStatusQuery.error
+          ? "Export status could not be updated."
+          : "",
     destinationStatus,
     clearExportContext,
     exportProject,
@@ -547,6 +595,11 @@ export function createExportController(deps: {
     setStrategy: (value: AppSettings["cutStrategy"]) => {
       setCutStrategy(value);
       deps.saveSettings({ cutStrategy: value });
+      deps.markDirty();
+      deps.setDirty(true);
+    },
+    setContainer: (value: ExportContainer) => {
+      setExportContainer(value);
       deps.markDirty();
       deps.setDirty(true);
     },
@@ -571,6 +624,17 @@ export function createExportController(deps: {
       deps.setDirty(true);
     },
   };
+}
+
+function useDestinationsQuery(api: ApiClient) {
+  return useQuery(() => ({
+    queryKey: ["destinations"],
+    queryFn: async ({ signal }: { signal: AbortSignal }) => {
+      const response = await api.request("destinations", { signal });
+      if (!response.ok) throw new Error(`Destinations could not be loaded (${response.status}).`);
+      return (await response.json()) as DestinationResponse;
+    },
+  }));
 }
 
 function preflightRequest(

@@ -20,6 +20,7 @@ func TestParseRoute(t *testing.T) {
 	project := "p_" + strings.Repeat("b", 12)
 	job := "j_" + strings.Repeat("c", 12)
 	batch := "b_" + strings.Repeat("d", 12)
+	credential := "c_" + strings.Repeat("e", 12)
 	tests := []struct {
 		name, method, path string
 		kind               routeKind
@@ -32,6 +33,9 @@ func TestParseRoute(t *testing.T) {
 		{"settings get", http.MethodGet, "/api/v1/settings", routeGetSettings, ""},
 		{"settings put", http.MethodPut, "/api/v1/settings", routePutSettings, ""},
 		{"settings refresh", http.MethodPost, "/api/v1/settings/media/refresh", routeRefreshSettings, ""},
+		{"mcp settings", http.MethodGet, "/api/v1/settings/mcp", routeGetMCPSettings, ""},
+		{"mcp credential create", http.MethodPost, "/api/v1/settings/mcp/credentials", routeCreateMCPCredential, ""},
+		{"mcp credential revoke", http.MethodDelete, "/api/v1/settings/mcp/credentials/" + credential, routeRevokeMCPCredential, credential},
 		{"media", http.MethodGet, "/api/v1/media/" + media, routeGetMedia, media},
 		{"preview head", http.MethodHead, "/api/v1/media/" + media + "/preview", routePreview, media},
 		{"thumbnails", http.MethodGet, "/api/v1/media/" + media + "/thumbnails", routeThumbnails, media},
@@ -66,6 +70,8 @@ func TestRouteCoverageInventory(t *testing.T) {
 	project := "p_" + strings.Repeat("b", 12)
 	job := "j_" + strings.Repeat("c", 12)
 	batch := "b_" + strings.Repeat("d", 12)
+	credential := "c_" + strings.Repeat("e", 12)
+	proposal := "ep_" + strings.Repeat("f", 12)
 	inventory := []struct {
 		method, path string
 		kind         routeKind
@@ -103,6 +109,11 @@ func TestRouteCoverageInventory(t *testing.T) {
 		{http.MethodGet, "/api/v1/destinations", routeListDestinations},
 		{http.MethodGet, "/api/v1/settings", routeGetSettings},
 		{http.MethodPut, "/api/v1/settings", routePutSettings},
+		{http.MethodGet, "/api/v1/export-proposals/" + proposal, routeGetExportProposal},
+		{http.MethodPost, "/api/v1/export-proposals/" + proposal + "/approval", routeApproveExportProposal},
+		{http.MethodGet, "/api/v1/settings/mcp", routeGetMCPSettings},
+		{http.MethodPost, "/api/v1/settings/mcp/credentials", routeCreateMCPCredential},
+		{http.MethodDelete, "/api/v1/settings/mcp/credentials/" + credential, routeRevokeMCPCredential},
 	}
 	seen := make(map[routeKind]bool, len(inventory))
 	for _, entry := range inventory {
@@ -111,13 +122,13 @@ func TestRouteCoverageInventory(t *testing.T) {
 		}
 		seen[entry.kind] = true
 	}
-	for kind := routeListMedia; kind <= routeRetryJob; kind++ {
+	for kind := routeListMedia; kind <= routeRevokeMCPCredential; kind++ {
 		if !seen[kind] {
 			t.Errorf("route kind %d is missing from the production route inventory", kind)
 		}
 	}
-	if len(seen) != int(routeRetryJob) {
-		t.Fatalf("route inventory accounts for %d kinds, want %d", len(seen), routeRetryJob)
+	if len(seen) != int(routeRevokeMCPCredential) {
+		t.Fatalf("route inventory accounts for %d kinds, want %d", len(seen), routeRevokeMCPCredential)
 	}
 }
 
@@ -337,7 +348,7 @@ func (d *routeTestDetection) Get(context.Context, string) (DetectionJob, error) 
 	return DetectionJob{
 		ID: "j_detection", Type: "detection", State: "succeeded",
 		MediaID: "m_media", ProjectID: "p_project", ProjectRevision: 7, Kind: model.DetectSilence,
-		Candidates: []model.Candidate{{ID: "c_candidate", MediaID: "m_media", ProjectID: "p_project", ProjectRevision: 7, StartMS: 100, EndMS: 200, Source: model.DetectSilence, Confidence: 0.9}},
+		Candidates: []model.Candidate{{ID: "c_candidate", MediaID: "m_media", ProjectID: "p_project", ProjectRevision: 7, StartMS: 100, EndMS: 200, Source: model.DetectSilence}},
 	}, nil
 }
 func (d *routeTestDetection) Cancel(context.Context, string) error {
@@ -353,7 +364,7 @@ func TestDetectionJobsDispatchThroughDetectionService(t *testing.T) {
 	detection := &routeTestDetection{}
 	jobs := &routeTestJobs{job: Job{
 		ID: "j_detection", Type: "detection", State: "succeeded", MediaID: "m_media", ProjectID: "p_project", ProjectRevision: 7, Kind: model.DetectSilence,
-		Candidates: []model.Candidate{{ID: "c_candidate", MediaID: "m_media", ProjectID: "p_project", ProjectRevision: 7, StartMS: 100, EndMS: 200, Source: model.DetectSilence, Confidence: 0.9}},
+		Candidates: []model.Candidate{{ID: "c_candidate", MediaID: "m_media", ProjectID: "p_project", ProjectRevision: 7, StartMS: 100, EndMS: 200, Source: model.DetectSilence}},
 	}}
 	server, err := New(Config{Authenticator: authenticator, Media: &routeTestMedia{}, Preview: routeTestPreview{}, Projects: routeTestProjects{}, BatchExports: &routeTestBatchExports{}, Detection: detection, Jobs: jobs})
 	if err != nil {
@@ -388,10 +399,13 @@ func TestDetectionJobsDispatchThroughDetectionService(t *testing.T) {
 				t.Fatalf("candidates=%#v", body["candidates"])
 			}
 			candidate := candidates[0].(map[string]any)
-			for _, key := range []string{"id", "mediaId", "projectId", "projectRevision", "startMs", "endMs", "source", "confidence"} {
+			for _, key := range []string{"id", "mediaId", "projectId", "projectRevision", "startMs", "endMs", "source"} {
 				if _, ok := candidate[key]; !ok {
 					t.Errorf("candidate missing JSON field %q: %#v", key, candidate)
 				}
+			}
+			if _, ok := candidate["confidence"]; ok {
+				t.Error("detection response exposes fabricated confidence")
 			}
 		}
 	}

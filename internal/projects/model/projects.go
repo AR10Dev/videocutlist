@@ -12,6 +12,8 @@ import (
 	"slices"
 	"strings"
 	"unicode/utf8"
+
+	"videocutlist/internal/exportpolicy"
 )
 
 var (
@@ -168,7 +170,7 @@ func validateExportOptions(options ExportOptions) error {
 	if options.CutStrategy != "" && options.CutStrategy != "stream_copy_preferred" && options.CutStrategy != "precise_reencode" && options.CutStrategy != "hybrid_smart_cut" {
 		return errors.New("invalid export cut strategy")
 	}
-	if options.Container != "" && options.Container != "mkv" {
+	if _, ok := exportpolicy.For(options.Container); !ok {
 		return errors.New("invalid export container")
 	}
 	if len(options.DestinationID) > 64 || len(options.FilenameTemplate) > 160 || strings.ContainsAny(options.DestinationID, "/\\") || strings.Contains(options.FilenameTemplate, "\x00") || strings.IndexFunc(options.DestinationID, func(r rune) bool { return r < 32 || r == 127 }) >= 0 {

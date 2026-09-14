@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "build": "tsc --noEmit && vite build && node scripts/compress.mjs",
-    "api:generate": "openapi-typescript ../docs/contracts/api.openapi.yaml -o src/generated/api.ts",
+    "api:generate": "openapi-typescript ../docs/contracts/api.openapi.yaml -o src/generated/api.ts --default-non-nullable false",
     "dev": "vite",
     "lint": "oxlint .",
     "format": "oxfmt --write .",
@@ -19,6 +19,11 @@
     "lucide-solid": "1.39.0",
     "motion": "13.2.0",
     "solid-js": "1.9.15"
+  },
+  "pnpm": {
+    "overrides": {
+      "@redocly/openapi-core>js-yaml": "4.3.2"
+    }
   },
   "devDependencies": {
     "@playwright/test": "1.58.2",

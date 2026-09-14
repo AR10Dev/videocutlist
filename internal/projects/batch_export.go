@@ -24,6 +24,7 @@ type ExportSnapshot struct {
 
 type SourceSnapshot struct {
 	MediaID    string `json:"mediaId"`
+	RootID     string `json:"rootId,omitempty"`
 	ETag       string `json:"etag"`
 	SizeBytes  int64  `json:"sizeBytes"`
 	DurationMS int64  `json:"durationMs"`
@@ -75,7 +76,7 @@ func (b BatchExportUseCase) Submit(ctx context.Context, request BatchExportReque
 		if strings.ContainsAny(item.ExportOptions.FilenameTemplate, `/\\`) {
 			return "", nil, &ProjectItemError{ItemID: item.ID, Code: "invalid_filename"}
 		}
-		snapshot := ExportSnapshot{ProjectRevision: project.Revision, MediaLabel: media.Name, Item: cloneProjectItem(item), Source: SourceSnapshot{MediaID: media.ID, ETag: media.ETag, SizeBytes: media.SizeBytes, DurationMS: media.DurationMS}, RuntimeSettings: runtimeSettings(b.Settings)}
+		snapshot := ExportSnapshot{ProjectRevision: project.Revision, MediaLabel: media.Name, Item: cloneProjectItem(item), Source: SourceSnapshot{MediaID: media.ID, RootID: media.RootID, ETag: media.ETag, SizeBytes: media.SizeBytes, DurationMS: media.DurationMS}, RuntimeSettings: runtimeSettings(b.Settings)}
 		payload, err := json.Marshal(snapshot)
 		if err != nil {
 			return "", nil, err
@@ -217,7 +218,7 @@ func (b BatchExportUseCase) Retry(ctx context.Context, jobID string) (Batch, err
 
 // ValidateSnapshot reports source_changed when current metadata differs from the queued snapshot.
 func ValidateSnapshot(snapshot ExportSnapshot, media Media) error {
-	if media.ID != snapshot.Source.MediaID || media.ETag != snapshot.Source.ETag || media.SizeBytes != snapshot.Source.SizeBytes || media.DurationMS != snapshot.Source.DurationMS {
+	if media.ID != snapshot.Source.MediaID || snapshot.Source.RootID != "" && media.RootID != snapshot.Source.RootID || media.ETag != snapshot.Source.ETag || media.SizeBytes != snapshot.Source.SizeBytes || media.DurationMS != snapshot.Source.DurationMS {
 		return fmt.Errorf("%w", jobqueue.ErrSourceChanged)
 	}
 	return nil

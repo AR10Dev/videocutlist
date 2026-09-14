@@ -22,6 +22,7 @@ import (
 	jobqueue "videocutlist/internal/jobs"
 	"videocutlist/internal/library/media/index"
 	"videocutlist/internal/library/media/probe"
+	"videocutlist/internal/mcp"
 	"videocutlist/internal/preview/cache"
 	"videocutlist/internal/preview/ffmpeg"
 	"videocutlist/internal/projects"
@@ -50,6 +51,10 @@ func run(ctx context.Context) error {
 		return err
 	}
 	defer db.Close()
+	mcpCredentials, err := mcp.NewCredentialStore(db)
+	if err != nil {
+		return err
+	}
 	runtimeSettingsStore, err := store.NewRuntimeSettingsStore(db)
 	if err != nil {
 		return err
@@ -93,7 +98,7 @@ func run(ctx context.Context) error {
 	})
 	mediaCatalog := runtime.MediaCatalog{Scanner: scanner, Store: mediaStore}
 	mediaService := &projects.MediaUseCase{Catalog: mediaCatalog, Configured: len(cfg.MediaRoots) > 0}
-	detectionService := projects.NewDetectionUseCase(detection.Service{Scanner: scanner, Catalog: mediaStore, FFmpegPath: cfg.FFmpegPath, Capacity: limiter})
+	detectionService := projects.NewDetectionUseCase(&detection.Service{Scanner: scanner, Catalog: mediaStore, FFmpegPath: cfg.FFmpegPath, Capacity: limiter})
 	detectionService.Catalog = mediaCatalog
 	previewRunner := runtime.PreviewRunner{Scanner: scanner, Media: mediaStore, FFmpeg: ffmpeg.Runner{Path: cfg.FFmpegPath}}
 	previewManager, err := projects.NewPreviewManager(runtime.PreviewCache{Store: cacheStore}, previewRunner, projects.Validator(validator), limiter)
@@ -228,10 +233,14 @@ func run(ctx context.Context) error {
 			},
 		)
 	}
+	proposalService, err := mcp.NewProposalService(db, mcpCredentials, projectService, mediaCatalog, exportExecutor, scheduler)
+	if err != nil {
+		return err
+	}
 	apiServer, err := httpapi.New(httpapi.Config{
 		Authenticator: authenticator, Media: mediaService, Preview: previewService, Assets: assetService,
 		Projects: projectService, BatchExports: batchExports, Preflight: exportExecutor, Jobs: jobService, Detection: detectionService, Download: exportExecutor, MediaImport: mediaService,
-		Settings: runtimeSettingsStore, RuntimeSettings: runtimeState, ApplyRuntimeSettings: applyRuntime,
+		Settings: runtimeSettingsStore, RuntimeSettings: runtimeState, ApplyRuntimeSettings: applyRuntime, MCPCredentials: mcpCredentials, ExportProposals: proposalService,
 		Destinations: destinationMetadata(cfg.Destinations),
 		Ready:        db.PingContext, Logger: logger, Metrics: httpapi.NewMetrics(),
 		BeforeMS: int64(cfg.PreviewBeforeMS), AfterMS: int64(cfg.PreviewAfterMS),
@@ -241,7 +250,28 @@ func run(ctx context.Context) error {
 		return err
 	}
 
+	mcpTools := append(mcp.MediaTools(mediaService), mcp.ExportTools(proposalService, scheduler, exportExecutor)...)
+	mcpTools = append(mcpTools, mcp.ProjectTools(projectService, mediaService, mcpCredentials)...)
+	mcpTools = append(mcpTools, mcp.PreviewDetectionTools(mediaService, previewService, detectionService, projectService)...)
+	mcpTransportConfig := mcp.TransportConfig{
+		Enabled: cfg.MCPEnabled, EnabledFunc: func() bool { return runtimeState.Snapshot().MCPEnabled }, Credentials: mcpCredentials, Tools: mcpTools, AllowedOrigins: cfg.AllowedOrigins,
+		MaxConcurrentRequests: cfg.PreviewGlobalLimit,
+		RequestInfo: func(request *http.Request) mcp.RequestInfo {
+			forwarded := httpapi.GetForwardedInfo(request.Context())
+			return mcp.RequestInfo{ClientIP: forwarded.ClientIP, Host: forwarded.Host, Proto: forwarded.Proto}
+		},
+	}
+	mcpTransport, err := mcp.NewTransport(mcpTransportConfig)
+	if err != nil {
+		return err
+	}
+	mcpDownloads, err := mcp.ExportDownloadHandler(mcpTransportConfig, proposalService, scheduler, exportExecutor)
+	if err != nil {
+		return err
+	}
 	mux := http.NewServeMux()
+	mux.Handle("/mcp/download/", mcpDownloads)
+	mux.Handle("/mcp", mcpTransport)
 	mux.Handle("/api/", apiServer)
 	mux.Handle("/metrics", apiServer)
 	mux.Handle("/", webassets.DefaultHandler())

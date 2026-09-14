@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import type { components } from "../src/generated/api";
 
 const media = {
   id: "m_0123456789012345678901234567890123456789012",
@@ -100,6 +101,20 @@ test.beforeEach(async ({ page }) => {
   await page.route(`${apiOrigin}/api/v1/**`, async (route) => {
     const request = route.request();
     const url = new URL(request.url());
+    if (url.pathname === "/api/v1/settings/mcp")
+      return route.fulfill({
+        json: {
+          enabled: false,
+          endpoint: "/mcp",
+          credentials: [],
+          permissions: [],
+          roots: [],
+          proposals: [],
+          authentication: "Bearer token",
+          remoteAccessGuidance: "Use HTTPS for remote access.",
+          clientCompatibility: "Streamable HTTP bearer-token clients only.",
+        } satisfies components["schemas"]["MCPSettingsResponse"],
+      });
     if (url.pathname === "/api/v1/media/status")
       return route.fulfill({
         json: { state: "ready_with_media", message: "Media library is ready." },
@@ -208,7 +223,6 @@ test.beforeEach(async ({ page }) => {
               startMs: 1000,
               endMs: 1500,
               source: "silence",
-              confidence: 0.9,
             },
           ],
         },
@@ -775,10 +789,14 @@ test("detection polls, previews, and supports sequential keyboard review", async
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   await page.getByRole("button", { name: "Add to project" }).click();
+  await openTask(page, "Export");
+  await expect(page.getByLabel("What to export", { exact: true })).toHaveValue("segments");
   await openTask(page, "Detection");
-  await page.getByRole("button", { name: "Find silence" }).click();
-  await expect(page.getByText("Detection running.")).toBeVisible();
-  await expect(page.getByText(/1 candidates found/)).toBeVisible();
+  await page.getByRole("button", { name: "Find pauses" }).click();
+  await expect(page.getByText("Detection running.", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("1 candidates found. Review each before accepting.", { exact: true }),
+  ).toBeVisible();
   await page.getByRole("button", { name: "Preview candidate 1" }).click();
   await expect(page.getByLabel("Preview player")).toHaveAttribute(
     "data-playback-mode",
@@ -786,12 +804,18 @@ test("detection polls, previews, and supports sequential keyboard review", async
   );
   await expect(page.getByLabel("Preview player")).toHaveAttribute("data-preview-offset", "1000");
   await page.getByRole("button", { name: "Dismiss" }).click();
-  await expect(page.getByText("Candidate dismissed.")).toBeVisible();
-  await page.getByRole("button", { name: "Find silence" }).click();
-  await expect(page.getByText(/1 candidates found/)).toBeVisible();
+  await expect(page.getByText("Candidate dismissed.", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Find pauses" }).click();
+  await expect(
+    page.getByText("1 candidates found. Review each before accepting.", { exact: true }),
+  ).toBeVisible();
   await page.getByLabel("Detection candidates").getByRole("listitem").focus();
   await page.keyboard.press("a");
-  await expect(page.getByText("Candidate accepted; save the project to persist it.")).toBeVisible();
+  await expect(
+    page.getByText("Candidate accepted; save the project to persist it.", { exact: true }),
+  ).toBeVisible();
+  await openTask(page, "Export");
+  await expect(page.getByLabel("What to export", { exact: true })).toHaveValue("segments");
   await openTask(page, "Cuts");
   await expect(page.getByText(/1 selected/)).toBeVisible();
 });
@@ -808,8 +832,7 @@ test("bulk detection acceptance skips unsafe candidates and undoes as one edit",
       projectRevision,
       startMs,
       endMs,
-      source: "scene",
-      confidence: 0.9,
+      source: "black",
     });
     return route.fulfill({
       status: 202,
@@ -820,7 +843,7 @@ test("bulk detection acceptance skips unsafe candidates and undoes as one edit",
         mediaId: media.id,
         projectId,
         projectRevision: 1,
-        kind: "scene",
+        kind: "black",
         candidates: [
           candidate("c_review-valid-1", 1000, 1500),
           candidate("c_review-valid-2", 2000, 2500),
@@ -835,17 +858,68 @@ test("bulk detection acceptance skips unsafe candidates and undoes as one edit",
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   await page.getByRole("button", { name: "Add to project" }).click();
   await openTask(page, "Detection");
-  await page.getByRole("button", { name: "Split into scenes" }).click();
-  await expect(page.getByText(/5 candidates found/)).toBeVisible();
+  await page.getByRole("button", { name: "Find black sections" }).click();
+  await expect(
+    page.getByText("5 candidates found. Review each before accepting.", { exact: true }),
+  ).toBeVisible();
   await page.once("dialog", (dialog) => void dialog.accept());
   await page.getByRole("button", { name: "Accept all valid" }).click();
   await expect(
-    page.getByText(/Accepted 2 candidates; skipped 1 stale, 1 invalid, 1 overlapping/),
+    page.getByText(
+      "Accepted 2 candidates; skipped 1 stale, 1 invalid, 1 overlapping. Save the project to persist them.",
+      { exact: true },
+    ),
   ).toBeVisible();
   await openTask(page, "Cuts");
   await expect(page.getByText(/2 selected/)).toBeVisible();
-  await page.getByRole("button", { name: "Undo" }).click();
+  await page.getByRole("button", { name: "Play preview" }).focus();
+  await page.keyboard.press("ControlOrMeta+z");
   await expect(page.getByText(/0 selected/)).toBeVisible();
+});
+
+test("scene changes remain points with bounded preview, seek, and dismiss", async ({ page }) => {
+  await page.route(`${apiOrigin}/api/v1/projects/*/detections`, (route) => {
+    const projectId = new URL(route.request().url()).pathname.split("/")[4];
+    return route.fulfill({
+      status: 202,
+      json: {
+        id: "j_detection-scene-point",
+        type: "detection",
+        state: "succeeded",
+        mediaId: media.id,
+        projectId,
+        projectRevision: 1,
+        kind: "scene",
+        candidates: [
+          {
+            id: "c_scene-point",
+            mediaId: media.id,
+            projectId,
+            projectRevision: 1,
+            pointMs: 5000,
+            source: "scene",
+          },
+        ],
+      },
+    });
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await page.getByRole("button", { name: "Add to project" }).click();
+  await openTask(page, "Detection");
+  await page.getByRole("button", { name: "Find scene changes" }).click();
+  await expect(
+    page.getByText("1 candidates found. Review each before accepting.", { exact: true }),
+  ).toBeVisible();
+  const row = page.getByLabel("Detection candidates").getByRole("listitem");
+  await expect(row.getByRole("button", { name: "Add segment" })).toHaveCount(0);
+  await expect(row.getByRole("button", { name: "Seek to point" })).toBeVisible();
+  await row.getByRole("button", { name: "Seek to point" }).click();
+  await expect(page.getByLabel("Timeline playhead")).toHaveValue("5000");
+  await row.getByRole("button", { name: "Preview candidate 1" }).click();
+  await expect(page.getByLabel("Preview player")).toHaveAttribute("data-preview-offset", "5000");
+  await row.getByRole("button", { name: "Dismiss" }).click();
+  await expect(page.getByText("All candidates reviewed", { exact: true })).toBeVisible();
 });
 
 test("detection can be cancelled and reports failed jobs", async ({ page }) => {
@@ -853,12 +927,14 @@ test("detection can be cancelled and reports failed jobs", async ({ page }) => {
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   await page.getByRole("button", { name: "Add to project" }).click();
   await openTask(page, "Detection");
-  await page.getByRole("button", { name: "Find silence" }).click();
+  await page.getByRole("button", { name: "Find pauses" }).click();
   await expect(page.getByRole("button", { name: "Cancel detection" })).toBeVisible();
   await page.getByRole("button", { name: "Cancel detection" }).click();
-  await expect(page.getByText("Detection cancelled.")).toBeVisible();
-  await page.getByRole("button", { name: "Find black frames" }).click();
-  await expect(page.getByText("Detection failed: detection_failed.")).toBeVisible();
+  await expect(page.getByText("Detection cancelled.", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Find black sections" }).click();
+  await expect(
+    page.getByText("Detection failed: detection_failed.", { exact: true }),
+  ).toBeVisible();
 });
 
 test("clears detection results when media context changes", async ({ page }) => {
@@ -891,7 +967,6 @@ test("clears detection results when media context changes", async ({ page }) => 
             startMs: 1000,
             endMs: 1500,
             source: "silence",
-            confidence: 0.9,
           },
         ],
       },
@@ -901,7 +976,7 @@ test("clears detection results when media context changes", async ({ page }) => 
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   await page.getByRole("button", { name: "Add to project" }).click();
   await openTask(page, "Detection");
-  await page.getByRole("button", { name: "Find silence" }).click();
+  await page.getByRole("button", { name: "Find pauses" }).click();
   await expect(page.getByRole("button", { name: "Cancel detection" })).toBeVisible();
   await pollStarted;
   await page.getByRole("button", { name: /second.mp4/ }).click();
@@ -2224,7 +2299,7 @@ test("covers the responsive workspace and keyboard editing workflow", async ({ p
   await detectionTab.focus();
   await page.keyboard.press("Enter");
   await expect(detectionTab).toHaveAttribute("aria-selected", "true");
-  await page.getByRole("button", { name: "Find silence" }).focus();
+  await page.getByRole("button", { name: "Find pauses" }).focus();
   await page.keyboard.press("Enter");
   await expect(page.getByText(/1 candidates found/)).toBeVisible();
 });
@@ -2446,6 +2521,17 @@ test("adds, selects, splits, and safely removes cuts with the redesigned control
   await expect(page.getByLabel(/Output arrangement/)).toContainText("Combine selected cuts");
   await expect(page.getByLabel("Processing")).toContainText("Fast copy");
   await expect(page.getByText(/not frame-exact/)).toBeVisible();
+});
+
+test("MCP settings renders an empty proposal list without a page error", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings" }).click();
+  await expect(page.getByRole("heading", { name: "MCP access" })).toBeVisible();
+  await expect(page.getByText("No export proposals are awaiting approval.")).toBeVisible();
+  await expect(page.getByLabel("Enable MCP", { exact: true })).not.toBeChecked();
+  expect(errors).toEqual([]);
 });
 
 test("persists appearance and recovers from invalid stored values", async ({ page }) => {

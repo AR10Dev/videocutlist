@@ -16,7 +16,9 @@ import (
 	"time"
 
 	"videocutlist/internal/db"
+	"videocutlist/internal/exportpolicy"
 	jobqueue "videocutlist/internal/jobs"
+	"videocutlist/internal/mcp"
 	"videocutlist/internal/projects"
 	"videocutlist/internal/projects/interchange"
 	"videocutlist/internal/projects/model"
@@ -139,6 +141,8 @@ type Config struct {
 	Download             projects.ExportDownloadService
 	Settings             *store.RuntimeSettingsStore
 	RuntimeSettings      *store.RuntimeSettingsState
+	MCPCredentials       *mcp.CredentialStore
+	ExportProposals      *mcp.ProposalService
 	ApplyRuntimeSettings func(store.RuntimeSettings) error
 	SettingsAllowlist    []string
 	Destinations         []DestinationMetadata
@@ -241,6 +245,21 @@ func (s *Server) dispatch(writer http.ResponseWriter, request *http.Request, id 
 	case routeRefreshSettings:
 		s.refreshSettings(writer, request, id)
 		return "/api/v1/settings/media/refresh", ""
+	case routeGetMCPSettings:
+		s.getMCPSettings(writer, request, id)
+		return "/api/v1/settings/mcp", ""
+	case routeCreateMCPCredential:
+		s.createMCPCredential(writer, request, id)
+		return "/api/v1/settings/mcp/credentials", ""
+	case routeRevokeMCPCredential:
+		s.revokeMCPCredential(writer, request, r.id, id)
+		return "/api/v1/settings/mcp/credentials/{credentialId}", ""
+	case routeGetExportProposal:
+		s.getExportProposal(writer, request, r.id, id)
+		return "/api/v1/export-proposals/{proposalId}", ""
+	case routeApproveExportProposal:
+		s.approveExportProposal(writer, request, r.id, id)
+		return "/api/v1/export-proposals/{proposalId}/approval", ""
 	case routeListMedia:
 		s.listMedia(writer, request, id)
 		return "/api/v1/media", ""
@@ -390,7 +409,10 @@ func previewHeaders(writer http.ResponseWriter, spec PreviewSpec, cache string) 
 	writer.Header().Set("X-Preview-Cache", cache)
 }
 func validExport(input ExportInput) bool {
-	if (input.Mode != "merge" && input.Mode != "separate") || (input.Selection != "" && input.Selection != "segments" && input.Selection != "gaps") || (input.CutStrategy != "stream_copy_preferred" && input.CutStrategy != "precise_reencode" && input.CutStrategy != "hybrid_smart_cut") || input.Container != "mkv" {
+	if (input.Mode != "merge" && input.Mode != "separate") || (input.Selection != "" && input.Selection != "segments" && input.Selection != "gaps") || (input.CutStrategy != "stream_copy_preferred" && input.CutStrategy != "precise_reencode" && input.CutStrategy != "hybrid_smart_cut") {
+		return false
+	}
+	if _, ok := exportpolicy.For(input.Container); !ok {
 		return false
 	}
 	if len(input.DestinationID) > 64 || len(input.FilenameTemplate) > 160 || strings.ContainsAny(input.DestinationID, "/\\") || strings.ContainsAny(input.FilenameTemplate, "\x00") || strings.IndexFunc(input.DestinationID, func(r rune) bool { return r < 32 || r == 127 }) >= 0 {
