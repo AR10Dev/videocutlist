@@ -19,7 +19,11 @@ func TestMediaSyncRollbackPreservesPreviousCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	media, err := store.NewMediaStore(db)
 	if err != nil {
 		t.Fatal(err)
@@ -46,11 +50,15 @@ func TestOpenDatabaseAppliesAllMigrations(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	if reopened, err := store.OpenDatabase(context.Background(), t.TempDir()+"/videocutlist.db"); err != nil {
 		t.Fatal(err)
-	} else {
-		reopened.Close()
+	} else if err := reopened.Close(); err != nil {
+		t.Error(err)
 	}
 	for _, table := range []string{"media", "projects", "export_jobs", "detection_jobs", "jobs", "cache_entries", "runtime_settings", "mcp_credentials", "mcp_audit_entries"} {
 		var name string
@@ -83,7 +91,11 @@ func TestOpenDatabaseMigratesLegacyProjectBeforeUnifiedJobs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	var raw string
 	if err := db.QueryRowContext(ctx, `SELECT document_json FROM projects WHERE id = 'p_legacy000001'`).Scan(&raw); err != nil {
 		t.Fatal(err)
@@ -139,7 +151,11 @@ func TestOpenDatabaseMigratesLegacyIdentityColumns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	for _, table := range []string{"media", "projects", "export_jobs", "detection_jobs"} {
 		assertNoOwnerColumn(t, db, table)
 	}

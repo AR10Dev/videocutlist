@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -92,7 +93,14 @@ func WriteManifest(directory, jobID, kind string, outputNames []string, expires 
 		return "", err
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
+	published := false
+	defer func() {
+		if !published {
+			// Best effort: preserve the primary write or rename error when the
+			// unpublished temporary manifest cannot be removed.
+			_ = os.Remove(tmpName)
+		}
+	}()
 	if err := tmp.Chmod(0o600); err != nil {
 		_ = tmp.Close()
 		return "", err
@@ -108,6 +116,7 @@ func WriteManifest(directory, jobID, kind string, outputNames []string, expires 
 	if err := os.Rename(tmpName, name); err != nil {
 		return "", err
 	}
+	published = true
 	return name, nil
 }
 
@@ -164,6 +173,33 @@ func writeManifestAt(root *os.Root, directory, jobID, kind string, outputNames [
 
 func removeManifest(path string) { _ = os.Remove(path) }
 
+func removeManifestOutputs(manifestPath string, outputNames []string) (err error) {
+	for _, name := range outputNames {
+		if name == "" || filepath.Base(name) != name || strings.Contains(name, "..") {
+			continue
+		}
+		path := filepath.Join(filepath.Dir(manifestPath), name)
+		info, statErr := os.Lstat(path)
+		if errors.Is(statErr, os.ErrNotExist) {
+			continue
+		}
+		if statErr != nil {
+			err = errors.Join(err, fmt.Errorf("inspect cancelled artifact %q: %w", name, statErr))
+			continue
+		}
+		if info.IsDir() {
+			err = errors.Join(err, fmt.Errorf("cancelled artifact %q is a directory", name))
+			continue
+		}
+		// Lstat plus Remove avoids following a replacement symlink and never
+		// recursively removes a directory.
+		if removeErr := os.Remove(path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			err = errors.Join(err, fmt.Errorf("remove cancelled artifact %q: %w", name, removeErr))
+		}
+	}
+	return err
+}
+
 // Reconcile validates job-owned published outputs before ordinary job restart
 // recovery. Unfinished manifests and their exact listed outputs are removed.
 func (s *ArtifactStore) Reconcile(ctx context.Context, jobs *jobqueue.JobsStore, ffprobePath string, destinations []Destination) error {
@@ -192,6 +228,15 @@ func (s *ArtifactStore) Reconcile(ctx context.Context, jobs *jobqueue.JobsStore,
 				removeManifest(path)
 				return nil
 			}
+			if job.State == jobqueue.JobCancelled {
+				if err := removeManifestOutputs(path, manifest.OutputNames); err != nil {
+					return err
+				}
+				if err := removeArtifactPath(path); err != nil {
+					return fmt.Errorf("remove cancelled artifact manifest: %w", err)
+				}
+				return nil
+			}
 			if job.State != jobqueue.JobRunning {
 				return nil
 			}
@@ -211,11 +256,7 @@ func (s *ArtifactStore) Reconcile(ctx context.Context, jobs *jobqueue.JobsStore,
 				values[i] = Artifact{Path: output, Name: name, Kind: manifest.Kind, Expires: expires}
 			}
 			if !valid {
-				for _, name := range manifest.OutputNames {
-					if filepath.Base(name) == name {
-						_ = os.Remove(filepath.Join(filepath.Dir(path), name))
-					}
-				}
+				_ = removeManifestOutputs(path, manifest.OutputNames)
 				removeManifest(path)
 				return nil
 			}
@@ -278,7 +319,11 @@ func VerifyArtifact(ctx context.Context, ffprobePath, path string, containers ..
 	if err != nil {
 		return ErrOutputUnavailable
 	}
-	defer file.Close()
+	defer func() {
+		// Best effort: the artifact was already published, so a post-validation
+		// close failure must not turn a valid artifact into a failed result.
+		_ = file.Close()
+	}()
 	fileInfo, err := file.Stat()
 	if err != nil || !os.SameFile(pathInfo, fileInfo) || !fileInfo.Mode().IsRegular() || fileInfo.Size() == 0 {
 		return ErrOutputUnavailable
@@ -310,18 +355,43 @@ func (s *ArtifactStore) Put(job string, values []Artifact) {
 	s.values[job] = slices.Clone(values)
 }
 
-// Remove rolls back published artifacts after a durable job transition fails.
-func (s *ArtifactStore) Remove(job string) {
+// Remove rolls back published artifacts after a durable job transition fails;
+// cleanup evidence remains registered when removal cannot complete.
+func (s *ArtifactStore) Remove(job string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	var err error
 	for _, value := range s.values[job] {
-		_ = os.Remove(value.Path)
+		if removeErr := removeArtifactPath(value.Path); removeErr != nil {
+			err = errors.Join(err, fmt.Errorf("remove artifact %q: %w", value.Name, removeErr))
+		}
+	}
+	if err != nil {
+		return err
+	}
+	if path := s.manifests[job]; path != "" {
+		if removeErr := removeArtifactPath(path); removeErr != nil {
+			return fmt.Errorf("remove artifact manifest: %w", removeErr)
+		}
 	}
 	delete(s.values, job)
-	if path := s.manifests[job]; path != "" {
-		_ = os.Remove(path)
-		delete(s.manifests, job)
+	delete(s.manifests, job)
+	return nil
+}
+
+func removeArtifactPath(path string) error {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
 	}
+	if err != nil {
+		return err
+	}
+	if info.IsDir() {
+		return errors.New("artifact path is a directory")
+	}
+	// Lstat plus Remove never follows a replacement symlink.
+	return os.Remove(path)
 }
 func (s *ArtifactStore) Open(job string, position int, now time.Time) (io.ReadCloser, Artifact, error) {
 	s.mu.Lock()

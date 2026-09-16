@@ -21,7 +21,11 @@ func TestRunRecoversUnifiedJobsOnStartup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	jobs, err := jobqueue.NewJobsStore(db)
 	if err != nil {
 		t.Fatal(err)
@@ -44,7 +48,9 @@ func TestRunRecoversUnifiedJobsOnStartup(t *testing.T) {
 		t.Fatal(err)
 	}
 	port := strconv.Itoa(listener.Addr().(*net.TCPAddr).Port)
-	listener.Close()
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("VIDEOCUTLIST_DATABASE_PATH", databasePath)
 	t.Setenv("VIDEOCUTLIST_CACHE_DIR", directory+"/cache")
 	t.Setenv("VIDEOCUTLIST_EXPORT_DIR", directory+"/exports")
@@ -103,7 +109,11 @@ func TestNewHTTPServerBindsConfiguredAddresses(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer listener.Close()
+			t.Cleanup(func() {
+				if err := listener.Close(); err != nil {
+					t.Error(err)
+				}
+			})
 			if _, port, err := net.SplitHostPort(listener.Addr().String()); err != nil || port == "0" {
 				t.Fatalf("listener address = %q, err = %v", listener.Addr(), err)
 			}
@@ -126,7 +136,11 @@ func TestNewHTTPServerServesLoopback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	response.Body.Close()
+	t.Cleanup(func() {
+		if err := response.Body.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	if response.StatusCode != http.StatusNoContent {
 		t.Fatalf("status = %d, want %d", response.StatusCode, http.StatusNoContent)
 	}

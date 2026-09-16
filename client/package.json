@@ -20,11 +20,6 @@
     "motion": "13.2.0",
     "solid-js": "1.9.15"
   },
-  "pnpm": {
-    "overrides": {
-      "@redocly/openapi-core>js-yaml": "4.3.2"
-    }
-  },
   "devDependencies": {
     "@playwright/test": "1.58.2",
     "@tailwindcss/vite": "4.3.3",
@@ -38,5 +33,10 @@
     "vite": "8.1.5",
     "vite-plugin-solid": "2.11.14",
     "vitest": "4.1.10"
+  },
+  "pnpm": {
+    "overrides": {
+      "@redocly/openapi-core>js-yaml": "4.3.2"
+    }
   }
 }

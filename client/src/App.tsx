@@ -1,4 +1,4 @@
-import { createEffect, onCleanup, Show } from "solid-js";
+import { createEffect, createSignal, onCleanup, Show } from "solid-js";
 import {
   AlertCircle,
   CheckCircle2,
@@ -15,6 +15,8 @@ import { EditorView } from "./features/editor/EditorView";
 import { ExportView } from "./features/export/ExportView";
 import { LibraryView } from "./features/media/LibraryView";
 import { SettingsView } from "./features/settings/SettingsView";
+import { ProjectDialog } from "./features/projects/ProjectDialog";
+import { ProjectConflictNotice, RecoveryNotice } from "./features/projects/ProjectNotices";
 import { createWorkspaceController } from "./features/app/controller";
 import { createWorkspacePanelController } from "./features/app/panelController";
 import { WorkspaceProvider } from "./features/app/WorkspaceContext";
@@ -68,8 +70,17 @@ export function App() {
   } = panel;
   let shortcutClose: HTMLButtonElement | undefined;
   let projectMenu: HTMLDetailsElement | undefined;
+  const [projectDialogOpen, setProjectDialogOpen] = createSignal(false);
 
   const closeProjectMenu = () => projectMenu?.removeAttribute("open");
+  const openProjectDialog = () => {
+    closeProjectMenu();
+    setProjectDialogOpen(true);
+  };
+  const closeProjectDialog = () => {
+    setProjectDialogOpen(false);
+    queueMicrotask(() => projectMenu?.querySelector<HTMLElement>("summary")?.focus());
+  };
   const openHelp = () => {
     closeProjectMenu();
     controller.setShortcutHelpOpen(true);
@@ -92,6 +103,9 @@ export function App() {
   createEffect(() => {
     if (controller.shortcutHelpOpen()) queueMicrotask(() => shortcutClose?.focus());
   });
+  createEffect(() => {
+    if (controller.projects.saveConflict()) openMediaPanel(false);
+  });
   return (
     <WorkspaceProvider value={controller}>
       <main
@@ -102,7 +116,8 @@ export function App() {
           if (
             narrowViewport() &&
             event.key === "Escape" &&
-            !event.target.closest("[role='dialog']") &&
+            !event.defaultPrevented &&
+            !event.target.closest("dialog") &&
             (mediaOpen() || tasksOpen())
           ) {
             event.preventDefault();
@@ -110,6 +125,25 @@ export function App() {
           }
         }}
       >
+        <div class="workspace-notices">
+          <RecoveryNotice />
+          <ProjectConflictNotice />
+          <Show when={projectSaveState() === "failed" && !controller.projects.saveConflict()}>
+            <div class="alert alert-error" role="alert">
+              <span>{controller.projects.saveError()}</span>
+              <button
+                class="btn btn-ghost btn-xs"
+                type="button"
+                onClick={() => void controller.projects.retrySave()}
+              >
+                Retry save
+              </button>
+            </div>
+          </Show>
+        </div>
+        <Show when={projectDialogOpen()}>
+          <ProjectDialog onClose={closeProjectDialog} />
+        </Show>
         <Show when={controller.shortcutHelpOpen()}>
           <dialog
             open
@@ -252,7 +286,7 @@ export function App() {
                 role="status"
                 title={
                   projectSaveState() === "failed"
-                    ? controller.status() || "Save failed. Try again."
+                    ? controller.projects.saveError() || "Save failed. Try again."
                     : undefined
                 }
               >
@@ -316,6 +350,11 @@ export function App() {
                   <li>
                     <button type="button" onClick={loadProjectFromMenu}>
                       <FolderOpen size={15} aria-hidden="true" /> Load project
+                    </button>
+                  </li>
+                  <li>
+                    <button type="button" onClick={openProjectDialog}>
+                      <FolderOpen size={15} aria-hidden="true" /> Project tools
                     </button>
                   </li>
                   <li>

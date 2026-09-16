@@ -23,6 +23,8 @@ export function SettingsView(props: { onClose?: () => void } = {}) {
     settingsRevision,
     runtimeSettings,
     settingsPending,
+    serverSettingsLoading,
+    loadServerSettings,
     rescanPending,
     muted,
     setMuted,
@@ -189,10 +191,16 @@ export function SettingsView(props: { onClose?: () => void } = {}) {
       <section class="server-settings" aria-labelledby="processing-settings-heading">
         <details>
           <summary id="processing-settings-heading">Server processing</summary>
-          <p>Changes apply to future jobs; running jobs keep their current settings.</p>
+          <p>
+            Changes apply live. Export concurrency (1–64) also limits detection and library jobs:
+            increases start more workers immediately; decreases let active jobs finish and keep
+            queued work. Existing exports keep their saved options, but shared process and cache
+            limits affect running work. Cache size covers the preview cache and each timeline asset
+            separately, not a combined budget.
+          </p>
           <fieldset
             class="fieldset border-0 p-0"
-            disabled={settingsPending() || !runtimeSettings()}
+            disabled={settingsPending() || serverSettingsLoading() || !runtimeSettings()}
             aria-label="Server processing limits"
           >
             <h4>Export</h4>
@@ -202,6 +210,8 @@ export function SettingsView(props: { onClose?: () => void } = {}) {
                 class="input input-bordered input-sm mt-1 w-full"
                 type="number"
                 min="1"
+                max="64"
+                step="1"
                 value={runtimeSettings()?.exportLimit ?? ""}
                 onChange={(event) =>
                   void saveRuntimeSettings(
@@ -375,9 +385,17 @@ export function SettingsView(props: { onClose?: () => void } = {}) {
         </dl>
         <p>Settings revision {settingsRevision()}</p>
       </details>
-      <Show when={serverSettingsStatus() !== "Administrator settings loaded."}>
+      <div aria-busy={settingsPending() || serverSettingsLoading()}>
         <p role="status">{serverSettingsStatus()}</p>
-      </Show>
+        <button
+          class="btn btn-ghost btn-sm"
+          type="button"
+          disabled={settingsPending() || serverSettingsLoading()}
+          onClick={() => void loadServerSettings()}
+        >
+          Reload administrator settings
+        </button>
+      </div>
     </section>
   );
 }

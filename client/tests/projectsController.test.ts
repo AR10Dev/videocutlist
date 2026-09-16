@@ -144,6 +144,138 @@ describe("projects controller", () => {
     controller.dispose();
   });
 
+  it("keeps conflict choices after a failed remote reload", async () => {
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: memoryStorage(),
+    });
+    const item: EditableProjectItem = {
+      id: "i_conflict-load01",
+      media,
+      timeline: createTimelineHistory({
+        playheadMs: 100,
+        segments: [{ id: "s_conflict", startMs: 100, endMs: 300 }],
+        zoom: 1,
+      }),
+      muted: false,
+      exportOptions: {
+        mode: "merge",
+        selection: "segments",
+        cutStrategy: "stream_copy_preferred",
+        container: "mkv",
+      },
+    };
+    const remoteProject: components["schemas"]["Project"] = {
+      id: "p_conflict-load1",
+      revision: 2,
+      updatedAt: "2026-01-01T00:00:00Z",
+      schemaVersion: 2,
+      name: "Remote project",
+      items: [
+        {
+          id: item.id,
+          mediaId: media.id,
+          segments: [{ startMs: 200, endMs: 400 }],
+          exportOptions: {},
+        },
+      ],
+    };
+    let reloadFailed = true;
+    const api: ApiClient = {
+      url: (path) => path,
+      request: (path, init) => {
+        if (path === "projects/p_conflict-load1" && init?.method === "PUT")
+          return Promise.resolve(
+            Response.json(
+              {
+                error: {
+                  code: "revision_conflict",
+                  message: "Project changed",
+                  requestId: "r-conflict",
+                },
+              },
+              { status: 409 },
+            ),
+          );
+        if (path === "projects/p_conflict-load1")
+          return Promise.resolve(
+            reloadFailed ? new Response(null, { status: 503 }) : Response.json(remoteProject),
+          );
+        if (path === `media/${media.id}`) return Promise.resolve(Response.json(media));
+        return Promise.reject(new Error(`Unexpected request: ${path}`));
+      },
+      assetRequest: () => Promise.resolve(Response.json({})),
+      interchangeRequest: () => Promise.resolve(Response.json({})),
+    };
+    const [selected, setSelected] = createSignal<components["schemas"]["Media"] | undefined>(media);
+    const [projectId, setProjectId] = createSignal("p_conflict-load1");
+    const [projectName, setProjectName] = createSignal("Local project");
+    const [revision, setRevision] = createSignal(1);
+    const [dirty, setDirty] = createSignal(true);
+    const [projectItems, setProjectItems] = createSignal([item]);
+    const [, setSelectedExportItems] = createSignal<string[]>([]);
+    const [, setActiveItemId] = createSignal<string | undefined>(item.id);
+    const [timeline, setTimeline] = createSignal(item.timeline);
+    const [, setMedia] = createSignal<components["schemas"]["Media"][]>([media]);
+    const [, setRecent] = createSignal<{ id: string; label: string; lastOpened: number }[]>([]);
+    const [, setMuted] = createSignal(false);
+    const [, setExportMode] = createSignal<"merge" | "separate">("merge");
+    const [, setExportSelection] = createSignal<"segments" | "gaps">("segments");
+    const [, setStreamIndexes] = createSignal<number[]>([]);
+    const [, setCutStrategy] = createSignal(defaultSettings.cutStrategy);
+    const [, setExportContainer] = createSignal<"mkv" | "mp4" | "mov">("mkv");
+    const [, setDestinationId] = createSignal("download");
+    const [, setFilenameTemplate] = createSignal(defaultSettings.filenameTemplate);
+    const controller = createProjectsController({
+      api,
+      queryClient: new QueryClient(),
+      selected,
+      projectId,
+      setProjectId,
+      projectName,
+      setProjectName,
+      revision,
+      setRevision,
+      dirty,
+      setDirty,
+      editorVersion: () => 1,
+      projectItems,
+      setProjectItems,
+      setSelectedExportItems,
+      setActiveItemId,
+      setSelected,
+      setTimeline,
+      setPreviewCenterMs: () => undefined,
+      setMedia,
+      setRecent,
+      settings: () => defaultSettings,
+      setMuted,
+      setExportMode,
+      setExportSelection,
+      setStreamIndexes,
+      setCutStrategy,
+      setExportContainer,
+      setDestinationId,
+      setFilenameTemplate,
+      editableItems: () => projectItems(),
+      clearDetectionContext: () => undefined,
+      setDiagnostics: () => undefined,
+      setStatus: () => undefined,
+    });
+
+    await controller.saveProject();
+    expect(controller.saveConflict()).toBe(true);
+    await controller.reloadRemoteProject();
+    expect(controller.saveConflict()).toBe(true);
+
+    reloadFailed = false;
+    await controller.reloadRemoteProject();
+    expect(controller.saveConflict()).toBe(false);
+    expect(projectName()).toBe("Remote project");
+    expect(timeline().present.segments[0]?.startMs).toBe(200);
+    controller.dispose();
+  });
+
   it("debounces saves, keeps recovery, and stays saved when cache refresh fails", async () => {
     Object.defineProperty(globalThis, "localStorage", {
       configurable: true,
@@ -253,6 +385,29 @@ describe("projects controller", () => {
     expect(controller.saveState()).toBe("saved");
     expect(dirty()).toBe(false);
     expect(controller.recovery()).toBeUndefined();
+
+    // A new editor context must win even if the old PUT has committed and its cache refresh is pending.
+    let finishRefresh!: () => void;
+    let refreshStarted!: () => void;
+    const refreshing = new Promise<void>((resolve) => {
+      refreshStarted = resolve;
+    });
+    queryClient.invalidateQueries = () =>
+      new Promise<void>((resolve) => {
+        finishRefresh = resolve;
+        refreshStarted();
+      });
+    const saving = controller.saveProject();
+    await refreshing;
+    controller.newProject();
+    const newID = projectId();
+    finishRefresh();
+    await saving;
+    expect(projectId()).toBe(newID);
+    expect(projectItems()).toEqual([]);
+    expect(revision()).toBe(0);
+    expect(controller.saveState()).toBe("unsaved");
+    expect(localStorage.getItem("videocutlist.active-project.v2")).toBeNull();
     controller.dispose();
     void setProjectName;
     void setRevision;

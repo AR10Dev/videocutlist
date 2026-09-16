@@ -26,7 +26,11 @@ func TestBuildPreviewArgsUsesInheritedFD(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer source.Close()
+	t.Cleanup(func() {
+		if err := source.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	args, err := BuildPreviewArgs(model.PreviewSpec{DurationMS: 1, Width: 1280, Height: 720, FPS: 30, Audio: true})
 	if err != nil {
 		t.Fatal(err)
@@ -43,7 +47,11 @@ func TestStartHonorsCancellation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer source.Close()
+	t.Cleanup(func() {
+		if err := source.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	ctx, cancel := context.WithCancel(context.Background())
 	running, err := (Runner{Path: os.Args[0]}).Start(ctx, source, model.PreviewSpec{DurationMS: 1, Width: 16, Height: 16, FPS: 1})
 	if err != nil {

@@ -92,7 +92,11 @@ func TestStreamCopySegmentsMergeWithWarningAndAtomicPublish(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer source.Close()
+	t.Cleanup(func() {
+		if err := source.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	if err := os.Remove(sourcePath); err != nil {
 		t.Fatal(err)
 	}
@@ -203,7 +207,11 @@ func TestHybridSmartCutMKVFixtureAndFallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer source.Close()
+	t.Cleanup(func() {
+		if err := source.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	service := export.Service{FFmpegPath: ffmpeg, OutputDir: filepath.Join(directory, "exports")}
 	document := projectDocument(model.Segment{StartMS: 100, EndMS: 900})
 	result, err := service.Run(context.Background(), source, document, export.Request{Mode: "merge", CutStrategy: "hybrid_smart_cut", Container: "mkv"})
@@ -236,7 +244,11 @@ func TestExportStrategiesReportTruthfulBoundaryWarnings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer source.Close()
+	t.Cleanup(func() {
+		if err := source.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	service := export.Service{FFmpegPath: ffmpeg, OutputDir: filepath.Join(directory, "exports")}
 	keyframes, err := (probe.Client{}).Keyframes(context.Background(), source)
 	if err != nil || !containsKeyframes(keyframes, 0, 500, 1000) {
@@ -307,7 +319,11 @@ func TestSeparateHybridExportReportsEachSegmentStrategy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer source.Close()
+	t.Cleanup(func() {
+		if err := source.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 
 	result, err := (export.Service{FFmpegPath: ffmpeg, OutputDir: filepath.Join(directory, "exports")}).Run(context.Background(), source, projectDocument(model.Segment{StartMS: 0, EndMS: 1000}, model.Segment{StartMS: 100, EndMS: 400}), export.Request{Mode: "separate", CutStrategy: "hybrid_smart_cut", Container: "mkv"})
 	if err != nil {
@@ -363,7 +379,11 @@ func TestHybridSmartCutRejectsWebMAndInvalidRate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer source.Close()
+	t.Cleanup(func() {
+		if err := source.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	service := export.Service{FFmpegPath: ffmpeg, OutputDir: filepath.Join(directory, "exports")}
 	_, err = service.Run(context.Background(), source, projectDocument(model.Segment{StartMS: 0, EndMS: 500}), export.Request{Mode: "merge", CutStrategy: "hybrid_smart_cut", Container: "mkv"})
 	if !errors.Is(err, export.ErrInvalidRequest) {
@@ -378,7 +398,11 @@ func TestHybridSmartCutRejectsWebMAndInvalidRate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer vfrSource.Close()
+	t.Cleanup(func() {
+		if err := vfrSource.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	_, err = service.Run(context.Background(), vfrSource, projectDocument(model.Segment{StartMS: 0, EndMS: 500}), export.Request{Mode: "merge", CutStrategy: "hybrid_smart_cut", Container: "mkv"})
 	if !errors.Is(err, export.ErrInvalidRequest) {
 		t.Fatalf("VFR error = %v", err)
@@ -395,7 +419,11 @@ func TestCancellationRemovesIncompleteOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer source.Close()
+	t.Cleanup(func() {
+		if err := source.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	ffmpeg := filepath.Join(directory, "wait-for-cancel.sh")
 	if err := os.WriteFile(ffmpeg, []byte("#!/bin/sh\nexec sleep 10\n"), 0o700); err != nil {
 		t.Fatal(err)
@@ -455,7 +483,11 @@ func TestSourceAdjacentExportUsesOpaqueLocationAndKeepsSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer source.Close()
+	t.Cleanup(func() {
+		if err := source.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	service := export.Service{
 		FFmpegPath: ffmpeg, FFprobePath: ffprobe,
 		Destinations: []export.Destination{{ID: "beside", Kind: export.KindSourceAdjacent, MediaRoot: mediaRoot}},
@@ -508,7 +540,11 @@ func TestSeparateExportReportsPartialSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer source.Close()
+	t.Cleanup(func() {
+		if err := source.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	service := export.Service{FFmpegPath: wrapper, FFprobePath: ffprobe, OutputDir: filepath.Join(directory, "exports")}
 	result, err := service.Run(context.Background(), source, projectDocument(
 		model.Segment{StartMS: 0, EndMS: 400}, model.Segment{StartMS: 500, EndMS: 900},

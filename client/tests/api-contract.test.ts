@@ -47,6 +47,12 @@ describe("generated API contract", () => {
     expect(forbiddenContractPath.test(contract)).toBe(false);
   });
 
+  it("closes the SettingsUpdate object at the top level", () => {
+    expect(contract).toContain(
+      "    SettingsUpdate:\n      type: object\n      additionalProperties: false\n      required: [revision, settings]",
+    );
+  });
+
   it("detects forbidden path fields with positive controls", () => {
     expect(
       forbiddenGeneratedSettingsPath.test("RuntimeDestination: {\n      root?: string;\n    };"),

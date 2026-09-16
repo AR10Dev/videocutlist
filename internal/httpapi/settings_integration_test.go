@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"videocutlist/internal/db"
+	settingsdomain "videocutlist/internal/settings"
 )
 
 func TestPutSettingsRuntimeFailureDoesNotPersist(t *testing.T) {
@@ -18,7 +19,11 @@ func TestPutSettingsRuntimeFailureDoesNotPersist(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	settings, err := store.NewRuntimeSettingsStore(db)
 	if err != nil {
 		t.Fatal(err)
@@ -37,14 +42,13 @@ func TestPutSettingsRuntimeFailureDoesNotPersist(t *testing.T) {
 	server, err := New(Config{
 		Authenticator: authenticator, Media: &routeTestMedia{}, Preview: routeTestPreview{},
 		Projects: routeTestProjects{}, BatchExports: &routeTestBatchExports{}, Jobs: &routeTestJobs{},
-		Settings: settings, RuntimeSettings: store.NewRuntimeSettingsState(previous.Settings),
-		ApplyRuntimeSettings: func(store.RuntimeSettings) error { return applyErr },
+		Settings: settingsdomain.NewRuntimeService(settings, store.NewRuntimeSettingsState(previous.Settings), func(context.Context, store.RuntimeSettings) error { return applyErr }),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	response := putSettingsRequest(t, server, previous.Revision, candidate)
-	if response.Code != http.StatusUnprocessableEntity {
+	if response.Code != http.StatusInternalServerError {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
 	got, err := settings.Get(ctx)
@@ -56,13 +60,156 @@ func TestPutSettingsRuntimeFailureDoesNotPersist(t *testing.T) {
 	}
 }
 
+func TestPutSettingsRejectsInvalidDocumentsWithoutToggling(t *testing.T) {
+	ctx := t.Context()
+	db, err := store.OpenDatabase(ctx, t.TempDir()+"/settings.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	settings, err := store.NewRuntimeSettingsStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaults := testRuntimeSettings()
+	defaults.MCPEnabled = true
+	previous, err := settings.Seed(ctx, defaults)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := store.NewRuntimeSettingsState(previous.Settings)
+	authenticator, err := NewAuthenticator(AuthConfig{Mode: "none"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := New(Config{
+		Authenticator: authenticator, Media: &routeTestMedia{}, Preview: routeTestPreview{},
+		Projects: routeTestProjects{}, BatchExports: &routeTestBatchExports{}, Jobs: &routeTestJobs{},
+		Settings: settingsdomain.NewRuntimeService(settings, state, nil),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(settingsUpdateRequest{Revision: previous.Revision, Settings: defaults})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(map[string]any)
+	}{
+		{
+			name: "omitted MCP enablement",
+			mutate: func(payload map[string]any) {
+				delete(payload["settings"].(map[string]any), "mcpEnabled")
+			},
+		},
+		{
+			name: "explicit null MCP enablement",
+			mutate: func(payload map[string]any) {
+				payload["settings"].(map[string]any)["mcpEnabled"] = nil
+			},
+		},
+		{
+			name: "unknown top-level field",
+			mutate: func(payload map[string]any) {
+				payload["unexpected"] = true
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var payload map[string]any
+			if err := json.Unmarshal(encoded, &payload); err != nil {
+				t.Fatal(err)
+			}
+			test.mutate(payload)
+			body, err := json.Marshal(payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			response := putSettingsBodyRequest(t, server, body)
+			if response.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+			got, err := settings.Get(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			live := state.Snapshot()
+			if got.Revision != previous.Revision || !got.Settings.MCPEnabled || !live.MCPEnabled {
+				t.Fatalf("invalid settings changed state: got=%#v previous=%#v live=%#v", got, previous, live)
+			}
+		})
+	}
+}
+
+func TestGetSettingsReturnsCompleteMutableDocument(t *testing.T) {
+	ctx := t.Context()
+	db, err := store.OpenDatabase(ctx, t.TempDir()+"/settings.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	settings, err := store.NewRuntimeSettingsStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := settings.Seed(ctx, testRuntimeSettings()); err != nil {
+		t.Fatal(err)
+	}
+	authenticator, err := NewAuthenticator(AuthConfig{Mode: "none"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := New(Config{
+		Authenticator: authenticator, Media: &routeTestMedia{}, Preview: routeTestPreview{},
+		Projects: routeTestProjects{}, BatchExports: &routeTestBatchExports{}, Jobs: &routeTestJobs{},
+		Settings: settingsdomain.NewRuntimeService(settings, nil, nil),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/settings", nil)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+	}
+	var payload struct {
+		Settings map[string]json.RawMessage `json:"settings"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{
+		"destinations", "exportLimit", "cacheMaxBytes", "previewGlobalLimit", "previewBeforeMs",
+		"previewAfterMs", "previewMaxMs", "previewGridMs", "mediaMaxFiles", "mediaMaxDepth", "mcpEnabled",
+	} {
+		if _, ok := payload.Settings[field]; !ok {
+			t.Errorf("GET settings omitted %q: %s", field, response.Body.String())
+		}
+	}
+}
+
 func TestPutSettingsRejectsDeploymentMutation(t *testing.T) {
 	ctx := context.Background()
 	db, err := store.OpenDatabase(ctx, t.TempDir()+"/settings.db")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	settings, err := store.NewRuntimeSettingsStore(db)
 	if err != nil {
 		t.Fatal(err)
@@ -80,8 +227,7 @@ func TestPutSettingsRejectsDeploymentMutation(t *testing.T) {
 	}
 	server, err := New(Config{
 		Authenticator: authenticator, Media: &routeTestMedia{}, Preview: routeTestPreview{},
-		Projects: routeTestProjects{}, BatchExports: &routeTestBatchExports{}, Jobs: &routeTestJobs{}, Settings: settings,
-		ApplyRuntimeSettings: func(store.RuntimeSettings) error { applied = true; return nil },
+		Projects: routeTestProjects{}, BatchExports: &routeTestBatchExports{}, Jobs: &routeTestJobs{}, Settings: settingsdomain.NewRuntimeService(settings, nil, func(context.Context, store.RuntimeSettings) error { applied = true; return nil }),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -108,7 +254,11 @@ func TestPutSettingsPersistenceFailureRestoresRuntime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	settings, err := store.NewRuntimeSettingsStore(db)
 	if err != nil {
 		t.Fatal(err)
@@ -130,17 +280,16 @@ func TestPutSettingsPersistenceFailureRestoresRuntime(t *testing.T) {
 	server, err := New(Config{
 		Authenticator: authenticator, Media: &routeTestMedia{}, Preview: routeTestPreview{},
 		Projects: routeTestProjects{}, BatchExports: &routeTestBatchExports{}, Jobs: &routeTestJobs{},
-		Settings: settings, RuntimeSettings: store.NewRuntimeSettingsState(previous.Settings),
-		ApplyRuntimeSettings: func(value store.RuntimeSettings) error {
+		Settings: settingsdomain.NewRuntimeService(settings, store.NewRuntimeSettingsState(previous.Settings), func(_ context.Context, value store.RuntimeSettings) error {
 			applied = append(applied, value)
 			return nil
-		},
+		}),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	response := putSettingsRequest(t, server, previous.Revision, candidate)
-	if response.Code != http.StatusUnprocessableEntity {
+	if response.Code != http.StatusInternalServerError {
 		t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 	}
 	if len(applied) != 2 || applied[0].ExportLimit != candidate.ExportLimit || applied[1].ExportLimit != previous.Settings.ExportLimit {
@@ -161,6 +310,11 @@ func putSettingsRequest(t *testing.T, server http.Handler, revision int64, setti
 	if err != nil {
 		t.Fatal(err)
 	}
+	return putSettingsBodyRequest(t, server, body)
+}
+
+func putSettingsBodyRequest(t *testing.T, server http.Handler, body []byte) *httptest.ResponseRecorder {
+	t.Helper()
 	request := httptest.NewRequest(http.MethodPut, "/api/v1/settings", strings.NewReader(string(body)))
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
@@ -173,6 +327,6 @@ func testRuntimeSettings() store.RuntimeSettings {
 		Destinations: []store.RuntimeDestination{{ID: "download", Label: "Downloads", Kind: "download", Root: "/exports", Retention: "24h"}},
 		ExportLimit:  1, CacheMaxBytes: 1024, PreviewGlobalLimit: 2,
 		PreviewBeforeMS: 2000, PreviewAfterMS: 6000, PreviewMaxMS: 15000, PreviewGridMS: 500,
-		MediaMaxFiles: 100, MediaMaxDepth: 5,
+		MediaMaxFiles: 100, MediaMaxDepth: 5, MCPEnabled: false,
 	}
 }

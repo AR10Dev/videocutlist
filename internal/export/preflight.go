@@ -187,12 +187,3 @@ func (s Service) Preflight(ctx context.Context, source *os.File, request Request
 	}
 	return result, nil
 }
-
-func sortedIndexes(streams []probe.Stream) []int {
-	out := make([]int, 0, len(streams))
-	for _, s := range streams {
-		out = append(out, s.Index)
-	}
-	slices.Sort(out)
-	return out
-}

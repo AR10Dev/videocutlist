@@ -1,7 +1,13 @@
 import { createSignal, type Setter } from "solid-js";
-import type { ApiClient } from "../../api";
+import { readApiError, type ApiClient } from "../../api";
 import type { components } from "../../generated/api";
-import { settingsKey, storedSettings, type AppSettings, type Appearance } from "./model";
+import {
+  settingsKey,
+  storedSettings,
+  validRuntimeSettingsInput,
+  type AppSettings,
+  type Appearance,
+} from "./model";
 
 type LibraryRoot = {
   alias: string;
@@ -24,6 +30,8 @@ export function createSettingsController(api: ApiClient) {
   const [settingsRevision, setSettingsRevision] = createSignal(0);
   const [runtimeSettings, setRuntimeSettings] = createSignal<ServerRuntimeSettings>();
   const [settingsPending, setSettingsPending] = createSignal(false);
+  const [serverSettingsLoading, setServerSettingsLoading] = createSignal(false);
+  let settingsRequest: AbortController | undefined;
   const [rescanPending, setRescanPending] = createSignal(false);
   const [mcpSettings, setMCPSettings] = createSignal<MCPSettings>();
   const [mcpPending, setMCPPending] = createSignal(false);
@@ -50,13 +58,26 @@ export function createSettingsController(api: ApiClient) {
     localStorage.setItem(settingsKey, JSON.stringify(next));
   };
   const loadServerSettings = async () => {
+    if (settingsPending()) return;
+    settingsRequest?.abort();
+    const controller = new AbortController();
+    settingsRequest = controller;
+    setServerSettingsLoading(true);
+    setRuntimeSettings();
+    setLibraryRoots([]);
     setServerSettingsStatus("Loading administrator settings…");
     try {
-      const response = await api.request("settings");
-      if (response.status === 403)
-        throw new Error("Administrator settings are unavailable: your account is not authorized.");
-      if (!response.ok) throw new Error("Administrator settings are unavailable on this server.");
+      const response = await api.request("settings", { signal: controller.signal });
+      if (!response.ok) {
+        const error = await readApiError(response);
+        throw new Error(
+          error.code === "origin_forbidden"
+            ? "This browser origin is not allowed by the server. Check the deployment CORS settings."
+            : "Administrator settings are unavailable on this server. Check your access and retry.",
+        );
+      }
       const value = (await response.json()) as ServerSettings;
+      if (controller.signal.aborted) return;
       setLibraryRoots(
         Object.entries(value.roots ?? {}).map(([alias, root]) => ({ alias, ...root })),
       );
@@ -64,15 +85,18 @@ export function createSettingsController(api: ApiClient) {
       setRuntimeSettings(value.settings);
       setServerSettingsStatus("Administrator settings loaded.");
     } catch (error) {
+      if (controller.signal.aborted) return;
       setServerSettingsStatus(
         error instanceof Error
           ? error.message
           : "Administrator settings are unavailable on this server.",
       );
+    } finally {
+      if (settingsRequest === controller) setServerSettingsLoading(false);
     }
   };
   const loadMCPSettings = async (cursor?: string) => {
-    if (mcpLoading()) return false;
+    if (mcpLoading() || settingsPending()) return false;
     setMCPLoading(true);
     setMCPLoadError("");
     try {
@@ -111,28 +135,39 @@ export function createSettingsController(api: ApiClient) {
     changes: Partial<ServerRuntimeSettings>,
     successMessage: string,
   ) => {
-    if (settingsPending()) return;
+    if (settingsPending() || serverSettingsLoading()) return false;
+    const candidate = { ...runtimeSettings(), ...changes };
+    if (!runtimeSettings() || !validRuntimeSettingsInput(candidate)) {
+      setServerSettingsStatus(
+        "Use complete positive whole-number limits, export concurrency 1–64, and a maximum preview window covering before + after. Reload settings if values are missing.",
+      );
+      return false;
+    }
+    const input: components["schemas"]["SettingsUpdate"] = {
+      revision: settingsRevision(),
+      settings: candidate,
+    };
     setSettingsPending(true);
     setServerSettingsStatus("Saving administrator settings…");
     try {
-      const current = await api.request("settings");
-      if (!current.ok) throw new Error("Settings could not be reloaded before saving.");
-      const value = (await current.json()) as ServerSettings;
       const response = await api.request("settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          revision: value.revision,
-          settings: { ...value.settings, ...changes },
-        }),
+        body: JSON.stringify(input),
       });
-      if (!response.ok)
+      if (!response.ok) {
+        const error = await readApiError(response);
         throw new Error(
-          response.status === 409
+          error.code === "settings_revision_conflict"
             ? "Settings changed; reload before updating."
-            : "Settings were rejected. Check the configured limits.",
+            : error.code === "invalid_settings" || error.code === "deployment_settings_read_only"
+              ? "Settings were rejected. Check the configured limits; deployment settings are read-only."
+              : error.code === "origin_forbidden"
+                ? "This browser origin is not allowed by the server. Check the deployment CORS settings."
+                : "Settings could not be saved. Retry or reload to check the server state.",
         );
-      const saved = (await response.json()) as ServerSettings;
+      }
+      const saved = (await response.json()) as components["schemas"]["SettingsUpdated"];
       setSettingsRevision(saved.revision);
       setRuntimeSettings(saved.settings);
       setServerSettingsStatus(successMessage);
@@ -147,10 +182,14 @@ export function createSettingsController(api: ApiClient) {
     }
   };
   const setMCPEnabled = async (enabled: boolean) => {
+    if (mcpLoading() || mcpPending()) return false;
     if (
       await saveRuntimeSettings({ mcpEnabled: enabled }, `MCP ${enabled ? "enabled" : "disabled"}.`)
-    )
+    ) {
       setMCPSettings((current) => (current ? { ...current, enabled } : current));
+      return true;
+    }
+    return false;
   };
   const createMCPCredential = async (input: MCPCredentialCreate) => {
     if (mcpPending() || mcpLoading()) return false;
@@ -256,6 +295,7 @@ export function createSettingsController(api: ApiClient) {
     setRuntimeSettings,
     settingsPending,
     setSettingsPending,
+    serverSettingsLoading,
     rescanPending,
     setRescanPending,
     mcpSettings,

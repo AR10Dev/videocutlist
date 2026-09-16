@@ -89,7 +89,11 @@ func TestConcurrentCommitsKeepOneCompleteWinner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer reader.Close()
+	t.Cleanup(func() {
+		if err := reader.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	body, _ := io.ReadAll(reader)
 	if string(body) != "first" && string(body) != "second" {
 		t.Fatalf("winner = %q", body)
@@ -111,7 +115,11 @@ func TestCommitOpenAndEvict(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer reader.Close()
+	t.Cleanup(func() {
+		if err := reader.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	if b, _ := io.ReadAll(reader); string(b) != "one" {
 		t.Fatalf("got %q", b)
 	}
@@ -288,7 +296,11 @@ func TestPartialPublishesOnlyAfterValidationAndRename(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer reader.Close()
+	t.Cleanup(func() {
+		if err := reader.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	if body, err := io.ReadAll(reader); err != nil || string(body) != "preview" {
 		t.Fatalf("published body = %q, %v", body, err)
 	}
@@ -358,7 +370,7 @@ func writePartial(t *testing.T, store *Store, key, body string) {
 }
 
 func stringsOf(c byte) string {
-	return string(make([]byte, 64, 64))[:0] + repeat(c, 64)
+	return string(make([]byte, 64))[:0] + repeat(c, 64)
 }
 
 func repeat(c byte, n int) string {

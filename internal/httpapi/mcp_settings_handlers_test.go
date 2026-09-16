@@ -11,6 +11,7 @@ import (
 
 	"videocutlist/internal/db"
 	"videocutlist/internal/mcp"
+	settingsdomain "videocutlist/internal/settings"
 )
 
 func TestMCPAdministrationRequiresDeploymentAuthAndRevealsSecretOnce(t *testing.T) {
@@ -42,7 +43,7 @@ func TestMCPAdministrationRequiresDeploymentAuthAndRevealsSecretOnce(t *testing.
 	server, err := New(Config{
 		Authenticator: authenticator, Media: &routeTestMedia{}, Preview: routeTestPreview{},
 		Projects: routeTestProjects{}, BatchExports: &routeTestBatchExports{}, Jobs: &routeTestJobs{},
-		Settings: runtimeSettings, RuntimeSettings: store.NewRuntimeSettingsState(record.Settings), MCPCredentials: credentials,
+		Settings: settingsdomain.NewRuntimeService(runtimeSettings, nil, nil), RuntimeSettings: store.NewRuntimeSettingsState(record.Settings), MCPCredentials: credentials,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -143,7 +144,7 @@ func TestMCPEnablementUsesPersistedRuntimeSettings(t *testing.T) {
 	server, err := New(Config{
 		Authenticator: authenticator, Media: &routeTestMedia{}, Preview: routeTestPreview{},
 		Projects: routeTestProjects{}, BatchExports: &routeTestBatchExports{}, Jobs: &routeTestJobs{},
-		Settings: runtimeSettings, RuntimeSettings: store.NewRuntimeSettingsState(record.Settings), MCPCredentials: credentials,
+		Settings: settingsdomain.NewRuntimeService(runtimeSettings, nil, nil), RuntimeSettings: store.NewRuntimeSettingsState(record.Settings), MCPCredentials: credentials,
 	})
 	if err != nil {
 		t.Fatal(err)

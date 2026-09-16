@@ -17,7 +17,7 @@ set +e
 status=$?
 set -e
 end_ns=$(date +%s%N)
-wall_ms=$(( (end_ns - start_ns) / 1000000 ))
+wall_ms=$(((end_ns - start_ns) / 1000000))
 printf 'started_utc,scenario,source_format,encoder_profile,cache_state,wall_ms,exit_status,stdout_bytes,stderr_bytes\n'
 printf '%s,%s,%s,%s,%s,%s,%s,%s,%s\n' "$started" "$scenario" "$source_format" "$encoder_profile" "$cache_state" "$wall_ms" "$status" "$(wc -c <"$tmp/stdout" | tr -d ' ')" "$(wc -c <"$tmp/stderr" | tr -d ' ')"
 exit "$status"

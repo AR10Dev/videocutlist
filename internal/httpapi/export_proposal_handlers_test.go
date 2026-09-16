@@ -12,6 +12,7 @@ import (
 	"videocutlist/internal/mcp"
 	"videocutlist/internal/projects"
 	"videocutlist/internal/projects/model"
+	settingsdomain "videocutlist/internal/settings"
 )
 
 type proposalHTTPProjects struct{ project projects.Project }
@@ -82,7 +83,7 @@ func TestExportProposalHTTPApprovalAndSettingsListDetails(t *testing.T) {
 		t.Fatal(err)
 	}
 	authenticator, _ := NewAuthenticator(AuthConfig{Mode: "none"})
-	server, err := New(Config{Authenticator: authenticator, Media: &routeTestMedia{}, Preview: routeTestPreview{}, Projects: routeTestProjects{}, BatchExports: &routeTestBatchExports{}, Jobs: &routeTestJobs{}, Settings: runtimeSettings, RuntimeSettings: store.NewRuntimeSettingsState(record.Settings), MCPCredentials: credentials, ExportProposals: service})
+	server, err := New(Config{Authenticator: authenticator, Media: &routeTestMedia{}, Preview: routeTestPreview{}, Projects: routeTestProjects{}, BatchExports: &routeTestBatchExports{}, Jobs: &routeTestJobs{}, Settings: settingsdomain.NewRuntimeService(runtimeSettings, nil, nil), RuntimeSettings: store.NewRuntimeSettingsState(record.Settings), MCPCredentials: credentials, ExportProposals: service})
 	if err != nil {
 		t.Fatal(err)
 	}

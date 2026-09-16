@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"strconv"
 
-	store "videocutlist/internal/db"
 	jobqueue "videocutlist/internal/jobs"
 	"videocutlist/internal/projects"
 )
@@ -42,7 +41,7 @@ func (s *Server) listProjects(writer http.ResponseWriter, request *http.Request,
 func (s *Server) getProject(writer http.ResponseWriter, request *http.Request, project string, id string) {
 	value, err := s.config.Projects.Get(request.Context(), project)
 	if err != nil {
-		notFound(writer, id)
+		resourceError(writer, id, err)
 		return
 	}
 	httpx.WriteJSON(writer, 200, value)
@@ -55,11 +54,7 @@ func (s *Server) putProject(writer http.ResponseWriter, request *http.Request, p
 	}
 	saved, err := s.config.Projects.Save(request.Context(), project, input.input())
 	if err != nil {
-		if errors.Is(err, store.ErrRevisionConflict) {
-			httpx.Error(writer, http.StatusConflict, "revision_conflict", "Project revision conflicts.", id)
-		} else {
-			httpx.Error(writer, http.StatusUnprocessableEntity, "invalid_project", "Project is invalid.", id)
-		}
+		projectError(writer, id, err)
 		return
 	}
 	httpx.WriteJSON(writer, 200, saved)
@@ -93,7 +88,7 @@ func (s *Server) getBatch(writer http.ResponseWriter, request *http.Request, bat
 	}
 	batch, err := s.config.BatchExports.Get(request.Context(), batchID)
 	if err != nil {
-		notFound(writer, id)
+		resourceError(writer, id, err)
 		return
 	}
 	httpx.WriteJSON(writer, http.StatusOK, batch)
@@ -109,7 +104,7 @@ func (s *Server) retryJob(writer http.ResponseWriter, request *http.Request, job
 		if errors.Is(err, jobqueue.ErrJobState) {
 			httpx.Error(writer, http.StatusConflict, "job_not_retryable", "Only failed export jobs can be retried.", id)
 		} else {
-			notFound(writer, id)
+			resourceError(writer, id, err)
 		}
 		return
 	}
@@ -124,7 +119,7 @@ func (s *Server) cancelBatch(writer http.ResponseWriter, request *http.Request, 
 		return
 	}
 	if err := s.config.BatchExports.Cancel(request.Context(), batchID); err != nil {
-		notFound(writer, id)
+		resourceError(writer, id, err)
 		return
 	}
 	writer.WriteHeader(http.StatusNoContent)
@@ -139,7 +134,7 @@ func (s *Server) preflightExport(writer http.ResponseWriter, request *http.Reque
 	}
 	owned, err := s.config.Projects.Get(request.Context(), project)
 	if err != nil {
-		notFound(writer, id)
+		resourceError(writer, id, err)
 		return
 	}
 	var input ExportInput
@@ -179,7 +174,7 @@ func (s *Server) createDetection(writer http.ResponseWriter, request *http.Reque
 	}
 	owned, err := s.config.Projects.Get(request.Context(), project)
 	if err != nil {
-		notFound(writer, id)
+		resourceError(writer, id, err)
 		return
 	}
 	var input DetectionRequest

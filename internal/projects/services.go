@@ -22,6 +22,7 @@ import (
 )
 
 var ErrJobState = jobqueue.ErrJobState
+var ErrInvalidProject = errors.New("invalid project")
 
 type RootStatusCatalog interface {
 	RootStatuses() map[string]index.RootStatus
@@ -53,7 +54,8 @@ type ProjectItemError struct {
 	Code   string
 }
 
-func (e *ProjectItemError) Error() string { return "project item " + e.ItemID + ": " + e.Code }
+func (e *ProjectItemError) Error() string        { return "project item " + e.ItemID + ": " + e.Code }
+func (e *ProjectItemError) Is(target error) bool { return target == ErrInvalidProject }
 
 type MediaUseCase struct {
 	Catalog    MediaCatalog
@@ -93,7 +95,10 @@ func (m *MediaUseCase) ImportStatus(ctx context.Context, id string) (ImportJob, 
 		return ImportJob{}, jobqueue.ErrJobNotFound
 	}
 	job, err := m.UnifiedJobs.Get(ctx, id)
-	if err != nil || job.Kind != jobqueue.JobScan {
+	if err != nil {
+		return ImportJob{}, err
+	}
+	if job.Kind != jobqueue.JobScan {
 		return ImportJob{}, jobqueue.ErrJobNotFound
 	}
 	return importJobResult(job), nil
@@ -104,10 +109,16 @@ func (m *MediaUseCase) CancelImport(ctx context.Context, id string) error {
 		return jobqueue.ErrJobNotFound
 	}
 	job, err := m.UnifiedJobs.Get(ctx, id)
-	if err != nil || job.Kind != jobqueue.JobScan {
+	if err != nil {
+		return err
+	}
+	if job.Kind != jobqueue.JobScan {
 		return jobqueue.ErrJobNotFound
 	}
 	_, err = m.Scheduler.Cancel(ctx, id)
+	if errors.Is(err, jobqueue.ErrJobState) {
+		return nil
+	}
 	return err
 }
 
@@ -355,13 +366,19 @@ func (p ProjectUseCase) save(ctx context.Context, id string, input ProjectInput)
 	if p.Media == nil {
 		return Project{}, errors.New("project media catalog is required")
 	}
-	if err := model.ValidateProject(input.Document); err != nil {
-		return Project{}, err
+	if input.Revision < 0 {
+		return Project{}, ErrInvalidProject
 	}
-	for _, item := range input.Document.Items {
+	if err := model.ValidateProject(input.Document); err != nil {
+		return Project{}, fmt.Errorf("%w: %w", ErrInvalidProject, err)
+	}
+	for _, item := range input.Items {
 		media, err := p.Media.Get(ctx, item.MediaID)
-		if err != nil {
+		if errors.Is(err, index.ErrNotFound) {
 			return Project{}, &ProjectItemError{ItemID: item.ID, Code: "media_unavailable"}
+		}
+		if err != nil {
+			return Project{}, fmt.Errorf("get project media: %w", err)
 		}
 		if err := model.ValidateProjectItem(item, media.DurationMS); err != nil {
 			return Project{}, &ProjectItemError{ItemID: item.ID, Code: "invalid"}
@@ -439,9 +456,10 @@ func unifiedJobResult(value jobqueue.Job) Job {
 	}
 	if job.ID == "" {
 		job = Job{ID: value.ID, Type: string(value.Kind), State: string(value.State), CreatedAt: value.CreatedAt, UpdatedAt: value.UpdatedAt}
-		if value.State == jobqueue.JobRunning {
+		switch value.State {
+		case jobqueue.JobRunning:
 			job.Progress = .5
-		} else if value.State == jobqueue.JobSucceeded || value.State == jobqueue.JobFailed || value.State == jobqueue.JobCancelled {
+		case jobqueue.JobSucceeded, jobqueue.JobFailed, jobqueue.JobCancelled:
 			job.Progress = 1
 		}
 		if value.ErrorCode.Valid {
@@ -603,7 +621,7 @@ func safeOutputName(name string) bool {
 		return false
 	}
 	for _, r := range name {
-		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '.' || r == '-' || r == '_') {
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '.' && r != '-' && r != '_' {
 			return false
 		}
 	}

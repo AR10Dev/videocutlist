@@ -1,6 +1,6 @@
 import { createEffect, createSignal, type Accessor } from "solid-js";
 import { createMutation, useQuery, type QueryClient } from "@tanstack/solid-query";
-import type { ApiClient } from "../../api";
+import { readApiError, type ApiClient } from "../../api";
 import type { components } from "../../generated/api";
 import { cancellationIsCurrent } from "../queue/cancellation";
 import { cancelJobLifecycle } from "../queue/queryLifecycle";
@@ -130,7 +130,7 @@ export function createDetectionController(
     const selected = dependencies.selected();
     if (!saved || !selected) {
       setDetectionStatus(
-        "Detection was not started. Save the project in Project and resolve any reported errors.",
+        "Detection was not started. Save from the project header and resolve any reported errors.",
       );
       return;
     }
@@ -154,12 +154,14 @@ export function createDetectionController(
       });
       if (controller.signal.aborted || request !== detectionRequest) return;
       if (!response.ok) {
+        const error = await readApiError(response);
+        if (controller.signal.aborted || request !== detectionRequest) return;
         setDetectionStatus(
-          response.status === 409
+          error.code === "stale_project"
             ? "Detection is stale; save or reload the project."
-            : response.status === 429
+            : error.code === "detection_busy"
               ? "Detection capacity is busy. Try again shortly."
-              : response.status === 422
+              : error.code === "invalid_detection"
                 ? "Detection settings were rejected. Check the sensitivity values."
                 : "Detection could not be started.",
         );

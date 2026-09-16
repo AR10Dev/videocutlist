@@ -304,6 +304,25 @@
     max-height: min(70dvh, 540px);
     overflow-y: auto;
   }
+  .workspace-notices {
+    position: fixed;
+    z-index: 60;
+    top: 12px;
+    left: 50%;
+    display: grid;
+    width: min(calc(100vw - 24px), 960px);
+    gap: 8px;
+    transform: translateX(-50%);
+    pointer-events: none;
+  }
+  .workspace-notices > * {
+    pointer-events: auto;
+    box-shadow: 0 8px 24px color-mix(in srgb, #000 20%, transparent);
+  }
+  .project-tools-dialog .modal-box {
+    max-height: min(90dvh, 760px);
+    overflow-y: auto;
+  }
   .spin {
     animation: spin 900ms linear infinite;
   }
@@ -534,30 +553,6 @@
     display: inline-flex;
     align-items: center;
     min-width: 36px;
-  }
-  .volume-control input[type="range"] {
-    position: absolute;
-    z-index: 1;
-    top: 50%;
-    left: calc(100% + 4px);
-    width: 0;
-    min-width: 0;
-    max-width: 0;
-    margin: 0;
-    opacity: 0;
-    pointer-events: none;
-    transform: translateY(-50%);
-    transition:
-      width 120ms ease,
-      opacity 120ms ease;
-  }
-  .volume-control:hover input[type="range"],
-  .volume-control:focus-within input[type="range"] {
-    width: 72px;
-    min-width: 72px;
-    max-width: 72px;
-    opacity: 1;
-    pointer-events: auto;
   }
   .export-summary code {
     font-family: ui-monospace, monospace;

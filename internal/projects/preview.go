@@ -94,7 +94,7 @@ func (m *PreviewManager) Preview(ctx context.Context, spec model.PreviewSpec) (i
 
 func streamPreview(ctx context.Context, cancel context.CancelFunc, running *RunningPreview, partial PreviewPartial, writer *io.PipeWriter, validator Validator, releaseProcess func()) {
 	defer releaseProcess()
-	defer running.Stdout.Close()
+	defer func() { _ = running.Stdout.Close() }()
 	defer cancel()
 	go func() {
 		<-ctx.Done()

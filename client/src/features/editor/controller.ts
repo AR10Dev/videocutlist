@@ -428,7 +428,7 @@ export function createEditorController(deps: {
     const handleKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement;
       const isEditable = target.closest(
-        "textarea, select, [contenteditable='true'], [role='combobox'], [role='menu'], [role='dialog'], dialog, .settings-view, [role='tablist'], input:not([type='range'])",
+        "textarea, select, [contenteditable='true'], [role='combobox'], [role='menu'], [role='dialog'], dialog, .settings-view, [role='tablist'], input:not(.timeline-playhead-input)",
       );
       if (
         event.defaultPrevented ||

@@ -1,3 +1,33 @@
+import type { components } from "./generated/api";
+
+/** Decode only the public error envelope; malformed/proxy errors retain a safe fallback. */
+export async function readApiError(
+  response: Response,
+  fallback = "Request could not be completed.",
+): Promise<components["schemas"]["Error"]["error"]> {
+  const body: unknown = await response.json().catch(() => undefined);
+  if (body && typeof body === "object" && "error" in body) {
+    const error = body.error;
+    if (
+      error &&
+      typeof error === "object" &&
+      "code" in error &&
+      typeof error.code === "string" &&
+      error.code &&
+      "message" in error &&
+      typeof error.message === "string" &&
+      "requestId" in error &&
+      typeof error.requestId === "string"
+    )
+      return { code: error.code, message: error.message, requestId: error.requestId };
+  }
+  return {
+    code: "http_error",
+    message: fallback,
+    requestId: response.headers.get("X-Request-ID") ?? "",
+  };
+}
+
 export type Authentication =
   | { type: "none" }
   | { type: "bearer"; token: string }

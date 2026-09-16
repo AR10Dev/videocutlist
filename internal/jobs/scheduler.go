@@ -10,9 +10,13 @@ import (
 )
 
 var (
-	ErrQueueFull     = errors.New("job queue capacity exceeded")
-	ErrSourceChanged = errors.New("source_changed")
+	ErrQueueFull        = errors.New("job queue capacity exceeded")
+	ErrSchedulerStopped = errors.New("job scheduler stopped")
+	ErrSourceChanged    = errors.New("source_changed")
 )
+
+// MaxWorkerLimit is a resource-safety ceiling, not recommended concurrency.
+const MaxWorkerLimit = 64
 
 // SchedulerConfig keeps durable backlog admission independent of active workers.
 type SchedulerConfig struct {
@@ -21,8 +25,8 @@ type SchedulerConfig struct {
 }
 
 func (c SchedulerConfig) validate() error {
-	if c.QueueCapacity < 1 || c.WorkerLimit < 1 {
-		return errors.New("queue capacity and worker limit must be positive")
+	if c.QueueCapacity < 1 || c.WorkerLimit < 1 || c.WorkerLimit > MaxWorkerLimit {
+		return fmt.Errorf("queue capacity must be positive and worker limit must be 1..%d", MaxWorkerLimit)
 	}
 	return nil
 }
@@ -36,17 +40,24 @@ type Scheduler struct {
 	jobs   *JobsStore
 	runner JobRunner
 	config SchedulerConfig
+	ctx    context.Context
+	cancel context.CancelFunc
 
 	mu      sync.Mutex
 	running map[string]runningJob
 	started bool
+	workers int
 
 	// afterClaim is a test seam for the claimed-but-not-registered handoff.
 	afterClaim func()
-	stopped    bool
-	wake       chan struct{}
-	stop       chan struct{}
-	done       sync.WaitGroup
+	// afterCommit is a test seam for cancellation after durable admission.
+	afterCommit func()
+	// afterDeregister is a test seam for cancellation after runner completion.
+	afterDeregister func()
+	stopped         bool
+	wake            chan struct{}
+	stop            chan struct{}
+	done            sync.WaitGroup
 }
 
 func NewScheduler(jobs *JobsStore, config SchedulerConfig, runner JobRunner) (*Scheduler, error) {
@@ -56,11 +67,19 @@ func NewScheduler(jobs *JobsStore, config SchedulerConfig, runner JobRunner) (*S
 	if err := config.validate(); err != nil {
 		return nil, err
 	}
-	return &Scheduler{jobs: jobs, runner: runner, config: config, running: make(map[string]runningJob), wake: make(chan struct{}, 1), stop: make(chan struct{})}, nil
+	ctx, cancel := context.WithCancel(context.Background())
+	return &Scheduler{jobs: jobs, runner: runner, config: config, ctx: ctx, cancel: cancel, running: make(map[string]runningJob), wake: make(chan struct{}, 1), stop: make(chan struct{})}, nil
 }
 
 // Submit atomically admits a whole batch or creates none of its child jobs.
-func (s *Scheduler) Submit(ctx context.Context, jobs []Job) ([]Job, error) {
+func (s *Scheduler) Submit(ctx context.Context, jobs []Job) (out []Job, err error) {
+	ctx, cancel := s.requestContext(ctx)
+	defer cancel()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stopped {
+		return nil, ErrSchedulerStopped
+	}
 	if len(jobs) == 0 {
 		return nil, errors.New("batch must contain a job")
 	}
@@ -71,7 +90,11 @@ func (s *Scheduler) Submit(ctx context.Context, jobs []Job) ([]Job, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback()
+	defer func() {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
+			err = errors.Join(err, fmt.Errorf("rollback job admission: %w", rollbackErr))
+		}
+	}()
 	var queued int
 	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM jobs WHERE state IN ('queued','running')`).Scan(&queued); err != nil {
 		return nil, err
@@ -79,24 +102,23 @@ func (s *Scheduler) Submit(ctx context.Context, jobs []Job) ([]Job, error) {
 	if queued+len(jobs) > s.config.QueueCapacity {
 		return nil, ErrQueueFull
 	}
-	for _, job := range jobs {
+	now := time.Now().UTC()
+	stamp := now.Format(time.RFC3339Nano)
+	out = make([]Job, len(jobs))
+	for i, job := range jobs {
 		if err := validateNewJob(job); err != nil {
 			return nil, err
 		}
-		now := time.Now().UTC().Format(time.RFC3339Nano)
-		if _, err := tx.ExecContext(ctx, `INSERT INTO jobs (id,batch_id,kind,project_id,project_item_id,proposal_id,credential_id,state,request_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`, job.ID, job.BatchID, job.Kind, nullString(job.ProjectID), nullString(job.ProjectItemID), nullString(job.ProposalID), nullString(job.CredentialID), JobQueued, job.RequestJSON, now, now); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO jobs (id,batch_id,kind,project_id,project_item_id,proposal_id,credential_id,state,request_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`, job.ID, job.BatchID, job.Kind, nullString(job.ProjectID), nullString(job.ProjectItemID), nullString(job.ProposalID), nullString(job.CredentialID), JobQueued, job.RequestJSON, stamp, stamp); err != nil {
 			return nil, fmt.Errorf("create job: %w", err)
 		}
+		out[i] = queuedJob(job, now)
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
-	out := make([]Job, len(jobs))
-	for i := range jobs {
-		out[i], err = s.jobs.Get(ctx, jobs[i].ID)
-		if err != nil {
-			return nil, err
-		}
+	if s.afterCommit != nil {
+		s.afterCommit()
 	}
 	s.signal()
 	return out, nil
@@ -105,7 +127,14 @@ func (s *Scheduler) Submit(ctx context.Context, jobs []Job) ([]Job, error) {
 // SubmitProposal atomically returns the jobs already bound to a proposal or
 // admits its exact export batch. This is the proposal idempotency boundary.
 func (s *Scheduler) SubmitProposal(ctx context.Context, proposalID, credentialID string, jobs []Job) ([]Job, error) {
-	if proposalID == "" || credentialID == "" || len(jobs) == 0 || len(jobs) > s.config.QueueCapacity {
+	ctx, cancel := s.requestContext(ctx)
+	defer cancel()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stopped {
+		return nil, ErrSchedulerStopped
+	}
+	if proposalID == "" || credentialID == "" || len(jobs) == 0 {
 		return nil, errors.New("proposal export jobs are required")
 	}
 	tx, err := s.jobs.db.BeginTx(ctx, nil)
@@ -130,20 +159,35 @@ func (s *Scheduler) SubmitProposal(ctx context.Context, proposalID, credentialID
 	if queued+len(jobs) > s.config.QueueCapacity {
 		return nil, ErrQueueFull
 	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	for _, job := range jobs {
+	now := time.Now().UTC()
+	stamp := now.Format(time.RFC3339Nano)
+	out := make([]Job, len(jobs))
+	for i, job := range jobs {
 		if err := validateNewJob(job); err != nil || job.Kind != JobExport || job.ProposalID != proposalID || job.CredentialID != credentialID {
 			return nil, errors.New("invalid proposal export job")
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO jobs (id,batch_id,kind,project_id,project_item_id,proposal_id,credential_id,state,request_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`, job.ID, job.BatchID, job.Kind, job.ProjectID, job.ProjectItemID, proposalID, credentialID, JobQueued, job.RequestJSON, now, now); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO jobs (id,batch_id,kind,project_id,project_item_id,proposal_id,credential_id,state,request_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`, job.ID, job.BatchID, job.Kind, job.ProjectID, job.ProjectItemID, proposalID, credentialID, JobQueued, job.RequestJSON, stamp, stamp); err != nil {
 			return nil, fmt.Errorf("create proposal job: %w", err)
 		}
+		out[i] = queuedJob(job, now)
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
+	if s.afterCommit != nil {
+		s.afterCommit()
+	}
 	s.signal()
-	return s.jobs.ListByProposal(ctx, proposalID)
+	return out, nil
+}
+
+func queuedJob(job Job, now time.Time) Job {
+	job.State = JobQueued
+	job.ResultJSON = sql.NullString{}
+	job.ErrorCode = sql.NullString{}
+	job.CreatedAt = now
+	job.UpdatedAt = now
+	return job
 }
 
 func validateNewJob(job Job) error {
@@ -167,14 +211,40 @@ func (s *Scheduler) Start() {
 		return
 	}
 	s.started = true
-	for range s.config.WorkerLimit {
-		s.done.Go(s.worker)
-	}
+	s.startWorkers()
 	s.mu.Unlock()
 	s.signal()
 }
 
+// SetLimits changes admission and execution capacity without cancelling active
+// jobs or discarding queued work. Excess workers retire after their current job.
+func (s *Scheduler) SetLimits(config SchedulerConfig) error {
+	if err := config.validate(); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stopped {
+		return ErrSchedulerStopped
+	}
+	s.config = config
+	if s.started {
+		s.startWorkers()
+	}
+	return nil
+}
+
+// startWorkers requires mu; Shutdown excludes all future WaitGroup additions.
+func (s *Scheduler) startWorkers() {
+	for s.workers < s.config.WorkerLimit {
+		s.workers++
+		s.done.Go(s.worker)
+	}
+}
+
 func (s *Scheduler) Shutdown(ctx context.Context) error {
+	// Unblock database work holding mu before waiting to stop registration.
+	s.cancel()
 	s.mu.Lock()
 	if !s.stopped {
 		s.stopped = true
@@ -194,12 +264,24 @@ func (s *Scheduler) Shutdown(ctx context.Context) error {
 	}
 }
 
-func (s *Scheduler) CancelBatch(ctx context.Context, batchID string) error {
+func (s *Scheduler) CancelBatch(ctx context.Context, batchID string) (err error) {
 	rows, err := s.jobs.db.QueryContext(ctx, `SELECT id FROM jobs WHERE batch_id=? AND state IN ('queued','running')`, batchID)
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	rowsClosed := false
+	closeRows := func() error {
+		if rowsClosed {
+			return nil
+		}
+		rowsClosed = true
+		return rows.Close()
+	}
+	defer func() {
+		if closeErr := closeRows(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close scheduler batch rows: %w", closeErr))
+		}
+	}()
 	var ids []string
 	for rows.Next() {
 		var id string
@@ -210,6 +292,9 @@ func (s *Scheduler) CancelBatch(ctx context.Context, batchID string) error {
 	}
 	if err := rows.Err(); err != nil {
 		return err
+	}
+	if closeErr := closeRows(); closeErr != nil {
+		return fmt.Errorf("close scheduler batch rows: %w", closeErr)
 	}
 	for _, id := range ids {
 		if _, err := s.Cancel(ctx, id); err != nil && !errors.Is(err, ErrJobState) {
@@ -225,31 +310,41 @@ func (s *Scheduler) Get(ctx context.Context, id string) (Job, error) {
 }
 
 func (s *Scheduler) Cancel(ctx context.Context, id string) (Job, error) {
+	ctx, cancel := s.requestContext(ctx)
+	defer cancel()
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	job, err := s.jobs.Get(ctx, id)
+	// The durable CAS arbitrates cancellation against a runner's terminal
+	// transition. Keep the running entry until the runner exits so cleanup and
+	// worker capacity still reflect the live process.
+	job, err := s.jobs.Cancel(ctx, id)
 	if err != nil {
 		return Job{}, err
 	}
-	if job.State == JobRunning {
-		if running, ok := s.running[id]; ok {
-			running.cancel()
-			return job, nil
-		}
-		// A claimed job is not executable until its context is registered. It is
-		// therefore still safe to terminally cancel this short handoff window.
+	if running, ok := s.running[id]; ok {
+		running.cancel()
 	}
-	return s.jobs.Cancel(ctx, id)
+	return job, nil
+}
+
+// requestContext keeps admission/cancellation database work bounded by both
+// its caller and scheduler shutdown, including while it holds the lifecycle lock.
+func (s *Scheduler) requestContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(s.ctx, cancel)
+	return ctx, func() { stop(); cancel() }
 }
 
 func (s *Scheduler) worker() {
 	for {
-		select {
-		case <-s.stop:
+		s.mu.Lock()
+		if s.stopped || s.workers > s.config.WorkerLimit {
+			s.workers--
+			s.mu.Unlock()
 			return
-		default:
 		}
-		job, err := s.claim(context.Background())
+		job, err := s.claim(s.ctx)
+		s.mu.Unlock()
 		if errors.Is(err, sql.ErrNoRows) {
 			select {
 			case <-s.wake:
@@ -272,19 +367,25 @@ func (s *Scheduler) worker() {
 		}
 		ctx, cancel := context.WithCancel(context.Background())
 		s.mu.Lock()
+		if s.stopped {
+			cancel()
+		}
 		s.running[job.ID] = runningJob{cancel: cancel}
 		s.mu.Unlock()
 		current, getErr := s.jobs.Get(context.Background(), job.ID)
-		if getErr != nil || current.State != JobRunning {
+		if ctx.Err() != nil || getErr != nil || current.State != JobRunning {
 			err = context.Canceled
 		} else {
 			err = s.runner(ctx, job)
 		}
-		cancelled := ctx.Err() != nil
-		cancel()
 		s.mu.Lock()
+		cancelled := ctx.Err() != nil
 		delete(s.running, job.ID)
 		s.mu.Unlock()
+		if s.afterDeregister != nil {
+			s.afterDeregister()
+		}
+		cancel()
 		if err == nil {
 			// Runners that produce durable results transition the job themselves.
 			// Do not overwrite those results with the scheduler's empty default.
@@ -308,12 +409,16 @@ type runningJob struct {
 	cancel context.CancelFunc
 }
 
-func (s *Scheduler) claim(ctx context.Context) (Job, error) {
+func (s *Scheduler) claim(ctx context.Context) (job Job, err error) {
 	tx, err := s.jobs.db.BeginTx(ctx, nil)
 	if err != nil {
 		return Job{}, err
 	}
-	defer tx.Rollback()
+	defer func() {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
+			err = errors.Join(err, fmt.Errorf("rollback job claim: %w", rollbackErr))
+		}
+	}()
 	var id string
 	if err := tx.QueryRowContext(ctx, `SELECT id FROM jobs WHERE state=? ORDER BY created_at,id LIMIT 1`, JobQueued).Scan(&id); err != nil {
 		return Job{}, err
@@ -328,7 +433,7 @@ func (s *Scheduler) claim(ctx context.Context) (Job, error) {
 		return Job{}, sql.ErrNoRows
 	}
 	row := tx.QueryRowContext(ctx, `SELECT id,batch_id,kind,COALESCE(project_id,''),COALESCE(project_item_id,''),COALESCE(proposal_id,''),COALESCE(credential_id,''),state,request_json,result_json,error_code,created_at,updated_at FROM jobs WHERE id=?`, id)
-	job, err := scanUnifiedJob(row)
+	job, err = scanUnifiedJob(row)
 	if err != nil {
 		return Job{}, err
 	}

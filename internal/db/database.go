@@ -7,6 +7,7 @@ import (
 	_ "embed"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -100,27 +101,42 @@ type legacyProjectDocument struct {
 	UIState  model.UIState   `json:"uiState"`
 }
 
-func migrateLegacyProjects(ctx context.Context, db *sql.DB) error {
+func migrateLegacyProjects(ctx context.Context, db *sql.DB) (err error) {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
+			err = errors.Join(err, fmt.Errorf("rollback legacy projects migration: %w", rollbackErr))
+		}
+	}()
 	rows, err := tx.QueryContext(ctx, `SELECT id, document_json FROM projects`)
 	if err != nil {
 		return err
 	}
+	rowsClosed := false
+	closeRows := func() error {
+		if rowsClosed {
+			return nil
+		}
+		rowsClosed = true
+		return rows.Close()
+	}
+	defer func() {
+		if closeErr := closeRows(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close legacy project rows: %w", closeErr))
+		}
+	}()
 	type update struct{ id, document string }
 	var updates []update
 	for rows.Next() {
 		var id, raw string
 		if err := rows.Scan(&id, &raw); err != nil {
-			rows.Close()
 			return err
 		}
 		var current model.Document
 		if err := json.Unmarshal([]byte(raw), &current); err != nil {
-			rows.Close()
 			return err
 		}
 		if len(current.Items) > 0 {
@@ -128,7 +144,6 @@ func migrateLegacyProjects(ctx context.Context, db *sql.DB) error {
 		}
 		var legacy legacyProjectDocument
 		if err := json.Unmarshal([]byte(raw), &legacy); err != nil || legacy.MediaID == "" {
-			rows.Close()
 			return fmt.Errorf("project %q has an invalid legacy document", id)
 		}
 		if legacy.Name == "" {
@@ -153,13 +168,15 @@ func migrateLegacyProjects(ctx context.Context, db *sql.DB) error {
 		}
 		encoded, err := json.Marshal(document)
 		if err != nil {
-			rows.Close()
 			return err
 		}
 		updates = append(updates, update{id: id, document: string(encoded)})
 	}
-	if err := rows.Close(); err != nil {
+	if err := rows.Err(); err != nil {
 		return err
+	}
+	if closeErr := closeRows(); closeErr != nil {
+		return closeErr
 	}
 	for _, item := range updates {
 		if _, err := tx.ExecContext(ctx, `UPDATE projects SET document_json = ? WHERE id = ?`, item.document, item.id); err != nil {
@@ -174,7 +191,7 @@ func legacyProjectItemID(projectID string) string {
 	return "i_" + base64.RawURLEncoding.EncodeToString(sum[:])
 }
 
-func migrateUnifiedJobs(ctx context.Context, db *sql.DB) error {
+func migrateUnifiedJobs(ctx context.Context, db *sql.DB) (err error) {
 	var existing int
 	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM jobs`).Scan(&existing); err != nil || existing != 0 {
 		return err
@@ -184,35 +201,65 @@ func migrateUnifiedJobs(ctx context.Context, db *sql.DB) error {
 	if err != nil {
 		return err
 	}
+	rowsClosed := false
+	closeRows := func() error {
+		if rowsClosed {
+			return nil
+		}
+		rowsClosed = true
+		return rows.Close()
+	}
+	defer func() {
+		if closeErr := closeRows(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close unified job project rows: %w", closeErr))
+		}
+	}()
 	for rows.Next() {
 		var id, raw string
 		if err := rows.Scan(&id, &raw); err != nil {
-			rows.Close()
 			return err
 		}
 		var document model.Document
 		if err := json.Unmarshal([]byte(raw), &document); err != nil {
-			rows.Close()
 			return err
 		}
 		if len(document.Items) > 0 {
 			items[id] = document.Items[0].ID
 		}
 	}
-	if err := rows.Close(); err != nil {
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if err := closeRows(); err != nil {
 		return err
 	}
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
-	copyExport := func() error {
+	defer func() {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
+			err = errors.Join(err, fmt.Errorf("rollback unified jobs migration: %w", rollbackErr))
+		}
+	}()
+	copyExport := func() (err error) {
 		rows, err := tx.QueryContext(ctx, `SELECT id,project_id,state,request_json,result_json,error_code,created_at,updated_at FROM export_jobs`)
 		if err != nil {
 			return err
 		}
-		defer rows.Close()
+		rowsClosed := false
+		closeRows := func() error {
+			if rowsClosed {
+				return nil
+			}
+			rowsClosed = true
+			return rows.Close()
+		}
+		defer func() {
+			if closeErr := closeRows(); closeErr != nil {
+				err = errors.Join(err, fmt.Errorf("close legacy export job rows: %w", closeErr))
+			}
+		}()
 		for rows.Next() {
 			var id, pid, state, request, created, updated string
 			var result, code sql.NullString
@@ -228,14 +275,29 @@ func migrateUnifiedJobs(ctx context.Context, db *sql.DB) error {
 				return err
 			}
 		}
-		return rows.Err()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		return closeRows()
 	}
-	copyDetection := func() error {
+	copyDetection := func() (err error) {
 		rows, err := tx.QueryContext(ctx, `SELECT id,project_id,media_id,kind,state,result_json,error_code,created_at,updated_at FROM detection_jobs`)
 		if err != nil {
 			return err
 		}
-		defer rows.Close()
+		rowsClosed := false
+		closeRows := func() error {
+			if rowsClosed {
+				return nil
+			}
+			rowsClosed = true
+			return rows.Close()
+		}
+		defer func() {
+			if closeErr := closeRows(); closeErr != nil {
+				err = errors.Join(err, fmt.Errorf("close legacy detection job rows: %w", closeErr))
+			}
+		}()
 		for rows.Next() {
 			var id, pid, media, kind, state, created, updated string
 			var result, code sql.NullString
@@ -255,7 +317,10 @@ func migrateUnifiedJobs(ctx context.Context, db *sql.DB) error {
 				return err
 			}
 		}
-		return rows.Err()
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		return closeRows()
 	}
 	if err := copyExport(); err != nil {
 		return err
@@ -266,12 +331,16 @@ func migrateUnifiedJobs(ctx context.Context, db *sql.DB) error {
 	return tx.Commit()
 }
 
-func migrateLegacyIdentityColumns(ctx context.Context, db *sql.DB) error {
+func migrateLegacyIdentityColumns(ctx context.Context, db *sql.DB) (err error) {
 	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
+			err = errors.Join(err, fmt.Errorf("rollback legacy identity migration: %w", rollbackErr))
+		}
+	}()
 	for _, index := range []string{"projects_owner_updated", "export_jobs_owner_updated", "detection_jobs_owner_updated"} {
 		if _, err := tx.ExecContext(ctx, `DROP INDEX IF EXISTS `+index); err != nil {
 			return fmt.Errorf("drop legacy index %s: %w", index, err)

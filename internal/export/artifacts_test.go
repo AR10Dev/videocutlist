@@ -29,7 +29,11 @@ func TestArtifactReconcilePublishesOnlyValidatedOwnedOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close database: %v", err)
+		}
+	})
 	jobs, err := jobqueue.NewJobsStore(db)
 	if err != nil {
 		t.Fatal(err)
@@ -61,13 +65,92 @@ func TestArtifactReconcilePublishesOnlyValidatedOwnedOutput(t *testing.T) {
 	}
 }
 
+func TestArtifactReconcileCleansCancelledPublishedManifestAndPreservesSucceededSibling(t *testing.T) {
+	dir := t.TempDir()
+	database, err := store.OpenDatabase(context.Background(), filepath.Join(dir, "jobs.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			t.Errorf("close database: %v", err)
+		}
+	})
+	jobs, err := jobqueue.NewJobsStore(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	batchID := "b_reconcile_cancelled"
+	cancelled := jobqueue.Job{ID: "j_reconcile_cancelled", BatchID: batchID, Kind: jobqueue.JobExport, ProjectID: "p_reconcile_cancelled", ProjectItemID: "i_aaaaaaaaaaaaaaaaaaaaaaaa", RequestJSON: `{}`}
+	succeeded := jobqueue.Job{ID: "j_reconcile_succeeded", BatchID: batchID, Kind: jobqueue.JobExport, ProjectID: "p_reconcile_succeeded", ProjectItemID: "i_bbbbbbbbbbbbbbbbbbbbbbbb", RequestJSON: `{}`}
+	for _, job := range []jobqueue.Job{cancelled, succeeded} {
+		if _, err := jobs.Create(context.Background(), job); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := jobs.Start(context.Background(), job.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := jobs.Cancel(context.Background(), cancelled.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := jobs.Succeed(context.Background(), succeeded.ID, `{"outputName":"succeeded.mkv"}`); err != nil {
+		t.Fatal(err)
+	}
+	cancelledOutput := filepath.Join(dir, "cancelled.mkv")
+	succeededOutput := filepath.Join(dir, "succeeded.mkv")
+	for _, path := range []string{cancelledOutput, succeededOutput} {
+		if err := os.WriteFile(path, []byte("published output"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cancelledManifest, err := WriteManifest(dir, cancelled.ID, KindDownload, []string{"cancelled.mkv"}, time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	succeededManifest, err := WriteManifest(dir, succeeded.ID, KindDownload, []string{"succeeded.mkv"}, time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A fresh store models restart after publication but before the runner's
+	// durable success transition/manifest cleanup completed.
+	artifacts := NewArtifactStore()
+	if err := artifacts.Reconcile(context.Background(), jobs, "missing-ffprobe", []Destination{{Kind: KindDownload, Root: dir}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(cancelledOutput); !os.IsNotExist(err) {
+		t.Fatal("cancelled published output was not cleaned")
+	}
+	if _, err := os.Stat(cancelledManifest); !os.IsNotExist(err) {
+		t.Fatal("cancelled manifest was not removed")
+	}
+	if _, err := os.Stat(succeededOutput); err != nil {
+		t.Fatalf("succeeded sibling output was removed: %v", err)
+	}
+	if _, err := os.Stat(succeededManifest); err != nil {
+		t.Fatalf("succeeded sibling manifest was removed: %v", err)
+	}
+	storedCancelled, err := jobs.Get(context.Background(), cancelled.ID)
+	if err != nil || storedCancelled.State != jobqueue.JobCancelled {
+		t.Fatalf("cancelled job = %#v, err = %v", storedCancelled, err)
+	}
+	storedSucceeded, err := jobs.Get(context.Background(), succeeded.ID)
+	if err != nil || storedSucceeded.State != jobqueue.JobSucceeded || !storedSucceeded.ResultJSON.Valid {
+		t.Fatalf("succeeded job = %#v, err = %v", storedSucceeded, err)
+	}
+}
+
 func TestArtifactReconcileCleansInvalidOwnedOutputOnly(t *testing.T) {
 	dir := t.TempDir()
 	db, err := store.OpenDatabase(context.Background(), filepath.Join(dir, "jobs.db"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close database: %v", err)
+		}
+	})
 	jobs, err := jobqueue.NewJobsStore(db)
 	if err != nil {
 		t.Fatal(err)
@@ -132,9 +215,41 @@ func TestArtifactStoreRemoveRollsBackPublishedFiles(t *testing.T) {
 	}
 	store := NewArtifactStore()
 	store.Put("job", []Artifact{{Path: path, Kind: KindDownload}})
-	store.Remove("job")
+	if err := store.Remove("job"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatal("published artifact was not removed")
+	}
+}
+
+func TestArtifactStoreRemoveRetainsManifestAfterCleanupFailure(t *testing.T) {
+	directory := t.TempDir()
+	outputPath := filepath.Join(directory, "published.mkv")
+	if err := os.Mkdir(outputPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	manifestPath, err := WriteManifest(directory, "j_cleanup_failure", KindDownload, []string{"published.mkv"}, time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifacts := NewArtifactStore()
+	artifacts.Put("j_cleanup_failure", []Artifact{{Path: outputPath, Name: "published.mkv", Kind: KindDownload}})
+	artifacts.RegisterManifest("j_cleanup_failure", manifestPath)
+	if err := artifacts.Remove("j_cleanup_failure"); err == nil {
+		t.Fatal("directory artifact cleanup unexpectedly succeeded")
+	}
+	if _, err := os.Stat(manifestPath); err != nil {
+		t.Fatalf("cleanup evidence was lost: %v", err)
+	}
+	if err := os.Remove(outputPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := artifacts.Remove("j_cleanup_failure"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(manifestPath); !os.IsNotExist(err) {
+		t.Fatal("manifest remained after cleanup retry")
 	}
 }
 
@@ -160,7 +275,11 @@ func TestArtifactStoreJobIsolationAndExpiry(t *testing.T) {
 				t.Error(err)
 				return
 			}
-			defer file.Close()
+			defer func() {
+				if err := file.Close(); err != nil {
+					t.Errorf("close artifact: %v", err)
+				}
+			}()
 			if artifact.Name != job[len("job-"):]+".mkv" {
 				t.Errorf("job %s opened %s", job, artifact.Name)
 			}

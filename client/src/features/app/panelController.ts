@@ -183,7 +183,7 @@ export function createWorkspacePanelController(deps: {
         workspaceTaskTabs[
           (start + direction * offset + workspaceTaskTabs.length) % workspaceTaskTabs.length
         ];
-      if (candidate !== "detection" || deps.selected()) {
+      if (candidate !== "detection" || (deps.selected() && deps.activeItem())) {
         nextTask = candidate;
         break;
       }

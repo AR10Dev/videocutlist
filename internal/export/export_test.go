@@ -47,7 +47,11 @@ func TestExportHonorsSharedFFmpegCapacity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer file.Close()
+	t.Cleanup(func() {
+		if err := file.Close(); err != nil {
+			t.Errorf("close source: %v", err)
+		}
+	})
 	_, err = (Service{Capacity: rejectingLimiter{}}).Run(context.Background(), file, model.Document{}, Request{})
 	if err == nil || err.Error() != "capacity exhausted" {
 		t.Fatalf("error = %v", err)

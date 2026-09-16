@@ -183,10 +183,6 @@ func uniqueSuffix() string {
 	}
 	return hex.EncodeToString(b[:])
 }
-func destinationRoot(d Destination, source string) (string, error) {
-	return destinationRootAt(d, source, SourceLocation{})
-}
-
 func destinationRootAt(d Destination, source string, location SourceLocation) (string, error) {
 	switch d.Kind {
 	case KindDownload, KindArchive:
@@ -237,10 +233,10 @@ func prepareDestination(d Destination, source *os.File, sourceName string, locat
 				prepared.close()
 				return preparedDestination{}, errors.New("source changed")
 			}
-			defer resolvedSource.Close()
 			fdInfo, fdErr := source.Stat()
 			pathInfo, pathErr := resolvedSource.Stat()
-			if fdErr != nil || pathErr != nil || !os.SameFile(fdInfo, pathInfo) {
+			closeErr := resolvedSource.Close()
+			if fdErr != nil || pathErr != nil || closeErr != nil || !os.SameFile(fdInfo, pathInfo) {
 				prepared.close()
 				return preparedDestination{}, errors.New("source changed")
 			}

@@ -1,6 +1,8 @@
 package config
 
 import (
+	"math"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -245,4 +247,15 @@ func mergeEnv(base, changes map[string]string) map[string]string {
 		values[key] = value
 	}
 	return values
+}
+
+func TestExportLimitSafetyBoundary(t *testing.T) {
+	for _, limit := range []int{0, 1, 64, 65, math.MaxInt} {
+		t.Run(strconv.Itoa(limit), func(t *testing.T) {
+			_, err := load(env(mergeEnv(baseEnv(), map[string]string{"VIDEOCUTLIST_EXPORT_LIMIT": strconv.Itoa(limit)})))
+			if (err == nil) != (limit >= 1 && limit <= 64) {
+				t.Fatalf("export limit %d: %v", limit, err)
+			}
+		})
+	}
 }

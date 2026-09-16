@@ -1,12 +1,15 @@
 package httpapi
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -115,8 +118,16 @@ func TestRouteCoverageInventory(t *testing.T) {
 		{http.MethodPost, "/api/v1/settings/mcp/credentials", routeCreateMCPCredential},
 		{http.MethodDelete, "/api/v1/settings/mcp/credentials/" + credential, routeRevokeMCPCredential},
 	}
+	contract := openAPIOperations(t)
+	normalize := strings.NewReplacer(media, "{mediaId}", project, "{projectId}", job, "{jobId}", batch, "{batchId}", credential, "{credentialId}", proposal, "{proposalId}", "/outputs/0", "/outputs/{position}", "/interchange/csv", "/interchange/{format}", "/interchange/chapters", "/interchange/{format}")
+	covered := make(map[string]bool)
 	seen := make(map[routeKind]bool, len(inventory))
 	for _, entry := range inventory {
+		operation := entry.method + " " + normalize.Replace(strings.TrimPrefix(entry.path, "/api/v1"))
+		if !contract[operation] {
+			t.Errorf("production operation missing from OpenAPI: %s", operation)
+		}
+		covered[operation] = true
 		if got := parseRoute(entry.method, entry.path); got.kind != entry.kind {
 			t.Errorf("%s %s: got route kind %d, want %d", entry.method, entry.path, got.kind, entry.kind)
 		}
@@ -125,6 +136,18 @@ func TestRouteCoverageInventory(t *testing.T) {
 	for kind := routeListMedia; kind <= routeRevokeMCPCredential; kind++ {
 		if !seen[kind] {
 			t.Errorf("route kind %d is missing from the production route inventory", kind)
+		}
+	}
+	for _, path := range []string{"/metrics", "/health", "/ready"} {
+		operation := http.MethodGet + " " + path
+		if !contract[operation] {
+			t.Errorf("missing operational endpoint: %s", operation)
+		}
+		covered[operation] = true
+	}
+	for operation := range contract {
+		if !covered[operation] {
+			t.Errorf("OpenAPI operation missing from production inventory: %s", operation)
 		}
 	}
 	if len(seen) != int(routeRevokeMCPCredential) {
@@ -287,12 +310,6 @@ func (routeTestProjects) Create(context.Context, string, projects.ProjectInput) 
 func (routeTestProjects) Get(context.Context, string) (Project, error) { return Project{}, nil }
 func (routeTestProjects) Save(_ context.Context, id string, input projects.ProjectInput) (Project, error) {
 	return Project{ID: id, Revision: 1, Document: input.Document}, nil
-}
-
-type routeTestExports struct{}
-
-func (routeTestExports) Create(context.Context, string, Project, ExportInput) (Job, error) {
-	return Job{}, nil
 }
 
 type routeTestBatchExports struct {
@@ -562,4 +579,44 @@ func TestValidOpaqueIDs(t *testing.T) {
 	if !validJobID("j_"+strings.Repeat("a", 12)) || validJobID("j_"+strings.Repeat("a", 11)) {
 		t.Fatal("job ID validation")
 	}
+}
+
+// Read method/path keys from the checked-in block-style contract. The existing
+// OpenAPI generator validates the complete YAML and schema references.
+func openAPIOperations(t *testing.T) map[string]bool {
+	t.Helper()
+	file, err := os.Open("../../docs/contracts/api.openapi.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := file.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	paths := regexp.MustCompile(`^  (/[^:]+):$`)
+	methods := regexp.MustCompile(`^    (get|head|post|put|delete|patch|options):$`)
+	operations := make(map[string]bool)
+	scanner := bufio.NewScanner(file)
+	path := ""
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "components:" {
+			break
+		}
+		if match := paths.FindStringSubmatch(line); match != nil {
+			path = match[1]
+		}
+		if match := methods.FindStringSubmatch(line); match != nil && path != "" {
+			operation := strings.ToUpper(match[1]) + " " + path
+			if operations[operation] {
+				t.Errorf("duplicate OpenAPI operation: %s", operation)
+			}
+			operations[operation] = true
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return operations
 }

@@ -5,8 +5,6 @@ import (
 	"bytes"
 	"cmp"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -240,16 +238,30 @@ func (s Service) Run(ctx context.Context, source *os.File, document model.Docume
 	if err != nil {
 		return Result{}, fmt.Errorf("create export temporary file: %w", err)
 	}
+	temporaryOutputClosed := false
 	defer prepared.remove(temporaryName)
-	defer temporaryOutput.Close()
+	defer func() {
+		if !temporaryOutputClosed {
+			// Best effort: when this cleanup runs, the temporary file is not
+			// published, and a cleanup failure must not replace the primary error.
+			_ = temporaryOutput.Close()
+		}
+	}()
 
 	workRoot, workDirectory, workDirName, err := prepared.createTempDir(".videocutlist-segments-")
 	if err != nil {
 		return Result{}, err
 	}
 	defer prepared.removeAll(workDirName)
-	defer workRoot.Close()
-	defer workDirectory.Close()
+	defer func() {
+		// Best effort: these descriptors only guard temporary work data, so
+		// cleanup cannot safely change a result after output publication.
+		_ = workRoot.Close()
+	}()
+	defer func() {
+		// Best effort: preserve the primary export error if this cleanup fails.
+		_ = workDirectory.Close()
+	}()
 
 	segmentFiles := make([]string, len(segments))
 	var segmentFailures []OutputFailure
@@ -428,6 +440,7 @@ func (s Service) Run(ctx context.Context, source *os.File, document model.Docume
 	if err := temporaryOutput.Close(); err != nil {
 		return Result{}, err
 	}
+	temporaryOutputClosed = true
 	finalPath := filepath.Join(outputDir, outputName)
 	for attempt := 0; ; attempt++ {
 		err = prepared.publish(temporaryName, outputName)
@@ -596,7 +609,7 @@ func hybridArgs(input string, startMS, durationMS int64, streamIndexes []int, vi
 	return append(args, "-avoid_negative_ts", "make_zero", "-c:v", videoCodec, "-c:a", audioCodec, output)
 }
 
-func (s Service) hybridSegment(ctx context.Context, source *os.File, segment model.Segment, output *os.File, workRoot *os.Root, workDirectory *os.File, keyframes []int64, streamIndexes []int, policy exportpolicy.Policy) error {
+func (s Service) hybridSegment(ctx context.Context, source *os.File, segment model.Segment, output *os.File, workRoot *os.Root, workDirectory *os.File, keyframes []int64, streamIndexes []int, policy exportpolicy.Policy) (returnErr error) {
 	boundary := int64(-1)
 	for _, keyframe := range keyframes {
 		if keyframe >= segment.StartMS {
@@ -612,14 +625,26 @@ func (s Service) hybridSegment(ctx context.Context, source *os.File, segment mod
 	if err != nil {
 		return err
 	}
-	defer prefix.Close()
-	defer workRoot.Remove(prefixName)
+	defer func() {
+		if err := prefix.Close(); err != nil {
+			returnErr = errors.Join(returnErr, fmt.Errorf("close hybrid prefix: %w", err))
+		}
+		if err := workRoot.Remove(prefixName); err != nil {
+			returnErr = errors.Join(returnErr, fmt.Errorf("remove hybrid prefix: %w", err))
+		}
+	}()
 	suffix, err := workRoot.OpenFile(suffixName, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return err
 	}
-	defer suffix.Close()
-	defer workRoot.Remove(suffixName)
+	defer func() {
+		if err := suffix.Close(); err != nil {
+			returnErr = errors.Join(returnErr, fmt.Errorf("close hybrid suffix: %w", err))
+		}
+		if err := workRoot.Remove(suffixName); err != nil {
+			returnErr = errors.Join(returnErr, fmt.Errorf("remove hybrid suffix: %w", err))
+		}
+	}()
 	if _, err := source.Seek(0, io.SeekStart); err != nil {
 		return err
 	}
@@ -647,11 +672,6 @@ func (s Service) concatToFile(ctx context.Context, workRoot *os.Root, workDirect
 	}
 	args := []string{"-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-f", "concat", "-safe", "1", "-i", "segments.ffconcat", "-c", "copy", "output." + policy.Extension}
 	return s.runWithOutput(ctx, nil, output, workDirectory, args, policy)
-}
-
-func (s Service) run(ctx context.Context, source *os.File, args []string) error {
-	policy, _ := exportpolicy.For("mkv")
-	return s.runWithOutput(ctx, source, nil, nil, args, policy)
 }
 
 func (s Service) runWithOutput(ctx context.Context, source, output, directory *os.File, args []string, policy exportpolicy.Policy) error {
@@ -930,51 +950,8 @@ func safeFailureMessage(err error) string {
 	return b.String()
 }
 
-func uniqueName(directory string, at time.Time) (string, error) {
-	for range 10 {
-		var random [16]byte
-		if _, err := rand.Read(random[:]); err != nil {
-			return "", err
-		}
-		name := "videocutlist-" + at.Format("20060102T150405.000000000Z") + "-" + hex.EncodeToString(random[:]) + ".mkv"
-		if _, err := os.Stat(filepath.Join(directory, name)); errors.Is(err, os.ErrNotExist) {
-			return name, nil
-		} else if err != nil {
-			return "", err
-		}
-	}
-	return "", errors.New("could not allocate collision-safe export name")
-}
-
 func publishNoReplace(source, destination string) error {
 	return os.Link(source, destination)
-}
-
-func copyFile(source, destination string) error {
-	in, err := os.Open(source)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-	out, err := os.OpenFile(destination, os.O_WRONLY|os.O_TRUNC, 0o600)
-	if err != nil {
-		return err
-	}
-	_, copyErr := io.Copy(out, in)
-	closeErr := out.Close()
-	if copyErr != nil {
-		return copyErr
-	}
-	return closeErr
-}
-
-func copyFileToOpen(source string, destination *os.File) error {
-	in, err := os.Open(source)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-	return copyOpenFileToOpen(in, destination)
 }
 
 func copyOpenFileToOpen(source, destination *os.File) error {

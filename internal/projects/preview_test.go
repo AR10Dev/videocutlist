@@ -27,6 +27,26 @@ func (r bytesRunner) Start(context.Context, model.PreviewSpec) (*RunningPreview,
 	return &RunningPreview{Stdout: io.NopCloser(bytes.NewReader(r)), Wait: func() error { return nil }}, nil
 }
 
+type closeTrackingReader struct {
+	io.Reader
+	closed bool
+}
+
+func (r *closeTrackingReader) Close() error {
+	if r.closed {
+		return errors.New("preview stdout already closed")
+	}
+	r.closed = true
+	return nil
+}
+
+type waitClosesStdoutRunner []byte
+
+func (r waitClosesStdoutRunner) Start(context.Context, model.PreviewSpec) (*RunningPreview, error) {
+	stdout := &closeTrackingReader{Reader: bytes.NewReader(r)}
+	return &RunningPreview{Stdout: stdout, Wait: stdout.Close}, nil
+}
+
 type blockingRunner struct {
 	mu      sync.Mutex
 	starts  int
@@ -67,6 +87,26 @@ func TestPreviewHitAndMissPublishAtomically(t *testing.T) {
 		t.Fatalf("hit = %v, %+v", err, result)
 	}
 	_ = hit.Close()
+}
+
+func TestPreviewWaitOwnsStdoutCloseAndPublishesCache(t *testing.T) {
+	manager, _ := newManager(t, waitClosesStdoutRunner("preview"), 1)
+	spec := testSpec("m_wait_closes_stdout")
+	reader, result, err := manager.Preview(context.Background(), spec)
+	if err != nil || result.Status != CacheMiss {
+		t.Fatalf("miss = %v, %+v", err, result)
+	}
+	body, readErr := io.ReadAll(reader)
+	if closeErr := reader.Close(); readErr != nil || closeErr != nil || string(body) != "preview" {
+		t.Fatalf("body = %q, read=%v close=%v", body, readErr, closeErr)
+	}
+	hit, result, err := manager.Preview(context.Background(), spec)
+	if err != nil || result.Status != CacheHit {
+		t.Fatalf("hit = %v, %+v", err, result)
+	}
+	if err := hit.Close(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestPreviewCancellationStopsProcessAndDiscardsPartial(t *testing.T) {

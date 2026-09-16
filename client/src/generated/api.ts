@@ -402,7 +402,10 @@ export interface paths {
     };
     /** Read runtime settings and safe root diagnostics */
     get: operations["getSettings"];
-    /** Replace runtime settings */
+    /**
+     * Replace runtime settings
+     * @description Complete mutable settings document, at most 1048576 bytes. Deployment roots and destinations remain server-owned and may be omitted; destination metadata may be echoed unchanged. Invalid settings (including exportLimit outside 1..64) are rejected with 422 before live mutation or persistence. Stale revisions are 409. Unexpected application/persistence/rollback failures are 500. Live settings affect new work; existing export snapshots retain their settings, except shared worker/process/cache limits. Preview defaults, scan limits, and MCP enablement apply live. MCP transport request capacity remains the startup value; previewGlobalLimit controls media processes.
+     */
     put: operations["updateSettings"];
     post?: never;
     delete?: never;
@@ -519,14 +522,208 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/media/import": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Queue a durable media-library scan
+     * @description Scans configured server roots; takes no parameters or request body. The existing 409 import_unavailable response covers unconfigured roots or unavailable queue capacity. Poll the returned opaque job ID.
+     */
+    post: operations["startMediaImport"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/media/import/{jobId}": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        jobId: components["parameters"]["JobId"];
+      };
+      cookie?: never;
+    };
+    /** Read a library scan job */
+    get: operations["getMediaImport"];
+    put?: never;
+    post?: never;
+    /** Request cancellation of a library scan */
+    delete: operations["cancelMediaImport"];
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/media/{mediaId}/thumbnails": {
+    parameters: {
+      query: {
+        /** @description Must be less than the media duration. */
+        startMs: components["parameters"]["AssetStart"];
+        durationMs: components["parameters"]["AssetDuration"];
+        count: number;
+        width: number;
+      };
+      header?: {
+        "If-None-Match"?: components["parameters"]["AssetETag"];
+      };
+      path: {
+        mediaId: components["parameters"]["MediaId"];
+      };
+      cookie?: never;
+    };
+    /**
+     * Read a PNG timeline thumbnail strip
+     * @description Duration is clamped to the remaining media duration. Unknown or repeated query keys are rejected. Existing validation responses use 422 invalid_asset. PNG output is validated before publication and on cache reads; invalid generated output is a safe 500, never a published image. Output is bounded to 8 MiB compressed and 16777216 decoded pixels.
+     */
+    get: operations["getThumbnails"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/media/{mediaId}/waveform": {
+    parameters: {
+      query: {
+        /** @description Must be less than the media duration. */
+        startMs: components["parameters"]["AssetStart"];
+        durationMs: components["parameters"]["AssetDuration"];
+        samples: number;
+      };
+      header?: {
+        "If-None-Match"?: components["parameters"]["AssetETag"];
+      };
+      path: {
+        mediaId: components["parameters"]["MediaId"];
+      };
+      cookie?: never;
+    };
+    /**
+     * Read normalized timeline waveform peaks
+     * @description Duration is clamped to the remaining media duration. Each peak covers whole float32 audio samples, normalized to 0..1. Unknown or repeated query keys and invalid bounds use the existing 422 invalid_asset response; media without audio uses 422 no_audio. Malformed generated output is 500.
+     */
+    get: operations["getWaveform"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/projects/{projectId}/interchange/{format}": {
+    parameters: {
+      query?: {
+        /** @description Required for multi-item projects; omitted selects the sole item. */
+        itemId?: string;
+      };
+      header?: never;
+      path: {
+        projectId: components["parameters"]["ProjectId"];
+        format: "csv" | "chapters";
+      };
+      cookie?: never;
+    };
+    /** Download a project item's cut list */
+    get: operations["exportInterchange"];
+    put?: never;
+    /**
+     * Replace a project item's segments from a cut list
+     * @description Maximum input is 1048576 bytes and 10000 segments. CSV requires the header start,end,label. Chapters accept start title or start --> end title lines. Timestamps are seconds, MM:SS, or HH:MM:SS with up to three fractional digits. Labels may not contain slash or backslash and are limited to 200 characters. Ranges must be valid for the media. Saving uses the revision read by the server; a concurrent edit returns 409. Missing/ambiguous item selection also returns 409 project_item_required. Existing invalid/oversized input responses use 422 invalid_interchange, not 400/413.
+     */
+    post: operations["importInterchange"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/automation": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /**
+     * Execute an authenticated local automation command
+     * @description Requires a loopback listener, configured deployment authentication (bearer or trusted proxy), and no Origin header. This is REST, not MCP JSON-RPC. The entire JSON body is limited to 1048576 bytes (413 on overflow). Unknown/trailing JSON and invalid commands use the existing 422 status. project.import/project.export require projectId and format; projectItemId may be omitted only for a sole-item project. project.import also requires nonempty input and applies the interchange validation rules. job.status requires jobId. Filesystem paths are never accepted or returned.
+     */
+    post: operations["automation"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
 }
 export type webhooks = Record<string, never>;
 export interface components {
   schemas: {
+    ImportJob: {
+      id: string;
+      /** @enum {string} */
+      state: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+      progress: number;
+      indexed: number;
+      rootResults?: {
+        [key: string]: {
+          /** @enum {string} */
+          state: "scanning" | "ready_empty" | "ready_with_media" | "failed";
+          /** @enum {string} */
+          errorCode?: "scan_limit" | "cancelled" | "scan_failed";
+        };
+      };
+      errorCode?: string;
+      validationErrors?: string[];
+    };
+    Waveform: {
+      startMs: number;
+      durationMs: number;
+      peaks: number[];
+    };
+    AutomationCommand: {
+      /** @enum {string} */
+      action: "project.import" | "project.export" | "job.status";
+      projectId?: string;
+      projectItemId?: string;
+      jobId?: string;
+      /** @enum {string} */
+      format?: "csv" | "chapters";
+      input?: string;
+    };
+    SettingsUpdated: {
+      settings: components["schemas"]["RuntimeSettings"];
+      revision: number;
+      schemaVersion: number;
+      /** Format: date-time */
+      updatedAt: string;
+    };
     SettingsUpdate: {
       revision: number;
-      settings: {
-        [key: string]: unknown;
+      settings: components["schemas"]["RuntimeSettings"] & {
+        exportLimit: number;
+        cacheMaxBytes: number;
+        previewGlobalLimit: number;
+        previewBeforeMs: number;
+        previewAfterMs: number;
+        previewMaxMs: number;
+        previewGridMs: number;
+        mediaMaxFiles: number;
+        mediaMaxDepth: number;
+        mcpEnabled: boolean;
       };
     };
     RuntimeDestination: {
@@ -539,16 +736,18 @@ export interface components {
     };
     RuntimeSettings: {
       destinations?: components["schemas"]["RuntimeDestination"][];
-      exportLimit?: number;
-      cacheMaxBytes?: number;
-      previewGlobalLimit?: number;
-      previewBeforeMs?: number;
-      previewAfterMs?: number;
-      previewMaxMs?: number;
-      previewGridMs?: number;
-      mediaMaxFiles?: number;
-      mediaMaxDepth?: number;
-      mcpEnabled?: boolean;
+      /** @description Live shared scheduler worker limit for export, detection, and library scan jobs. 64 is a safety ceiling, not recommended concurrency. Admission allows at most four times this limit in queued/running jobs. Increases allow more workers immediately. Decreases do not cancel active jobs or discard queued work; excess workers retire after their current job and queued work drains at the new limit. */
+      exportLimit: number;
+      /** @description Live preview-cache total budget and timeline-asset per-artifact limit (not a combined cache budget). Subsequent publications use the current limit, including in-flight generations. Oversized timeline cache entries are misses. Existing preview entries are evicted on subsequent commits. */
+      cacheMaxBytes: number;
+      previewGlobalLimit: number;
+      previewBeforeMs: number;
+      previewAfterMs: number;
+      previewMaxMs: number;
+      previewGridMs: number;
+      mediaMaxFiles: number;
+      mediaMaxDepth: number;
+      mcpEnabled: boolean;
     };
     MCPMediaScope: {
       /** @enum {string} */
@@ -940,9 +1139,10 @@ export interface components {
     };
   };
   responses: {
-    /** @description Safe error */
+    /** @description Safe error; the request ID matches X-Request-ID */
     Error: {
       headers: {
+        "X-Request-ID"?: string;
         [name: string]: unknown;
       };
       content: {
@@ -951,6 +1151,10 @@ export interface components {
     };
   };
   parameters: {
+    /** @description Must be less than the media duration. */
+    AssetStart: number;
+    AssetDuration: number;
+    AssetETag: string;
     MediaId: string;
     ProjectId: string;
     JobId: string;
@@ -997,6 +1201,7 @@ export interface operations {
         };
         content?: never;
       };
+      403: components["responses"]["Error"];
     };
   };
   ready: {
@@ -1015,6 +1220,7 @@ export interface operations {
         };
         content?: never;
       };
+      403: components["responses"]["Error"];
       503: components["responses"]["Error"];
     };
   };
@@ -1039,6 +1245,9 @@ export interface operations {
           "application/json": components["schemas"]["MediaPage"];
         };
       };
+      401: components["responses"]["Error"];
+      403: components["responses"]["Error"];
+      500: components["responses"]["Error"];
     };
   };
   browseMediaTree: {
@@ -1063,7 +1272,10 @@ export interface operations {
         };
       };
       400: components["responses"]["Error"];
+      401: components["responses"]["Error"];
+      403: components["responses"]["Error"];
       404: components["responses"]["Error"];
+      500: components["responses"]["Error"];
     };
   };
   mediaLibraryStatus: {
@@ -1084,6 +1296,9 @@ export interface operations {
           "application/json": components["schemas"]["LibraryStatus"];
         };
       };
+      401: components["responses"]["Error"];
+      403: components["responses"]["Error"];
+      500: components["responses"]["Error"];
     };
   };
   refreshMedia: {
@@ -1101,10 +1316,12 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          "application/json": components["schemas"]["Job"];
+          "application/json": components["schemas"]["ImportJob"];
         };
       };
+      401: components["responses"]["Error"];
       403: components["responses"]["Error"];
+      500: components["responses"]["Error"];
     };
   };
   getMedia: {
@@ -1127,7 +1344,10 @@ export interface operations {
           "application/json": components["schemas"]["Media"];
         };
       };
+      401: components["responses"]["Error"];
+      403: components["responses"]["Error"];
       404: components["responses"]["Error"];
+      500: components["responses"]["Error"];
     };
   };
   streamPreview: {
@@ -1160,10 +1380,12 @@ export interface operations {
           "video/mp4": string;
         };
       };
+      401: components["responses"]["Error"];
       403: components["responses"]["Error"];
       404: components["responses"]["Error"];
       422: components["responses"]["Error"];
       429: components["responses"]["Error"];
+      500: components["responses"]["Error"];
     };
   };
   previewStatus: {
@@ -1189,6 +1411,8 @@ export interface operations {
         };
         content?: never;
       };
+      401: components["responses"]["Error"];
+      403: components["responses"]["Error"];
       /** @description No complete cached preview */
       404: {
         headers: {
@@ -1196,6 +1420,7 @@ export interface operations {
         };
         content?: never;
       };
+      500: components["responses"]["Error"];
     };
   };
   listProjects: {
@@ -1220,6 +1445,9 @@ export interface operations {
         };
       };
       400: components["responses"]["Error"];
+      401: components["responses"]["Error"];
+      403: components["responses"]["Error"];
+      500: components["responses"]["Error"];
     };
   };
   getProject: {
@@ -1242,7 +1470,10 @@ export interface operations {
           "application/json": components["schemas"]["Project"];
         };
       };
+      401: components["responses"]["Error"];
+      403: components["responses"]["Error"];
       404: components["responses"]["Error"];
+      500: components["responses"]["Error"];
     };
   };
   putProject: {
@@ -1269,8 +1500,12 @@ export interface operations {
           "application/json": components["schemas"]["Project"];
         };
       };
+      401: components["responses"]["Error"];
+      403: components["responses"]["Error"];
+      404: components["responses"]["Error"];
       409: components["responses"]["Error"];
       422: components["responses"]["Error"];
+      500: components["responses"]["Error"];
     };
   };
   createDetection: {
@@ -1297,9 +1532,12 @@ export interface operations {
           "application/json": components["schemas"]["DetectionJob"];
         };
       };
+      401: components["responses"]["Error"];
+      403: components["responses"]["Error"];
       404: components["responses"]["Error"];
       409: components["responses"]["Error"];
       422: components["responses"]["Error"];
+      500: components["responses"]["Error"];
     };
   };
   createExport: {
@@ -1326,10 +1564,12 @@ export interface operations {
           "application/json": components["schemas"]["BatchExportSubmission"];
         };
       };
+      401: components["responses"]["Error"];
       403: components["responses"]["Error"];
       404: components["responses"]["Error"];
       422: components["responses"]["Error"];
       429: components["responses"]["Error"];
+      500: components["responses"]["Error"];
     };
   };
   listBatches: {
@@ -1353,6 +1593,9 @@ export interface operations {
         };
       };
       400: components["responses"]["Error"];
+      401: components["responses"]["Error"];
+      403: components["responses"]["Error"];
+      500: components["responses"]["Error"];
     };
   };
   getBatchProgress: {
@@ -1375,7 +1618,10 @@ export interface operations {
           "application/json": components["schemas"]["Batch"];
         };
       };
+      401: components["responses"]["Error"];
+      403: components["responses"]["Error"];
       404: components["responses"]["Error"];
+      500: components["responses"]["Error"];
     };
   };
   cancelBatch: {
@@ -1396,7 +1642,10 @@ export interface operations {
         };
         content?: never;
       };
+      401: components["responses"]["Error"];
+      403: components["responses"]["Error"];
       404: components["responses"]["Error"];
+      500: components["responses"]["Error"];
     };
   };
   downloadBatchOutputs: {
@@ -1419,7 +1668,10 @@ export interface operations {
           "application/zip": string;
         };
       };
+      401: components["responses"]["Error"];
+      403: components["responses"]["Error"];
       404: components["responses"]["Error"];
+      500: components["responses"]["Error"];
     };
   };
   preflightExport: {
@@ -1446,7 +1698,10 @@ export interface operations {
           "application/json": components["schemas"]["ExportPreflight"];
         };
       };
+      401: components["responses"]["Error"];
+      403: components["responses"]["Error"];
       422: components["responses"]["Error"];
+      500: components["responses"]["Error"];
     };
   };
   listDestinations: {
@@ -1470,6 +1725,9 @@ export interface operations {
           };
         };
       };
+      401: components["responses"]["Error"];
+      403: components["responses"]["Error"];
+      500: components["responses"]["Error"];
     };
   };
   getJob: {
@@ -1492,7 +1750,10 @@ export interface operations {
           "application/json": components["schemas"]["Job"];
         };
       };
+      401: components["responses"]["Error"];
+      403: components["responses"]["Error"];
       404: components["responses"]["Error"];
+      500: components["responses"]["Error"];
     };
   };
   cancelJob: {
@@ -1513,7 +1774,10 @@ export interface operations {
         };
         content?: never;
       };
+      401: components["responses"]["Error"];
+      403: components["responses"]["Error"];
       404: components["responses"]["Error"];
+      500: components["responses"]["Error"];
     };
   };
   retryJob: {
@@ -1536,9 +1800,12 @@ export interface operations {
           "application/json": components["schemas"]["Batch"];
         };
       };
+      401: components["responses"]["Error"];
+      403: components["responses"]["Error"];
       404: components["responses"]["Error"];
       409: components["responses"]["Error"];
       429: components["responses"]["Error"];
+      500: components["responses"]["Error"];
     };
   };
   downloadJobOutput: {
@@ -1564,7 +1831,10 @@ export interface operations {
           "video/quicktime": string;
         };
       };
+      401: components["responses"]["Error"];
+      403: components["responses"]["Error"];
       404: components["responses"]["Error"];
+      500: components["responses"]["Error"];
     };
   };
   getSettings: {
@@ -1585,7 +1855,10 @@ export interface operations {
           "application/json": components["schemas"]["SettingsResponse"];
         };
       };
+      401: components["responses"]["Error"];
       403: components["responses"]["Error"];
+      404: components["responses"]["Error"];
+      500: components["responses"]["Error"];
     };
   };
   updateSettings: {
@@ -1606,11 +1879,16 @@ export interface operations {
         headers: {
           [name: string]: unknown;
         };
-        content?: never;
+        content: {
+          "application/json": components["schemas"]["SettingsUpdated"];
+        };
       };
+      401: components["responses"]["Error"];
       403: components["responses"]["Error"];
+      404: components["responses"]["Error"];
       409: components["responses"]["Error"];
       422: components["responses"]["Error"];
+      500: components["responses"]["Error"];
     };
   };
   getMCPSettings: {
@@ -1634,7 +1912,11 @@ export interface operations {
           "application/json": components["schemas"]["MCPSettingsResponse"];
         };
       };
+      400: components["responses"]["Error"];
+      401: components["responses"]["Error"];
       403: components["responses"]["Error"];
+      404: components["responses"]["Error"];
+      500: components["responses"]["Error"];
     };
   };
   createMCPCredential: {
@@ -1659,8 +1941,11 @@ export interface operations {
           "application/json": components["schemas"]["MCPCredentialCreated"];
         };
       };
+      401: components["responses"]["Error"];
       403: components["responses"]["Error"];
+      404: components["responses"]["Error"];
       422: components["responses"]["Error"];
+      500: components["responses"]["Error"];
     };
   };
   getExportProposal: {
@@ -1683,7 +1968,10 @@ export interface operations {
           "application/json": components["schemas"]["ExportProposal"];
         };
       };
+      401: components["responses"]["Error"];
+      403: components["responses"]["Error"];
       404: components["responses"]["Error"];
+      500: components["responses"]["Error"];
     };
   };
   approveExportProposal: {
@@ -1706,8 +1994,11 @@ export interface operations {
           "application/json": components["schemas"]["ExportProposal"];
         };
       };
+      401: components["responses"]["Error"];
+      403: components["responses"]["Error"];
       404: components["responses"]["Error"];
       409: components["responses"]["Error"];
+      500: components["responses"]["Error"];
     };
   };
   revokeMCPCredential: {
@@ -1730,8 +2021,10 @@ export interface operations {
           "application/json": components["schemas"]["MCPCredential"];
         };
       };
+      401: components["responses"]["Error"];
       403: components["responses"]["Error"];
       404: components["responses"]["Error"];
+      500: components["responses"]["Error"];
     };
   };
   refreshSettingsMedia: {
@@ -1749,11 +2042,283 @@ export interface operations {
           [name: string]: unknown;
         };
         content: {
-          "application/json": components["schemas"]["Job"];
+          "application/json": components["schemas"]["ImportJob"];
         };
       };
+      401: components["responses"]["Error"];
       403: components["responses"]["Error"];
       409: components["responses"]["Error"];
+      500: components["responses"]["Error"];
+    };
+  };
+  startMediaImport: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Library scan accepted */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ImportJob"];
+        };
+      };
+      401: components["responses"]["Error"];
+      403: components["responses"]["Error"];
+      409: components["responses"]["Error"];
+      500: components["responses"]["Error"];
+    };
+  };
+  getMediaImport: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        jobId: components["parameters"]["JobId"];
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Library scan status; non-scan job IDs are not found */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ImportJob"];
+        };
+      };
+      401: components["responses"]["Error"];
+      403: components["responses"]["Error"];
+      404: components["responses"]["Error"];
+      500: components["responses"]["Error"];
+    };
+  };
+  cancelMediaImport: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        jobId: components["parameters"]["JobId"];
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Cancellation requested or job already terminal */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      401: components["responses"]["Error"];
+      403: components["responses"]["Error"];
+      404: components["responses"]["Error"];
+      500: components["responses"]["Error"];
+    };
+  };
+  getThumbnails: {
+    parameters: {
+      query: {
+        /** @description Must be less than the media duration. */
+        startMs: components["parameters"]["AssetStart"];
+        durationMs: components["parameters"]["AssetDuration"];
+        count: number;
+        width: number;
+      };
+      header?: {
+        "If-None-Match"?: components["parameters"]["AssetETag"];
+      };
+      path: {
+        mediaId: components["parameters"]["MediaId"];
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description PNG strip with private, no-cache policy */
+      200: {
+        headers: {
+          ETag?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          "image/png": string;
+        };
+      };
+      /** @description Client ETag matches this source and query */
+      304: {
+        headers: {
+          ETag?: string;
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      401: components["responses"]["Error"];
+      403: components["responses"]["Error"];
+      404: components["responses"]["Error"];
+      422: components["responses"]["Error"];
+      500: components["responses"]["Error"];
+    };
+  };
+  getWaveform: {
+    parameters: {
+      query: {
+        /** @description Must be less than the media duration. */
+        startMs: components["parameters"]["AssetStart"];
+        durationMs: components["parameters"]["AssetDuration"];
+        samples: number;
+      };
+      header?: {
+        "If-None-Match"?: components["parameters"]["AssetETag"];
+      };
+      path: {
+        mediaId: components["parameters"]["MediaId"];
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Waveform with private, no-cache policy */
+      200: {
+        headers: {
+          ETag?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Waveform"];
+        };
+      };
+      /** @description Client ETag matches this source and query */
+      304: {
+        headers: {
+          ETag?: string;
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      401: components["responses"]["Error"];
+      403: components["responses"]["Error"];
+      404: components["responses"]["Error"];
+      422: components["responses"]["Error"];
+      500: components["responses"]["Error"];
+    };
+  };
+  exportInterchange: {
+    parameters: {
+      query?: {
+        /** @description Required for multi-item projects; omitted selects the sole item. */
+        itemId?: string;
+      };
+      header?: never;
+      path: {
+        projectId: components["parameters"]["ProjectId"];
+        format: "csv" | "chapters";
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Attachment named cutlist.csv or cutlist.chapters */
+      200: {
+        headers: {
+          "Content-Disposition"?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          "text/csv": string;
+          "text/plain": string;
+        };
+      };
+      401: components["responses"]["Error"];
+      403: components["responses"]["Error"];
+      404: components["responses"]["Error"];
+      409: components["responses"]["Error"];
+      500: components["responses"]["Error"];
+    };
+  };
+  importInterchange: {
+    parameters: {
+      query?: {
+        /** @description Required for multi-item projects; omitted selects the sole item. */
+        itemId?: string;
+      };
+      header?: never;
+      path: {
+        projectId: components["parameters"]["ProjectId"];
+        format: "csv" | "chapters";
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "text/csv": string;
+        "text/plain": string;
+      };
+    };
+    responses: {
+      /** @description Saved project */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Project"];
+        };
+      };
+      401: components["responses"]["Error"];
+      403: components["responses"]["Error"];
+      404: components["responses"]["Error"];
+      409: components["responses"]["Error"];
+      422: components["responses"]["Error"];
+      500: components["responses"]["Error"];
+    };
+  };
+  automation: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["AutomationCommand"];
+      };
+    };
+    responses: {
+      /** @description Import project ID, exported cut-list text, or job status */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json":
+            | {
+                projectId: string;
+              }
+            | {
+                filename: string;
+                content: string;
+              }
+            | components["schemas"]["Job"];
+        };
+      };
+      401: components["responses"]["Error"];
+      403: components["responses"]["Error"];
+      404: components["responses"]["Error"];
+      409: components["responses"]["Error"];
+      413: components["responses"]["Error"];
+      422: components["responses"]["Error"];
+      500: components["responses"]["Error"];
     };
   };
 }

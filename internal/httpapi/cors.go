@@ -28,17 +28,17 @@ func CORS(allowedOrigins []string, next http.Handler) http.Handler {
 		}
 		origin := origins[0]
 		if len(origins) != 1 || !validOrigin(origin) {
-			writer.WriteHeader(http.StatusForbidden)
+			rejectOrigin(writer, request)
 			return
 		}
 		if _, ok := allowed[origin]; !ok && !sameOrigin(request, origin) {
-			writer.WriteHeader(http.StatusForbidden)
+			rejectOrigin(writer, request)
 			return
 		}
 
 		if request.Method == http.MethodOptions || len(request.Header.Values("Access-Control-Request-Method")) != 0 || len(request.Header.Values("Access-Control-Request-Headers")) != 0 {
 			if !validPreflight(request) {
-				writer.WriteHeader(http.StatusForbidden)
+				rejectOrigin(writer, request)
 				return
 			}
 			setCORSHeaders(writer.Header(), origin)
@@ -54,6 +54,20 @@ func CORS(allowedOrigins []string, next http.Handler) http.Handler {
 		writer.Header().Set("Access-Control-Expose-Headers", exposedHeaders)
 		next.ServeHTTP(writer, request)
 	})
+}
+
+func rejectOrigin(w http.ResponseWriter, r *http.Request) {
+	if strings.HasPrefix(r.URL.Path, "/api/") {
+		id := w.Header().Get("X-Request-ID")
+		if id == "" {
+			id = RequestID()
+			w.Header().Set("X-Request-ID", id)
+		}
+		Error(w, http.StatusForbidden, "origin_forbidden", "Request origin is not allowed.", id)
+		return
+	}
+	// MCP retains its transport protocol; it never receives a REST envelope.
+	w.WriteHeader(http.StatusForbidden)
 }
 
 func setCORSHeaders(header http.Header, origin string) {

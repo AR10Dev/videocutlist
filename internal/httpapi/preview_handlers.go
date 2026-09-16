@@ -14,7 +14,7 @@ import (
 func (s *Server) preview(writer http.ResponseWriter, request *http.Request, media string, id string) {
 	item, err := s.config.Media.Get(request.Context(), media)
 	if err != nil {
-		notFound(writer, id)
+		resourceError(writer, id, err)
 		return
 	}
 	spec, err := s.previewSpec(request, item)
@@ -41,7 +41,7 @@ func (s *Server) preview(writer http.ResponseWriter, request *http.Request, medi
 		httpx.Error(writer, http.StatusTooManyRequests, "preview_unavailable", "Preview is unavailable.", id)
 		return
 	}
-	defer result.Reader.Close()
+	defer closeResponseBody(s.config.Logger, "preview", result.Reader)
 	previewHeaders(writer, PreviewSpec{StartMS: result.StartMS, WindowMS: result.DurationMS, OffsetMS: result.OffsetMS}, result.CacheStatus)
 	writer.Header().Set("Content-Type", "video/mp4")
 	writer.WriteHeader(http.StatusOK)
@@ -120,7 +120,7 @@ func (s *Server) thumbnails(w http.ResponseWriter, r *http.Request, media, id st
 	}
 	item, err := s.config.Media.Get(r.Context(), media)
 	if err != nil {
-		notFound(w, id)
+		resourceError(w, id, err)
 		return
 	}
 	spec, err := s.assetSpec(r, item, false)
@@ -128,7 +128,7 @@ func (s *Server) thumbnails(w http.ResponseWriter, r *http.Request, media, id st
 		httpx.Error(w, 422, "invalid_asset", "Thumbnail parameters are invalid.", id)
 		return
 	}
-	if assetNotModified(w, r, item, "thumbnails") {
+	if assetNotModified(w, r, item, "thumbnails-v2") {
 		return
 	}
 	result, err := s.config.Assets.Thumbnails(r.Context(), spec)
@@ -136,7 +136,7 @@ func (s *Server) thumbnails(w http.ResponseWriter, r *http.Request, media, id st
 		internalError(w, id)
 		return
 	}
-	defer result.Reader.Close()
+	defer closeResponseBody(s.config.Logger, "thumbnail", result.Reader)
 	w.Header().Set("Content-Type", "image/png")
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.Copy(w, result.Reader)
@@ -151,7 +151,7 @@ func (s *Server) waveform(w http.ResponseWriter, r *http.Request, media, id stri
 	}
 	item, err := s.config.Media.Get(r.Context(), media)
 	if err != nil {
-		notFound(w, id)
+		resourceError(w, id, err)
 		return
 	}
 	if item.Streams["audio"] == nil {
@@ -163,7 +163,7 @@ func (s *Server) waveform(w http.ResponseWriter, r *http.Request, media, id stri
 		httpx.Error(w, 422, "invalid_asset", "Waveform parameters are invalid.", id)
 		return
 	}
-	if assetNotModified(w, r, item, "waveform") {
+	if assetNotModified(w, r, item, "waveform-v2") {
 		return
 	}
 	result, err := s.config.Assets.Waveform(r.Context(), spec)

@@ -28,12 +28,16 @@ func NewMediaStore(db *sql.DB) (*MediaStore, error) {
 }
 
 // Sync makes a successful root scan authoritative: absent rows become unavailable.
-func (s *MediaStore) Sync(ctx context.Context, alias string, records []index.Record) error {
+func (s *MediaStore) Sync(ctx context.Context, alias string, records []index.Record) (err error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
+			err = errors.Join(err, fmt.Errorf("rollback media sync: %w", rollbackErr))
+		}
+	}()
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if _, err := tx.ExecContext(ctx, `UPDATE media SET available = 0, updated_at = ? WHERE root_alias = ?`, now, alias); err != nil {
 		return err
@@ -59,7 +63,7 @@ ON CONFLICT(root_alias, relative_path) DO UPDATE SET
 
 // RemoveRoots atomically makes records from removed roots unavailable without
 // exposing filesystem paths or deleting historical opaque IDs.
-func (s *MediaStore) RemoveRoots(ctx context.Context, aliases []string) error {
+func (s *MediaStore) RemoveRoots(ctx context.Context, aliases []string) (err error) {
 	if len(aliases) == 0 {
 		return nil
 	}
@@ -67,7 +71,11 @@ func (s *MediaStore) RemoveRoots(ctx context.Context, aliases []string) error {
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
+			err = errors.Join(err, fmt.Errorf("rollback media root removal: %w", rollbackErr))
+		}
+	}()
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	for _, alias := range aliases {
 		if _, err := tx.ExecContext(ctx, `UPDATE media SET available = 0, updated_at = ? WHERE root_alias = ?`, now, alias); err != nil {
@@ -99,7 +107,19 @@ func (s *MediaStore) Browse(ctx context.Context, folderID, cursor string, limit 
 	if err != nil {
 		return nil, nil, "", err
 	}
-	defer rows.Close()
+	rowsClosed := false
+	closeRows := func() error {
+		if rowsClosed {
+			return nil
+		}
+		rowsClosed = true
+		return rows.Close()
+	}
+	defer func() {
+		if closeErr := closeRows(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close media browse rows: %w", closeErr))
+		}
+	}()
 	type candidate struct {
 		root, path string
 		media      index.Media
@@ -115,6 +135,9 @@ func (s *MediaStore) Browse(ctx context.Context, folderID, cursor string, limit 
 	}
 	if err = rows.Err(); err != nil {
 		return nil, nil, "", err
+	}
+	if closeErr := closeRows(); closeErr != nil {
+		return nil, nil, "", fmt.Errorf("close media browse rows: %w", closeErr)
 	}
 	// Resolve the opaque folder ID by comparing hashes; no client-supplied path is accepted.
 	for _, c := range found {
@@ -154,7 +177,7 @@ func appendUniqueFolder(folders []index.Folder, folder index.Folder) []index.Fol
 	return append(folders, folder)
 }
 
-func (s *MediaStore) List(ctx context.Context, cursor string, limit int) (index.Page, error) {
+func (s *MediaStore) List(ctx context.Context, cursor string, limit int) (page index.Page, err error) {
 	if limit <= 0 {
 		limit = 100
 	}
@@ -167,8 +190,20 @@ FROM media WHERE available = 1 AND id > ? ORDER BY id LIMIT ?`, cursor, limit+1)
 	if err != nil {
 		return index.Page{}, err
 	}
-	defer rows.Close()
-	page := index.Page{}
+	rowsClosed := false
+	closeRows := func() error {
+		if rowsClosed {
+			return nil
+		}
+		rowsClosed = true
+		return rows.Close()
+	}
+	defer func() {
+		if closeErr := closeRows(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close media list rows: %w", closeErr))
+		}
+	}()
+	page = index.Page{}
 	for rows.Next() {
 		record, err := scanMedia(rows)
 		if err != nil {
@@ -176,11 +211,20 @@ FROM media WHERE available = 1 AND id > ? ORDER BY id LIMIT ?`, cursor, limit+1)
 		}
 		if len(page.Items) == limit {
 			page.NextCursor = page.Items[len(page.Items)-1].ID
+			if closeErr := closeRows(); closeErr != nil {
+				return index.Page{}, fmt.Errorf("close media list rows: %w", closeErr)
+			}
 			return page, nil
 		}
 		page.Items = append(page.Items, record.Media)
 	}
-	return page, rows.Err()
+	if err := rows.Err(); err != nil {
+		return index.Page{}, err
+	}
+	if closeErr := closeRows(); closeErr != nil {
+		return index.Page{}, fmt.Errorf("close media list rows: %w", closeErr)
+	}
+	return page, nil
 }
 
 type rowScanner interface{ Scan(...any) error }

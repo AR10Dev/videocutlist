@@ -31,7 +31,7 @@ func (s *Server) downloadOutput(w http.ResponseWriter, r *http.Request, encoded,
 		notFound(w, id)
 		return
 	}
-	defer file.Close()
+	defer closeResponseBody(s.config.Logger, "download_output", file)
 	if !safeOutputName(name) {
 		notFound(w, id)
 		return
@@ -54,7 +54,7 @@ func (s *Server) downloadBatch(w http.ResponseWriter, r *http.Request, batchID, 
 		notFound(w, id)
 		return
 	}
-	defer file.Close()
+	defer closeResponseBody(s.config.Logger, "download_batch", file)
 	if !safeOutputName(name) {
 		notFound(w, id)
 		return

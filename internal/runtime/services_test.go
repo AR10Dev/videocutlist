@@ -92,8 +92,24 @@ func TestMediaAPIShapeHidesStorageAndProviderMetadata(t *testing.T) {
 
 type adapterProbe struct{}
 
+type failingCloser struct{ err error }
+
+func (c failingCloser) Close() error { return c.err }
+
 func (adapterProbe) ProbeFile(context.Context, *os.File) (probe.Metadata, error) {
 	return probe.Metadata{}, nil
+}
+
+func TestExportExecutorSourceClosePreservesPublishedResult(t *testing.T) {
+	closeErr := errors.New("source close failed")
+	if err := closeBatchSource(nil, failingCloser{err: closeErr}); err != nil {
+		t.Fatalf("successful export close error = %v; want ignored cleanup error", err)
+	}
+	primary := errors.New("export failed")
+	err := closeBatchSource(primary, failingCloser{err: closeErr})
+	if !errors.Is(err, primary) || !errors.Is(err, closeErr) {
+		t.Fatalf("primary=%v, want primary and cleanup errors", err)
+	}
 }
 
 func TestMediaCatalogPreviewUsesCatalogMetadata(t *testing.T) {
@@ -111,7 +127,11 @@ func TestMediaCatalogPreviewUsesCatalogMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	mediaStore, err := store.NewMediaStore(db)
 	if err != nil {
 		t.Fatal(err)
@@ -175,7 +195,11 @@ func TestExportDownloadEnforcesDurableLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	jobs, err := jobqueue.NewJobsStore(db)
 	if err != nil {
 		t.Fatal(err)
@@ -256,7 +280,11 @@ func TestExportExecutorDownloadBatchPublishesValidatedArchive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer database.Close()
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	jobs, err := jobqueue.NewJobsStore(database)
 	if err != nil {
 		t.Fatal(err)
@@ -334,7 +362,11 @@ func TestPreviewRunnerRejectsChangedSourceForOldSpec(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	mediaStore, err := store.NewMediaStore(db)
 	if err != nil {
 		t.Fatal(err)

@@ -1,6 +1,6 @@
 import { createSignal, type Accessor, type Setter } from "solid-js";
 import type { QueryClient } from "@tanstack/solid-query";
-import type { ApiClient } from "../../api";
+import { readApiError, type ApiClient } from "../../api";
 import type { components } from "../../generated/api";
 import {
   confirmDiscard,
@@ -115,6 +115,12 @@ export function createProjectsController(deps: ProjectsControllerDeps) {
     deps.revision() > 0 && !deps.dirty() ? "saved" : "unsaved",
   );
   const [saveConflict, setSaveConflict] = createSignal(false);
+  const [saveError, setSaveError] = createSignal("");
+  const failSave = (message: string) => {
+    setSaveError(message);
+    setSaveState("failed");
+    deps.setStatus(message);
+  };
   const [recovery, setRecovery] = createSignal<ProjectRecovery | undefined>(readRecovery());
   const remember = (id: string, label: string) => {
     let recent: ReturnType<typeof recentProjects> = [];
@@ -177,20 +183,11 @@ export function createProjectsController(deps: ProjectsControllerDeps) {
       name: deps.projectName(),
       items: deps.editableItems(),
     };
-    if (!validProjectId(snapshot.project)) {
-      setSaveState("failed");
-      return void deps.setStatus("Project ID is invalid.");
-    }
-    if (!snapshot.items.length) {
-      setSaveState("failed");
-      return void deps.setStatus("Add media before saving.");
-    }
+    if (!validProjectId(snapshot.project)) return void failSave("Project ID is invalid.");
+    if (!snapshot.items.length) return void failSave("Add media before saving.");
     for (const item of snapshot.items) {
       const error = validateSegments(item.timeline.present.segments, item.media.durationMs);
-      if (error) {
-        setSaveState("failed");
-        return void deps.setStatus(`${item.media.name}: ${error}`);
-      }
+      if (error) return void failSave(`${item.media.name}: ${error}`);
     }
     const serializedItems = snapshot.items.map(serializeProjectItem);
     const controller = new AbortController();
@@ -209,28 +206,28 @@ export function createProjectsController(deps: ProjectsControllerDeps) {
         }),
       });
       if (controller.signal.aborted || disposed) return;
-      const sameProject =
-        snapshot.context === contextVersion && snapshot.project === deps.projectId();
-      if (response.status === 409) {
-        if (sameProject) {
+      const sameProject = () =>
+        !controller.signal.aborted &&
+        !disposed &&
+        snapshot.context === contextVersion &&
+        snapshot.project === deps.projectId();
+      const error = response.ok ? undefined : await readApiError(response);
+      if (error?.code === "revision_conflict") {
+        if (sameProject()) {
           pendingSave = undefined;
           setSaveConflict(true);
-          setSaveState("failed");
-          deps.setStatus(
+          failSave(
             "Project changed on another client. Reload it or save local work as a new project.",
           );
         }
         return;
       }
       if (!response.ok) {
-        if (sameProject) {
-          setSaveState("failed");
-          deps.setStatus(`Project save failed (${response.status}). Retry when ready.`);
-        }
+        if (sameProject()) failSave(`Project save failed (${response.status}). Retry when ready.`);
         return;
       }
       const project = (await response.json()) as Project;
-      if (!sameProject) return project;
+      if (!sameProject()) return;
       deps.setRevision(project.revision);
       // A successful PUT is the source of truth. A cache refresh can fail when a
       // project query is stale or the media endpoint is briefly unavailable; that
@@ -240,6 +237,7 @@ export function createProjectsController(deps: ProjectsControllerDeps) {
       } catch {
         // Keep the saved response and let the next explicit load refresh the cache.
       }
+      if (!sameProject()) return;
       const current =
         snapshot.editorVersion === deps.editorVersion() && snapshot.media === deps.selected()?.id;
       if (current) {
@@ -260,8 +258,7 @@ export function createProjectsController(deps: ProjectsControllerDeps) {
       return project;
     } catch (error) {
       if (!controller.signal.aborted && !disposed && snapshot.context === contextVersion) {
-        setSaveState("failed");
-        deps.setStatus(
+        failSave(
           error instanceof Error
             ? `${error.message} Retry when ready.`
             : "Project save failed. Retry when ready.",
@@ -334,7 +331,8 @@ export function createProjectsController(deps: ProjectsControllerDeps) {
       return;
     cancelAutosave();
     contextVersion++;
-    setSaveConflict(false);
+    const preserveConflict = !imported && id === deps.projectId() && saveConflict();
+    if (!preserveConflict) setSaveConflict(false);
     const snapshotEditorVersion = deps.editorVersion();
     const snapshotProject = deps.projectId();
     deps.clearDetectionContext();
@@ -390,6 +388,7 @@ export function createProjectsController(deps: ProjectsControllerDeps) {
       deps.setSelected(first.media);
       deps.setTimeline(first.timeline);
       deps.setPreviewCenterMs(first.timeline.present.playheadMs);
+      setSaveConflict(false);
       deps.setMuted(first.muted);
       deps.setExportMode(first.exportOptions.mode ?? "merge");
       deps.setExportSelection(first.exportOptions.selection ?? "segments");
@@ -491,6 +490,7 @@ export function createProjectsController(deps: ProjectsControllerDeps) {
     dismissRecovery,
     saveConflict,
     saveState,
+    saveError,
     loadProject,
     importProject: (document: components["schemas"]["ProjectInput"]) => {
       const id = newProjectId();

@@ -23,7 +23,10 @@ async function addToProject(page: Page) {
 }
 
 async function addSegment(page: Page, start = 100, end = 700, startNew = false) {
-  if (startNew) await page.getByRole("button", { name: "New segment" }).click();
+  if (startNew) {
+    await page.getByRole("heading", { name: "Timeline", exact: true }).focus();
+    await page.keyboard.press("c");
+  }
   const playhead = page.getByLabel("Timeline playhead");
   await playhead.fill(String(start));
   await page.getByRole("heading", { name: "Timeline", exact: true }).focus();
@@ -44,6 +47,8 @@ async function openMediaChooser(page: Page) {
 }
 
 async function openExport(page: Page) {
+  const taskToggle = page.getByRole("button", { name: /editing tools/ }).first();
+  if ((await taskToggle.getAttribute("aria-expanded")) === "false") await taskToggle.click();
   await page.getByRole("tab", { name: "Export", exact: true }).click();
   await expect(page.getByRole("button", { name: "Create clips" })).toBeVisible();
 }
@@ -197,8 +202,24 @@ test.beforeEach(async ({ page }) => {
         json: {
           revision: 1,
           schemaVersion: 1,
+          updatedAt: "2026-01-01T00:00:00Z",
+          pathsConstrained: false,
           roots: { media: { state: "ready" } },
-          settings: { exportLimit: 1, previewGlobalLimit: 2 },
+          settings: {
+            destinations: [
+              { id: "download", label: "Browser download", kind: "download", retention: "24h" },
+            ],
+            exportLimit: 1,
+            cacheMaxBytes: 1_000_000,
+            previewGlobalLimit: 2,
+            previewBeforeMs: 1000,
+            previewAfterMs: 1000,
+            previewMaxMs: 5000,
+            previewGridMs: 1000,
+            mediaMaxFiles: 100,
+            mediaMaxDepth: 4,
+            mcpEnabled: false,
+          },
         },
       });
     if (path === "/api/v1/batches" && request.method() === "GET")
@@ -317,7 +338,11 @@ test("multi-item preflight checks every selected item before submission", async 
   await openExport(page);
   await page.getByRole("radio", { name: "Selected project items" }).check();
   await page.getByRole("button", { name: "Select all" }).click();
-  await expect(page.getByText("One selected item has an unsupported stream.")).toBeVisible();
+  await expect(
+    page
+      .getByRole("region", { name: "Server preflight" })
+      .getByText("One selected item has an unsupported stream.", { exact: true }),
+  ).toBeVisible();
   await expect(page.getByRole("button", { name: "Create clips" })).toBeDisabled();
   expect(calls.at(-1)).toBe("preflight");
   expect(preflightItems.at(-1)).toHaveLength(2);
@@ -361,7 +386,16 @@ test("conflicted saves never submit preflight or export", async ({ page }) => {
   await page.route(`${origin}/api/v1/projects/*`, async (route) => {
     if (route.request().method() !== "PUT") return route.fallback();
     calls.push("save");
-    return route.fulfill({ status: 409 });
+    return route.fulfill({
+      status: 409,
+      json: {
+        error: {
+          code: "revision_conflict",
+          message: "Project revision conflicts.",
+          requestId: "r-conflict",
+        },
+      },
+    });
   });
   page.on("request", (request) => {
     const path = new URL(request.url()).pathname;
@@ -419,19 +453,25 @@ test("changing export scope invalidates a prior preflight", async ({ page }) => 
   await addToProject(page);
   await addSegment(page);
   await openExport(page);
-  await page.getByRole("button", { name: "Save project", exact: true }).click();
+  await page.getByRole("button", { name: "Save project from project header", exact: true }).click();
   await expect.poll(() => preflightItems.length).toBe(1);
   expect(preflightItems[0]).toHaveLength(1);
   const create = page.getByRole("button", { name: "Create clips" });
   await expect(create).toBeEnabled();
 
   await page.getByRole("radio", { name: "Selected project items" }).check();
-  await expect(page.getByText("Checking export requirements…")).toBeVisible();
+  await expect(
+    page.getByRole("status").filter({ hasText: "Checking export requirements…" }).first(),
+  ).toBeVisible();
   await expect(create).toBeDisabled();
   await expect.poll(() => preflightItems.length).toBe(2);
   expect(preflightItems[1]).toHaveLength(2);
   releaseSelected?.();
-  await expect(page.getByText("Selected scope preflight blocker.")).toBeVisible();
+  await expect(
+    page
+      .getByRole("region", { name: "Server preflight" })
+      .getByText("Selected scope preflight blocker.", { exact: true }),
+  ).toBeVisible();
   await expect(create).toBeDisabled();
 });
 
@@ -441,7 +481,6 @@ test("new items use the remembered destination and unavailable preferences expla
   await page.goto("/");
   await page.getByRole("button", { name: "Select camera.mp4" }).click();
   await openExport(page);
-  await page.getByText("Export options", { exact: true }).click();
   await page.getByLabel("Destination").selectOption("archive");
   await page.getByRole("button", { name: "Select second.mp4" }).click();
   await openExport(page);
@@ -465,9 +504,8 @@ test("export task keeps scope options and the queue in one workspace panel", asy
 
   await openExport(page);
   await expect(page.getByRole("group", { name: "Export scope" })).toBeVisible();
-  await expect(page.getByText("Included segments", { exact: true })).toBeVisible();
+  await expect(page.locator(".export-plan")).toContainText("Included cuts");
   await expect(page.getByText("Filename preview", { exact: true })).toBeVisible();
-  await page.getByText("Export options", { exact: true }).click();
   await expect(page.getByLabel("Output arrangement")).toBeVisible();
   await expect(page.getByRole("region", { name: "Export queue" })).toBeVisible();
   await expect(page.getByText("No export jobs yet.")).toBeVisible();

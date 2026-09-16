@@ -71,30 +71,39 @@ func (m *Metrics) Add(name string, amount uint64) {
 }
 func (m *Metrics) Set(name string, value float64) { m.mu.Lock(); m.gauges[name] = value; m.mu.Unlock() }
 
-func (m *Metrics) WritePrometheus(writer io.Writer) {
+func (m *Metrics) WritePrometheus(writer io.Writer) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	var output []byte
 	for _, name := range []string{"http_requests_total", "http_request_duration_seconds", "preview_requests_total", "preview_cache_hits_total", "preview_cache_misses_total", "preview_jobs_active", "preview_queue_depth", "preview_time_to_first_byte_seconds", "preview_generation_duration_seconds", "preview_bytes_streamed_total", "ffmpeg_failures_total", "preview_cancellations_total", "export_jobs_active", "export_jobs_total", "cache_bytes", "cache_evictions_total"} {
-		fmt.Fprintf(writer, "# TYPE %s %s\n", name, metricType(name))
+		output = fmt.Appendf(output, "# TYPE %s %s\n", name, metricType(name))
 	}
 	keys := sorted(m.http)
 	for _, key := range keys {
 		parts := strings.Split(key, "\x00")
-		fmt.Fprintf(writer, "http_requests_total{route=%q,method=%q,status_class=%q} %d\n", parts[0], parts[1], parts[2], m.http[key])
-		fmt.Fprintf(writer, "http_request_duration_seconds{route=%q,method=%q,status_class=%q} %g\n", parts[0], parts[1], parts[2], m.durations[key])
+		output = fmt.Appendf(output, "http_requests_total{route=%q,method=%q,status_class=%q} %d\n", parts[0], parts[1], parts[2], m.http[key])
+		output = fmt.Appendf(output, "http_request_duration_seconds{route=%q,method=%q,status_class=%q} %g\n", parts[0], parts[1], parts[2], m.durations[key])
 	}
 	keys = sorted(m.preview)
 	for _, key := range keys {
-		fmt.Fprintf(writer, "preview_requests_total{cache_status=%q} %d\n", key, m.preview[key])
+		output = fmt.Appendf(output, "preview_requests_total{cache_status=%q} %d\n", key, m.preview[key])
 	}
 	keys = sorted(m.counters)
 	for _, key := range keys {
-		fmt.Fprintf(writer, "%s %d\n", key, m.counters[key])
+		output = fmt.Appendf(output, "%s %d\n", key, m.counters[key])
 	}
 	keys = sortedFloat(m.gauges)
 	for _, key := range keys {
-		fmt.Fprintf(writer, "%s %g\n", key, m.gauges[key])
+		output = fmt.Appendf(output, "%s %g\n", key, m.gauges[key])
 	}
+	n, err := writer.Write(output)
+	if err != nil {
+		return fmt.Errorf("write prometheus metrics: %w", err)
+	}
+	if n != len(output) {
+		return io.ErrShortWrite
+	}
+	return nil
 }
 
 func metricType(name string) string {

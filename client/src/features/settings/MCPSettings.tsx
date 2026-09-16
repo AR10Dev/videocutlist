@@ -92,7 +92,7 @@ export function MCPSettings() {
       <button
         class="btn btn-sm"
         type="button"
-        disabled={mcpLoading() || mcpPending()}
+        disabled={settingsPending() || mcpLoading() || mcpPending()}
         onClick={() => void loadMCPSettings()}
       >
         Refresh MCP settings
@@ -114,7 +114,7 @@ export function MCPSettings() {
                 class="toggle toggle-sm"
                 type="checkbox"
                 checked={settings().enabled}
-                disabled={settingsPending()}
+                disabled={settingsPending() || mcpLoading() || mcpPending()}
                 onChange={(event) => void setMCPEnabled(event.currentTarget.checked)}
               />
               Enable MCP
@@ -419,7 +419,7 @@ export function MCPSettings() {
               <button
                 class="btn btn-sm"
                 type="button"
-                disabled={mcpLoading() || mcpPending()}
+                disabled={settingsPending() || mcpLoading() || mcpPending()}
                 onClick={() => void loadMCPSettings(settings().nextCursor)}
               >
                 Load more credentials

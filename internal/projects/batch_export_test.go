@@ -37,7 +37,11 @@ func TestBatchExportSnapshotsItemsInProjectOrder(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	jobs, _ := jobqueue.NewJobsStore(db)
 	scheduler, err := jobqueue.NewScheduler(jobs, jobqueue.SchedulerConfig{QueueCapacity: 4, WorkerLimit: 1}, func(context.Context, jobqueue.Job) error { return nil })
 	if err != nil {
@@ -80,7 +84,11 @@ func TestBatchExportUsesSchedulerCapacity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	jobs, _ := jobqueue.NewJobsStore(db)
 	scheduler, err := jobqueue.NewScheduler(jobs, jobqueue.SchedulerConfig{QueueCapacity: 1, WorkerLimit: 1}, func(context.Context, jobqueue.Job) error { return nil })
 	if err != nil {
@@ -112,7 +120,11 @@ func TestBatchExportRetryCreatesNewQueuedJobFromImmutableSnapshot(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	jobs, err := jobqueue.NewJobsStore(db)
 	if err != nil {
 		t.Fatal(err)
@@ -161,7 +173,11 @@ func TestBatchExportRunnerPersistsSuccessfulResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	jobs, err := jobqueue.NewJobsStore(db)
 	if err != nil {
 		t.Fatal(err)
@@ -230,7 +246,11 @@ func TestBatchExportSchedulerPersistsSourceChangedFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	jobs, err := jobqueue.NewJobsStore(db)
 	if err != nil {
 		t.Fatal(err)
@@ -263,7 +283,11 @@ func TestBatchExportSchedulerPersistsSourceChangedFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	scheduler.Start()
-	defer scheduler.Shutdown(context.Background())
+	t.Cleanup(func() {
+		if err := scheduler.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
 		job, getErr := jobs.Get(context.Background(), "j_000000000081")
@@ -287,7 +311,11 @@ func TestBatchExportRunningCancellationPropagatesContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	jobs, _ := jobqueue.NewJobsStore(db)
 	started := make(chan struct{})
 	id := "m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -309,7 +337,11 @@ func TestBatchExportRunningCancellationPropagatesContext(t *testing.T) {
 		},
 	}
 	scheduler.Start()
-	defer scheduler.Shutdown(context.Background())
+	t.Cleanup(func() {
+		if err := scheduler.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
 	batchID, submitted, err := uc.Submit(context.Background(), BatchExportRequest{ProjectID: "p_aaaaaaaaaaaa"})
 	if err != nil {
 		t.Fatal(err)
@@ -319,7 +351,7 @@ func TestBatchExportRunningCancellationPropagatesContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	state, progress, err := uc.Progress(context.Background(), batchID)
-	if err != nil || state != jobqueue.JobRunning {
+	if err != nil || state != jobqueue.JobCancelled || progress != 1 {
 		t.Fatalf("running cancellation = %s %v %v", state, progress, err)
 	}
 	deadline := time.Now().Add(time.Second)
@@ -339,7 +371,11 @@ func TestBatchExportCancellationAndSourceFingerprint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	jobs, _ := jobqueue.NewJobsStore(db)
 	scheduler, err := jobqueue.NewScheduler(jobs, jobqueue.SchedulerConfig{QueueCapacity: 1, WorkerLimit: 1}, func(context.Context, jobqueue.Job) error { return nil })
 	if err != nil {

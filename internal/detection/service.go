@@ -37,7 +37,7 @@ var scenePoint = regexp.MustCompile(`pts_time:([0-9.]+)`)
 const maxDetectionCandidates = 1000
 const maxDetectionInput = 1 << 20
 
-func (s *Service) Detect(ctx context.Context, request projects.DetectionRequest) ([]model.Candidate, error) {
+func (s *Service) Detect(ctx context.Context, request projects.DetectionRequest) (candidates []model.Candidate, err error) {
 	if err := projects.ValidateDetectionRequest(request); err != nil {
 		return nil, err
 	}
@@ -48,7 +48,11 @@ func (s *Service) Detect(ctx context.Context, request projects.DetectionRequest)
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("close detection source: %w", closeErr)
+		}
+	}()
 	if request.SourceFingerprint != "" && index.SourceFingerprint(media) != request.SourceFingerprint {
 		return nil, jobqueue.ErrSourceChanged
 	}

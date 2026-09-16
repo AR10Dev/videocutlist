@@ -1,6 +1,10 @@
 package httpapi
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -120,5 +124,83 @@ func TestCORSRejectsMalformedPreflightBeforeDownstream(t *testing.T) {
 				t.Fatalf("status = %d, called = %v", response.Code, called)
 			}
 		})
+	}
+}
+
+func TestAPICORSErrorsAndLogsAreCorrelated(t *testing.T) {
+	for _, test := range []struct {
+		name, method string
+		origins      []string
+		status       int
+	}{
+		{"no origin", http.MethodGet, nil, http.StatusOK},
+		{"allowed", http.MethodGet, []string{"https://editor.test"}, http.StatusOK},
+		{"disallowed", http.MethodGet, []string{"https://private-secret.test"}, http.StatusForbidden},
+		{"malformed", http.MethodGet, []string{"https://editor.test/private-secret"}, http.StatusForbidden},
+		{"multiple", http.MethodGet, []string{"https://editor.test", "https://private-secret.test"}, http.StatusForbidden},
+		{"invalid preflight", http.MethodOptions, []string{"https://editor.test"}, http.StatusForbidden},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var logs bytes.Buffer
+			var contextID string
+			auth, err := NewAuthenticator(AuthConfig{Mode: "none"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			server, err := New(Config{Authenticator: auth, Media: &routeTestMedia{}, Preview: routeTestPreview{}, Projects: routeTestProjects{}, BatchExports: &routeTestBatchExports{}, Jobs: &routeTestJobs{}, AllowedOrigins: []string{"https://editor.test"}, Logger: log.New(&logs, "", 0), Ready: func(ctx context.Context) error {
+				contextID = RequestIDFromContext(ctx)
+				return nil
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			request := httptest.NewRequest(test.method, "/api/v1/ready?secret=private-secret", strings.NewReader("private-secret"))
+			request.Header["Origin"] = test.origins
+			request.Header.Set("Authorization", "Bearer private-secret")
+			request.Header.Set("Cookie", "session=private-secret")
+			request.Header.Set("X-Request-ID", "private-secret")
+			response := httptest.NewRecorder()
+			server.ServeHTTP(response, request)
+			id := response.Header().Get("X-Request-ID")
+			if response.Code != test.status || id == "" || id == "private-secret" {
+				t.Fatalf("response = %d %s", response.Code, response.Body.String())
+			}
+			var entry map[string]any
+			if err := json.Unmarshal(logs.Bytes(), &entry); err != nil {
+				t.Fatal(err)
+			}
+			for _, field := range []string{"request_id", "method", "route", "duration_ms", "status", "error_category"} {
+				if _, ok := entry[field]; !ok {
+					t.Errorf("missing log field %s: %s", field, logs.String())
+				}
+			}
+			if strings.Contains(logs.String(), "private-secret") || entry["request_id"] != id || entry["method"] != test.method {
+				t.Fatalf("unsafe or uncorrelated log: %s", logs.String())
+			}
+			if test.status == http.StatusForbidden {
+				var envelope struct {
+					Error struct{ Code, Message, RequestID string }
+				}
+				if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+					t.Fatal(err)
+				}
+				if envelope.Error.Code != "origin_forbidden" || envelope.Error.RequestID != id || envelope.Error.Message == "" || entry["error_category"] != "origin_forbidden" {
+					t.Fatalf("error = %s; log = %s", response.Body.String(), logs.String())
+				}
+			} else if contextID != id {
+				t.Fatalf("context correlation = %q, header = %q", contextID, id)
+			}
+		})
+	}
+}
+
+func TestCORSDoesNotReplaceMCPProtocolWithREST(t *testing.T) {
+	handler := CORS(nil, http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Fatal("unexpected dispatch") }))
+	request := httptest.NewRequest(http.MethodPost, "/mcp", nil)
+	request.Header.Set("Origin", "https://disallowed.test")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden || response.Body.Len() != 0 {
+		t.Fatalf("MCP received REST error: %d %s", response.Code, response.Body.String())
 	}
 }

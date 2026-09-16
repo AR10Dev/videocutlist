@@ -289,12 +289,6 @@ export function createWorkspaceController() {
   createEffect(() => {
     const item = selectedMediaQuery.data;
     if (item && item.id === selected()?.id) setSelected(item);
-    if (selectedMediaQuery.error && selected()?.id)
-      setStatus(
-        selectedMediaQuery.error instanceof Error
-          ? selectedMediaQuery.error.message
-          : "Metadata request failed.",
-      );
   });
   const initializedPreviewFeature = createPreviewController(api, {
     selected,
@@ -483,6 +477,11 @@ export function createWorkspaceController() {
     refreshing,
     status,
     setStatus,
+    metadataError: () => selectedMediaQuery.error?.message,
+    metadataLoading: () => selectedMediaQuery.isFetching,
+    retryMetadata: () => void selectedMediaQuery.refetch(),
+    serverSettingsLoading: settingsFeature.serverSettingsLoading,
+    loadServerSettings: settingsFeature.loadServerSettings,
     assetStatus,
     previewStatus,
     segmentLabel,

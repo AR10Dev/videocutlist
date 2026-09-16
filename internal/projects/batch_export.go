@@ -42,8 +42,9 @@ type BatchExportUseCase struct {
 	Scheduler *jobqueue.Scheduler
 	Settings  *store.RuntimeSettingsState
 	// RunSnapshot executes an immutable export snapshot after source validation.
-	RunSnapshot   func(context.Context, string, ExportSnapshot) (string, error)
-	ClearManifest func(string)
+	RunSnapshot     func(context.Context, string, ExportSnapshot) (string, error)
+	ClearManifest   func(string)
+	RemoveArtifacts func(string) error
 }
 
 func (b BatchExportUseCase) Submit(ctx context.Context, request BatchExportRequest) (string, []Job, error) {
@@ -142,7 +143,17 @@ func (b BatchExportUseCase) RunQueuedSnapshot(ctx context.Context, job jobqueue.
 	if b.Jobs == nil {
 		return errors.New("batch export job store is not configured")
 	}
-	if _, err = b.Jobs.Succeed(ctx, job.ID, result); err != nil {
+	// Complete this durable CAS even after runner cancellation; its result
+	// decides whether published artifacts are retained or rolled back.
+	if _, err = b.Jobs.Succeed(context.Background(), job.ID, result); err != nil {
+		if errors.Is(err, jobqueue.ErrJobState) && b.RemoveArtifacts != nil {
+			current, getErr := b.Jobs.Get(context.Background(), job.ID)
+			if getErr == nil && current.State == jobqueue.JobCancelled {
+				if removeErr := b.RemoveArtifacts(job.ID); removeErr != nil {
+					err = errors.Join(err, fmt.Errorf("remove cancelled export artifacts: %w", removeErr))
+				}
+			}
+		}
 		return err
 	}
 	if b.ClearManifest != nil {

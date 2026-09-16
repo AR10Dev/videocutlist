@@ -4,6 +4,7 @@ import type { components } from "../../generated/api";
 import { useWorkspace } from "../app/WorkspaceContext";
 import { ExportJobCard, jobOutputNames } from "../export/ExportJobCard";
 import { BatchDownload } from "../export/BatchDownload";
+import { isBatchActive } from "../export/queueResponse";
 
 type Batch = components["schemas"]["Batch"];
 type Destination = components["schemas"]["Destination"];
@@ -78,7 +79,7 @@ function BatchCard(props: {
         output{outputs().length === 1 ? "" : "s"} published
       </p>
 
-      <Show when={props.batch.state === "queued" || props.batch.state === "running"}>
+      <Show when={isBatchActive(props.batch)}>
         <div class="queue-batch-actions">
           <button
             class="btn btn-ghost btn-sm"
@@ -126,12 +127,8 @@ export function QueueView() {
   const { batches, destinations, cancelBatch, cancelChildJob, retryChildJob } = workspace;
   const activeOrRecent = () => {
     const current = batches();
-    const visible = current.filter(
-      (batch) => batch.state === "queued" || batch.state === "running",
-    );
-    const recentTerminal = current.find(
-      (batch) => batch.state !== "queued" && batch.state !== "running",
-    );
+    const visible = current.filter(isBatchActive);
+    const recentTerminal = current.find((batch) => !isBatchActive(batch));
     if (recentTerminal) visible.push(recentTerminal);
     return visible;
   };

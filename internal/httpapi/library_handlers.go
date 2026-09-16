@@ -83,7 +83,7 @@ func (s *Server) startMediaScan(ctx context.Context) (projects.ImportJob, error)
 func (s *Server) getMedia(writer http.ResponseWriter, request *http.Request, media string, id string) {
 	result, err := s.config.Media.Get(request.Context(), media)
 	if err != nil {
-		notFound(writer, id)
+		resourceError(writer, id, err)
 		return
 	}
 	httpx.WriteJSON(writer, 200, result)

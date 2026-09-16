@@ -3,15 +3,28 @@ package jobs
 import (
 	"context"
 	"errors"
+	"fmt"
 )
 
 // CancelBatch requests cancellation for every queued or running child.
-func (s *JobsStore) CancelBatch(ctx context.Context, batchID string) error {
+func (s *JobsStore) CancelBatch(ctx context.Context, batchID string) (err error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT id FROM jobs WHERE batch_id=? AND state IN ('queued','running')`, batchID)
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
+	rowsClosed := false
+	closeRows := func() error {
+		if rowsClosed {
+			return nil
+		}
+		rowsClosed = true
+		return rows.Close()
+	}
+	defer func() {
+		if closeErr := closeRows(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close batch cancellation rows: %w", closeErr))
+		}
+	}()
 	var ids []string
 	for rows.Next() {
 		var id string
@@ -23,6 +36,9 @@ func (s *JobsStore) CancelBatch(ctx context.Context, batchID string) error {
 	if err := rows.Err(); err != nil {
 		return err
 	}
+	if closeErr := closeRows(); closeErr != nil {
+		return fmt.Errorf("close batch cancellation rows: %w", closeErr)
+	}
 	for _, id := range ids {
 		if _, err := s.Cancel(ctx, id); err != nil && !errors.Is(err, ErrJobState) {
 			return err
@@ -31,22 +47,36 @@ func (s *JobsStore) CancelBatch(ctx context.Context, batchID string) error {
 	return nil
 }
 
-func (s *JobsStore) ListByBatch(ctx context.Context, batchID string) ([]Job, error) {
+func (s *JobsStore) ListByBatch(ctx context.Context, batchID string) (result []Job, err error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT id,batch_id,kind,COALESCE(project_id,''),COALESCE(project_item_id,''),COALESCE(proposal_id,''),COALESCE(credential_id,''),state,request_json,result_json,error_code,created_at,updated_at FROM jobs WHERE batch_id=? ORDER BY created_at,id`, batchID)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var result []Job
+	rowsClosed := false
+	closeRows := func() error {
+		if rowsClosed {
+			return nil
+		}
+		rowsClosed = true
+		return rows.Close()
+	}
+	defer func() {
+		if closeErr := closeRows(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close batch job rows: %w", closeErr))
+		}
+	}()
 	for rows.Next() {
-		job, err := scanUnifiedJob(rows)
-		if err != nil {
-			return nil, err
+		job, scanErr := scanUnifiedJob(rows)
+		if scanErr != nil {
+			return nil, scanErr
 		}
 		result = append(result, job)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
+	}
+	if closeErr := closeRows(); closeErr != nil {
+		return nil, fmt.Errorf("close batch job rows: %w", closeErr)
 	}
 	if len(result) == 0 {
 		return nil, ErrJobNotFound
@@ -77,13 +107,24 @@ func (s *JobsStore) ListByProposal(ctx context.Context, proposalID string) ([]Jo
 	return result, nil
 }
 
-func (s *JobsStore) ListBatchIDs(ctx context.Context, kind JobKind, limit int) ([]string, error) {
+func (s *JobsStore) ListBatchIDs(ctx context.Context, kind JobKind, limit int) (result []string, err error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT batch_id FROM jobs WHERE kind=? GROUP BY batch_id ORDER BY MAX(created_at) DESC, batch_id DESC LIMIT ?`, kind, limit)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var result []string
+	rowsClosed := false
+	closeRows := func() error {
+		if rowsClosed {
+			return nil
+		}
+		rowsClosed = true
+		return rows.Close()
+	}
+	defer func() {
+		if closeErr := closeRows(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close batch ID rows: %w", closeErr))
+		}
+	}()
 	for rows.Next() {
 		var id string
 		if err := rows.Scan(&id); err != nil {
@@ -91,5 +132,11 @@ func (s *JobsStore) ListBatchIDs(ctx context.Context, kind JobKind, limit int) (
 		}
 		result = append(result, id)
 	}
-	return result, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if closeErr := closeRows(); closeErr != nil {
+		return nil, fmt.Errorf("close batch ID rows: %w", closeErr)
+	}
+	return result, nil
 }

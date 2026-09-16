@@ -106,7 +106,7 @@ func (s *JobsStore) Create(ctx context.Context, job Job) (Job, error) {
 	return s.Get(ctx, job.ID)
 }
 
-func (s *JobsStore) CreateBatch(ctx context.Context, jobs []Job) ([]Job, error) {
+func (s *JobsStore) CreateBatch(ctx context.Context, jobs []Job) (result []Job, err error) {
 	if len(jobs) == 0 {
 		return nil, errors.New("batch requires jobs")
 	}
@@ -114,7 +114,11 @@ func (s *JobsStore) CreateBatch(ctx context.Context, jobs []Job) ([]Job, error) 
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback()
+	defer func() {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
+			err = errors.Join(err, fmt.Errorf("rollback batch creation: %w", rollbackErr))
+		}
+	}()
 	for _, job := range jobs {
 		if !jobIDPattern.MatchString(job.ID) || !batchIDPattern.MatchString(job.BatchID) || job.RequestJSON == "" || !validJobKind(job.Kind) || job.Kind != JobExport || job.ProjectID == "" || job.ProjectItemID == "" {
 			return nil, errors.New("valid export jobs are required")
@@ -129,7 +133,7 @@ func (s *JobsStore) CreateBatch(ctx context.Context, jobs []Job) ([]Job, error) 
 	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
-	result := make([]Job, 0, len(jobs))
+	result = make([]Job, 0, len(jobs))
 	for _, job := range jobs {
 		value, err := s.Get(ctx, job.ID)
 		if err != nil {

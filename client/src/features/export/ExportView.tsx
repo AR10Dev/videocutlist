@@ -15,6 +15,7 @@ import { useWorkspace } from "../app/WorkspaceContext";
 import { summarizeExports } from "./summary";
 import { QueueView } from "../queue/QueueView";
 import { ExportJobCard } from "./ExportJobCard";
+import { isJobActive } from "./queueResponse";
 import type { ExportContainer } from "../projects/model";
 
 type ExportFinding = {
@@ -164,7 +165,9 @@ export function ExportView(props: ExportViewProps = {}) {
   const preflightFindings = () => (preflight()?.findings ?? []) as ExportFinding[];
   const blockedFinding = () =>
     preflightFindings().find((finding) => finding.severity === "blocked");
-  const exportActive = () => exportJob()?.state === "queued" || exportJob()?.state === "running";
+  const exportActive = () =>
+    !exportFeature.exportCancellationPending() &&
+    (isJobActive(exportJob()) || batchJobs().some(isJobActive));
   const planBlocker = () => {
     if (!selected()) return "Choose a video before exporting.";
     if (!exportItemIDs().length) return "Select at least one project item.";

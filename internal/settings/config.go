@@ -13,6 +13,7 @@ import (
 	"unicode"
 
 	exporter "videocutlist/internal/export"
+	"videocutlist/internal/jobs"
 )
 
 const (
@@ -165,6 +166,9 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 	}
 	if c.ExportLimit, err = positiveInt(lookup, "VIDEOCUTLIST_EXPORT_LIMIT", defaultExportLimit); err != nil {
 		return Config{}, err
+	}
+	if c.ExportLimit > jobs.MaxWorkerLimit {
+		return Config{}, fmt.Errorf("VIDEOCUTLIST_EXPORT_LIMIT must be 1..%d", jobs.MaxWorkerLimit)
 	}
 	if c.MediaMaxFiles, err = positiveInt(lookup, "VIDEOCUTLIST_MEDIA_MAX_FILES", defaultMediaMaxFiles); err != nil {
 		return Config{}, err

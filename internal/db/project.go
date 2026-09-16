@@ -52,7 +52,7 @@ func MigrateProjects(ctx context.Context, db *sql.DB) error {
 	return err
 }
 
-func (s *ProjectStore) List(ctx context.Context, cursor string, limit int) ([]ProjectSummary, *string, error) {
+func (s *ProjectStore) List(ctx context.Context, cursor string, limit int) (projects []ProjectSummary, next *string, err error) {
 	if limit <= 0 {
 		limit = 50
 	}
@@ -63,8 +63,20 @@ func (s *ProjectStore) List(ctx context.Context, cursor string, limit int) ([]Pr
 	if err != nil {
 		return nil, nil, err
 	}
-	defer rows.Close()
-	projects := []ProjectSummary{}
+	rowsClosed := false
+	closeRows := func() error {
+		if rowsClosed {
+			return nil
+		}
+		rowsClosed = true
+		return rows.Close()
+	}
+	defer func() {
+		if closeErr := closeRows(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close project list rows: %w", closeErr))
+		}
+	}()
+	projects = []ProjectSummary{}
 	for rows.Next() {
 		var summary ProjectSummary
 		var documentJSON, updated string
@@ -82,12 +94,21 @@ func (s *ProjectStore) List(ctx context.Context, cursor string, limit int) ([]Pr
 			return nil, nil, err
 		}
 		if len(projects) == limit {
-			next := projects[len(projects)-1].ID
-			return projects, &next, nil
+			nextID := projects[len(projects)-1].ID
+			if closeErr := closeRows(); closeErr != nil {
+				return nil, nil, fmt.Errorf("close project list rows: %w", closeErr)
+			}
+			return projects, &nextID, nil
 		}
 		projects = append(projects, summary)
 	}
-	return projects, nil, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	if closeErr := closeRows(); closeErr != nil {
+		return nil, nil, fmt.Errorf("close project list rows: %w", closeErr)
+	}
+	return projects, nil, nil
 }
 
 func (s *ProjectStore) Get(ctx context.Context, id string) (ProjectRecord, error) {
