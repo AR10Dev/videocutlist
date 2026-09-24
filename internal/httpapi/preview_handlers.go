@@ -2,11 +2,14 @@
 package httpapi
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net/http"
+	"os"
 	"strconv"
 
+	"videocutlist/internal/library/media/index"
 	"videocutlist/internal/projects"
 	"videocutlist/internal/projects/model"
 )
@@ -14,7 +17,7 @@ import (
 func (s *Server) preview(writer http.ResponseWriter, request *http.Request, media string, id string) {
 	item, err := s.config.Media.Get(request.Context(), media)
 	if err != nil {
-		notFound(writer, id)
+		resourceError(writer, id, err)
 		return
 	}
 	spec, err := s.previewSpec(request, item)
@@ -25,7 +28,7 @@ func (s *Server) preview(writer http.ResponseWriter, request *http.Request, medi
 	if request.Method == http.MethodHead {
 		cached, err := s.config.Preview.Cached(request.Context(), spec)
 		if err != nil {
-			internalError(writer, id)
+			previewError(writer, id, err)
 			return
 		}
 		if !cached {
@@ -38,10 +41,10 @@ func (s *Server) preview(writer http.ResponseWriter, request *http.Request, medi
 	}
 	result, err := s.config.Preview.Start(request.Context(), spec)
 	if err != nil {
-		httpx.Error(writer, http.StatusTooManyRequests, "preview_unavailable", "Preview is unavailable.", id)
+		previewError(writer, id, err)
 		return
 	}
-	defer result.Reader.Close()
+	defer closeResponseBody(s.config.Logger, "preview", result.Reader)
 	previewHeaders(writer, PreviewSpec{StartMS: result.StartMS, WindowMS: result.DurationMS, OffsetMS: result.OffsetMS}, result.CacheStatus)
 	writer.Header().Set("Content-Type", "video/mp4")
 	writer.WriteHeader(http.StatusOK)
@@ -113,14 +116,12 @@ func (s *Server) assetSpec(request *http.Request, item Media, waveform bool) (As
 
 func (s *Server) thumbnails(w http.ResponseWriter, r *http.Request, media, id string) {
 	if s.config.Assets == nil {
-		if s.config.Assets == nil {
-			internalError(w, id)
-		}
+		internalError(w, id)
 		return
 	}
 	item, err := s.config.Media.Get(r.Context(), media)
 	if err != nil {
-		notFound(w, id)
+		resourceError(w, id, err)
 		return
 	}
 	spec, err := s.assetSpec(r, item, false)
@@ -128,15 +129,19 @@ func (s *Server) thumbnails(w http.ResponseWriter, r *http.Request, media, id st
 		httpx.Error(w, 422, "invalid_asset", "Thumbnail parameters are invalid.", id)
 		return
 	}
-	if assetNotModified(w, r, item, "thumbnails") {
+	if err := s.config.Assets.ValidateSource(r.Context(), item.ID); err != nil {
+		assetError(w, id, err)
+		return
+	}
+	if assetNotModified(w, r, item, "thumbnails-v2") {
 		return
 	}
 	result, err := s.config.Assets.Thumbnails(r.Context(), spec)
 	if err != nil {
-		internalError(w, id)
+		assetError(w, id, err)
 		return
 	}
-	defer result.Reader.Close()
+	defer closeResponseBody(s.config.Logger, "thumbnail", result.Reader)
 	w.Header().Set("Content-Type", "image/png")
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.Copy(w, result.Reader)
@@ -144,14 +149,12 @@ func (s *Server) thumbnails(w http.ResponseWriter, r *http.Request, media, id st
 
 func (s *Server) waveform(w http.ResponseWriter, r *http.Request, media, id string) {
 	if s.config.Assets == nil {
-		if s.config.Assets == nil {
-			internalError(w, id)
-		}
+		internalError(w, id)
 		return
 	}
 	item, err := s.config.Media.Get(r.Context(), media)
 	if err != nil {
-		notFound(w, id)
+		resourceError(w, id, err)
 		return
 	}
 	if item.Streams["audio"] == nil {
@@ -163,7 +166,11 @@ func (s *Server) waveform(w http.ResponseWriter, r *http.Request, media, id stri
 		httpx.Error(w, 422, "invalid_asset", "Waveform parameters are invalid.", id)
 		return
 	}
-	if assetNotModified(w, r, item, "waveform") {
+	if err := s.config.Assets.ValidateSource(r.Context(), item.ID); err != nil {
+		assetError(w, id, err)
+		return
+	}
+	if assetNotModified(w, r, item, "waveform-v2") {
 		return
 	}
 	result, err := s.config.Assets.Waveform(r.Context(), spec)
@@ -172,10 +179,43 @@ func (s *Server) waveform(w http.ResponseWriter, r *http.Request, media, id stri
 		return
 	}
 	if err != nil {
-		internalError(w, id)
+		assetError(w, id, err)
 		return
 	}
 	httpx.WriteJSON(w, 200, map[string]any{"startMs": result.StartMS, "durationMs": result.DurationMS, "peaks": result.Peaks})
+}
+
+func previewError(w http.ResponseWriter, id string, err error) {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return
+	case errors.Is(err, context.DeadlineExceeded):
+		httpx.Error(w, http.StatusGatewayTimeout, "preview_timeout", "Preview timed out.", id)
+	case errors.Is(err, index.ErrNotFound), errors.Is(err, os.ErrNotExist):
+		notFound(w, id)
+	case errors.Is(err, index.ErrSourceChanged):
+		httpx.Error(w, http.StatusConflict, "source_changed", "Media changed; refresh the library and try again.", id)
+	case errors.Is(err, projects.ErrGlobalLimit):
+		w.Header().Set("Retry-After", "1")
+		httpx.Error(w, http.StatusTooManyRequests, "preview_busy", "Preview capacity is full; retry later.", id)
+	default:
+		internalError(w, id)
+	}
+}
+
+func assetError(w http.ResponseWriter, id string, err error) {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return
+	case errors.Is(err, context.DeadlineExceeded):
+		httpx.Error(w, http.StatusGatewayTimeout, "asset_timeout", "Asset generation timed out.", id)
+	case errors.Is(err, index.ErrNotFound), errors.Is(err, os.ErrNotExist):
+		notFound(w, id)
+	case errors.Is(err, index.ErrSourceChanged):
+		httpx.Error(w, http.StatusConflict, "source_changed", "Media changed; refresh the library and try again.", id)
+	default:
+		internalError(w, id)
+	}
 }
 
 func (s *Server) previewSpec(request *http.Request, item Media) (PreviewSpec, error) {

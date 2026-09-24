@@ -92,7 +92,11 @@ func TestStreamCopySegmentsMergeWithWarningAndAtomicPublish(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer source.Close()
+	t.Cleanup(func() {
+		if err := source.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	if err := os.Remove(sourcePath); err != nil {
 		t.Fatal(err)
 	}
@@ -121,6 +125,70 @@ func TestStreamCopySegmentsMergeWithWarningAndAtomicPublish(t *testing.T) {
 	}
 }
 
+func TestMP4MOVContainerPolicyProducesVerifiedArtifacts(t *testing.T) {
+	ffmpeg, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		t.Skip("ffmpeg is required")
+	}
+	ffprobe, err := exec.LookPath("ffprobe")
+	if err != nil {
+		t.Skip("ffprobe is required")
+	}
+	directory := t.TempDir()
+	sourcePath := filepath.Join(directory, "fixture.mp4")
+	fixture := exec.Command(ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=30", "-f", "lavfi", "-i", "sine=frequency=880:sample_rate=48000", "-t", "2", "-map", "0:v:0", "-map", "1:a:0", "-c:v", "libx264", "-g", "60", "-pix_fmt", "yuv420p", "-c:a", "aac", sourcePath)
+	if output, err := fixture.CombinedOutput(); err != nil {
+		t.Skipf("cannot generate fixture: %v: %s", err, output)
+	}
+	source, err := os.Open(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := source.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	service := export.Service{FFmpegPath: ffmpeg, FFprobePath: ffprobe, OutputDir: filepath.Join(directory, "exports")}
+	for _, test := range []struct {
+		name, container, mode, strategy string
+	}{
+		{"mp4 copy merge", "mp4", "merge", "stream_copy_preferred"},
+		{"mov copy separate", "mov", "separate", "stream_copy_preferred"},
+		{"mp4 precise merge", "mp4", "merge", "precise_reencode"},
+		{"mov precise separate", "mov", "separate", "precise_reencode"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			result, err := service.Run(context.Background(), source, projectDocument(model.Segment{StartMS: 0, EndMS: 700}, model.Segment{StartMS: 1_000, EndMS: 1_700}), export.Request{Mode: test.mode, CutStrategy: test.strategy, Container: test.container, StreamIndexes: []int{0, 1}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Container != test.container {
+				t.Fatalf("result container = %q, want %q", result.Container, test.container)
+			}
+			names := append([]string(nil), result.OutputNames...)
+			if result.OutputName != "" {
+				names = append(names, result.OutputName)
+			}
+			if len(names) != 1 && test.mode == "merge" || len(names) != 2 && test.mode == "separate" {
+				t.Fatalf("output names = %#v", names)
+			}
+			for _, name := range names {
+				if !strings.HasSuffix(name, "."+test.container) {
+					t.Fatalf("output name %q does not match %s", name, test.container)
+				}
+				metadata, err := (probe.Client{Path: ffprobe}).Probe(context.Background(), filepath.Join(service.OutputDir, name))
+				if err != nil || metadata.DurationMS <= 0 || !strings.Contains(metadata.Container, "mp4") && !strings.Contains(metadata.Container, "mov") {
+					t.Fatalf("output metadata = %#v, err=%v", metadata, err)
+				}
+				if len(metadata.Streams) != 2 || metadata.Streams[0].Codec != "h264" || metadata.Streams[1].Codec != "aac" {
+					t.Fatalf("output streams = %#v", metadata.Streams)
+				}
+			}
+		})
+	}
+}
+
 func TestHybridSmartCutMKVFixtureAndFallback(t *testing.T) {
 	ffmpeg, err := exec.LookPath("ffmpeg")
 	if err != nil {
@@ -139,7 +207,11 @@ func TestHybridSmartCutMKVFixtureAndFallback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer source.Close()
+	t.Cleanup(func() {
+		if err := source.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	service := export.Service{FFmpegPath: ffmpeg, OutputDir: filepath.Join(directory, "exports")}
 	document := projectDocument(model.Segment{StartMS: 100, EndMS: 900})
 	result, err := service.Run(context.Background(), source, document, export.Request{Mode: "merge", CutStrategy: "hybrid_smart_cut", Container: "mkv"})
@@ -172,7 +244,11 @@ func TestExportStrategiesReportTruthfulBoundaryWarnings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer source.Close()
+	t.Cleanup(func() {
+		if err := source.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	service := export.Service{FFmpegPath: ffmpeg, OutputDir: filepath.Join(directory, "exports")}
 	keyframes, err := (probe.Client{}).Keyframes(context.Background(), source)
 	if err != nil || !containsKeyframes(keyframes, 0, 500, 1000) {
@@ -243,7 +319,11 @@ func TestSeparateHybridExportReportsEachSegmentStrategy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer source.Close()
+	t.Cleanup(func() {
+		if err := source.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 
 	result, err := (export.Service{FFmpegPath: ffmpeg, OutputDir: filepath.Join(directory, "exports")}).Run(context.Background(), source, projectDocument(model.Segment{StartMS: 0, EndMS: 1000}, model.Segment{StartMS: 100, EndMS: 400}), export.Request{Mode: "separate", CutStrategy: "hybrid_smart_cut", Container: "mkv"})
 	if err != nil {
@@ -299,7 +379,11 @@ func TestHybridSmartCutRejectsWebMAndInvalidRate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer source.Close()
+	t.Cleanup(func() {
+		if err := source.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	service := export.Service{FFmpegPath: ffmpeg, OutputDir: filepath.Join(directory, "exports")}
 	_, err = service.Run(context.Background(), source, projectDocument(model.Segment{StartMS: 0, EndMS: 500}), export.Request{Mode: "merge", CutStrategy: "hybrid_smart_cut", Container: "mkv"})
 	if !errors.Is(err, export.ErrInvalidRequest) {
@@ -314,7 +398,11 @@ func TestHybridSmartCutRejectsWebMAndInvalidRate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer vfrSource.Close()
+	t.Cleanup(func() {
+		if err := vfrSource.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	_, err = service.Run(context.Background(), vfrSource, projectDocument(model.Segment{StartMS: 0, EndMS: 500}), export.Request{Mode: "merge", CutStrategy: "hybrid_smart_cut", Container: "mkv"})
 	if !errors.Is(err, export.ErrInvalidRequest) {
 		t.Fatalf("VFR error = %v", err)
@@ -331,7 +419,11 @@ func TestCancellationRemovesIncompleteOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer source.Close()
+	t.Cleanup(func() {
+		if err := source.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	ffmpeg := filepath.Join(directory, "wait-for-cancel.sh")
 	if err := os.WriteFile(ffmpeg, []byte("#!/bin/sh\nexec sleep 10\n"), 0o700); err != nil {
 		t.Fatal(err)
@@ -391,7 +483,11 @@ func TestSourceAdjacentExportUsesOpaqueLocationAndKeepsSource(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer source.Close()
+	t.Cleanup(func() {
+		if err := source.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	service := export.Service{
 		FFmpegPath: ffmpeg, FFprobePath: ffprobe,
 		Destinations: []export.Destination{{ID: "beside", Kind: export.KindSourceAdjacent, MediaRoot: mediaRoot}},
@@ -444,7 +540,11 @@ func TestSeparateExportReportsPartialSuccess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer source.Close()
+	t.Cleanup(func() {
+		if err := source.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	service := export.Service{FFmpegPath: wrapper, FFprobePath: ffprobe, OutputDir: filepath.Join(directory, "exports")}
 	result, err := service.Run(context.Background(), source, projectDocument(
 		model.Segment{StartMS: 0, EndMS: 400}, model.Segment{StartMS: 500, EndMS: 900},

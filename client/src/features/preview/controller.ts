@@ -1,7 +1,13 @@
 import { createEffect, createSignal, onCleanup, type Accessor } from "solid-js";
 import type { ApiClient } from "../../api";
 import type { components } from "../../generated/api";
-import { normalizePeaks, visibleAssetRanges, type AssetRange, type AssetViewport } from "./assets";
+import {
+  normalizePeaks,
+  normalizedAssetViewport,
+  visibleAssetRanges,
+  type AssetRange,
+  type AssetViewport,
+} from "./assets";
 import {
   canStreamPreview,
   clampMediaPosition,
@@ -58,22 +64,28 @@ function loadThumbnail(url: string, signal: AbortSignal): Promise<HTMLImageEleme
 }
 
 async function composeThumbnailStrip(
-  urls: (string | undefined)[],
+  results: AssetRequestResult[],
   signal: AbortSignal,
+  viewport: AssetRange,
 ): Promise<string | undefined> {
   const images = await Promise.all(
-    urls.map((url) => (url ? loadThumbnail(url, signal) : Promise.resolve(undefined))),
+    results.map(({ thumbnailURL }) =>
+      thumbnailURL ? loadThumbnail(thumbnailURL, signal) : Promise.resolve(undefined),
+    ),
   );
   if (signal.aborted || !images.some(Boolean)) return undefined;
   const tileWidth = 320;
   const tileHeight = Math.max(1, ...images.map((image) => image?.naturalHeight || 180));
   const canvas = document.createElement("canvas");
-  canvas.width = Math.max(1, tileWidth * urls.length);
+  canvas.width = Math.max(1, tileWidth * results.length);
   canvas.height = tileHeight;
   const context = canvas.getContext("2d");
   if (!context) return undefined;
   images.forEach((image, index) => {
-    if (image) context.drawImage(image, index * tileWidth, 0, tileWidth, tileHeight);
+    const range = results[index].range;
+    const left = ((range.startMs - viewport.startMs) / viewport.durationMs) * canvas.width;
+    const width = (range.durationMs / viewport.durationMs) * canvas.width;
+    if (image) context.drawImage(image, left, 0, width, tileHeight);
   });
   const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
   if (!blob || signal.aborted) return undefined;
@@ -191,17 +203,8 @@ export function createPreviewController(
         return;
       }
       const thumbnailURLs = results.map((result) => result.thumbnailURL);
-      const combinedThumbnail =
-        ranges.length === 1 && thumbnailURLs.filter(Boolean).length === 1
-          ? thumbnailURLs.find(Boolean)
-          : await composeThumbnailStrip(thumbnailURLs, controller.signal);
-      const fullRange = {
-        startMs: ranges[0].startMs,
-        durationMs:
-          ranges[ranges.length - 1].startMs +
-          ranges[ranges.length - 1].durationMs -
-          ranges[0].startMs,
-      };
+      const fullRange = normalizedAssetViewport(viewport, item.durationMs);
+      const combinedThumbnail = await composeThumbnailStrip(results, controller.signal, fullRange);
       if (!current()) {
         thumbnailURLs.forEach((url) => url && URL.revokeObjectURL(url));
         if (combinedThumbnail && combinedThumbnail !== thumbnailURLs.find(Boolean))
@@ -214,7 +217,27 @@ export function createPreviewController(
           ? combinedThumbnail
           : undefined;
       setThumbnailURL(combinedThumbnail);
-      setWaveform(results.flatMap((result) => result.waveform));
+      const peaks = new Array<number>(2048).fill(0);
+      for (const result of results) {
+        const first = Math.ceil(
+          ((result.range.startMs - fullRange.startMs) / fullRange.durationMs) * peaks.length,
+        );
+        const last = Math.min(
+          peaks.length,
+          Math.floor(
+            ((result.range.startMs + result.range.durationMs - fullRange.startMs) /
+              fullRange.durationMs) *
+              peaks.length,
+          ),
+        );
+        for (let position = first; position < last; position++) {
+          const sample = Math.floor(
+            ((position - first) / Math.max(1, last - first)) * result.waveform.length,
+          );
+          peaks[position] = result.waveform[sample] ?? 0;
+        }
+      }
+      setWaveform(peaks);
       setAssetRange(fullRange);
       const unavailable: string[] = [];
       if (results.some((result) => result.thumbnailFailed))
@@ -417,6 +440,42 @@ export function createPreviewController(
     }
     startPlayback(loop ? "active-segment-loop" : "active-segment", segment.startMs, segment);
   };
+  const playDetectionPoint = (pointMs: number) => {
+    const item = dependencies.selected();
+    if (!canStreamPreview()) {
+      setPreviewStatus(
+        "Preview is unavailable in this browser. Use the timeline to seek to this point instead.",
+      );
+      return;
+    }
+    if (!item || !Number.isInteger(pointMs) || pointMs < 0 || pointMs > item.durationMs) {
+      setPreviewStatus("That scene point has invalid playback bounds.");
+      return;
+    }
+    const segment = {
+      startMs: Math.max(0, pointMs - 2_000),
+      endMs: Math.min(item.durationMs, pointMs + 2_000),
+      label: "scene change",
+      included: true,
+    };
+    if (segment.startMs >= segment.endMs) {
+      setPreviewStatus("That scene point has invalid playback bounds.");
+      return;
+    }
+    startPlayback("active-segment", pointMs, segment);
+  };
+  const seekDetectionPoint = (pointMs: number) => {
+    const item = dependencies.selected();
+    if (!item || !Number.isInteger(pointMs) || pointMs < 0 || pointMs > item.durationMs) {
+      setPreviewStatus("That scene point has invalid playback bounds.");
+      return;
+    }
+    setPlaybackIntent(false);
+    setPlaybackMode("whole-media");
+    setBoundedSegment();
+    dependencies.updatePlaybackPosition(pointMs);
+    restartPreview(pointMs);
+  };
   const setLoopSelectedSegment = (enabled: boolean) => {
     setLoopSelectedSegmentState(enabled);
     try {
@@ -523,5 +582,7 @@ export function createPreviewController(
     playActiveSegment,
     playOrderedSegments,
     playSegment,
+    playDetectionPoint,
+    seekDetectionPoint,
   };
 }

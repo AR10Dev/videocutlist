@@ -2,6 +2,13 @@ openapi: 3.1.0
 info:
   title: VideoCutlist API
   version: 1.0.0
+  description: >-
+    Deployment authentication applies to application endpoints. API responses carry
+    a server-generated X-Request-ID; errors contain error.code, error.message, and
+    matching error.requestId. Missing/invalid authentication is 401, rejected origins
+    are 403 origin_forbidden, and unexpected persistence/runtime failures are safe
+    500 responses. Existing 422 input-validation exceptions are retained. HEAD
+    responses have no body. MCP JSON-RPC is a separate protocol outside this contract.
 servers:
   - url: "{serverBaseUrl}/api/v1"
     variables:
@@ -36,6 +43,8 @@ paths:
       responses:
         "200":
           description: Alive
+        "403":
+          $ref: "#/components/responses/Error"
   /ready:
     get:
       summary: Check dependency readiness
@@ -45,6 +54,8 @@ paths:
         "200":
           description: Ready
         "503":
+          $ref: "#/components/responses/Error"
+        "403":
           $ref: "#/components/responses/Error"
   /media:
     get:
@@ -69,6 +80,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/MediaPage"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
   /media/tree:
     get:
       summary: Browse indexed media folders and items
@@ -93,6 +110,12 @@ paths:
           $ref: "#/components/responses/Error"
         "404":
           $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
   /media/status:
     get:
       summary: Read media-library status
@@ -104,6 +127,12 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/LibraryStatus"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
   /media/refresh:
     post:
       summary: Refresh the media index
@@ -114,8 +143,12 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Job"
+                $ref: "#/components/schemas/ImportJob"
         "403":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "500":
           $ref: "#/components/responses/Error"
   /media/{mediaId}:
     parameters:
@@ -131,6 +164,12 @@ paths:
               schema:
                 $ref: "#/components/schemas/Media"
         "404":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "500":
           $ref: "#/components/responses/Error"
   /media/{mediaId}/preview:
     parameters:
@@ -159,6 +198,12 @@ paths:
     get:
       summary: Stream a normalized preview
       operationId: streamPreview
+      description: >-
+        Revalidates the source before cache lookup. Changed sources return
+        409 source_changed and require a library refresh; missing sources return
+        404 not_found. Only process-capacity rejection returns 429 preview_busy
+        with Retry-After: 1. Deadline expiry returns 504 preview_timeout; unexpected
+        startup/cache failures return 500 internal_error.
       responses:
         "200":
           description: Fragmented MP4 preview
@@ -188,20 +233,46 @@ paths:
                 format: binary
         "404":
           $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
         "422":
           $ref: "#/components/responses/Error"
         "403":
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+        "504":
+          $ref: "#/components/responses/Error"
     head:
       summary: Check for a cached preview
       operationId: previewStatus
+      description: >-
+        Revalidates the source even for a cached preview. Source changes return
+        409; missing sources or absent cache entries return 404. Uses the same
+        validation, capacity, and deadline statuses as GET, without a body.
       responses:
         "200":
           description: Complete cached preview exists
         "404":
           description: No complete cached preview
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+        "504":
+          $ref: "#/components/responses/Error"
   /projects:
     get:
       summary: List saved projects
@@ -227,6 +298,12 @@ paths:
                 $ref: "#/components/schemas/ProjectPage"
         "400":
           $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
   /projects/{projectId}:
     parameters:
       - $ref: "#/components/parameters/ProjectId"
@@ -241,6 +318,12 @@ paths:
               schema:
                 $ref: "#/components/schemas/Project"
         "404":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "500":
           $ref: "#/components/responses/Error"
     put:
       summary: Save a project
@@ -261,6 +344,14 @@ paths:
         "409":
           $ref: "#/components/responses/Error"
         "422":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+        "404":
           $ref: "#/components/responses/Error"
   /projects/{projectId}/detections:
     parameters:
@@ -287,6 +378,12 @@ paths:
           $ref: "#/components/responses/Error"
         "422":
           $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
   /projects/{projectId}/exports:
     parameters:
       - $ref: "#/components/parameters/ProjectId"
@@ -298,7 +395,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/ExportInput"
+              $ref: "#/components/schemas/ExportSubmissionInput"
       responses:
         "202":
           description: Batch export queued
@@ -313,6 +410,10 @@ paths:
         "429":
           $ref: "#/components/responses/Error"
         "422":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "500":
           $ref: "#/components/responses/Error"
   /batches:
     get:
@@ -335,6 +436,12 @@ paths:
                 $ref: "#/components/schemas/BatchPage"
         "400":
           $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
   /batches/{batchId}:
     parameters:
       - name: batchId
@@ -354,13 +461,28 @@ paths:
                 $ref: "#/components/schemas/Batch"
         "404":
           $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
     delete:
       summary: Cancel a batch export
       operationId: cancelBatch
       responses:
         "204":
-          description: Batch cancellation requested
+          description: >-
+            Cancellation is requested for each queued or running child; 204 does
+            not mean every runner has exited or its resources are released.
+            Terminal children remain unchanged.
         "404":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "500":
           $ref: "#/components/responses/Error"
   /batches/{batchId}/download:
     parameters:
@@ -384,6 +506,12 @@ paths:
                 format: binary
         "404":
           $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
   /projects/{projectId}/exports/preflight:
     parameters:
       - $ref: "#/components/parameters/ProjectId"
@@ -404,6 +532,12 @@ paths:
               schema:
                 $ref: "#/components/schemas/ExportPreflight"
         "422":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "500":
           $ref: "#/components/responses/Error"
   /destinations:
     get:
@@ -426,6 +560,12 @@ paths:
                       $ref: "#/components/schemas/Destination"
                   capabilities:
                     $ref: "#/components/schemas/DestinationCapabilities"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
   /jobs/{jobId}:
     parameters:
       - $ref: "#/components/parameters/JobId"
@@ -441,13 +581,28 @@ paths:
                 $ref: "#/components/schemas/Job"
         "404":
           $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
     delete:
       summary: Cancel a job
       operationId: cancelJob
       responses:
         "204":
-          description: Cancelled or already terminal
+          description: >-
+            Cancellation is durably accepted for queued or running jobs, but 204
+            does not mean the runner process or its resources have stopped.
+            Already terminal jobs are unchanged.
         "404":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "500":
           $ref: "#/components/responses/Error"
   /jobs/{jobId}/retry:
     parameters:
@@ -468,6 +623,12 @@ paths:
           $ref: "#/components/responses/Error"
         "429":
           $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
   /jobs/{jobId}/outputs/{position}:
     parameters:
       - $ref: "#/components/parameters/JobId"
@@ -477,20 +638,34 @@ paths:
         schema:
           type: integer
           minimum: 0
-          maximum: 99
+          maximum: 999
     get:
       summary: Download one completed output
       operationId: downloadJobOutput
       responses:
         "200":
           description: >-
-            MKV attachment; only persisted download outputs are eligible
+            Authenticated attachment; only persisted download outputs are eligible
           content:
             video/x-matroska:
               schema:
                 type: string
                 format: binary
+            video/mp4:
+              schema:
+                type: string
+                format: binary
+            video/quicktime:
+              schema:
+                type: string
+                format: binary
         "404":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "500":
           $ref: "#/components/responses/Error"
   /settings:
     get:
@@ -506,9 +681,25 @@ paths:
                 $ref: "#/components/schemas/SettingsResponse"
         "403":
           $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
     put:
       summary: Replace runtime settings
       operationId: updateSettings
+      description: >-
+        Complete mutable settings document, at most 1048576 bytes. Deployment roots
+        and destinations remain server-owned and may be omitted; destination metadata
+        may be echoed unchanged. Invalid settings (including exportLimit outside
+        1..64) are rejected with 422 before live mutation or persistence. Stale
+        revisions are 409. Unexpected application/persistence/rollback failures
+        are 500. Live settings affect new work; existing export snapshots retain
+        their settings, except shared worker/process/cache limits. Preview defaults,
+        scan limits, and MCP enablement apply live. MCP transport request capacity
+        remains the startup value; previewGlobalLimit controls media processes.
       requestBody:
         required: true
         content:
@@ -518,11 +709,157 @@ paths:
       responses:
         "200":
           description: Updated settings
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/SettingsUpdated"}
         "403":
+          $ref: "#/components/responses/Error"
+        "404":
           $ref: "#/components/responses/Error"
         "409":
           $ref: "#/components/responses/Error"
         "422":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+  /settings/mcp:
+    get:
+      summary: Read MCP administration status and safe credential metadata
+      operationId: getMCPSettings
+      parameters:
+        - name: cursor
+          in: query
+          schema: {type: string}
+          description: Exclusive credential cursor returned by a previous page.
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 100}
+        - name: proposalCursor
+          in: query
+          schema: {type: string}
+          description: Exclusive pending-proposal cursor returned by a previous page.
+        - name: proposalLimit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 100}
+      responses:
+        "200":
+          description: MCP status, connection guidance, and credentials without secrets
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MCPSettingsResponse"
+        "403":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+        "400":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+  /settings/mcp/credentials:
+    post:
+      summary: Create a scoped MCP bearer credential
+      operationId: createMCPCredential
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MCPCredentialCreate"
+      responses:
+        "201":
+          description: Created credential with its one-time bearer secret
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MCPCredentialCreated"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+  /export-proposals/{proposalId}:
+    parameters:
+      - name: proposalId
+        in: path
+        required: true
+        schema: {type: string, pattern: '^ep_[A-Za-z0-9_-]{12,64}$'}
+    get:
+      summary: Read exact MCP export proposal details
+      operationId: getExportProposal
+      responses:
+        "200":
+          description: Exact export proposal awaiting or carrying approval
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExportProposal"
+        "404":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+  /export-proposals/{proposalId}/approval:
+    parameters:
+      - name: proposalId
+        in: path
+        required: true
+        schema: {type: string, pattern: '^ep_[A-Za-z0-9_-]{12,64}$'}
+    post:
+      summary: Approve exact MCP export proposal details
+      operationId: approveExportProposal
+      responses:
+        "200":
+          description: Approved export proposal
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExportProposal"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+  /settings/mcp/credentials/{credentialId}:
+    parameters:
+      - name: credentialId
+        in: path
+        required: true
+        schema: {type: string, pattern: '^c_[A-Za-z0-9_-]{12,64}$'}
+    delete:
+      summary: Revoke an MCP credential immediately
+      operationId: revokeMCPCredential
+      responses:
+        "200":
+          description: Revoked credential metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MCPCredential"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "500":
           $ref: "#/components/responses/Error"
   /settings/media/refresh:
     post:
@@ -534,10 +871,292 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/Job"
+                $ref: "#/components/schemas/ImportJob"
         "403":
           $ref: "#/components/responses/Error"
         "409":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+  /media/import:
+    post:
+      summary: Queue a durable media-library scan
+      operationId: startMediaImport
+      description: >-
+        Scans configured server roots; takes no parameters or request body.
+        The existing 409 import_unavailable response covers unconfigured roots or
+        unavailable queue capacity. Poll the returned opaque job ID.
+      responses:
+        "202":
+          description: Library scan accepted
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ImportJob"}
+        "409":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+  /media/import/{jobId}:
+    parameters:
+      - $ref: "#/components/parameters/JobId"
+    get:
+      summary: Read a library scan job
+      operationId: getMediaImport
+      responses:
+        "200":
+          description: Library scan status; non-scan job IDs are not found
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/ImportJob"}
+        "404":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+    delete:
+      summary: Request cancellation of a library scan
+      operationId: cancelMediaImport
+      responses:
+        "204":
+          description: >-
+            Cancellation is durably accepted for queued or running scans, but 204
+            does not mean the runner process or its resources have stopped.
+            Already terminal jobs are unchanged.
+        "404":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+  /media/{mediaId}/thumbnails:
+    parameters:
+      - $ref: "#/components/parameters/MediaId"
+      - $ref: "#/components/parameters/AssetStart"
+      - $ref: "#/components/parameters/AssetDuration"
+      - $ref: "#/components/parameters/AssetETag"
+      - name: count
+        in: query
+        required: true
+        schema: {type: integer, minimum: 1, maximum: 32}
+      - name: width
+        in: query
+        required: true
+        schema: {type: integer, minimum: 80, maximum: 320}
+    get:
+      summary: Read a PNG timeline thumbnail strip
+      operationId: getThumbnails
+      description: >-
+        Duration is clamped to the remaining media duration. Unknown or repeated
+        query keys are rejected. Existing validation responses use 422 invalid_asset.
+        PNG output is validated before publication and on cache reads; invalid
+        generated output is a safe 500, never a published image. Output is bounded
+        to 8 MiB compressed and 16777216 decoded pixels.
+        Source identity is revalidated before cache hits and conditional 304
+        responses; changed sources return 409 source_changed until refreshed.
+      responses:
+        "200":
+          description: PNG strip with private, no-cache policy
+          headers:
+            ETag: {schema: {type: string}}
+          content:
+            image/png:
+              schema: {type: string, format: binary}
+        "304":
+          description: Client ETag matches this source and query
+          headers:
+            ETag: {schema: {type: string}}
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+        "504":
+          $ref: "#/components/responses/Error"
+  /media/{mediaId}/waveform:
+    parameters:
+      - $ref: "#/components/parameters/MediaId"
+      - $ref: "#/components/parameters/AssetStart"
+      - $ref: "#/components/parameters/AssetDuration"
+      - $ref: "#/components/parameters/AssetETag"
+      - name: samples
+        in: query
+        required: true
+        schema: {type: integer, minimum: 16, maximum: 4096}
+    get:
+      summary: Read normalized timeline waveform peaks
+      operationId: getWaveform
+      description: >-
+        Duration is clamped to the remaining media duration. Each peak covers
+        whole float32 audio samples, normalized to 0..1. Unknown or repeated query
+        keys and invalid bounds use the existing 422 invalid_asset response;
+        media without audio uses 422 no_audio. Malformed generated output is 500.
+        Source identity is revalidated before cache hits and conditional 304
+        responses; changed sources return 409 source_changed until refreshed.
+      responses:
+        "200":
+          description: Waveform with private, no-cache policy
+          headers:
+            ETag: {schema: {type: string}}
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Waveform"}
+        "304":
+          description: Client ETag matches this source and query
+          headers:
+            ETag: {schema: {type: string}}
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+        "504":
+          $ref: "#/components/responses/Error"
+  /projects/{projectId}/interchange/{format}:
+    parameters:
+      - $ref: "#/components/parameters/ProjectId"
+      - name: format
+        in: path
+        required: true
+        schema: {type: string, enum: [csv, chapters]}
+      - name: itemId
+        in: query
+        description: Required for multi-item projects; omitted selects the sole item.
+        schema: {type: string, pattern: '^i_[A-Za-z0-9_-]{24}$'}
+    get:
+      summary: Download a project item's cut list
+      operationId: exportInterchange
+      responses:
+        "200":
+          description: Attachment named cutlist.csv or cutlist.chapters
+          headers:
+            Content-Disposition: {schema: {type: string}}
+          content:
+            text/csv:
+              schema: {type: string}
+            text/plain:
+              schema: {type: string}
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+    post:
+      summary: Replace a project item's segments from a cut list
+      operationId: importInterchange
+      description: >-
+        Maximum input is 1048576 bytes and 10000 segments. CSV requires the header
+        start,end,label. Chapters accept start title or start --> end title lines.
+        Timestamps are seconds, MM:SS, or HH:MM:SS with up to three fractional digits.
+        Labels may not contain slash or backslash and are limited to 200 characters.
+        Ranges must be valid for the media. Saving uses the revision read by the
+        server; a concurrent edit returns 409. Missing/ambiguous item selection
+        also returns 409 project_item_required. Existing invalid/oversized input
+        responses use 422 invalid_interchange, not 400/413.
+      requestBody:
+        required: true
+        content:
+          text/csv:
+            schema: {type: string}
+          text/plain:
+            schema: {type: string}
+      responses:
+        "200":
+          description: Saved project
+          content:
+            application/json:
+              schema: {$ref: "#/components/schemas/Project"}
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+  /automation:
+    post:
+      summary: Execute an authenticated local automation command
+      operationId: automation
+      security:
+        - bearerAuth: []
+      description: >-
+        Requires a loopback listener, configured deployment authentication
+        (bearer or trusted proxy), and no Origin header. This is REST, not MCP
+        JSON-RPC. The entire JSON body is limited to 1048576 bytes (413 on overflow).
+        Unknown/trailing JSON and invalid commands use the existing 422 status.
+        project.import/project.export require projectId and format; projectItemId
+        may be omitted only for a sole-item project. project.import also requires
+        nonempty input and applies the interchange validation rules. job.status
+        requires jobId. Filesystem paths are never accepted or returned.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/AutomationCommand"}
+      responses:
+        "200":
+          description: Import project ID, exported cut-list text, or job status
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: object
+                    required: [projectId]
+                    properties:
+                      projectId: {type: string}
+                  - type: object
+                    required: [filename, content]
+                    properties:
+                      filename: {type: string}
+                      content: {type: string}
+                  - $ref: "#/components/schemas/Job"
+        "404":
+          $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "413":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "500":
           $ref: "#/components/responses/Error"
 components:
   securitySchemes:
@@ -546,6 +1165,21 @@ components:
       scheme: bearer
       description: Used only when the server selects static bearer mode.
   parameters:
+    AssetStart:
+      name: startMs
+      in: query
+      required: true
+      description: Must be less than the media duration.
+      schema: {type: integer, minimum: 0}
+    AssetDuration:
+      name: durationMs
+      in: query
+      required: true
+      schema: {type: integer, minimum: 1, maximum: 120000}
+    AssetETag:
+      name: If-None-Match
+      in: header
+      schema: {type: string}
     MediaId:
       name: mediaId
       in: path
@@ -569,22 +1203,89 @@ components:
         pattern: ^j_[A-Za-z0-9_-]{12,64}$
   responses:
     Error:
-      description: Safe error
+      description: Safe error; the request ID matches X-Request-ID
+      headers:
+        X-Request-ID: {schema: {type: string}}
       content:
         application/json:
           schema:
             $ref: "#/components/schemas/Error"
   schemas:
+    ImportJob:
+      type: object
+      required: [id, state, progress, indexed]
+      properties:
+        id: {type: string, pattern: '^j_[A-Za-z0-9_-]{12,64}$'}
+        state: {type: string, enum: [queued, running, succeeded, failed, cancelled]}
+        progress: {type: number, minimum: 0, maximum: 1}
+        indexed: {type: integer, minimum: 0}
+        rootResults:
+          type: object
+          additionalProperties:
+            type: object
+            required: [state]
+            properties:
+              state: {type: string, enum: [scanning, ready_empty, ready_with_media, failed]}
+              errorCode: {type: string, enum: [scan_limit, cancelled, scan_failed]}
+        errorCode: {type: string}
+        validationErrors:
+          type: array
+          items: {type: string}
+    Waveform:
+      type: object
+      required: [startMs, durationMs, peaks]
+      properties:
+        startMs: {type: integer, minimum: 0}
+        durationMs: {type: integer, minimum: 1, maximum: 120000}
+        peaks:
+          type: array
+          minItems: 16
+          maxItems: 4096
+          items: {type: number, minimum: 0, maximum: 1}
+    AutomationCommand:
+      type: object
+      additionalProperties: false
+      required: [action]
+      properties:
+        action: {type: string, enum: [project.import, project.export, job.status]}
+        projectId: {type: string, pattern: '^p_[A-Za-z0-9_-]{12,64}$'}
+        projectItemId: {type: string, pattern: '^i_[A-Za-z0-9_-]{24}$'}
+        jobId: {type: string, pattern: '^j_[A-Za-z0-9_-]{12,64}$'}
+        format: {type: string, enum: [csv, chapters]}
+        input: {type: string}
+    SettingsUpdated:
+      type: object
+      required: [settings, revision, schemaVersion, updatedAt]
+      properties:
+        settings: {$ref: "#/components/schemas/RuntimeSettings"}
+        revision: {type: integer, minimum: 1}
+        schemaVersion: {type: integer}
+        updatedAt: {type: string, format: date-time}
     SettingsUpdate:
       type: object
+      additionalProperties: false
       required: [revision, settings]
       properties:
         revision:
           type: integer
           minimum: 1
         settings:
-          type: object
-          additionalProperties: true
+          allOf:
+            - $ref: "#/components/schemas/RuntimeSettings"
+            - type: object
+              required: [exportLimit, cacheMaxBytes, previewGlobalLimit, previewBeforeMs, previewAfterMs, previewMaxMs, previewGridMs, mediaMaxFiles, mediaMaxDepth, mcpEnabled]
+              # Explicit types keep required PUT fields non-optional in generated clients.
+              properties:
+                exportLimit: {type: integer}
+                cacheMaxBytes: {type: integer}
+                previewGlobalLimit: {type: integer}
+                previewBeforeMs: {type: integer}
+                previewAfterMs: {type: integer}
+                previewMaxMs: {type: integer}
+                previewGridMs: {type: integer}
+                mediaMaxFiles: {type: integer}
+                mediaMaxDepth: {type: integer}
+                mcpEnabled: {type: boolean}
     RuntimeDestination:
       type: object
       required: [id, label, kind]
@@ -597,6 +1298,7 @@ components:
     RuntimeSettings:
       type: object
       additionalProperties: false
+      required: [exportLimit, cacheMaxBytes, previewGlobalLimit, previewBeforeMs, previewAfterMs, previewMaxMs, previewGridMs, mediaMaxFiles, mediaMaxDepth, mcpEnabled]
       properties:
         destinations:
           type: array
@@ -604,8 +1306,23 @@ components:
             $ref: "#/components/schemas/RuntimeDestination"
         exportLimit:
           type: integer
+          minimum: 1
+          maximum: 64
+          description: >-
+            Live shared scheduler worker limit for export, detection, and library
+            scan jobs. 64 is a safety ceiling, not recommended concurrency.
+            Admission allows at most four times this limit in queued/running jobs.
+            Increases allow more workers immediately. Decreases do not cancel
+            active jobs or discard queued work; excess workers retire after their
+            current job and queued work drains at the new limit.
         cacheMaxBytes:
           type: integer
+          minimum: 2
+          description: >-
+            Combined cache disk budget, partitioned between preview clips (three
+            quarters) and timeline assets (one quarter), with at least one byte
+            per partition. Completed entries are evicted on publication; oversized
+            artifacts cannot be published.
         previewGlobalLimit:
           type: integer
         previewBeforeMs:
@@ -620,6 +1337,104 @@ components:
           type: integer
         mediaMaxDepth:
           type: integer
+        mcpEnabled:
+          type: boolean
+    MCPMediaScope:
+      type: object
+      additionalProperties: false
+      required: [kind]
+      properties:
+        kind: {type: string, enum: [all, roots, media]}
+        rootIds:
+          type: array
+          items: {type: string}
+        mediaIds:
+          type: array
+          items: {type: string}
+    MCPProjectScope:
+      type: object
+      additionalProperties: false
+      required: [kind]
+      properties:
+        kind: {type: string, enum: [all, projects]}
+        projectIds:
+          type: array
+          items: {type: string}
+    MCPCredential:
+      type: object
+      additionalProperties: false
+      required: [id, tokenIdentifier, name, permissions, mediaScope, projectScope, unattendedExports, createdAt]
+      properties:
+        id: {type: string}
+        tokenIdentifier: {type: string}
+        name: {type: string}
+        permissions:
+          type: array
+          items: {type: string}
+        mediaScope:
+          $ref: "#/components/schemas/MCPMediaScope"
+        projectScope:
+          $ref: "#/components/schemas/MCPProjectScope"
+        expiresAt: {type: string, format: date-time}
+        revokedAt: {type: string, format: date-time}
+        unattendedExports: {type: boolean}
+        createdAt: {type: string, format: date-time}
+        lastUsedAt: {type: string, format: date-time}
+        status: {type: string, enum: [active, expired, revoked]}
+    MCPCredentialCreated:
+      allOf:
+        - $ref: "#/components/schemas/MCPCredential"
+        - type: object
+          required: [secret]
+          properties:
+            secret: {type: string}
+    MCPCredentialCreate:
+      type: object
+      additionalProperties: false
+      required: [name, permissions, mediaScope, projectScope]
+      properties:
+        name: {type: string, maxLength: 120}
+        permissions:
+          type: array
+          items: {type: string}
+        mediaScope:
+          $ref: "#/components/schemas/MCPMediaScope"
+        projectScope:
+          $ref: "#/components/schemas/MCPProjectScope"
+        expiresAt: {type: string, format: date-time}
+        allowNonExpiring: {type: boolean}
+        unattendedExports: {type: boolean}
+    MCPSettingsResponse:
+      type: object
+      additionalProperties: false
+      required: [enabled, endpoint, authentication, remoteAccessGuidance, clientCompatibility, permissions, roots, credentials, proposals]
+      properties:
+        enabled: {type: boolean}
+        endpoint: {type: string}
+        authentication: {type: string}
+        remoteAccessGuidance: {type: string}
+        clientCompatibility: {type: string}
+        permissions:
+          type: array
+          items: {type: string}
+        roots:
+          type: array
+          items:
+            type: object
+            required: [id, label]
+            properties:
+              id: {type: string}
+              label: {type: string}
+        credentials:
+          type: array
+          items:
+            $ref: "#/components/schemas/MCPCredential"
+        proposals:
+          type: array
+          items:
+            $ref: "#/components/schemas/ExportProposal"
+        nextCursor: {type: string}
+        proposalNextCursor: {type: string}
     SettingsResponse:
       type: object
       required:
@@ -859,7 +1674,7 @@ components:
           enum: [stream_copy_preferred, precise_reencode, hybrid_smart_cut]
         container:
           type: string
-          enum: [mkv]
+          enum: [mkv, mp4, mov]
         destinationId:
           type: string
           maxLength: 64
@@ -930,25 +1745,32 @@ components:
           minimum: 0
           maximum: 1
     DetectionCandidate:
+      oneOf:
+        - $ref: "#/components/schemas/DetectionRangeCandidate"
+        - $ref: "#/components/schemas/DetectionPointCandidate"
+    DetectionRangeCandidate:
       type: object
-      required:
-        - id
-        - mediaId
-        - projectId
-        - projectRevision
-        - startMs
-        - endMs
-        - source
-        - confidence
+      additionalProperties: false
+      required: [id, mediaId, projectId, projectRevision, startMs, endMs, source]
       properties:
         id: {type: string}
         mediaId: {type: string}
         projectId: {type: string}
         projectRevision: {type: integer}
-        startMs: {type: integer}
-        endMs: {type: integer}
-        source: {type: string, enum: [silence, black, scene]}
-        confidence: {type: number}
+        startMs: {type: integer, minimum: 0}
+        endMs: {type: integer, minimum: 1}
+        source: {type: string, enum: [silence, black]}
+    DetectionPointCandidate:
+      type: object
+      additionalProperties: false
+      required: [id, mediaId, projectId, projectRevision, pointMs, source]
+      properties:
+        id: {type: string}
+        mediaId: {type: string}
+        projectId: {type: string}
+        projectRevision: {type: integer}
+        pointMs: {type: integer, minimum: 0}
+        source: {type: string, enum: [scene]}
     DetectionJob:
       type: object
       required: [id, type, state, mediaId, projectId, projectRevision, kind]
@@ -966,6 +1788,18 @@ components:
           type: array
           items: {$ref: "#/components/schemas/DetectionCandidate"}
         errorCode: {type: string}
+    ExportSubmissionInput:
+      type: object
+      additionalProperties: false
+      properties:
+        itemIds:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+          description: >-
+            Optional ordered project-item selection; omitted selects all. Export
+            options are read from each saved project item.
     ExportInput:
       type: object
       additionalProperties: false
@@ -1002,6 +1836,8 @@ components:
           type: string
           enum:
             - mkv
+            - mp4
+            - mov
         destinationId:
           type: string
           maxLength: 64
@@ -1113,25 +1949,72 @@ components:
         findings:
           type: array
           items:
-            type: object
-            required:
-              - severity
-              - code
-              - message
-            properties:
-              severity:
-                type: string
-                enum:
-                  - allowed
-                  - warn
-                  - blocked
-              code:
-                type: string
-              message:
-                type: string
-              streamIndex:
-                type: integer
-                minimum: 0
+            $ref: "#/components/schemas/ExportFinding"
+    ExportFinding:
+      type: object
+      required:
+        - severity
+        - code
+        - message
+      properties:
+        severity:
+          type: string
+          enum:
+            - allowed
+            - warn
+            - blocked
+        code:
+          type: string
+        message:
+          type: string
+        streamIndex:
+          type: integer
+          minimum: 0
+    SourceSnapshot:
+      type: object
+      required: [mediaId, etag, sizeBytes, durationMs]
+      properties:
+        mediaId: {type: string}
+        rootId: {type: string}
+        etag: {type: string}
+        sizeBytes: {type: integer}
+        durationMs: {type: integer}
+    ExportSnapshot:
+      type: object
+      required: [projectRevision, mediaLabel, item, source]
+      properties:
+        projectRevision: {type: integer}
+        mediaLabel: {type: string}
+        item:
+          $ref: "#/components/schemas/ProjectItem"
+        source:
+          $ref: "#/components/schemas/SourceSnapshot"
+    ExportProposal:
+      type: object
+      required: [id, credentialId, projectRevision, snapshots, findings, allowed, requiresReencoding, accuracy, destinationId, expiresAt, createdAt]
+      properties:
+        id: {type: string}
+        credentialId: {type: string}
+        projectId: {type: string}
+        projectRevision: {type: integer}
+        mediaId: {type: string}
+        snapshots:
+          type: array
+          items:
+            $ref: "#/components/schemas/ExportSnapshot"
+        findings:
+          type: array
+          items:
+            $ref: "#/components/schemas/ExportFinding"
+        allowed: {type: boolean}
+        requiresReencoding: {type: boolean}
+        accuracy:
+          type: string
+          enum: [frame_exact, keyframe_limited, mixed]
+        destinationId: {type: string}
+        expiresAt: {type: string, format: date-time}
+        approvedAt: {type: string, format: date-time}
+        createdAt: {type: string, format: date-time}
     Job:
       type: object
       required:
@@ -1183,6 +2066,10 @@ components:
             - sizeBytes
             - retainUntil
           properties:
+            container:
+              type: string
+              enum: [mkv, mp4, mov]
+              description: Published output container.
             outputName:
               type: string
               description: >-
@@ -1249,6 +2136,24 @@ components:
         strategy:
           type: string
           description: Requested cut strategy.
+        container:
+          type: string
+          enum: [mkv, mp4, mov]
+          description: Requested output container.
+        mode:
+          type: string
+          enum: [merge, separate]
+          description: Requested output arrangement.
+        selection:
+          type: string
+          enum: [segments, gaps]
+          description: Requested ranges (included cuts or gaps between cuts).
+        selectedStreams:
+          type: array
+          items:
+            type: integer
+            minimum: 0
+          description: Resolved stream indexes used by the export job.
         appliedStrategy:
           type: string
           description: >-

@@ -58,7 +58,7 @@ func (s *Server) automation(w http.ResponseWriter, r *http.Request, id string) {
 		// Reuse the canonical HTTP interchange path and return only its opaque project ID.
 		project, err := s.config.Projects.Get(r.Context(), command.ProjectID)
 		if err != nil {
-			notFound(w, id)
+			resourceError(w, id, err)
 			return
 		}
 		item, ok := projectItem(project, command.ProjectItemID)
@@ -68,7 +68,7 @@ func (s *Server) automation(w http.ResponseWriter, r *http.Request, id string) {
 		}
 		media, err := s.config.Media.Get(r.Context(), item.MediaID)
 		if err != nil {
-			notFound(w, id)
+			resourceError(w, id, err)
 			return
 		}
 		var segments []model.Segment
@@ -84,7 +84,7 @@ func (s *Server) automation(w http.ResponseWriter, r *http.Request, id string) {
 		item.Segments = slices.Clone(segments)
 		saved, err := s.config.Projects.Save(r.Context(), command.ProjectID, projects.ProjectInput{Revision: project.Revision, Document: project.Document})
 		if err != nil {
-			httpx.Error(w, http.StatusConflict, "revision_conflict", "Project revision conflicts.", id)
+			projectError(w, id, err)
 			return
 		}
 		httpx.WriteJSON(w, http.StatusOK, map[string]string{"projectId": saved.ID})
@@ -95,7 +95,7 @@ func (s *Server) automation(w http.ResponseWriter, r *http.Request, id string) {
 		}
 		project, err := s.config.Projects.Get(r.Context(), command.ProjectID)
 		if err != nil {
-			notFound(w, id)
+			resourceError(w, id, err)
 			return
 		}
 		item, ok := projectItem(project, command.ProjectItemID)
@@ -121,7 +121,7 @@ func (s *Server) automation(w http.ResponseWriter, r *http.Request, id string) {
 		}
 		job, err := s.config.Jobs.Get(r.Context(), command.JobID)
 		if err != nil {
-			notFound(w, id)
+			resourceError(w, id, err)
 			return
 		}
 		httpx.WriteJSON(w, http.StatusOK, job)
@@ -154,7 +154,7 @@ func (s *Server) importInterchange(w http.ResponseWriter, r *http.Request, route
 	}
 	project, err := s.config.Projects.Get(r.Context(), parts[0])
 	if err != nil {
-		notFound(w, id)
+		resourceError(w, id, err)
 		return
 	}
 	item, ok := projectItem(project, r.URL.Query().Get("itemId"))
@@ -164,7 +164,7 @@ func (s *Server) importInterchange(w http.ResponseWriter, r *http.Request, route
 	}
 	media, err := s.config.Media.Get(r.Context(), item.MediaID)
 	if err != nil {
-		notFound(w, id)
+		resourceError(w, id, err)
 		return
 	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, interchange.MaxInputBytes+1))
@@ -185,7 +185,7 @@ func (s *Server) importInterchange(w http.ResponseWriter, r *http.Request, route
 	item.Segments = slices.Clone(segments)
 	saved, err := s.config.Projects.Save(r.Context(), parts[0], projects.ProjectInput{Revision: project.Revision, Document: project.Document})
 	if err != nil {
-		httpx.Error(w, 409, "revision_conflict", "Project revision conflicts.", id)
+		projectError(w, id, err)
 		return
 	}
 	httpx.WriteJSON(w, 200, saved)
@@ -197,7 +197,7 @@ func (s *Server) exportInterchange(w http.ResponseWriter, r *http.Request, route
 	}
 	project, err := s.config.Projects.Get(r.Context(), parts[0])
 	if err != nil {
-		notFound(w, id)
+		resourceError(w, id, err)
 		return
 	}
 	item, ok := projectItem(project, r.URL.Query().Get("itemId"))

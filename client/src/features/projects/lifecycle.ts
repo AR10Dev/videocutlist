@@ -1,3 +1,5 @@
+import { validateSegmentLabel } from "../preview/model";
+
 export type RecentProject = { id: string; label: string; lastOpened: number };
 
 export const recentProjectsKey = "videocutlist.recent-projects.v1";
@@ -91,7 +93,10 @@ export const parseProjectJson = (text: string): Record<string, unknown> => {
             !("endMs" in segment) ||
             !Number.isSafeInteger(segment.startMs) ||
             !Number.isSafeInteger(segment.endMs) ||
-            ("label" in segment && typeof segment.label !== "string"),
+            ("label" in segment && typeof segment.label !== "string") ||
+            ("label" in segment &&
+              typeof segment.label === "string" &&
+              validateSegmentLabel(segment.label) !== undefined),
         )
       )
         throw new Error("Project segments are invalid.");
@@ -103,7 +108,7 @@ export const parseProjectJson = (text: string): Record<string, unknown> => {
           !["stream_copy_preferred", "precise_reencode", "hybrid_smart_cut"].includes(
             options.cutStrategy,
           )) ||
-        (options.container !== undefined && options.container !== "mkv") ||
+        (options.container !== undefined && !["mkv", "mp4", "mov"].includes(options.container)) ||
         (options.destinationId !== undefined && typeof options.destinationId !== "string") ||
         (options.filenameTemplate !== undefined && typeof options.filenameTemplate !== "string") ||
         (options.streamIndexes !== undefined &&

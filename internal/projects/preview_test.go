@@ -27,6 +27,26 @@ func (r bytesRunner) Start(context.Context, model.PreviewSpec) (*RunningPreview,
 	return &RunningPreview{Stdout: io.NopCloser(bytes.NewReader(r)), Wait: func() error { return nil }}, nil
 }
 
+type closeTrackingReader struct {
+	io.Reader
+	closed bool
+}
+
+func (r *closeTrackingReader) Close() error {
+	if r.closed {
+		return errors.New("preview stdout already closed")
+	}
+	r.closed = true
+	return nil
+}
+
+type waitClosesStdoutRunner []byte
+
+func (r waitClosesStdoutRunner) Start(context.Context, model.PreviewSpec) (*RunningPreview, error) {
+	stdout := &closeTrackingReader{Reader: bytes.NewReader(r)}
+	return &RunningPreview{Stdout: stdout, Wait: stdout.Close}, nil
+}
+
 type blockingRunner struct {
 	mu      sync.Mutex
 	starts  int
@@ -69,6 +89,26 @@ func TestPreviewHitAndMissPublishAtomically(t *testing.T) {
 	_ = hit.Close()
 }
 
+func TestPreviewWaitOwnsStdoutCloseAndPublishesCache(t *testing.T) {
+	manager, _ := newManager(t, waitClosesStdoutRunner("preview"), 1)
+	spec := testSpec("m_wait_closes_stdout")
+	reader, result, err := manager.Preview(context.Background(), spec)
+	if err != nil || result.Status != CacheMiss {
+		t.Fatalf("miss = %v, %+v", err, result)
+	}
+	body, readErr := io.ReadAll(reader)
+	if closeErr := reader.Close(); readErr != nil || closeErr != nil || string(body) != "preview" {
+		t.Fatalf("body = %q, read=%v close=%v", body, readErr, closeErr)
+	}
+	hit, result, err := manager.Preview(context.Background(), spec)
+	if err != nil || result.Status != CacheHit {
+		t.Fatalf("hit = %v, %+v", err, result)
+	}
+	if err := hit.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestPreviewCancellationStopsProcessAndDiscardsPartial(t *testing.T) {
 	runner := &blockingRunner{}
 	manager, store := newManager(t, runner, 1)
@@ -102,6 +142,69 @@ func TestPreviewCancellationStopsProcessAndDiscardsPartial(t *testing.T) {
 		}
 		t.Fatalf("cancelled cache = %v", err)
 	}
+}
+
+type failingPartial struct{}
+
+func (failingPartial) Write([]byte) (int, error)               { return 0, errors.New("partial write failed") }
+func (failingPartial) Commit(context.Context, Validator) error { return errors.New("unused") }
+func (failingPartial) Discard() error                          { return nil }
+
+type failingCache struct{}
+
+func (failingCache) Open(context.Context, string, Validator) (io.ReadCloser, error) {
+	return nil, ErrCacheMiss
+}
+func (failingCache) Begin(string) (PreviewPartial, error) { return failingPartial{}, nil }
+
+type partialFailureRunner struct{}
+
+func (partialFailureRunner) Start(ctx context.Context, _ model.PreviewSpec) (*RunningPreview, error) {
+	return &RunningPreview{
+		Stdout: io.NopCloser(bytes.NewReader([]byte("chunk"))),
+		Wait: func() error {
+			<-ctx.Done()
+			return ctx.Err()
+		},
+	}, nil
+}
+
+func TestPreviewPartialWriteFailureStillReleasesProcess(t *testing.T) {
+	runner := &partialFailureRunner{}
+	limiter, err := NewPreviewLimits(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, err := NewPreviewManager(failingCache{}, runner, func(context.Context, string) error { return nil }, limiter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	reader, _, err := manager.Preview(ctx, testSpec("m_partial_fail"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reader.Close() })
+	readDone := make(chan error, 1)
+	go func() {
+		_, readErr := io.ReadAll(reader)
+		readDone <- readErr
+	}()
+	select {
+	case readErr := <-readDone:
+		if readErr == nil {
+			t.Fatal("partial-write failure was not surfaced to the reader")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("preview reader hung after a partial-write failure")
+	}
+	_ = reader.Close()
+	second, _, err := manager.Preview(ctx, testSpec("m_second"))
+	if err != nil {
+		t.Fatalf("process slot leaked after partial-write failure: %v", err)
+	}
+	_ = second.Close()
 }
 
 func newManager(t *testing.T, runner PreviewRunner, global int) (*PreviewManager, *cache.Store) {

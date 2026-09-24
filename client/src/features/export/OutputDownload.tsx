@@ -1,5 +1,6 @@
 import { createSignal, Show } from "solid-js";
 import { createApiClient, resolveBrowserConfiguration } from "../../api";
+import { downloadExport } from "./download";
 
 const api = createApiClient(resolveBrowserConfiguration());
 
@@ -13,15 +14,7 @@ export function OutputDownload(props: { jobId: string; position: number; name: s
     setPending(true);
     setError("");
     try {
-      const response = await api.request(path());
-      if (!response.ok) throw new Error(`Download failed (${response.status}). Try again.`);
-      // ponytail: blob download buffers one output; use streamed file writes for very large exports.
-      const url = URL.createObjectURL(await response.blob());
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = props.name;
-      link.click();
-      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      await downloadExport(api, path(), props.name);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Download failed. Try again.");
     } finally {

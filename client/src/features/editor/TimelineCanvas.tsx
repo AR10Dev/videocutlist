@@ -21,7 +21,11 @@ export function TimelineCanvas(props: Props) {
     const version = ++drawVersion;
     if (!canvas) return;
     const bounds = canvas.getBoundingClientRect();
-    const scale = window.devicePixelRatio || 1;
+    const scale = Math.min(
+      window.devicePixelRatio || 1,
+      8192 / Math.max(1, bounds.width),
+      2048 / Math.max(1, bounds.height),
+    );
     canvas.width = Math.max(1, Math.round(bounds.width * scale));
     canvas.height = Math.max(1, Math.round(bounds.height * scale));
     const context = canvas.getContext("2d");
@@ -40,6 +44,7 @@ export function TimelineCanvas(props: Props) {
       context.fillStyle = "rgba(96, 165, 250, 0.7)";
       const column = width / Math.max(1, waveformPeaks.length);
       waveformPeaks.forEach((peak, index) => {
+        if (peak <= 0) return;
         const height = Math.max(2, peak * bounds.height);
         context.fillRect(
           left + index * column,

@@ -15,12 +15,14 @@ import (
 	"time"
 
 	"videocutlist/internal/db"
+	"videocutlist/internal/exportpolicy"
 	jobqueue "videocutlist/internal/jobs"
 	"videocutlist/internal/library/media/index"
 	"videocutlist/internal/projects/model"
 )
 
 var ErrJobState = jobqueue.ErrJobState
+var ErrInvalidProject = errors.New("invalid project")
 
 type RootStatusCatalog interface {
 	RootStatuses() map[string]index.RootStatus
@@ -52,7 +54,41 @@ type ProjectItemError struct {
 	Code   string
 }
 
-func (e *ProjectItemError) Error() string { return "project item " + e.ItemID + ": " + e.Code }
+func (e *ProjectItemError) Error() string        { return "project item " + e.ItemID + ": " + e.Code }
+func (e *ProjectItemError) Is(target error) bool { return target == ErrInvalidProject }
+
+// SelectProjectItems validates an optional item-ID selection atomically and
+// returns matching items in their document order.
+func SelectProjectItems(document model.Document, itemIDs []string) ([]model.ProjectItem, error) {
+	if len(itemIDs) == 0 {
+		return slices.Clone(document.Items), nil
+	}
+	known := make(map[string]struct{}, len(document.Items))
+	for _, item := range document.Items {
+		known[item.ID] = struct{}{}
+	}
+	requested := make(map[string]struct{}, len(itemIDs))
+	for _, id := range itemIDs {
+		if id == "" {
+			return nil, &ProjectItemError{Code: "item_id_required"}
+		}
+		if _, duplicate := requested[id]; duplicate {
+			return nil, &ProjectItemError{ItemID: id, Code: "item_id_duplicate"}
+		}
+		if _, exists := known[id]; !exists {
+			return nil, &ProjectItemError{ItemID: id, Code: "item_id_unknown"}
+		}
+		requested[id] = struct{}{}
+	}
+	selected := make([]model.ProjectItem, 0, len(requested))
+	for _, item := range document.Items {
+		if _, ok := requested[item.ID]; ok {
+			selected = append(selected, item)
+		}
+	}
+	return selected, nil
+
+}
 
 type MediaUseCase struct {
 	Catalog    MediaCatalog
@@ -92,7 +128,10 @@ func (m *MediaUseCase) ImportStatus(ctx context.Context, id string) (ImportJob, 
 		return ImportJob{}, jobqueue.ErrJobNotFound
 	}
 	job, err := m.UnifiedJobs.Get(ctx, id)
-	if err != nil || job.Kind != jobqueue.JobScan {
+	if err != nil {
+		return ImportJob{}, err
+	}
+	if job.Kind != jobqueue.JobScan {
 		return ImportJob{}, jobqueue.ErrJobNotFound
 	}
 	return importJobResult(job), nil
@@ -103,10 +142,16 @@ func (m *MediaUseCase) CancelImport(ctx context.Context, id string) error {
 		return jobqueue.ErrJobNotFound
 	}
 	job, err := m.UnifiedJobs.Get(ctx, id)
-	if err != nil || job.Kind != jobqueue.JobScan {
+	if err != nil {
+		return err
+	}
+	if job.Kind != jobqueue.JobScan {
 		return jobqueue.ErrJobNotFound
 	}
 	_, err = m.Scheduler.Cancel(ctx, id)
+	if errors.Is(err, jobqueue.ErrJobState) {
+		return nil
+	}
 	return err
 }
 
@@ -354,13 +399,19 @@ func (p ProjectUseCase) save(ctx context.Context, id string, input ProjectInput)
 	if p.Media == nil {
 		return Project{}, errors.New("project media catalog is required")
 	}
-	if err := model.ValidateProject(input.Document); err != nil {
-		return Project{}, err
+	if input.Revision < 0 {
+		return Project{}, ErrInvalidProject
 	}
-	for _, item := range input.Document.Items {
+	if err := model.ValidateProject(input.Document); err != nil {
+		return Project{}, fmt.Errorf("%w: %w", ErrInvalidProject, err)
+	}
+	for _, item := range input.Items {
 		media, err := p.Media.Get(ctx, item.MediaID)
-		if err != nil {
+		if errors.Is(err, index.ErrNotFound) {
 			return Project{}, &ProjectItemError{ItemID: item.ID, Code: "media_unavailable"}
+		}
+		if err != nil {
+			return Project{}, fmt.Errorf("get project media: %w", err)
 		}
 		if err := model.ValidateProjectItem(item, media.DurationMS); err != nil {
 			return Project{}, &ProjectItemError{ItemID: item.ID, Code: "invalid"}
@@ -438,9 +489,10 @@ func unifiedJobResult(value jobqueue.Job) Job {
 	}
 	if job.ID == "" {
 		job = Job{ID: value.ID, Type: string(value.Kind), State: string(value.State), CreatedAt: value.CreatedAt, UpdatedAt: value.UpdatedAt}
-		if value.State == jobqueue.JobRunning {
+		switch value.State {
+		case jobqueue.JobRunning:
 			job.Progress = .5
-		} else if value.State == jobqueue.JobSucceeded || value.State == jobqueue.JobFailed || value.State == jobqueue.JobCancelled {
+		case jobqueue.JobSucceeded, jobqueue.JobFailed, jobqueue.JobCancelled:
 			job.Progress = 1
 		}
 		if value.ErrorCode.Valid {
@@ -487,15 +539,28 @@ func jobResult(record jobqueue.Job) Job {
 	}
 	job := Job{ID: record.ID, Type: "export", State: string(record.State), Progress: progress, CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt}
 	var request ExportInput
-	if json.Unmarshal([]byte(record.RequestJSON), &request) == nil {
-		job.Strategy, job.Mode, job.Selection, job.SelectedStreams = request.CutStrategy, request.Mode, request.Selection, slices.Clone(request.StreamIndexes)
+	if json.Unmarshal([]byte(record.RequestJSON), &request) != nil || request.Mode == "" && request.CutStrategy == "" && request.Container == "" {
+		var snapshot ExportSnapshot
+		if json.Unmarshal([]byte(record.RequestJSON), &snapshot) == nil {
+			request = ExportInput{
+				Mode: snapshot.Item.ExportOptions.Mode, Selection: snapshot.Item.ExportOptions.Selection,
+				StreamIndexes: snapshot.Item.ExportOptions.StreamIndexes, CutStrategy: snapshot.Item.ExportOptions.CutStrategy,
+				Container: snapshot.Item.ExportOptions.Container,
+			}
+		}
 	}
+	if request.Container == "" {
+		policy, _ := exportpolicy.For("")
+		request.Container = policy.Name
+	}
+	job.Strategy, job.Mode, job.Selection, job.SelectedStreams, job.Container = request.CutStrategy, request.Mode, request.Selection, slices.Clone(request.StreamIndexes), request.Container
 	if record.State == jobqueue.JobFailed && record.ErrorCode.Valid {
 		value := record.ErrorCode.String
 		job.ErrorCode = &value
 	}
 	if record.State == jobqueue.JobSucceeded && record.ResultJSON.Valid {
 		var result struct {
+			Container         string            `json:"container"`
 			OutputName        string            `json:"outputName"`
 			OutputNames       []string          `json:"outputNames"`
 			OutputFailures    []OutputFailure   `json:"outputFailures"`
@@ -511,8 +576,12 @@ func jobResult(record jobqueue.Job) Job {
 			} `json:"warnings"`
 			Verified bool `json:"verified"`
 		}
-		if json.Unmarshal([]byte(record.ResultJSON.String), &result) == nil && safeOutputNames(result.OutputName, result.OutputNames) && safeOutputFailures(result.OutputFailures) && safeAppliedStrategies(result.AppliedStrategies) && result.SizeBytes >= 0 && !result.RetainUntil.IsZero() {
-			job.Result = &JobResult{OutputName: result.OutputName, OutputNames: result.OutputNames, OutputFailures: result.OutputFailures, AppliedStrategies: result.AppliedStrategies, SizeBytes: result.SizeBytes, RetainUntil: result.RetainUntil, DestinationID: result.DestinationID, DestinationKind: result.DestinationKind}
+		if json.Unmarshal([]byte(record.ResultJSON.String), &result) == nil && safeOutputNames(result.OutputName, result.OutputNames) && safeOutputFailures(result.OutputFailures) && safeAppliedStrategies(result.AppliedStrategies) && safeResultContainer(result.Container, result.OutputName, result.OutputNames) && result.SizeBytes >= 0 && !result.RetainUntil.IsZero() {
+			container := result.Container
+			if container == "" {
+				container = inferredOutputContainer(result.OutputName, result.OutputNames)
+			}
+			job.Result = &JobResult{Container: container, OutputName: result.OutputName, OutputNames: result.OutputNames, OutputFailures: result.OutputFailures, AppliedStrategies: result.AppliedStrategies, SizeBytes: result.SizeBytes, RetainUntil: result.RetainUntil, DestinationID: result.DestinationID, DestinationKind: result.DestinationKind}
 			job.AppliedStrategy = result.AppliedStrategy
 			job.Verified = result.Verified
 			for _, warning := range result.Warnings {
@@ -534,11 +603,46 @@ func safeOutputNames(name string, names []string) bool {
 	if name != "" {
 		return len(names) == 0 && safeOutputName(name)
 	}
-	if len(names) == 0 || len(names) > 100 {
+	if len(names) == 0 || len(names) > exportpolicy.MaxOutputs {
 		return false
 	}
 	for _, output := range names {
 		if !safeOutputName(output) {
+			return false
+		}
+	}
+	return true
+}
+
+func inferredOutputContainer(name string, names []string) string {
+	if name != "" {
+		if policy, ok := exportpolicy.ForFilename(name); ok {
+			return policy.Name
+		}
+	}
+	for _, output := range names {
+		if policy, ok := exportpolicy.ForFilename(output); ok {
+			return policy.Name
+		}
+	}
+	return ""
+}
+
+func safeResultContainer(container, name string, names []string) bool {
+	if container == "" {
+		return inferredOutputContainer(name, names) != ""
+	}
+	policy, ok := exportpolicy.For(container)
+	if !ok {
+		return false
+	}
+	outputs := names
+	if name != "" {
+		outputs = []string{name}
+	}
+	for _, output := range outputs {
+		inferred, ok := exportpolicy.ForFilename(output)
+		if !ok || inferred.Name != policy.Name {
 			return false
 		}
 	}
@@ -550,7 +654,7 @@ func safeOutputName(name string) bool {
 		return false
 	}
 	for _, r := range name {
-		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '.' || r == '-' || r == '_') {
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '.' && r != '-' && r != '_' {
 			return false
 		}
 	}
@@ -558,7 +662,7 @@ func safeOutputName(name string) bool {
 }
 
 func safeOutputFailures(failures []OutputFailure) bool {
-	if len(failures) > 100 {
+	if len(failures) > exportpolicy.MaxOutputs {
 		return false
 	}
 	for _, failure := range failures {

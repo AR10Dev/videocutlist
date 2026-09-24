@@ -2,8 +2,10 @@ package projects
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -32,12 +34,41 @@ func (c batchCatalog) Preview(context.Context, PreviewSpec) (model.PreviewSpec, 
 	return model.PreviewSpec{}, nil
 }
 
+func TestSeparateExportResultRetainsAllAddressableOutputs(t *testing.T) {
+	for _, count := range []int{101, 1000, 1001} {
+		names := make([]string, count)
+		for index := range names {
+			names[index] = fmt.Sprintf("segment-%04d.mkv", index)
+		}
+		payload, err := json.Marshal(map[string]any{
+			"container": "mkv", "outputNames": names,
+			"sizeBytes": 1, "retainUntil": time.Now().Add(time.Hour),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		record := jobqueue.Job{ID: "j_outputbound", State: jobqueue.JobSucceeded, ResultJSON: sql.NullString{String: string(payload), Valid: true}}
+		result := jobResult(record).Result
+		if count <= 1000 {
+			if result == nil || len(result.OutputNames) != count {
+				t.Fatalf("%d outputs disappeared: %#v", count, result)
+			}
+		} else if result != nil {
+			t.Fatalf("over-bound output result accepted: %d", count)
+		}
+	}
+}
+
 func TestBatchExportSnapshotsItemsInProjectOrder(t *testing.T) {
 	db, err := store.OpenDatabase(context.Background(), t.TempDir()+"/jobs.db")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	jobs, _ := jobqueue.NewJobsStore(db)
 	scheduler, err := jobqueue.NewScheduler(jobs, jobqueue.SchedulerConfig{QueueCapacity: 4, WorkerLimit: 1}, func(context.Context, jobqueue.Job) error { return nil })
 	if err != nil {
@@ -70,7 +101,7 @@ func TestBatchExportSnapshotsItemsInProjectOrder(t *testing.T) {
 	if unchanged.Item.Segments[0].EndMS == 999 {
 		t.Fatal("snapshot changed after project mutation")
 	}
-	if state, progress, err := uc.Progress(context.Background(), batchID); err != nil || state != jobqueue.JobQueued || progress != 0 {
+	if state, progress, err := jobs.Batch(context.Background(), batchID); err != nil || state != jobqueue.JobQueued || progress != 0 {
 		t.Fatalf("progress = %s %v %v", state, progress, err)
 	}
 }
@@ -80,7 +111,11 @@ func TestBatchExportUsesSchedulerCapacity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	jobs, _ := jobqueue.NewJobsStore(db)
 	scheduler, err := jobqueue.NewScheduler(jobs, jobqueue.SchedulerConfig{QueueCapacity: 1, WorkerLimit: 1}, func(context.Context, jobqueue.Job) error { return nil })
 	if err != nil {
@@ -112,7 +147,11 @@ func TestBatchExportRetryCreatesNewQueuedJobFromImmutableSnapshot(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	jobs, err := jobqueue.NewJobsStore(db)
 	if err != nil {
 		t.Fatal(err)
@@ -161,7 +200,11 @@ func TestBatchExportRunnerPersistsSuccessfulResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	jobs, err := jobqueue.NewJobsStore(db)
 	if err != nil {
 		t.Fatal(err)
@@ -176,7 +219,6 @@ func TestBatchExportRunnerPersistsSuccessfulResult(t *testing.T) {
 	if _, err := jobs.Start(ctx, job.ID); err != nil {
 		t.Fatal(err)
 	}
-	clearedManifest := ""
 	uc := BatchExportUseCase{
 		Media: batchCatalog{media: map[string]Media{mediaID: {ID: mediaID, ETag: "v1", SizeBytes: 10, DurationMS: 100}}},
 		Jobs:  jobs,
@@ -186,7 +228,6 @@ func TestBatchExportRunnerPersistsSuccessfulResult(t *testing.T) {
 			}
 			return `{"outputName":"clip.mkv","sizeBytes":10,"retainUntil":"2030-01-01T00:00:00Z"}`, nil
 		},
-		ClearManifest: func(jobID string) { clearedManifest = jobID },
 	}
 	if err := uc.RunQueuedSnapshot(ctx, job); err != nil {
 		t.Fatal(err)
@@ -197,9 +238,6 @@ func TestBatchExportRunnerPersistsSuccessfulResult(t *testing.T) {
 	}
 	if stored.State != jobqueue.JobSucceeded || !stored.ResultJSON.Valid || !strings.Contains(stored.ResultJSON.String, "clip.mkv") {
 		t.Fatalf("stored result = %+v", stored)
-	}
-	if clearedManifest != job.ID {
-		t.Fatalf("cleared manifest = %q, want %q", clearedManifest, job.ID)
 	}
 }
 
@@ -230,7 +268,11 @@ func TestBatchExportSchedulerPersistsSourceChangedFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	jobs, err := jobqueue.NewJobsStore(db)
 	if err != nil {
 		t.Fatal(err)
@@ -263,7 +305,11 @@ func TestBatchExportSchedulerPersistsSourceChangedFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	scheduler.Start()
-	defer scheduler.Shutdown(context.Background())
+	t.Cleanup(func() {
+		if err := scheduler.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
 		job, getErr := jobs.Get(context.Background(), "j_000000000081")
@@ -287,7 +333,11 @@ func TestBatchExportRunningCancellationPropagatesContext(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	jobs, _ := jobqueue.NewJobsStore(db)
 	started := make(chan struct{})
 	id := "m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -309,7 +359,11 @@ func TestBatchExportRunningCancellationPropagatesContext(t *testing.T) {
 		},
 	}
 	scheduler.Start()
-	defer scheduler.Shutdown(context.Background())
+	t.Cleanup(func() {
+		if err := scheduler.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	})
 	batchID, submitted, err := uc.Submit(context.Background(), BatchExportRequest{ProjectID: "p_aaaaaaaaaaaa"})
 	if err != nil {
 		t.Fatal(err)
@@ -318,8 +372,8 @@ func TestBatchExportRunningCancellationPropagatesContext(t *testing.T) {
 	if err := uc.Cancel(context.Background(), batchID); err != nil {
 		t.Fatal(err)
 	}
-	state, progress, err := uc.Progress(context.Background(), batchID)
-	if err != nil || state != jobqueue.JobRunning {
+	state, progress, err := jobs.Batch(context.Background(), batchID)
+	if err != nil || state != jobqueue.JobCancelled || progress != 1 {
 		t.Fatalf("running cancellation = %s %v %v", state, progress, err)
 	}
 	deadline := time.Now().Add(time.Second)
@@ -339,7 +393,11 @@ func TestBatchExportCancellationAndSourceFingerprint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	jobs, _ := jobqueue.NewJobsStore(db)
 	scheduler, err := jobqueue.NewScheduler(jobs, jobqueue.SchedulerConfig{QueueCapacity: 1, WorkerLimit: 1}, func(context.Context, jobqueue.Job) error { return nil })
 	if err != nil {
@@ -355,7 +413,7 @@ func TestBatchExportCancellationAndSourceFingerprint(t *testing.T) {
 	if err := uc.Cancel(context.Background(), batchID); err != nil {
 		t.Fatal(err)
 	}
-	state, progress, err := uc.Progress(context.Background(), batchID)
+	state, progress, err := jobs.Batch(context.Background(), batchID)
 	if err != nil || state != jobqueue.JobCancelled || progress != 1 {
 		t.Fatalf("cancel progress = %s %v %v", state, progress, err)
 	}

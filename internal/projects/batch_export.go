@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"videocutlist/internal/db"
 	jobqueue "videocutlist/internal/jobs"
@@ -24,6 +25,7 @@ type ExportSnapshot struct {
 
 type SourceSnapshot struct {
 	MediaID    string `json:"mediaId"`
+	RootID     string `json:"rootId,omitempty"`
 	ETag       string `json:"etag"`
 	SizeBytes  int64  `json:"sizeBytes"`
 	DurationMS int64  `json:"durationMs"`
@@ -41,8 +43,8 @@ type BatchExportUseCase struct {
 	Scheduler *jobqueue.Scheduler
 	Settings  *store.RuntimeSettingsState
 	// RunSnapshot executes an immutable export snapshot after source validation.
-	RunSnapshot   func(context.Context, string, ExportSnapshot) (string, error)
-	ClearManifest func(string)
+	RunSnapshot     func(context.Context, string, ExportSnapshot) (string, error)
+	RemoveArtifacts func(string) error
 }
 
 func (b BatchExportUseCase) Submit(ctx context.Context, request BatchExportRequest) (string, []Job, error) {
@@ -53,21 +55,16 @@ func (b BatchExportUseCase) Submit(ctx context.Context, request BatchExportReque
 	if err != nil {
 		return "", nil, err
 	}
-	selected := make(map[string]struct{}, len(request.ItemIDs))
-	for _, id := range request.ItemIDs {
-		selected[id] = struct{}{}
+	items, err := SelectProjectItems(project.Document, request.ItemIDs)
+	if err != nil {
+		return "", nil, err
 	}
 	batchID, err := newID("b_")
 	if err != nil {
 		return "", nil, err
 	}
-	jobs := make([]jobqueue.Job, 0, len(project.Document.Items))
-	for _, item := range project.Document.Items {
-		if len(selected) > 0 {
-			if _, ok := selected[item.ID]; !ok {
-				continue
-			}
-		}
+	jobs := make([]jobqueue.Job, 0, len(items))
+	for _, item := range items {
 		media, err := b.Media.Get(ctx, item.MediaID)
 		if err != nil {
 			return "", nil, &ProjectItemError{ItemID: item.ID, Code: "media_unavailable"}
@@ -75,7 +72,7 @@ func (b BatchExportUseCase) Submit(ctx context.Context, request BatchExportReque
 		if strings.ContainsAny(item.ExportOptions.FilenameTemplate, `/\\`) {
 			return "", nil, &ProjectItemError{ItemID: item.ID, Code: "invalid_filename"}
 		}
-		snapshot := ExportSnapshot{ProjectRevision: project.Revision, MediaLabel: media.Name, Item: cloneProjectItem(item), Source: SourceSnapshot{MediaID: media.ID, ETag: media.ETag, SizeBytes: media.SizeBytes, DurationMS: media.DurationMS}, RuntimeSettings: runtimeSettings(b.Settings)}
+		snapshot := ExportSnapshot{ProjectRevision: project.Revision, MediaLabel: media.Name, Item: cloneProjectItem(item), Source: SourceSnapshot{MediaID: media.ID, RootID: media.RootID, ETag: media.ETag, SizeBytes: media.SizeBytes, DurationMS: media.DurationMS}, RuntimeSettings: runtimeSettings(b.Settings)}
 		payload, err := json.Marshal(snapshot)
 		if err != nil {
 			return "", nil, err
@@ -141,17 +138,22 @@ func (b BatchExportUseCase) RunQueuedSnapshot(ctx context.Context, job jobqueue.
 	if b.Jobs == nil {
 		return errors.New("batch export job store is not configured")
 	}
-	if _, err = b.Jobs.Succeed(ctx, job.ID, result); err != nil {
-		return err
-	}
-	if b.ClearManifest != nil {
-		b.ClearManifest(job.ID)
+	// Complete this durable CAS even after runner cancellation; its result
+	// decides whether published artifacts are retained or rolled back.
+	persistCtx, persistCancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer persistCancel()
+	if _, err = b.Jobs.Succeed(persistCtx, job.ID, result); err != nil {
+		if errors.Is(err, jobqueue.ErrJobState) && b.RemoveArtifacts != nil {
+			current, getErr := b.Jobs.Get(context.Background(), job.ID)
+			if getErr == nil && current.State == jobqueue.JobCancelled {
+				if removeErr := b.RemoveArtifacts(job.ID); removeErr != nil {
+					err = errors.Join(err, fmt.Errorf("remove cancelled export artifacts: %w", removeErr))
+				}
+			}
+		}
+		return &jobqueue.ResultPersistenceError{Result: result, Err: err}
 	}
 	return nil
-}
-
-func (b BatchExportUseCase) Progress(ctx context.Context, batchID string) (jobqueue.JobState, float64, error) {
-	return b.Jobs.Batch(ctx, batchID)
 }
 
 func (b BatchExportUseCase) Get(ctx context.Context, batchID string) (Batch, error) {
@@ -217,7 +219,7 @@ func (b BatchExportUseCase) Retry(ctx context.Context, jobID string) (Batch, err
 
 // ValidateSnapshot reports source_changed when current metadata differs from the queued snapshot.
 func ValidateSnapshot(snapshot ExportSnapshot, media Media) error {
-	if media.ID != snapshot.Source.MediaID || media.ETag != snapshot.Source.ETag || media.SizeBytes != snapshot.Source.SizeBytes || media.DurationMS != snapshot.Source.DurationMS {
+	if media.ID != snapshot.Source.MediaID || snapshot.Source.RootID != "" && media.RootID != snapshot.Source.RootID || media.ETag != snapshot.Source.ETag || media.SizeBytes != snapshot.Source.SizeBytes || media.DurationMS != snapshot.Source.DurationMS {
 		return fmt.Errorf("%w", jobqueue.ErrSourceChanged)
 	}
 	return nil

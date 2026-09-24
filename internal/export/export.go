@@ -5,8 +5,6 @@ import (
 	"bytes"
 	"cmp"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -14,18 +12,22 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 
+	"videocutlist/internal/exportpolicy"
+	"videocutlist/internal/fdinput"
 	"videocutlist/internal/library/media/probe"
 	"videocutlist/internal/projects"
 	"videocutlist/internal/projects/model"
 )
 
 const maxStderrBytes = 64 << 10
+
+// MaxExportOutputs is the shared separate-export artifact bound.
+const MaxExportOutputs = exportpolicy.MaxOutputs
 
 var (
 	ErrCancelled                      = errors.New("export cancelled")
@@ -71,6 +73,7 @@ type OutputFailure struct {
 
 // Result deliberately contains only an output name, never a filesystem path.
 type Result struct {
+	Container         string            `json:"container"`
 	OutputName        string            `json:"outputName,omitempty"`
 	OutputNames       []string          `json:"outputNames,omitempty"`
 	SizeBytes         int64             `json:"sizeBytes"`
@@ -103,6 +106,11 @@ func (s Service) Run(ctx context.Context, source *os.File, document model.Docume
 	if source == nil {
 		return Result{}, errors.New("export source is required")
 	}
+	policy, policyOK := exportpolicy.For(request.Container)
+	if !policyOK {
+		return Result{}, fmt.Errorf("%w: unsupported export container", ErrInvalidRequest)
+	}
+	request.Container = policy.Name
 	if !atomicNoReplacePublicationSupported() {
 		return Result{}, fmt.Errorf("%w: %s", ErrInvalidRequest, unsupportedPublicationMessage)
 	}
@@ -117,7 +125,7 @@ func (s Service) Run(ctx context.Context, source *os.File, document model.Docume
 		}
 		defer release()
 	}
-	if (request.Mode != "merge" && request.Mode != "separate") || (request.CutStrategy != "stream_copy_preferred" && request.CutStrategy != "precise_reencode" && request.CutStrategy != "hybrid_smart_cut") || request.Container != "mkv" || (request.Selection != "" && request.Selection != "segments" && request.Selection != "gaps") {
+	if (request.Mode != "merge" && request.Mode != "separate") || (request.CutStrategy != "stream_copy_preferred" && request.CutStrategy != "precise_reencode" && request.CutStrategy != "hybrid_smart_cut") || (request.Selection != "" && request.Selection != "segments" && request.Selection != "gaps") {
 		return Result{}, fmt.Errorf("%w: unsupported export options", ErrInvalidRequest)
 	}
 	if request.Selection == "" {
@@ -139,13 +147,22 @@ func (s Service) Run(ctx context.Context, source *os.File, document model.Docume
 	if !preflight.Allowed {
 		return Result{}, fmt.Errorf("%w: export preflight blocked", ErrInvalidRequest)
 	}
+	if err := s.checkCapabilities(ctx, policy, request.CutStrategy); err != nil {
+		if ctx.Err() != nil {
+			return Result{}, fmt.Errorf("%w: %v", ErrCancelled, err)
+		}
+		return Result{}, fmt.Errorf("%w: %v", ErrInvalidRequest, err)
+	}
 	request.StreamIndexes = preflight.Selection
 	if len(document.Items) != 1 {
 		return Result{}, fmt.Errorf("%w: export requires one project item", ErrInvalidRequest)
 	}
-	segments := selectedSegments(document.Items[0].Segments, request.Selection, metadata.DurationMS)
+	segments := ResolveRanges(document.Items[0].Segments, request.Selection, metadata.DurationMS)
 	if len(segments) == 0 {
 		return Result{}, fmt.Errorf("%w: at least one segment is required", ErrInvalidRequest)
+	}
+	if request.Mode == "separate" && len(segments) > MaxExportOutputs {
+		return Result{}, fmt.Errorf("%w: separate export exceeds %d outputs", ErrInvalidRequest, MaxExportOutputs)
 	}
 	for _, segment := range segments {
 		if segment.StartMS < 0 || segment.EndMS <= segment.StartMS {
@@ -182,15 +199,9 @@ func (s Service) Run(ctx context.Context, source *os.File, document model.Docume
 			return Result{}, fmt.Errorf("%w: source changed", ErrInvalidRequest)
 		}
 	}
-	destination := Destination{ID: "download", Kind: KindDownload, Root: s.OutputDir, Retention: s.Retention}
-	for _, candidate := range s.Destinations {
-		if candidate.ID == request.DestinationID || request.DestinationID == "" && candidate.ID == "download" {
-			destination = candidate
-			break
-		}
-	}
-	if request.DestinationID != "" && destination.ID != request.DestinationID {
-		return Result{}, fmt.Errorf("%w: unknown destination", ErrInvalidRequest)
+	destination, err := s.destinationForRequest(request)
+	if err != nil {
+		return Result{}, fmt.Errorf("%w: %v", ErrInvalidRequest, err)
 	}
 	prepared, err := prepareDestination(destination, source, sourceName, SourceLocation{RootPath: request.SourceRoot, RelativePath: request.SourceRelative})
 	if err != nil {
@@ -206,45 +217,55 @@ func (s Service) Run(ctx context.Context, source *os.File, document model.Docume
 	manifestPublished := false
 	mergeCommitted := false
 	mergePublished := false
+	var mergeOwner manifestOutput
 	defer func() {
 		if !mergeCommitted && mergePublished {
-			prepared.remove(outputName)
+			prepared.removeOwned(mergeOwner)
 		}
 	}()
 	if s.Artifacts != nil && request.JobID != "" && request.Mode != "separate" {
-		manifestPath, err = writeManifestAt(prepared.root, outputDir, request.JobID, destination.Kind, []string{outputName}, now(s).Add(destinationRetention(destination, s)))
-		if err != nil {
-			return Result{}, err
-		}
-		s.Artifacts.RegisterManifest(request.JobID, manifestPath)
 		defer func() {
 			if manifestPath != "" && !manifestPublished {
 				s.Artifacts.ClearManifest(request.JobID)
 			}
 		}()
 	}
-	temporaryOutput, temporaryName, err := prepared.createTemp(".videocutlist-export-", ".mkv")
+	temporaryOutput, temporaryName, err := prepared.createTemp(".videocutlist-export-", "."+policy.Extension)
 	if err != nil {
 		return Result{}, fmt.Errorf("create export temporary file: %w", err)
 	}
+	temporaryOutputClosed := false
 	defer prepared.remove(temporaryName)
-	defer temporaryOutput.Close()
+	defer func() {
+		if !temporaryOutputClosed {
+			// Best effort: when this cleanup runs, the temporary file is not
+			// published, and a cleanup failure must not replace the primary error.
+			_ = temporaryOutput.Close()
+		}
+	}()
 
 	workRoot, workDirectory, workDirName, err := prepared.createTempDir(".videocutlist-segments-")
 	if err != nil {
 		return Result{}, err
 	}
 	defer prepared.removeAll(workDirName)
-	defer workRoot.Close()
-	defer workDirectory.Close()
+	defer func() {
+		// Best effort: these descriptors only guard temporary work data, so
+		// cleanup cannot safely change a result after output publication.
+		_ = workRoot.Close()
+	}()
+	defer func() {
+		// Best effort: preserve the primary export error if this cleanup fails.
+		_ = workDirectory.Close()
+	}()
 
 	segmentFiles := make([]string, len(segments))
 	var segmentFailures []OutputFailure
 	for i, segment := range segments {
-		segmentFiles[i] = fmt.Sprintf("segment-%03d.mkv", i)
+		segmentFiles[i] = fmt.Sprintf("segment-%03d.%s", i, policy.Extension)
 		segmentOutput, openErr := workRoot.OpenFile(segmentFiles[i], os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
 		if openErr == nil {
-			openErr = s.copySegment(ctx, source, segment, segmentOutput, workRoot, workDirectory, request, keyframes)
+			openErr = s.copySegment(ctx, source, segment, segmentOutput, workRoot, workDirectory, request, keyframes, policy)
 			closeErr := segmentOutput.Close()
 			if openErr == nil {
 				openErr = closeErr
@@ -261,10 +282,12 @@ func (s Service) Run(ctx context.Context, source *os.File, document model.Docume
 	}
 	appliedStrategies := segmentStrategies(request.CutStrategy, segments, keyframes)
 	if request.Mode == "separate" {
-		result := Result{OutputNames: make([]string, 0, len(segmentFiles)), OutputFailures: segmentFailures, RetainUntil: now(s).Add(destinationRetention(destination, s)), DestinationID: destination.ID, DestinationKind: destination.Kind, AppliedStrategy: uniformStrategy(appliedStrategies), AppliedStrategies: appliedStrategies}
-		published := make([]string, 0, len(segmentFiles))
+		result := Result{Container: request.Container, OutputNames: make([]string, 0, len(segmentFiles)), OutputFailures: segmentFailures, RetainUntil: now(s).Add(destinationRetention(destination, s)), DestinationID: destination.ID, DestinationKind: destination.Kind, AppliedStrategy: uniformStrategy(appliedStrategies), AppliedStrategies: appliedStrategies}
+		publishedOwners := make([]manifestOutput, 0, len(segmentFiles))
 		committed := false
 		separateNames := make([]string, len(segmentFiles))
+		separateOwners := make([]manifestOutput, len(segmentFiles))
+		reservedNames := make(map[string]bool, len(segmentFiles))
 		for i := range separateNames {
 			if segmentFiles[i] == "" {
 				continue
@@ -272,27 +295,28 @@ func (s Service) Run(ctx context.Context, source *os.File, document model.Docume
 			separateNames[i], err = prepared.outputFileName(request, sourceName, i, now(s))
 			if err != nil {
 				result.OutputFailures = append(result.OutputFailures, OutputFailure{Segment: i + 1, Code: "output_name_failed", Message: safeFailureMessage(err)})
+				continue
 			}
-		}
-		if s.Artifacts != nil && request.JobID != "" {
-			manifestNames := nonEmptyNames(separateNames)
-			if len(manifestNames) > 0 {
-				manifestPath, err = writeManifestAt(prepared.root, outputDir, request.JobID, destination.Kind, manifestNames, result.RetainUntil)
-				if err != nil {
-					return Result{}, err
-				}
-				s.Artifacts.RegisterManifest(request.JobID, manifestPath)
+			base := separateNames[i]
+			for suffix := 1; reservedNames[separateNames[i]]; suffix++ {
+				extension := filepath.Ext(base)
+				separateNames[i] = fmt.Sprintf("%s-%d%s", strings.TrimSuffix(base, extension), suffix, extension)
 			}
-			defer func() {
-				if !committed {
-					s.Artifacts.ClearManifest(request.JobID)
-				}
-			}()
+			reservedNames[separateNames[i]] = true
+			info, statErr := workRoot.Stat(segmentFiles[i])
+			if statErr != nil {
+				return Result{}, statErr
+			}
+			device, inode, ok := manifestFileIdentity(info)
+			if !ok {
+				return Result{}, errors.New("cannot establish temporary output ownership")
+			}
+			separateOwners[i] = manifestOutput{Name: separateNames[i], Device: device, Inode: inode}
 		}
 		defer func() {
 			if !committed {
-				for _, name := range published {
-					prepared.remove(name)
+				for _, owner := range publishedOwners {
+					prepared.removeOwned(owner)
 				}
 			}
 		}()
@@ -311,7 +335,7 @@ func (s Service) Run(ctx context.Context, source *os.File, document model.Docume
 				result.OutputFailures = append(result.OutputFailures, OutputFailure{Segment: i + 1, Code: "output_validation_failed", Message: "temporary output is unavailable"})
 				continue
 			}
-			verifyErr := verifyOutputFile(ctx, s.FFprobePath, tempFile, metadata, request.StreamIndexes, segments[i].EndMS-segments[i].StartMS)
+			verifyErr := verifyOutputFile(ctx, s.FFprobePath, tempFile, metadata, request.StreamIndexes, segments[i].EndMS-segments[i].StartMS, request.Container)
 			if verifyErr != nil {
 				_ = tempFile.Close()
 				if ctx.Err() != nil {
@@ -326,8 +350,29 @@ func (s Service) Run(ctx context.Context, source *os.File, document model.Docume
 				result.OutputFailures = append(result.OutputFailures, OutputFailure{Segment: i + 1, Code: "output_validation_failed", Message: "temporary output changed during validation"})
 				continue
 			}
+			device, inode, identityOK := manifestFileIdentity(currentInfo)
+			if !identityOK {
+				return Result{}, errors.New("cannot establish temporary output ownership")
+			}
 			name := separateNames[i]
 			for attempt := 0; ; attempt++ {
+				if s.Artifacts != nil && request.JobID != "" {
+					separateNames[i] = name
+					separateOwners[i] = manifestOutput{Name: name, Device: device, Inode: inode}
+					pendingNames := make([]string, 0, len(separateNames))
+					pendingOwners := make([]manifestOutput, 0, len(separateOwners))
+					for position, plannedName := range separateNames {
+						if plannedName != "" {
+							pendingNames = append(pendingNames, plannedName)
+							pendingOwners = append(pendingOwners, separateOwners[position])
+						}
+					}
+					manifestPath, err = writeManifestAtWithOwners(prepared.root, outputDir, request.JobID, destination.Kind, destination.ID, pendingNames, pendingOwners, result.RetainUntil, request.Container)
+					if err != nil {
+						return Result{}, err
+					}
+					s.Artifacts.RegisterManifest(request.JobID, manifestPath)
+				}
 				err = prepared.publishFrom(workDirectory, filepath.Join(workDirName, segmentFile), segmentFile, name)
 				if err == nil {
 					break
@@ -350,10 +395,13 @@ func (s Service) Run(ctx context.Context, source *os.File, document model.Docume
 			if name == "" {
 				continue
 			}
-			published = append(published, name)
-			info, err := prepared.root.Stat(name)
+			publishedOwners = append(publishedOwners, manifestOutput{Name: name, Device: device, Inode: inode})
+			info, err := prepared.root.Lstat(name)
 			if err != nil {
 				return Result{}, err
+			}
+			if !info.Mode().IsRegular() || !os.SameFile(currentInfo, info) {
+				return Result{}, errors.New("published output changed")
 			}
 			result.OutputNames = append(result.OutputNames, name)
 			result.AppliedStrategies[i].OutputName = name
@@ -372,7 +420,7 @@ func (s Service) Run(ctx context.Context, source *os.File, document model.Docume
 		}
 		if s.Artifacts != nil && request.JobID != "" {
 			manifestNames := result.OutputNames
-			manifestPath, err = writeManifestAt(prepared.root, outputDir, request.JobID, destination.Kind, manifestNames, result.RetainUntil)
+			manifestPath, err = writeManifestAtWithOwners(prepared.root, outputDir, request.JobID, destination.Kind, destination.ID, manifestNames, publishedOwners, result.RetainUntil, request.Container)
 			if err != nil {
 				return Result{}, err
 			}
@@ -399,7 +447,7 @@ func (s Service) Run(ctx context.Context, source *os.File, document model.Docume
 		if copyErr != nil {
 			return Result{}, copyErr
 		}
-	} else if err := s.concatToFile(ctx, workRoot, workDirectory, segmentFiles, temporaryOutput); err != nil {
+	} else if err := s.concatToFile(ctx, workRoot, workDirectory, segmentFiles, temporaryOutput, policy); err != nil {
 		return Result{}, err
 	}
 	if err := temporaryOutput.Sync(); err != nil {
@@ -409,14 +457,32 @@ func (s Service) Run(ctx context.Context, source *os.File, document model.Docume
 	for _, segment := range segments {
 		expectedDuration += segment.EndMS - segment.StartMS
 	}
-	if err := verifyOutputFile(ctx, s.FFprobePath, temporaryOutput, metadata, request.StreamIndexes, expectedDuration); err != nil {
+	if err := verifyOutputFile(ctx, s.FFprobePath, temporaryOutput, metadata, request.StreamIndexes, expectedDuration, request.Container); err != nil {
 		return Result{}, fmt.Errorf("validate export: %w", err)
+	}
+	temporaryInfo, err := temporaryOutput.Stat()
+	if err != nil {
+		return Result{}, err
+	}
+	device, inode, identityOK := manifestFileIdentity(temporaryInfo)
+	if !identityOK {
+		return Result{}, errors.New("cannot establish temporary output ownership")
 	}
 	if err := temporaryOutput.Close(); err != nil {
 		return Result{}, err
 	}
+	temporaryOutputClosed = true
 	finalPath := filepath.Join(outputDir, outputName)
 	for attempt := 0; ; attempt++ {
+		mergeOwner = manifestOutput{Name: outputName, Device: device, Inode: inode}
+		if s.Artifacts != nil && request.JobID != "" {
+			owners := []manifestOutput{{Name: outputName, Device: device, Inode: inode}}
+			manifestPath, err = writeManifestAtWithOwners(prepared.root, outputDir, request.JobID, destination.Kind, destination.ID, []string{outputName}, owners, now(s).Add(destinationRetention(destination, s)), request.Container)
+			if err != nil {
+				return Result{}, err
+			}
+			s.Artifacts.RegisterManifest(request.JobID, manifestPath)
+		}
 		err = prepared.publish(temporaryName, outputName)
 		if err == nil {
 			mergePublished = true
@@ -430,19 +496,15 @@ func (s Service) Run(ctx context.Context, source *os.File, document model.Docume
 			return Result{}, err
 		}
 		finalPath = filepath.Join(outputDir, outputName)
-		if s.Artifacts != nil && request.JobID != "" {
-			manifestPath, err = writeManifestAt(prepared.root, outputDir, request.JobID, destination.Kind, []string{outputName}, now(s).Add(destinationRetention(destination, s)))
-			if err != nil {
-				return Result{}, err
-			}
-			s.Artifacts.RegisterManifest(request.JobID, manifestPath)
-		}
 	}
-	info, err := prepared.root.Stat(outputName)
+	info, err := prepared.root.Lstat(outputName)
 	if err != nil {
 		return Result{}, err
 	}
-	result := Result{OutputName: outputName, SizeBytes: info.Size(), RetainUntil: now(s).Add(destinationRetention(destination, s)), DestinationID: destination.ID, DestinationKind: destination.Kind, AppliedStrategy: uniformStrategy(appliedStrategies), AppliedStrategies: appliedStrategies, Verified: request.CutStrategy != "precise_reencode"}
+	if !info.Mode().IsRegular() || !os.SameFile(temporaryInfo, info) {
+		return Result{}, errors.New("published output changed")
+	}
+	result := Result{Container: request.Container, OutputName: outputName, SizeBytes: info.Size(), RetainUntil: now(s).Add(destinationRetention(destination, s)), DestinationID: destination.ID, DestinationKind: destination.Kind, AppliedStrategy: uniformStrategy(appliedStrategies), AppliedStrategies: appliedStrategies, Verified: request.CutStrategy != "precise_reencode"}
 	if s.Artifacts != nil {
 		s.Artifacts.Put(request.JobID, []Artifact{{Path: finalPath, Name: outputName, Kind: destination.Kind, Expires: result.RetainUntil}})
 	}
@@ -461,12 +523,12 @@ func (s Service) Run(ctx context.Context, source *os.File, document model.Docume
 	return result, nil
 }
 
-func (s Service) copySegment(ctx context.Context, source *os.File, segment model.Segment, output *os.File, workRoot *os.Root, workDirectory *os.File, request Request, keyframes []int64) error {
+func (s Service) copySegment(ctx context.Context, source *os.File, segment model.Segment, output *os.File, workRoot *os.Root, workDirectory *os.File, request Request, keyframes []int64, policy exportpolicy.Policy) error {
 	if output == nil || workRoot == nil || workDirectory == nil {
 		return errors.New("segment output is not open")
 	}
 	if request.CutStrategy == "hybrid_smart_cut" {
-		return s.hybridSegment(ctx, source, segment, output, workRoot, workDirectory, keyframes, request.StreamIndexes)
+		return s.hybridSegment(ctx, source, segment, output, workRoot, workDirectory, keyframes, request.StreamIndexes, policy)
 	}
 	if _, err := source.Seek(0, io.SeekStart); err != nil {
 		return fmt.Errorf("rewind export source: %w", err)
@@ -486,7 +548,7 @@ func (s Service) copySegment(ctx context.Context, source *os.File, segment model
 		args = append(args, "-c", "copy")
 	}
 	args = append(args, output.Name())
-	return s.runWithOutput(ctx, source, output, workDirectory, args)
+	return s.runWithOutput(ctx, source, output, workDirectory, args, policy)
 }
 
 func hybridSupported(metadata probe.Metadata) bool {
@@ -583,7 +645,7 @@ func hybridArgs(input string, startMS, durationMS int64, streamIndexes []int, vi
 	return append(args, "-avoid_negative_ts", "make_zero", "-c:v", videoCodec, "-c:a", audioCodec, output)
 }
 
-func (s Service) hybridSegment(ctx context.Context, source *os.File, segment model.Segment, output *os.File, workRoot *os.Root, workDirectory *os.File, keyframes []int64, streamIndexes []int) error {
+func (s Service) hybridSegment(ctx context.Context, source *os.File, segment model.Segment, output *os.File, workRoot *os.Root, workDirectory *os.File, keyframes []int64, streamIndexes []int, policy exportpolicy.Policy) (returnErr error) {
 	boundary := int64(-1)
 	for _, keyframe := range keyframes {
 		if keyframe >= segment.StartMS {
@@ -592,39 +654,51 @@ func (s Service) hybridSegment(ctx context.Context, source *os.File, segment mod
 		}
 	}
 	if boundary <= segment.StartMS || boundary >= segment.EndMS {
-		return s.copySegment(ctx, source, segment, output, workRoot, workDirectory, Request{CutStrategy: "stream_copy_preferred", StreamIndexes: streamIndexes}, nil)
+		return s.copySegment(ctx, source, segment, output, workRoot, workDirectory, Request{CutStrategy: "stream_copy_preferred", Container: "mkv", StreamIndexes: streamIndexes}, nil, policy)
 	}
 	prefixName, suffixName := "prefix.mkv", "suffix.mkv"
 	prefix, err := workRoot.OpenFile(prefixName, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return err
 	}
-	defer prefix.Close()
-	defer workRoot.Remove(prefixName)
+	defer func() {
+		if err := prefix.Close(); err != nil {
+			returnErr = errors.Join(returnErr, fmt.Errorf("close hybrid prefix: %w", err))
+		}
+		if err := workRoot.Remove(prefixName); err != nil {
+			returnErr = errors.Join(returnErr, fmt.Errorf("remove hybrid prefix: %w", err))
+		}
+	}()
 	suffix, err := workRoot.OpenFile(suffixName, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return err
 	}
-	defer suffix.Close()
-	defer workRoot.Remove(suffixName)
+	defer func() {
+		if err := suffix.Close(); err != nil {
+			returnErr = errors.Join(returnErr, fmt.Errorf("close hybrid suffix: %w", err))
+		}
+		if err := workRoot.Remove(suffixName); err != nil {
+			returnErr = errors.Join(returnErr, fmt.Errorf("remove hybrid suffix: %w", err))
+		}
+	}()
 	if _, err := source.Seek(0, io.SeekStart); err != nil {
 		return err
 	}
 	prefixArgs := hybridArgs(sourceArgument(), segment.StartMS, boundary-segment.StartMS, streamIndexes, "libx264", "aac", "prefix.mkv")
-	if err := s.runWithOutput(ctx, source, prefix, workDirectory, prefixArgs); err != nil {
+	if err := s.runWithOutput(ctx, source, prefix, workDirectory, prefixArgs, policy); err != nil {
 		return err
 	}
 	if _, err := source.Seek(0, io.SeekStart); err != nil {
 		return err
 	}
 	suffixArgs := hybridArgs(sourceArgument(), boundary, segment.EndMS-boundary, streamIndexes, "copy", "aac", "suffix.mkv")
-	if err := s.runWithOutput(ctx, source, suffix, workDirectory, suffixArgs); err != nil {
+	if err := s.runWithOutput(ctx, source, suffix, workDirectory, suffixArgs, policy); err != nil {
 		return err
 	}
-	return s.concatToFile(ctx, workRoot, workDirectory, []string{prefixName, suffixName}, output)
+	return s.concatToFile(ctx, workRoot, workDirectory, []string{prefixName, suffixName}, output, policy)
 }
 
-func (s Service) concatToFile(ctx context.Context, workRoot *os.Root, workDirectory *os.File, segments []string, output *os.File) error {
+func (s Service) concatToFile(ctx context.Context, workRoot *os.Root, workDirectory *os.File, segments []string, output *os.File, policy exportpolicy.Policy) error {
 	manifest := "ffconcat version 1.0\n"
 	for _, segment := range segments {
 		manifest += "file '" + filepath.Base(segment) + "'\n"
@@ -632,15 +706,11 @@ func (s Service) concatToFile(ctx context.Context, workRoot *os.Root, workDirect
 	if err := workRoot.WriteFile("segments.ffconcat", []byte(manifest), 0o600); err != nil {
 		return err
 	}
-	args := []string{"-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-f", "concat", "-safe", "1", "-i", "segments.ffconcat", "-c", "copy", "output.mkv"}
-	return s.runWithOutput(ctx, nil, output, workDirectory, args)
+	args := []string{"-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-f", "concat", "-safe", "1", "-i", "segments.ffconcat", "-c", "copy", "output." + policy.Extension}
+	return s.runWithOutput(ctx, nil, output, workDirectory, args, policy)
 }
 
-func (s Service) run(ctx context.Context, source *os.File, args []string) error {
-	return s.runWithOutput(ctx, source, nil, nil, args)
-}
-
-func (s Service) runWithOutput(ctx context.Context, source, output, directory *os.File, args []string) error {
+func (s Service) runWithOutput(ctx context.Context, source, output, directory *os.File, args []string, policy exportpolicy.Policy) error {
 	path := s.FFmpegPath
 	if path == "" {
 		path = "ffmpeg"
@@ -655,26 +725,26 @@ func (s Service) runWithOutput(ctx context.Context, source, output, directory *o
 		if len(args) == 0 {
 			return errors.New("ffmpeg output arguments are required")
 		}
-		if runtime.GOOS == "linux" {
-			outputDescriptor := 3 + len(extraFiles) - 1
-			outputArgs := slices.Clone(args[:len(args)-1])
-			outputLabel := filepath.Base(args[len(args)-1])
-			if outputLabel != "" && outputLabel != "." {
-				outputArgs = append(outputArgs, "-metadata", "videocutlist-output="+outputLabel)
-			}
-			args = append(outputArgs, "-f", "matroska", fmt.Sprintf("/proc/self/fd/%d", outputDescriptor))
-		} else {
-			args = append(slices.Clone(args[:len(args)-1]), output.Name())
+		outputArgs := slices.Clone(args[:len(args)-1])
+		outputLabel := filepath.Base(args[len(args)-1])
+		if outputLabel != "" && outputLabel != "." {
+			outputArgs = append(outputArgs, "-metadata", "videocutlist-output="+outputLabel)
 		}
+		if policy.FastStart {
+			outputArgs = append(outputArgs, "-movflags", "+faststart")
+		}
+		outputArgs = append(outputArgs, "-f", policy.Muxer)
+		outputDescriptor := 3 + len(extraFiles) - 1
+		args = append(outputArgs, fdinput.Path(uintptr(outputDescriptor)))
 	}
 	if directory != nil {
 		extraFiles = append(extraFiles, directory)
 	}
 	cmd := exec.Command(path, args...)
-	if directory != nil && runtime.GOOS == "linux" {
+	if directory != nil {
 		// Cmd.Dir is resolved before ExtraFiles are installed in the child;
 		// use the already-open parent descriptor, not its child slot.
-		cmd.Dir = fmt.Sprintf("/proc/self/fd/%d", directory.Fd())
+		cmd.Dir = fdinput.Directory(directory)
 	}
 	cmd.ExtraFiles = extraFiles
 	var stderr limitedBuffer
@@ -718,11 +788,11 @@ func runCommand(ctx context.Context, cmd *exec.Cmd) error {
 	}
 }
 
+// sourceArgument names the inherited source descriptor for FFmpeg input. The
+// Linux and Darwin paths are seekable so input-side -ss works; other platforms
+// fall back to FFmpeg pipe syntax, where only output-side seeks work.
 func sourceArgument() string {
-	if runtime.GOOS == "linux" {
-		return "/proc/self/fd/3" // A fixed inherited descriptor remains seekable for input-side -ss.
-	}
-	return "pipe:3"
+	return fdinput.Path(3)
 }
 
 func validateStreamIndexes(indexes []int, streams []probe.Stream) error {
@@ -746,7 +816,8 @@ func validateStreamIndexes(indexes []int, streams []probe.Stream) error {
 	return nil
 }
 
-func selectedSegments(segments []model.Segment, selection string, duration int64) []model.Segment {
+// ResolveRanges freezes the exact included ranges for an export selection.
+func ResolveRanges(segments []model.Segment, selection string, duration int64) []model.Segment {
 	included := make([]model.Segment, 0, len(segments))
 	for _, segment := range segments {
 		if segment.IsIncluded() {
@@ -772,6 +843,12 @@ func selectedSegments(segments []model.Segment, selection string, duration int64
 		gaps = append(gaps, model.Segment{StartMS: cursor, EndMS: duration})
 	}
 	return gaps
+}
+
+// selectedSegments remains for existing package callers; new consumers use
+// ResolveRanges to make the frozen export selection explicit.
+func selectedSegments(segments []model.Segment, selection string, duration int64) []model.Segment {
+	return ResolveRanges(segments, selection, duration)
 }
 
 func segmentStrategies(requested string, segments []model.Segment, keyframes []int64) []AppliedStrategy {
@@ -846,7 +923,11 @@ func destinationRetention(d Destination, s Service) time.Duration {
 }
 
 func (p preparedDestination) outputFileName(request Request, source string, segment int, at time.Time) (string, error) {
-	values := map[string]string{"source": strings.TrimSuffix(filepath.Base(source), filepath.Ext(source)), "date": at.Format("20060102"), "time": at.Format("150405"), "segment": strconv.Itoa(segment + 1), "mode": request.Mode, "ext": "mkv"}
+	policy, ok := exportpolicy.For(request.Container)
+	if !ok {
+		return "", fmt.Errorf("%w: unsupported export container", ErrInvalidRequest)
+	}
+	values := map[string]string{"source": strings.TrimSuffix(filepath.Base(source), filepath.Ext(source)), "date": at.Format("20060102"), "time": at.Format("150405"), "segment": strconv.Itoa(segment + 1), "mode": request.Mode, "ext": policy.Extension}
 	name, err := RenderTemplate(request.FilenameTemplate, values)
 	if err != nil {
 		return "", fmt.Errorf("%w: %v", ErrInvalidRequest, err)
@@ -856,7 +937,7 @@ func (p preparedDestination) outputFileName(request Request, source string, segm
 		if candidateName == "" {
 			candidateName = "cut-" + uniqueSuffix()
 		}
-		candidateName = strings.TrimSuffix(candidateName, ".mkv") + "-" + uniqueSuffix() + ".mkv"
+		candidateName = strings.TrimSuffix(candidateName, "."+policy.Extension) + "-" + uniqueSuffix() + "." + policy.Extension
 		_, statErr := p.root.Lstat(candidateName)
 		if errors.Is(statErr, os.ErrNotExist) {
 			return candidateName, nil
@@ -866,16 +947,6 @@ func (p preparedDestination) outputFileName(request Request, source string, segm
 		}
 	}
 	return "", errors.New("could not allocate collision-safe export name")
-}
-
-func nonEmptyNames(names []string) []string {
-	result := make([]string, 0, len(names))
-	for _, name := range names {
-		if name != "" {
-			result = append(result, name)
-		}
-	}
-	return result
 }
 
 func safeFailureMessage(err error) string {
@@ -901,51 +972,8 @@ func safeFailureMessage(err error) string {
 	return b.String()
 }
 
-func uniqueName(directory string, at time.Time) (string, error) {
-	for range 10 {
-		var random [16]byte
-		if _, err := rand.Read(random[:]); err != nil {
-			return "", err
-		}
-		name := "videocutlist-" + at.Format("20060102T150405.000000000Z") + "-" + hex.EncodeToString(random[:]) + ".mkv"
-		if _, err := os.Stat(filepath.Join(directory, name)); errors.Is(err, os.ErrNotExist) {
-			return name, nil
-		} else if err != nil {
-			return "", err
-		}
-	}
-	return "", errors.New("could not allocate collision-safe export name")
-}
-
 func publishNoReplace(source, destination string) error {
 	return os.Link(source, destination)
-}
-
-func copyFile(source, destination string) error {
-	in, err := os.Open(source)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-	out, err := os.OpenFile(destination, os.O_WRONLY|os.O_TRUNC, 0o600)
-	if err != nil {
-		return err
-	}
-	_, copyErr := io.Copy(out, in)
-	closeErr := out.Close()
-	if copyErr != nil {
-		return copyErr
-	}
-	return closeErr
-}
-
-func copyFileToOpen(source string, destination *os.File) error {
-	in, err := os.Open(source)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-	return copyOpenFileToOpen(in, destination)
 }
 
 func copyOpenFileToOpen(source, destination *os.File) error {

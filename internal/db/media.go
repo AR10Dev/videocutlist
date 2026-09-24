@@ -28,12 +28,16 @@ func NewMediaStore(db *sql.DB) (*MediaStore, error) {
 }
 
 // Sync makes a successful root scan authoritative: absent rows become unavailable.
-func (s *MediaStore) Sync(ctx context.Context, alias string, records []index.Record) error {
+func (s *MediaStore) Sync(ctx context.Context, alias string, records []index.Record) (err error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
+			err = errors.Join(err, fmt.Errorf("rollback media sync: %w", rollbackErr))
+		}
+	}()
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	if _, err := tx.ExecContext(ctx, `UPDATE media SET available = 0, updated_at = ? WHERE root_alias = ?`, now, alias); err != nil {
 		return err
@@ -59,7 +63,7 @@ ON CONFLICT(root_alias, relative_path) DO UPDATE SET
 
 // RemoveRoots atomically makes records from removed roots unavailable without
 // exposing filesystem paths or deleting historical opaque IDs.
-func (s *MediaStore) RemoveRoots(ctx context.Context, aliases []string) error {
+func (s *MediaStore) RemoveRoots(ctx context.Context, aliases []string) (err error) {
 	if len(aliases) == 0 {
 		return nil
 	}
@@ -67,7 +71,11 @@ func (s *MediaStore) RemoveRoots(ctx context.Context, aliases []string) error {
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback()
+	defer func() {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
+			err = errors.Join(err, fmt.Errorf("rollback media root removal: %w", rollbackErr))
+		}
+	}()
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	for _, alias := range aliases {
 		if _, err := tx.ExecContext(ctx, `UPDATE media SET available = 0, updated_at = ? WHERE root_alias = ?`, now, alias); err != nil {
@@ -95,66 +103,158 @@ func (s *MediaStore) Browse(ctx context.Context, folderID, cursor string, limit 
 	if limit > 500 {
 		limit = 500
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id, root_alias, relative_path, size_bytes, mtime_ns, metadata_json FROM media WHERE available = 1`)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, nil, "", err
 	}
-	defer rows.Close()
-	type candidate struct {
-		root, path string
-		media      index.Media
+	defer func() {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
+			err = errors.Join(err, fmt.Errorf("rollback media browse: %w", rollbackErr))
+		}
+	}()
+
+	// Folder discovery still scans every available row because the catalog has
+	// no folder index. The lightweight projection keeps decoded item state
+	// bounded to limit+1 while row work remains O(library).
+	rows, err := tx.QueryContext(ctx, `
+SELECT id, root_alias, relative_path, size_bytes, mtime_ns
+FROM media
+WHERE available = 1
+ORDER BY id`)
+	if err != nil {
+		return nil, nil, "", err
 	}
-	var found []candidate
+	rowsClosed := false
+	closeRows := func() error {
+		if rowsClosed {
+			return nil
+		}
+		rowsClosed = true
+		return rows.Close()
+	}
+	defer func() {
+		if closeErr := closeRows(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close media browse rows: %w", closeErr))
+		}
+	}()
+
+	type browseItem struct {
+		id, root, path string
+		sizeBytes      int64
+		mtimeNS        int64
+	}
+	retained := make([]browseItem, 0, limit+1)
+	foldersByID := make(map[string]index.Folder)
 	for rows.Next() {
-		var r index.Record
-		r, err = scanMedia(rows)
-		if err != nil {
+		var item browseItem
+		if err = rows.Scan(&item.id, &item.root, &item.path, &item.sizeBytes, &item.mtimeNS); err != nil {
 			return nil, nil, "", err
 		}
-		found = append(found, candidate{r.RootAlias, r.RelativePath, r.Media})
+		parts := strings.Split(filepath.ToSlash(item.path), "/")
+		for depth := range len(parts) {
+			parent := strings.Join(parts[:depth], "/")
+			if folderID != "" && index.FolderID(item.root, parent) != folderID {
+				continue
+			}
+			if depth == len(parts)-1 {
+				if item.id > cursor && len(retained) < limit+1 {
+					retained = append(retained, item)
+				}
+				continue
+			}
+			folder := index.Folder{
+				ID:    index.FolderID(item.root, strings.Join(parts[:depth+1], "/")),
+				Label: parts[depth],
+			}
+			if _, exists := foldersByID[folder.ID]; !exists {
+				foldersByID[folder.ID] = folder
+			}
+			break
+		}
 	}
 	if err = rows.Err(); err != nil {
 		return nil, nil, "", err
 	}
-	// Resolve the opaque folder ID by comparing hashes; no client-supplied path is accepted.
-	for _, c := range found {
-		parts := strings.Split(filepath.ToSlash(c.path), "/")
-		for depth := range len(parts) {
-			parent := strings.Join(parts[:depth], "/")
-			if folderID != "" && index.FolderID(c.root, parent) != folderID {
-				continue
+	if closeErr := closeRows(); closeErr != nil {
+		return nil, nil, "", fmt.Errorf("close media browse rows: %w", closeErr)
+	}
+
+	if len(foldersByID) > 0 {
+		folders = make([]index.Folder, 0, len(foldersByID))
+		for _, folder := range foldersByID {
+			folders = append(folders, folder)
+		}
+		slices.SortFunc(folders, func(a, b index.Folder) int { return cmp.Compare(a.ID, b.ID) })
+	}
+
+	itemLimit := min(len(retained), limit)
+	if len(retained) > limit {
+		next = retained[limit-1].id
+	}
+	if itemLimit > 0 {
+		placeholders := strings.TrimSuffix(strings.Repeat("?,", itemLimit), ",")
+		args := make([]any, itemLimit)
+		for i := range itemLimit {
+			args[i] = retained[i].id
+		}
+		metadataRows, queryErr := tx.QueryContext(ctx, `
+SELECT id, metadata_json
+FROM media
+WHERE available = 1 AND id IN (`+placeholders+`)`, args...)
+		if queryErr != nil {
+			return nil, nil, "", queryErr
+		}
+		metadataRowsClosed := false
+		closeMetadataRows := func() error {
+			if metadataRowsClosed {
+				return nil
 			}
-			if depth == len(parts)-1 {
-				if c.media.ID > cursor {
-					items = append(items, c.media)
-				}
-				continue
+			metadataRowsClosed = true
+			return metadataRows.Close()
+		}
+		defer func() {
+			if closeErr := closeMetadataRows(); closeErr != nil {
+				err = errors.Join(err, fmt.Errorf("close media metadata rows: %w", closeErr))
 			}
-			label := parts[depth]
-			id := index.FolderID(c.root, strings.Join(parts[:depth+1], "/"))
-			folders = appendUniqueFolder(folders, index.Folder{ID: id, Label: label})
-			break
+		}()
+		metadataByID := make(map[string]index.Media, itemLimit)
+		for metadataRows.Next() {
+			var id, metadataJSON string
+			if err = metadataRows.Scan(&id, &metadataJSON); err != nil {
+				return nil, nil, "", err
+			}
+			var media index.Media
+			if err = json.Unmarshal([]byte(metadataJSON), &media.Metadata); err != nil {
+				return nil, nil, "", fmt.Errorf("decode media metadata: %w", err)
+			}
+			metadataByID[id] = media
+		}
+		if err = metadataRows.Err(); err != nil {
+			return nil, nil, "", err
+		}
+		if closeErr := closeMetadataRows(); closeErr != nil {
+			return nil, nil, "", fmt.Errorf("close media metadata rows: %w", closeErr)
+		}
+		items = make([]index.Media, 0, itemLimit)
+		for _, retainedItem := range retained[:itemLimit] {
+			media, exists := metadataByID[retainedItem.id]
+			if !exists {
+				return nil, nil, "", fmt.Errorf("media metadata missing for %q", retainedItem.id)
+			}
+			media.ID = retainedItem.id
+			media.Name = fileName(retainedItem.path)
+			media.SizeBytes = retainedItem.sizeBytes
+			media.MtimeNS = retainedItem.mtimeNS
+			items = append(items, media)
 		}
 	}
-	slices.SortFunc(folders, func(a, b index.Folder) int { return cmp.Compare(a.ID, b.ID) })
-	slices.SortFunc(items, func(a, b index.Media) int { return cmp.Compare(a.ID, b.ID) })
-	if len(items) > limit {
-		next = items[limit-1].ID
-		items = items[:limit]
+	if err = tx.Commit(); err != nil {
+		return nil, nil, "", err
 	}
 	return folders, items, next, nil
 }
 
-func appendUniqueFolder(folders []index.Folder, folder index.Folder) []index.Folder {
-	for _, f := range folders {
-		if f.ID == folder.ID {
-			return folders
-		}
-	}
-	return append(folders, folder)
-}
-
-func (s *MediaStore) List(ctx context.Context, cursor string, limit int) (index.Page, error) {
+func (s *MediaStore) List(ctx context.Context, cursor string, limit int) (page index.Page, err error) {
 	if limit <= 0 {
 		limit = 100
 	}
@@ -167,8 +267,20 @@ FROM media WHERE available = 1 AND id > ? ORDER BY id LIMIT ?`, cursor, limit+1)
 	if err != nil {
 		return index.Page{}, err
 	}
-	defer rows.Close()
-	page := index.Page{}
+	rowsClosed := false
+	closeRows := func() error {
+		if rowsClosed {
+			return nil
+		}
+		rowsClosed = true
+		return rows.Close()
+	}
+	defer func() {
+		if closeErr := closeRows(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close media list rows: %w", closeErr))
+		}
+	}()
+	page = index.Page{}
 	for rows.Next() {
 		record, err := scanMedia(rows)
 		if err != nil {
@@ -176,11 +288,20 @@ FROM media WHERE available = 1 AND id > ? ORDER BY id LIMIT ?`, cursor, limit+1)
 		}
 		if len(page.Items) == limit {
 			page.NextCursor = page.Items[len(page.Items)-1].ID
+			if closeErr := closeRows(); closeErr != nil {
+				return index.Page{}, fmt.Errorf("close media list rows: %w", closeErr)
+			}
 			return page, nil
 		}
 		page.Items = append(page.Items, record.Media)
 	}
-	return page, rows.Err()
+	if err := rows.Err(); err != nil {
+		return index.Page{}, err
+	}
+	if closeErr := closeRows(); closeErr != nil {
+		return index.Page{}, fmt.Errorf("close media list rows: %w", closeErr)
+	}
+	return page, nil
 }
 
 type rowScanner interface{ Scan(...any) error }

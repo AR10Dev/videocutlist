@@ -143,6 +143,11 @@ func MediaID(rootAlias, relativePath string) string {
 func (s *Scanner) Scan(ctx context.Context, alias string) ([]Record, error) {
 	s.config.RLock()
 	defer s.config.RUnlock()
+	return s.scanLocked(ctx, alias)
+}
+
+// scanLocked requires config to remain read-locked through catalog publication.
+func (s *Scanner) scanLocked(ctx context.Context, alias string) ([]Record, error) {
 	root, err := s.root(alias)
 	if err != nil {
 		return nil, err
@@ -378,7 +383,7 @@ func (s *Scanner) Refresh(ctx context.Context, catalog Catalog) error {
 	var firstErr error
 	for _, alias := range aliases {
 		s.setRootStatus(alias, RootStatus{State: "scanning"})
-		records, err := s.Scan(ctx, alias)
+		records, err := s.scanLocked(ctx, alias)
 		if err != nil {
 			s.setRootStatus(alias, RootStatus{State: "failed", ErrorCode: rootErrorCode(err)})
 			if firstErr == nil {

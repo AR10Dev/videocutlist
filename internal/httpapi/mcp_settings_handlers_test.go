@@ -1,0 +1,222 @@
+package httpapi
+
+import (
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+
+	"videocutlist/internal/db"
+	"videocutlist/internal/mcp"
+	settingsdomain "videocutlist/internal/settings"
+)
+
+func TestMCPAdministrationRequiresDeploymentAuthAndRevealsSecretOnce(t *testing.T) {
+	database, err := store.OpenDatabase(t.Context(), t.TempDir()+"/mcp-settings.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := database.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	runtimeSettings, err := store.NewRuntimeSettingsStore(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := runtimeSettings.Seed(t.Context(), testRuntimeSettings())
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentials, err := mcp.NewCredentialStore(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authenticator, err := NewAuthenticator(AuthConfig{Mode: "bearer", BearerToken: "deployment-admin"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := New(Config{
+		Authenticator: authenticator, Media: &routeTestMedia{}, Preview: routeTestPreview{},
+		Projects: routeTestProjects{}, BatchExports: &routeTestBatchExports{}, Jobs: &routeTestJobs{},
+		Settings: settingsdomain.NewRuntimeService(runtimeSettings, nil, nil), RuntimeSettings: store.NewRuntimeSettingsState(record.Settings), MCPCredentials: credentials,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	expires := time.Now().UTC().Add(time.Hour).Format(time.RFC3339Nano)
+	invalidRoot := `{"name":"assistant","permissions":["media:read"],"mediaScope":{"kind":"roots","rootIds":["unknown-root"]},"projectScope":{"kind":"all"},"expiresAt":"` + expires + `"}`
+	invalidRootResponse := mcpAdminRequest(server, http.MethodPost, "/api/v1/settings/mcp/credentials", invalidRoot, "deployment-admin")
+	if invalidRootResponse.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("unknown root status=%d body=%s", invalidRootResponse.Code, invalidRootResponse.Body.String())
+	}
+
+	body := `{"name":"assistant","permissions":["media:read","exports:run"],"mediaScope":{"kind":"all"},"projectScope":{"kind":"all"},"expiresAt":"` + expires + `","unattendedExports":true}`
+	createdResponse := mcpAdminRequest(server, http.MethodPost, "/api/v1/settings/mcp/credentials", body, "deployment-admin")
+	if createdResponse.Code != http.StatusCreated {
+		t.Fatalf("create status=%d body=%s", createdResponse.Code, createdResponse.Body.String())
+	}
+	var created mcp.CreatedCredential
+	if err := json.Unmarshal(createdResponse.Body.Bytes(), &created); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(created.Secret, "vcl_") || created.Name != "assistant" {
+		t.Fatalf("created credential=%#v", created)
+	}
+
+	for name, token := range map[string]string{"missing": "", "scoped MCP credential": created.Secret} {
+		t.Run(name+" cannot administer", func(t *testing.T) {
+			response := mcpAdminRequest(server, http.MethodGet, "/api/v1/settings/mcp", "", token)
+			if response.Code != http.StatusUnauthorized {
+				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
+			}
+		})
+	}
+
+	listResponse := mcpAdminRequest(server, http.MethodGet, "/api/v1/settings/mcp", "", "deployment-admin")
+	if listResponse.Code != http.StatusOK {
+		t.Fatalf("list status=%d body=%s", listResponse.Code, listResponse.Body.String())
+	}
+	listed := listResponse.Body.String()
+	if strings.Contains(listed, created.Secret) || strings.Contains(listed, `"secret"`) {
+		t.Fatalf("list revealed credential secret: %s", listed)
+	}
+	for _, expected := range []string{`"enabled":false`, `"endpoint":"/mcp"`, `"status":"active"`, "HTTPS", "OAuth-only"} {
+		if !strings.Contains(listed, expected) {
+			t.Fatalf("list missing %q: %s", expected, listed)
+		}
+	}
+
+	if strings.Contains(listed, `"nextCursor"`) {
+		t.Fatalf("final page must omit nextCursor: %s", listed)
+	}
+	second := mcpAdminRequest(server, http.MethodPost, "/api/v1/settings/mcp/credentials", body, "deployment-admin")
+	if second.Code != http.StatusCreated {
+		t.Fatalf("second create status=%d", second.Code)
+	}
+	firstPage := mcpAdminRequest(server, http.MethodGet, "/api/v1/settings/mcp?limit=1", "", "deployment-admin")
+	var page struct {
+		Credentials []mcpCredentialView `json:"credentials"`
+		NextCursor  string              `json:"nextCursor"`
+	}
+	if err := json.Unmarshal(firstPage.Body.Bytes(), &page); err != nil {
+		t.Fatal(err)
+	}
+	if firstPage.Code != http.StatusOK || len(page.Credentials) != 1 || page.NextCursor == "" {
+		t.Fatalf("first page=%s", firstPage.Body.String())
+	}
+	lastPage := mcpAdminRequest(server, http.MethodGet, "/api/v1/settings/mcp?limit=1&cursor="+page.NextCursor, "", "deployment-admin")
+	if lastPage.Code != http.StatusOK || strings.Contains(lastPage.Body.String(), `"nextCursor"`) || strings.Contains(lastPage.Body.String(), page.Credentials[0].ID) {
+		t.Fatalf("last page=%s", lastPage.Body.String())
+	}
+
+	revokeResponse := mcpAdminRequest(server, http.MethodDelete, "/api/v1/settings/mcp/credentials/"+created.ID, "", "deployment-admin")
+	if revokeResponse.Code != http.StatusOK || !strings.Contains(revokeResponse.Body.String(), `"status":"revoked"`) {
+		t.Fatalf("revoke status=%d body=%s", revokeResponse.Code, revokeResponse.Body.String())
+	}
+	if _, err := credentials.Authenticate(t.Context(), created.Secret); !errors.Is(err, mcp.ErrCredentialUnauthorized) {
+		t.Fatalf("revoked credential authentication error=%v", err)
+	}
+}
+
+func TestMCPEnablementUsesPersistedRuntimeSettings(t *testing.T) {
+	database, err := store.OpenDatabase(t.Context(), t.TempDir()+"/mcp-enablement.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := database.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	runtimeSettings, _ := store.NewRuntimeSettingsStore(database)
+	record, err := runtimeSettings.Seed(t.Context(), testRuntimeSettings())
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentials, _ := mcp.NewCredentialStore(database)
+	authenticator, _ := NewAuthenticator(AuthConfig{Mode: "none"})
+	server, err := New(Config{
+		Authenticator: authenticator, Media: &routeTestMedia{}, Preview: routeTestPreview{},
+		Projects: routeTestProjects{}, BatchExports: &routeTestBatchExports{}, Jobs: &routeTestJobs{},
+		Settings: settingsdomain.NewRuntimeService(runtimeSettings, nil, nil), RuntimeSettings: store.NewRuntimeSettingsState(record.Settings), MCPCredentials: credentials,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated := record.Settings
+	updated.MCPEnabled = true
+	response := putSettingsRequest(t, server, record.Revision, updated)
+	if response.Code != http.StatusOK {
+		t.Fatalf("enable status=%d body=%s", response.Code, response.Body.String())
+	}
+	status := mcpAdminRequest(server, http.MethodGet, "/api/v1/settings/mcp", "", "")
+	if status.Code != http.StatusOK || !strings.Contains(status.Body.String(), `"enabled":true`) {
+		t.Fatalf("mcp status=%d body=%s", status.Code, status.Body.String())
+	}
+}
+
+func TestMCPSettingsQueryAndStorageErrorsUseSafeEnvelopes(t *testing.T) {
+	settingsDatabase, err := store.OpenDatabase(t.Context(), t.TempDir()+"/mcp-settings-errors.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentialsDatabase, err := store.OpenDatabase(t.Context(), t.TempDir()+"/mcp-credentials-errors.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = settingsDatabase.Close()
+		_ = credentialsDatabase.Close()
+	})
+	runtimeSettings, err := store.NewRuntimeSettingsStore(settingsDatabase)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := runtimeSettings.Seed(t.Context(), testRuntimeSettings())
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentials, err := mcp.NewCredentialStore(credentialsDatabase)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authenticator, err := NewAuthenticator(AuthConfig{Mode: "none"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := New(Config{
+		Authenticator: authenticator, Media: &routeTestMedia{}, Preview: routeTestPreview{},
+		Projects: routeTestProjects{}, BatchExports: &routeTestBatchExports{}, Jobs: &routeTestJobs{},
+		Settings: settingsdomain.NewRuntimeService(runtimeSettings, nil, nil), RuntimeSettings: store.NewRuntimeSettingsState(record.Settings), MCPCredentials: credentials,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalid := mcpAdminRequest(server, http.MethodGet, "/api/v1/settings/mcp?cursor=invalid", "", "")
+	if invalid.Code != http.StatusBadRequest || !strings.Contains(invalid.Body.String(), `"code":"invalid_query"`) {
+		t.Fatalf("invalid cursor status=%d body=%s", invalid.Code, invalid.Body.String())
+	}
+	if err := credentialsDatabase.Close(); err != nil {
+		t.Fatal(err)
+	}
+	failed := mcpAdminRequest(server, http.MethodGet, "/api/v1/settings/mcp", "", "")
+	if failed.Code != http.StatusInternalServerError || strings.Contains(failed.Body.String(), `"code":"invalid_query"`) {
+		t.Fatalf("storage failure status=%d body=%s", failed.Code, failed.Body.String())
+	}
+}
+
+func mcpAdminRequest(server http.Handler, method, path, body, token string) *httptest.ResponseRecorder {
+	request := httptest.NewRequest(method, path, strings.NewReader(body))
+	if token != "" {
+		request.Header.Set("Authorization", "Bearer "+token)
+	}
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	return response
+}

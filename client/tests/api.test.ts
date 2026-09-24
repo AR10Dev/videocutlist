@@ -1,7 +1,31 @@
 import { describe, expect, it, vi } from "vitest";
-import { createApiClient, MAX_INTERCHANGE_FILE_BYTES, validInterchangeFileSize } from "../src/api";
+import {
+  createApiClient,
+  MAX_INTERCHANGE_FILE_BYTES,
+  readApiError,
+  validInterchangeFileSize,
+} from "../src/api";
 
 describe("client API boundary", () => {
+  it("preserves error codes, public messages, and request IDs, with safe malformed-response fallbacks", async () => {
+    const error = {
+      code: "origin_forbidden",
+      message: "Request origin is not allowed.",
+      requestId: "r-1",
+    };
+    expect(await readApiError(Response.json({ error }, { status: 403 }))).toEqual(error);
+    for (const body of [
+      "<html>proxy failure</html>",
+      JSON.stringify({ error: { code: 409, message: "internal path", requestId: null } }),
+    ]) {
+      expect(
+        await readApiError(
+          new Response(body, { status: 500, headers: { "X-Request-ID": "r-2" } }),
+          "Try again.",
+        ),
+      ).toEqual({ code: "http_error", message: "Try again.", requestId: "r-2" });
+    }
+  });
   it("bounds interchange files before reading them", () => {
     expect(validInterchangeFileSize(MAX_INTERCHANGE_FILE_BYTES)).toBe(true);
     expect(validInterchangeFileSize(MAX_INTERCHANGE_FILE_BYTES + 1)).toBe(false);

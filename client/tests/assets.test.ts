@@ -3,7 +3,6 @@ import {
   maxAssetDurationMs,
   normalizePeaks,
   viewportScale,
-  visibleAssetRange,
   visibleAssetRanges,
 } from "../src/features/preview/assets";
 
@@ -16,20 +15,21 @@ describe("timeline assets", () => {
     expect(viewportScale(40)).toBe(16);
   });
   it("requests the visible interval instead of the media prefix", () => {
-    expect(visibleAssetRange({ startMs: 180_000, endMs: 240_000 }, 600_000)).toEqual({
-      startMs: 180_000,
-      durationMs: 60_000,
-    });
+    expect(visibleAssetRanges({ startMs: 180_000, endMs: 240_000 }, 600_000)).toEqual([
+      { startMs: 180_000, durationMs: 60_000 },
+    ]);
   });
   it("clamps a viewport at the media end while preserving the visible interval", () => {
-    expect(visibleAssetRange({ startMs: 599_900, endMs: 700_000 }, 600_000)).toEqual({
-      startMs: 599_900,
-      durationMs: 100,
-    });
-    expect(visibleAssetRange({ startMs: 0, endMs: 600_000 }, 600_000)).toEqual({
-      startMs: 0,
-      durationMs: 600_000,
-    });
+    expect(visibleAssetRanges({ startMs: 599_900, endMs: 700_000 }, 600_000)).toEqual([
+      { startMs: 599_900, durationMs: 100 },
+    ]);
+    expect(visibleAssetRanges({ startMs: 0, endMs: 600_000, widthPx: 1600 }, 600_000)).toEqual([
+      { startMs: 0, durationMs: maxAssetDurationMs },
+      { startMs: maxAssetDurationMs, durationMs: maxAssetDurationMs },
+      { startMs: maxAssetDurationMs * 2, durationMs: maxAssetDurationMs },
+      { startMs: maxAssetDurationMs * 3, durationMs: maxAssetDurationMs },
+      { startMs: maxAssetDurationMs * 4, durationMs: maxAssetDurationMs },
+    ]);
   });
   it("tiles long visible intervals into bounded asset requests", () => {
     expect(visibleAssetRanges({ startMs: 0, endMs: 300_000 }, 600_000)).toEqual([
@@ -37,5 +37,17 @@ describe("timeline assets", () => {
       { startMs: maxAssetDurationMs, durationMs: maxAssetDurationMs },
       { startMs: maxAssetDurationMs * 2, durationMs: 60_000 },
     ]);
+  });
+  it("bounds ten-hour overview work while sampling its beginning middle and end", () => {
+    const duration = 36_000_000;
+    const ranges = visibleAssetRanges({ startMs: 0, endMs: duration, widthPx: 960 }, duration);
+    expect(ranges).toEqual([
+      { startMs: 0, durationMs: maxAssetDurationMs },
+      { startMs: (duration - maxAssetDurationMs) / 2, durationMs: maxAssetDurationMs },
+      { startMs: duration - maxAssetDurationMs, durationMs: maxAssetDurationMs },
+    ]);
+    expect(
+      visibleAssetRanges({ startMs: 0, endMs: duration, widthPx: 100000 }, duration),
+    ).toHaveLength(8);
   });
 });

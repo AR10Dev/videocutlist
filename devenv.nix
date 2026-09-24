@@ -6,7 +6,7 @@
     gopls
     golangci-lint
     nodejs
-    pnpm
+    pnpm_10
     ffmpeg
     shellcheck
     shfmt

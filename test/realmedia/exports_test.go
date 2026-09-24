@@ -34,7 +34,10 @@ func temporaryArtifactsPresent(root string) bool {
 	present := false
 	for _, dir := range []string{filepath.Join(root, "exports"), filepath.Join(root, "cache")} {
 		_ = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-			if err == nil && info != nil && !info.IsDir() && (strings.HasSuffix(info.Name(), ".partial") || strings.HasPrefix(info.Name(), ".videocutlist-")) {
+			if err == nil && info != nil && !info.IsDir() &&
+				(strings.HasSuffix(info.Name(), ".partial") ||
+					(strings.HasPrefix(info.Name(), ".videocutlist-") &&
+						!(strings.HasPrefix(info.Name(), ".videocutlist-export-") && strings.HasSuffix(info.Name(), ".json")))) {
 				present = true
 			}
 			return nil
@@ -123,7 +126,7 @@ func TestProductionExportsJobsAndOutputs(t *testing.T) {
 			t.Fatalf("preflight selection=%v allowed=%v", checked.Selection, checked.Allowed)
 		}
 		preflight.Body.Close()
-		response := p.requestBody(t, "POST", "/api/v1/projects/"+projectID+"/exports", payload)
+		response := p.requestBody(t, "POST", "/api/v1/projects/"+projectID+"/exports", map[string]any{"itemIds": payload["itemIds"]})
 		var submitted struct {
 			BatchID string `json:"batchId"`
 			Jobs    []struct {

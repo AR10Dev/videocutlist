@@ -1,4 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
+import type { components } from "../src/generated/api";
 
 const media = {
   id: "m_0123456789012345678901234567890123456789012",
@@ -20,15 +21,66 @@ const secondMedia = {
   id: "m_second-012345678901234567890123456789012345",
   name: "second.mp4",
 };
+const serverSettings = {
+  revision: 1,
+  schemaVersion: 1,
+  updatedAt: "2026-01-01T00:00:00Z",
+  pathsConstrained: false,
+  roots: { media: { state: "ready" } },
+  settings: {
+    destinations: [{ id: "download", label: "Downloads", kind: "download", retention: "24h" }],
+    exportLimit: 2,
+    cacheMaxBytes: 1_000_000,
+    previewGlobalLimit: 2,
+    previewBeforeMs: 1000,
+    previewAfterMs: 1000,
+    previewMaxMs: 5000,
+    previewGridMs: 1000,
+    mediaMaxFiles: 100,
+    mediaMaxDepth: 4,
+    mcpEnabled: false,
+  },
+} satisfies components["schemas"]["SettingsResponse"];
 
 const apiOrigin = "http://127.0.0.1:8787";
 const itemId = "i_aaaaaaaaaaaaaaaaaaaaaaaa";
 
+async function openProjectControls(page: Page) {
+  const mediaToggle = page.getByRole("button", { name: /media library/ }).first();
+  if ((await mediaToggle.getAttribute("aria-expanded")) === "false") {
+    const taskToggle = page.getByRole("button", { name: /editing tools/ }).first();
+    if ((await taskToggle.getAttribute("aria-expanded")) === "true")
+      await taskToggle.press("Escape");
+    await mediaToggle.click();
+  }
+}
+
 async function openTask(page: Page, name: "Cuts" | "Project" | "Export" | "Detection") {
-  if (name === "Project") return;
+  if (name === "Project") return openProjectControls(page);
+  const taskToggle = page.getByRole("button", { name: /editing tools/ }).first();
+  if ((await taskToggle.getAttribute("aria-expanded")) === "false") await taskToggle.click();
   await page
     .getByRole("tab", { name: name === "Detection" ? "Auto-detect" : name, exact: true })
     .click();
+}
+
+async function newProject(page: Page) {
+  await openProjectControls(page);
+  await page.locator(".project-menu > summary").click();
+  await page.getByRole("button", { name: "New project" }).click();
+}
+
+async function startNewSegment(page: Page) {
+  await page.getByRole("heading", { name: "Timeline", exact: true }).focus();
+  await page.keyboard.press("c");
+}
+
+async function setRange(page: Page, start: number, end: number) {
+  const playhead = page.getByLabel("Timeline playhead");
+  await playhead.fill(String(start));
+  await page.getByRole("button", { name: "Set in" }).click();
+  await playhead.fill(String(end));
+  await page.getByRole("button", { name: "Set out" }).click();
 }
 
 async function loadProject(page: Page, id: string) {
@@ -36,6 +88,7 @@ async function loadProject(page: Page, id: string) {
     void dialog.accept(dialog.type() === "prompt" ? id : undefined);
   page.on("dialog", accept);
   try {
+    await page.locator(".project-menu > summary").click();
     await page.getByRole("button", { name: "Load project" }).click();
     await page.waitForTimeout(0);
   } finally {
@@ -52,8 +105,12 @@ async function addSelectedMediaToProject(page: Page) {
 async function saveProject(page: Page) {
   await addSelectedMediaToProject(page);
   await openTask(page, "Project");
-  await page.getByRole("button", { name: "Save project", exact: true }).click();
-  await expect(page.getByText(/Project saved \(revision \d+\)\./)).toBeVisible();
+  const saved = page.waitForResponse(
+    (response) => response.request().method() === "PUT" && response.url().includes("/projects/"),
+  );
+  await page.getByRole("button", { name: "Save project from project header", exact: true }).click();
+  expect((await (await saved).json()).revision).toBeGreaterThan(0);
+  await expect(page.getByRole("status", { name: "Project status" })).toHaveText("Saved");
 }
 
 test.beforeEach(async ({ page }) => {
@@ -100,6 +157,21 @@ test.beforeEach(async ({ page }) => {
   await page.route(`${apiOrigin}/api/v1/**`, async (route) => {
     const request = route.request();
     const url = new URL(request.url());
+    if (url.pathname === "/api/v1/settings") return route.fulfill({ json: serverSettings });
+    if (url.pathname === "/api/v1/settings/mcp")
+      return route.fulfill({
+        json: {
+          enabled: false,
+          endpoint: "/mcp",
+          credentials: [],
+          permissions: [],
+          roots: [],
+          proposals: [],
+          authentication: "Bearer token",
+          remoteAccessGuidance: "Use HTTPS for remote access.",
+          clientCompatibility: "Streamable HTTP bearer-token clients only.",
+        } satisfies components["schemas"]["MCPSettingsResponse"],
+      });
     if (url.pathname === "/api/v1/media/status")
       return route.fulfill({
         json: { state: "ready_with_media", message: "Media library is ready." },
@@ -107,16 +179,27 @@ test.beforeEach(async ({ page }) => {
     if (url.pathname === "/api/v1/media/tree")
       return route.fulfill({ json: { folders: [], items: [media, secondMedia] } });
     if (url.pathname === `/api/v1/media/${media.id}`) return route.fulfill({ json: media });
-    if (url.pathname.endsWith("/thumbnails"))
+    if (url.pathname === `/api/v1/media/${secondMedia.id}`)
+      return route.fulfill({ json: secondMedia });
+    if (
+      url.pathname === `/api/v1/media/${media.id}/thumbnails` ||
+      url.pathname === `/api/v1/media/${secondMedia.id}/thumbnails`
+    )
       return route.fulfill({
         headers: { "content-type": "image/png" },
         body: "png-fixture",
       });
-    if (url.pathname.endsWith("/waveform"))
+    if (
+      url.pathname === `/api/v1/media/${media.id}/waveform` ||
+      url.pathname === `/api/v1/media/${secondMedia.id}/waveform`
+    )
       return route.fulfill({
         json: { startMs: 0, durationMs: 10000, peaks: [0.1, 0.5, 1] },
       });
-    if (url.pathname.includes("/preview")) {
+    if (
+      url.pathname === `/api/v1/media/${media.id}/preview` ||
+      url.pathname === `/api/v1/media/${secondMedia.id}/preview`
+    ) {
       const center = url.searchParams.get("centerMs") ?? "0";
       if (center === "1000") await new Promise((resolve) => setTimeout(resolve, 500));
       return route.fulfill({
@@ -141,6 +224,10 @@ test.beforeEach(async ({ page }) => {
           ],
         },
       });
+    if (url.pathname === "/api/v1/media/refresh" && request.method() === "POST")
+      return route.fulfill({
+        json: { id: "j_refresh", type: "media_refresh", state: "succeeded", progress: 1 },
+      });
     if (url.pathname.endsWith("/exports/preflight") && request.method() === "POST")
       return route.fulfill({ json: { allowed: true, selection: [], findings: [] } });
     if (url.pathname.endsWith("/detections") && request.method() === "POST") {
@@ -163,7 +250,7 @@ test.beforeEach(async ({ page }) => {
         },
       });
     }
-    if (url.pathname.includes("/jobs/j_detection-black") && request.method() === "GET")
+    if (/^\/api\/v1\/jobs\/j_detection-black-\d+$/.test(url.pathname) && request.method() === "GET")
       return route.fulfill({
         json: {
           id: url.pathname.split("/").pop(),
@@ -176,7 +263,10 @@ test.beforeEach(async ({ page }) => {
           errorCode: "detection_failed",
         },
       });
-    if (url.pathname.includes("/jobs/j_detection-silence") && request.method() === "GET") {
+    if (
+      /^\/api\/v1\/jobs\/j_detection-silence-\d+$/.test(url.pathname) &&
+      request.method() === "GET"
+    ) {
       detectionPoll += 1;
       if (detectionPoll === 1)
         return route.fulfill({
@@ -208,54 +298,62 @@ test.beforeEach(async ({ page }) => {
               startMs: 1000,
               endMs: 1500,
               source: "silence",
-              confidence: 0.9,
             },
           ],
         },
       });
     }
-    if (url.pathname.includes("/jobs/j_detection-") && request.method() === "DELETE")
+    if (
+      /^\/api\/v1\/jobs\/j_detection-(?:black|silence)-\d+$/.test(url.pathname) &&
+      request.method() === "DELETE"
+    )
       return route.fulfill({ status: 204 });
-    if (request.method() === "GET")
-      return route.fulfill({
-        json: {
-          id: "p_demo-project",
-          revision: 4,
-          schemaVersion: 2,
-          name: "Demo project",
-          updatedAt: "2026-08-20T12:00:00Z",
-          items: [
-            {
-              id: itemId,
-              mediaId: media.id,
-              segments: [{ startMs: 100, endMs: 700, label: "restored" }],
-              editorState: { playheadMs: 700, zoom: 1, muted: false },
-              exportOptions: {},
-            },
-          ],
-        },
-      });
-    if (request.method() === "PUT") {
-      if (url.pathname.endsWith("p_conflict-id1"))
+    if (url.pathname === "/api/v1/projects")
+      return route.fulfill({ json: { items: [], nextCursor: null } });
+    if (url.pathname === "/api/v1/batches") return route.fulfill({ json: { items: [] } });
+    if (/^\/api\/v1\/batches\/[^/]+$/.test(url.pathname)) return route.fulfill({ status: 404 });
+    if (/^\/api\/v1\/projects\/[^/]+$/.test(url.pathname)) {
+      if (request.method() === "GET")
         return route.fulfill({
-          status: 409,
           json: {
-            error: { code: "conflict", message: "stale", requestId: "r" },
+            id: "p_demo-project",
+            revision: 4,
+            schemaVersion: 2,
+            name: "Demo project",
+            updatedAt: "2026-08-20T12:00:00Z",
+            items: [
+              {
+                id: itemId,
+                mediaId: media.id,
+                segments: [{ startMs: 100, endMs: 700, label: "restored" }],
+                editorState: { playheadMs: 700, zoom: 1, muted: false },
+                exportOptions: {},
+              },
+            ],
           },
         });
-      savedRevision += 1;
-      const savedProjectId = url.pathname.split("/")[4];
-      const body = request.postDataJSON();
-      return route.fulfill({
-        json: {
-          ...body,
-          id: savedProjectId,
-          revision: savedRevision,
-          updatedAt: "2026-08-20T12:00:00Z",
-        },
-      });
+      if (request.method() === "PUT") {
+        if (url.pathname.endsWith("p_conflict-id1"))
+          return route.fulfill({
+            status: 409,
+            json: {
+              error: { code: "revision_conflict", message: "stale", requestId: "r" },
+            },
+          });
+        savedRevision += 1;
+        const savedProjectId = url.pathname.split("/")[4];
+        const body = request.postDataJSON();
+        return route.fulfill({
+          json: {
+            ...body,
+            id: savedProjectId,
+            revision: savedRevision,
+            updatedAt: "2026-08-20T12:00:00Z",
+          },
+        });
+      }
     }
-    return route.fulfill({ status: 404 });
+    throw new Error(`Unexpected API request: ${request.method()} ${url.pathname}`);
   });
 });
 
@@ -265,13 +363,18 @@ test("desktop and narrow layouts keep the explorer and primary actions reachable
   for (const width of [1280, 600]) {
     await page.setViewportSize({ width, height: 800 });
     await page.goto("/");
-    await expect(page.getByRole("heading", { name: "Media library", exact: true })).toBeVisible();
+    await expect(page.getByRole("region", { name: "Media library", exact: true })).toBeVisible();
     await page.getByRole("button", { name: /camera.mp4/ }).click();
     await expect(page.getByRole("heading", { name: "Timeline" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Set in" })).toBeVisible();
     await expect(page.getByRole("button", { name: "Set out" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "New segment" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Add segment" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Set in", exact: true })).toBeVisible();
+    if (width >= 1050)
+      await expect(
+        page.getByText(
+          "Set In and Out on the timeline; a valid range becomes one selected segment automatically.",
+        ),
+      ).toBeVisible();
   }
 });
 
@@ -291,9 +394,9 @@ test("desktop workbench fixes the viewport and lets both sidebars resize and scr
     return {
       documentFits: document.documentElement.scrollHeight === document.documentElement.clientHeight,
       bodyOverflow: getComputedStyle(document.body).overflow,
-      leftResize: style(".left-sidebar").resize,
+      leftResizeCursor: style(".media-resizer").cursor,
       leftOverflow: style(".left-sidebar").overflowY,
-      rightResize: style(".task-panel").resize,
+      rightResizeCursor: style(".segments-resizer").cursor,
       rightOverflow: style(".task-panel").overflowY,
       timelineCursor: style(".timeline-visual").cursor,
       markerCursor: style(".cut-handle").cursor,
@@ -303,9 +406,9 @@ test("desktop workbench fixes the viewport and lets both sidebars resize and scr
   expect(layout).toEqual({
     documentFits: true,
     bodyOverflow: "hidden",
-    leftResize: "horizontal",
+    leftResizeCursor: "col-resize",
     leftOverflow: "auto",
-    rightResize: "horizontal",
+    rightResizeCursor: "col-resize",
     rightOverflow: "auto",
     timelineCursor: "default",
     markerCursor: "ew-resize",
@@ -317,6 +420,10 @@ test("task tabs expose selection, association, and keyboard navigation", async (
   const detection = page.getByRole("tab", { name: "Auto-detect", exact: true });
   await expect(detection).toBeDisabled();
   await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await page.getByRole("tab", { name: "Cuts", exact: true }).press("ArrowRight");
+  await expect(page.getByRole("tab", { name: "Export", exact: true })).toBeFocused();
+  await expect(detection).toBeDisabled();
+  await page.getByRole("tab", { name: "Cuts", exact: true }).click();
   await addSelectedMediaToProject(page);
   await expect(detection).toBeEnabled();
   const cuts = page.getByRole("tab", { name: "Cuts", exact: true });
@@ -345,13 +452,9 @@ test("segment rows show values and support reorder and removal", async ({ page }
     [0, [100, 700]],
     [1, [800, 900]],
   ] as const) {
-    if (index > 0) await page.getByRole("button", { name: "New segment" }).click();
-    await playhead.fill(String(start));
-    await expect(playhead).toHaveValue(String(start));
-    await page.getByRole("button", { name: "Set in" }).click();
-    await playhead.fill(String(end));
+    if (index > 0) await startNewSegment(page);
+    await setRange(page, start, end);
     await expect(playhead).toHaveValue(String(end));
-    await page.getByRole("button", { name: "Set out" }).click();
     await expect(rows).toHaveCount(index + 1);
     await expect(page.getByRole("button", { name: `Select cut ${index + 1}` })).toHaveAttribute(
       "aria-pressed",
@@ -390,9 +493,14 @@ test("keyboard editing keeps drafts separate from active cuts and is discoverabl
 
   await rows.nth(0).getByRole("button", { name: "Select cut 1" }).click();
   await playhead.fill("400");
+  await page.getByRole("heading", { name: "Timeline", exact: true }).focus();
   await page.keyboard.press("i");
-  await expect(page.getByLabel("In point")).toHaveValue("00:00.400");
+  await expect(page.locator("#timeline-description")).toContainText("In marker 00:00.400");
+  await expect(page.getByRole("textbox", { name: "Cut 1 In", exact: true })).toHaveValue(
+    "00:00.100",
+  );
   await playhead.fill("850");
+  await page.getByRole("heading", { name: "Timeline", exact: true }).focus();
   await page.keyboard.press("o");
   await expect(page.getByText(/overlap another cut/)).toBeVisible();
 
@@ -411,7 +519,8 @@ test("keyboard editing keeps drafts separate from active cuts and is discoverabl
 
   await page.keyboard.press("Shift+/");
   await expect(page.getByRole("heading", { name: "Keyboard shortcuts" })).toBeVisible();
-  await expect(page.getByText("Preview selected segments", { exact: false })).toHaveCount(0);
+  await expect(page.getByText("C Start a new segment draft", { exact: true })).toBeVisible();
+  await expect(page.getByText("Preview cuts in order", { exact: false })).toBeVisible();
   await page.getByRole("button", { name: "Close", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Keyboard shortcuts" })).toHaveCount(0);
 });
@@ -461,6 +570,10 @@ test("active, looping, and ordered segment preview use bounded modes", async ({ 
   await expect(playhead).toHaveValue("100");
   await expect(video).toHaveAttribute("data-playback-intent", "playing");
 
+  await page.getByRole("heading", { name: "Timeline", exact: true }).focus();
+  await page.keyboard.press("r");
+  await expect(video).toHaveAttribute("data-playback-mode", "ordered-segments");
+  await expect(video).toHaveAttribute("data-playback-intent", "playing");
   await page.getByRole("button", { name: "Preview selected segments" }).click();
   await expect(video).toHaveAttribute("data-playback-mode", "ordered-segments");
   await expect(video).toHaveAttribute("data-playback-intent", "playing");
@@ -499,8 +612,9 @@ test("browser theme selection persists and keeps focusable controls readable", a
   await expect(page.getByRole("heading", { name: "Destinations" })).toBeVisible();
   await expect(page.getByText("Server processing").locator("..")).not.toHaveAttribute("open", "");
   await expect(page.getByText("Diagnostics").locator("..")).not.toHaveAttribute("open", "");
-  await expect(page.getByText("Settings revision 1")).not.toBeVisible();
-  await expect(page.getByRole("button", { name: "Settings" })).toHaveCount(0);
+  await page.getByText("Diagnostics", { exact: true }).click();
+  await expect(page.getByText("Settings revision 1")).toBeVisible();
+  await expect(page.locator(".left-sidebar")).not.toBeVisible();
   await expect(page.getByRole("button", { name: "Back to editor" })).toBeVisible();
 });
 
@@ -519,7 +633,18 @@ test("edits independent project items and submits a durable batch", async ({ pag
         id: "j_batch-edit01",
         batchId: "b_batch-edit01",
         projectItemId: itemId,
+        mediaId: media.id,
         mediaLabel: "camera.mp4",
+        type: "export",
+        state: "queued",
+        progress: 0,
+      },
+      {
+        id: "j_batch-edit02",
+        batchId: "b_batch-edit01",
+        projectItemId: "i_second-batch-item",
+        mediaId: secondMedia.id,
+        mediaLabel: "second.mp4",
         type: "export",
         state: "queued",
         progress: 0,
@@ -532,6 +657,9 @@ test("edits independent project items and submits a durable batch", async ({ pag
   await page.route(`${apiOrigin}/api/v1/projects/*`, async (route) => {
     if (route.request().method() !== "PUT") return route.fallback();
     savedBody = route.request().postDataJSON() as Record<string, unknown>;
+    const savedItems = savedBody.items as Array<{ id: string }>;
+    batch.jobs[0].projectItemId = savedItems[0].id;
+    batch.jobs[1].projectItemId = savedItems[1].id;
     return route.fulfill({
       json: {
         ...savedBody,
@@ -552,6 +680,9 @@ test("edits independent project items and submits a durable batch", async ({ pag
     submitted = true;
     return route.fulfill({ status: 202, json: batch });
   });
+  await page.route(`${apiOrigin}/api/v1/jobs/j_batch-edit01`, (route) =>
+    route.fulfill({ json: batch.jobs[0] }),
+  );
 
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
@@ -571,32 +702,29 @@ test("edits independent project items and submits a durable batch", async ({ pag
   await expect(page.locator(".cut-row[data-segment-id]")).toHaveCount(1);
 
   await openTask(page, "Export");
-  await page.getByText("Export options", { exact: true }).click();
   await page.getByLabel("Output arrangement").selectOption("merge");
-  await page.getByText("Export options", { exact: true }).click();
-  await openTask(page, "Project");
-  const projectItems = page.getByRole("list", { name: "Project media items" });
-  await projectItems.getByRole("button", { name: /^camera\.mp4/ }).click();
+  await page.getByRole("button", { name: /camera\.mp4/ }).click();
   await openTask(page, "Cuts");
   await expect(page.getByRole("list", { name: "Selected cuts" })).toContainText("00:00.100");
   await expect(page.getByRole("list", { name: "Selected cuts" })).not.toContainText("00:00.200");
-  await openTask(page, "Project");
-  await page.getByRole("button", { name: "Move second.mp4 up" }).click();
-  await page.getByRole("button", { name: "Save project", exact: true }).click();
+  await page.getByRole("button", { name: /second\.mp4/ }).click();
+  await expect(page.getByRole("list", { name: "Selected cuts" })).toContainText("00:00.200");
+  await page.getByRole("button", { name: "Save project from project header", exact: true }).click();
   await expect.poll(() => savedBody).toBeTruthy();
   const items = savedBody?.items as Array<{
     mediaId: string;
     segments: Array<{ startMs: number }>;
   }>;
-  expect(items.map((item) => item.mediaId)).toEqual([secondMedia.id, media.id]);
-  expect(items.map((item) => item.segments[0]?.startMs)).toEqual([200, 100]);
+  expect(items.map((item) => item.mediaId)).toEqual([media.id, secondMedia.id]);
+  expect(items.map((item) => item.segments[0]?.startMs)).toEqual([100, 200]);
 
   await openTask(page, "Export");
   await page.getByRole("radio", { name: "Selected project items" }).check();
-  const exportSummary = page.getByLabel("Export summary");
-  await expect(exportSummary).toContainText("Included segments");
+  const exportSummary = page.getByLabel("Export plan");
+  await expect(exportSummary).toContainText("Included cuts");
   await expect(exportSummary).toContainText("2 · 00:01.200 requested");
-  await page.getByText("Export options", { exact: true }).click();
+  await page.getByRole("button", { name: /camera\.mp4/ }).click();
+  await expect(page.getByLabel("Output arrangement")).toBeVisible();
   await page.getByLabel("Output arrangement").selectOption("merge");
   await page.getByLabel("Output arrangement").selectOption("separate");
   await saveProject(page);
@@ -615,9 +743,13 @@ test("edits independent project items and submits a durable batch", async ({ pag
   );
   expect(exportBody?.itemIds).toBeUndefined();
   await expect(page.getByRole("heading", { name: "Export queue" })).toBeVisible();
-  await page.getByText("Job details", { exact: true }).click();
   const queue = page.getByRole("region", { name: "Export queue" });
-  await expect(queue.getByText(/camera.mp4 · queued/)).toBeVisible();
+  const queueJobs = queue.locator(".queue-job-list > .export-job-card");
+  await expect(queueJobs).toHaveCount(2);
+  await expect(queueJobs.nth(0)).toContainText("j_batch-edit01");
+  await expect(queueJobs.nth(0)).toContainText("camera.mp4");
+  await expect(queueJobs.nth(1)).toContainText("j_batch-edit02");
+  await expect(queueJobs.nth(1)).toContainText("second.mp4");
 });
 
 test("restores the durable queue and retries a failed child as a new job", async ({ page }) => {
@@ -666,17 +798,94 @@ test("restores the durable queue and retries a failed child as a new job", async
     retried = true;
     return route.fulfill({ status: 202, json: retryBatch });
   });
+  await page.route(`${apiOrigin}/api/v1/jobs/j_retryqueue001`, (route) =>
+    route.fulfill({ json: retryBatch.jobs[0] }),
+  );
 
   await page.goto("/");
   await openTask(page, "Export");
   await expect(page.getByRole("heading", { name: "Export queue" })).toBeVisible();
-  await expect(page.getByText("b_failedqueue01", { exact: false })).toHaveCount(0);
-  await page.getByText("Job details", { exact: true }).click();
-  await expect(page.getByText(/camera.mp4 · failed · 100% · source_changed/)).toBeVisible();
-  await page.getByRole("button", { name: "Retry" }).click();
+  await expect(page.getByText("b_failedqueue01", { exact: true })).toBeVisible();
+  const failedJob = page.getByRole("article", { name: "Export job 1" });
+  await expect(failedJob).toContainText("source_changed");
+  await failedJob.getByRole("button", { name: "Retry job" }).click();
   await expect.poll(() => retried).toBe(true);
-  await expect(page.getByRole("article", { name: "Export batch 1" })).toBeVisible();
-  await expect(page.getByText("b_retryqueue001", { exact: false })).toHaveCount(0);
+  const retriedBatch = page.getByRole("article", { name: "Export batch 1" });
+  await expect(retriedBatch).toContainText("b_retryqueue001");
+  await expect(retriedBatch.locator("span.badge").first()).toHaveText("queued");
+  const retriedJob = retriedBatch.getByRole("article", { name: "Export job 1" });
+  await expect(retriedJob).toContainText("j_retryqueue001");
+  await expect(retriedJob.locator("span.badge")).toHaveText("queued");
+  const originalBatch = page.getByRole("article", { name: "Export batch 2" });
+  await expect(originalBatch).toContainText("b_failedqueue01");
+  await expect(originalBatch).toContainText("source_changed");
+});
+test("child retry exposes pending state, rejects visibly, and ignores duplicate clicks", async ({
+  page,
+}, testInfo) => {
+  const failedJob = {
+    id: "j_retry-rejected01",
+    batchId: "b_retry-rejected01",
+    projectItemId: itemId,
+    mediaLabel: "camera.mp4",
+    type: "export",
+    state: "failed",
+    progress: 1,
+    errorCode: "source_changed",
+  };
+  const failedBatch = {
+    batchId: "b_retry-rejected01",
+    projectId: "p_demo-project",
+    projectRevision: 4,
+    state: "failed",
+    progress: 1,
+    jobs: [failedJob],
+  };
+  let retryCalls = 0;
+  let releaseRetry!: () => void;
+  const retryResponse = new Promise<void>((resolve) => {
+    releaseRetry = resolve;
+  });
+  await page.route(`${apiOrigin}/api/v1/batches**`, async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (request.method() === "GET")
+      return route.fulfill({
+        json: path === "/api/v1/batches" ? { items: [failedBatch] } : failedBatch,
+      });
+    return route.fallback();
+  });
+  await page.route(`${apiOrigin}/api/v1/jobs/${failedJob.id}`, async (route) => {
+    if (route.request().method() === "GET") return route.fulfill({ json: failedJob });
+    return route.fallback();
+  });
+  await page.route(`${apiOrigin}/api/v1/jobs/${failedJob.id}/retry`, async (route) => {
+    retryCalls += 1;
+    await retryResponse;
+    await route.abort();
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Select camera.mp4" }).click();
+  await addSelectedMediaToProject(page);
+  await openTask(page, "Export");
+  const card = page
+    .getByRole("region", { name: "Export queue" })
+    .getByRole("article", { name: "Export job 1" });
+  const retry = card.getByRole("button", { name: "Retry job" });
+  await retry.click();
+  await expect.poll(() => retryCalls).toBe(1);
+  await expect(retry).toBeDisabled();
+  await page.screenshot({ path: testInfo.outputPath("child-retry-pending.png"), fullPage: true });
+  await retry.evaluate((button) =>
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true })),
+  );
+  expect(retryCalls).toBe(1);
+  releaseRetry();
+  await expect(page.locator(".export-status")).toContainText(/failed|could not|try again/i);
+  await expect(retry).toBeEnabled();
+  await retry.click();
+  await expect.poll(() => retryCalls).toBe(2);
 });
 
 test("reload restores the active project and permits child and batch cancellation", async ({
@@ -723,12 +932,9 @@ test("reload restores the active project and permits child and batch cancellatio
   await page.goto("/");
   await expect(page.getByLabel("Preview player")).toBeVisible();
   await openTask(page, "Project");
-  const projectDetails = page.locator("details").filter({ hasText: "Project details" });
-  await expect(projectDetails).toBeVisible();
-  await expect(projectDetails).not.toHaveAttribute("open", "");
+  await expect(page.locator(".project-sidebar-header strong")).toHaveText("Demo project");
   await openTask(page, "Export");
   const restored = page.getByRole("article", { name: "Export batch 1" });
-  await restored.getByText("Job details", { exact: true }).click();
   await restored.getByRole("button", { name: "Cancel job" }).click();
   await expect.poll(() => childCancelled).toBe(true);
   await restored.getByRole("button", { name: "Cancel batch" }).click();
@@ -745,20 +951,20 @@ test("explains server-mounted setup when the library is empty", async ({ page })
 
   await page.goto("/");
 
-  await expect(page.getByRole("heading", { name: "Media library", exact: true })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Media library", exact: true })).toBeVisible();
   await expect(page.getByText("No supported media was found.")).toBeVisible();
   await expect(page.getByText(/Mount supported media, then Refresh to index it/)).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Project" })).toBeVisible();
+  await expect(page.locator(".project-sidebar-header strong")).toHaveText("Untitled project");
 });
 
 test("keeps the inspector contextual until media is selected", async ({ page }) => {
   await page.goto("/");
 
   await expect(page.getByRole("button", { name: "Settings" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Project" })).toBeVisible();
+  await expect(page.locator(".project-sidebar-header strong")).toHaveText("Untitled project");
   await expect(
     page.getByText("Add a video to your project by making your first valid cut."),
-  ).toBeVisible();
+  ).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Export", exact: true })).not.toBeVisible();
   await expect(page.getByRole("heading", { name: "Detection" })).not.toBeVisible();
   await expect(page.getByText("Default cut strategy")).not.toBeVisible();
@@ -775,10 +981,14 @@ test("detection polls, previews, and supports sequential keyboard review", async
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   await page.getByRole("button", { name: "Add to project" }).click();
+  await openTask(page, "Export");
+  await expect(page.getByLabel("What to export", { exact: true })).toHaveValue("segments");
   await openTask(page, "Detection");
-  await page.getByRole("button", { name: "Find silence" }).click();
-  await expect(page.getByText("Detection running.")).toBeVisible();
-  await expect(page.getByText(/1 candidates found/)).toBeVisible();
+  await page.getByRole("button", { name: "Find pauses" }).click();
+  await expect(page.getByText("Detection running.", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("1 candidates found. Review each before accepting.", { exact: true }),
+  ).toBeVisible();
   await page.getByRole("button", { name: "Preview candidate 1" }).click();
   await expect(page.getByLabel("Preview player")).toHaveAttribute(
     "data-playback-mode",
@@ -786,19 +996,47 @@ test("detection polls, previews, and supports sequential keyboard review", async
   );
   await expect(page.getByLabel("Preview player")).toHaveAttribute("data-preview-offset", "1000");
   await page.getByRole("button", { name: "Dismiss" }).click();
-  await expect(page.getByText("Candidate dismissed.")).toBeVisible();
-  await page.getByRole("button", { name: "Find silence" }).click();
-  await expect(page.getByText(/1 candidates found/)).toBeVisible();
+  await expect(page.getByText("Candidate dismissed.", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Find pauses" }).click();
+  await expect(
+    page.getByText("1 candidates found. Review each before accepting.", { exact: true }),
+  ).toBeVisible();
   await page.getByLabel("Detection candidates").getByRole("listitem").focus();
   await page.keyboard.press("a");
-  await expect(page.getByText("Candidate accepted; save the project to persist it.")).toBeVisible();
+  await expect(
+    page.getByText("Candidate accepted; save the project to persist it.", { exact: true }),
+  ).toBeVisible();
+  await openTask(page, "Export");
+  await expect(page.getByLabel("What to export", { exact: true })).toHaveValue("segments");
   await openTask(page, "Cuts");
   await expect(page.getByText(/1 selected/)).toBeVisible();
+});
+
+test("detection recovers when the first status request fails", async ({ page }) => {
+  let statusRequests = 0;
+  await page.route(`${apiOrigin}/api/v1/jobs/j_detection-silence-*`, (route) => {
+    if (route.request().method() === "GET" && ++statusRequests === 1)
+      return route.fulfill({
+        status: 503,
+        json: { error: { code: "unavailable", message: "try again", requestId: "r" } },
+      });
+    return route.fallback();
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await page.getByRole("button", { name: "Add to project" }).click();
+  await openTask(page, "Detection");
+  await page.getByRole("button", { name: "Find pauses" }).click();
+  await expect(
+    page.getByText("1 candidates found. Review each before accepting.", { exact: true }),
+  ).toBeVisible();
+  expect(statusRequests).toBeGreaterThan(1);
 });
 
 test("bulk detection acceptance skips unsafe candidates and undoes as one edit", async ({
   page,
 }) => {
+  let reviewJob: Record<string, unknown> = {};
   await page.route(`${apiOrigin}/api/v1/projects/*/detections`, (route) => {
     const projectId = new URL(route.request().url()).pathname.split("/")[4];
     const candidate = (id: string, startMs: number, endMs: number, projectRevision = 1) => ({
@@ -808,44 +1046,97 @@ test("bulk detection acceptance skips unsafe candidates and undoes as one edit",
       projectRevision,
       startMs,
       endMs,
-      source: "scene",
-      confidence: 0.9,
+      source: "black",
     });
-    return route.fulfill({
-      status: 202,
-      json: {
-        id: "j_detection-review",
-        type: "detection",
-        state: "succeeded",
-        mediaId: media.id,
-        projectId,
-        projectRevision: 1,
-        kind: "scene",
-        candidates: [
-          candidate("c_review-valid-1", 1000, 1500),
-          candidate("c_review-valid-2", 2000, 2500),
-          candidate("c_review-overlap", 1200, 1600),
-          candidate("c_review-stale", 3000, 3500, 0),
-          candidate("c_review-invalid", 4000, 11000),
-        ],
-      },
-    });
+    reviewJob = {
+      id: "j_detection-review",
+      type: "detection",
+      state: "succeeded",
+      mediaId: media.id,
+      projectId,
+      projectRevision: 1,
+      kind: "black",
+      candidates: [
+        candidate("c_review-valid-1", 1000, 1500),
+        candidate("c_review-valid-2", 2000, 2500),
+        candidate("c_review-overlap", 1200, 1600),
+        candidate("c_review-stale", 3000, 3500, 0),
+        candidate("c_review-invalid", 4000, 11000),
+      ],
+    };
+    return route.fulfill({ status: 202, json: reviewJob });
   });
+  await page.route(`${apiOrigin}/api/v1/jobs/j_detection-review`, (route) =>
+    route.fulfill({ json: reviewJob }),
+  );
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   await page.getByRole("button", { name: "Add to project" }).click();
   await openTask(page, "Detection");
-  await page.getByRole("button", { name: "Split into scenes" }).click();
-  await expect(page.getByText(/5 candidates found/)).toBeVisible();
+  await page.getByRole("button", { name: "Find black sections" }).click();
+  await expect(
+    page.getByText("5 candidates found. Review each before accepting.", { exact: true }),
+  ).toBeVisible();
   await page.once("dialog", (dialog) => void dialog.accept());
   await page.getByRole("button", { name: "Accept all valid" }).click();
   await expect(
-    page.getByText(/Accepted 2 candidates; skipped 1 stale, 1 invalid, 1 overlapping/),
+    page.getByText(
+      "Accepted 2 candidates; skipped 1 stale, 1 invalid, 1 overlapping. Save the project to persist them.",
+      { exact: true },
+    ),
   ).toBeVisible();
   await openTask(page, "Cuts");
   await expect(page.getByText(/2 selected/)).toBeVisible();
-  await page.getByRole("button", { name: "Undo" }).click();
+  await page.getByRole("button", { name: "Play preview" }).focus();
+  await page.keyboard.press("ControlOrMeta+z");
   await expect(page.getByText(/0 selected/)).toBeVisible();
+});
+
+test("scene changes remain points with bounded preview, seek, and dismiss", async ({ page }) => {
+  let sceneJob: Record<string, unknown> = {};
+  await page.route(`${apiOrigin}/api/v1/projects/*/detections`, (route) => {
+    const projectId = new URL(route.request().url()).pathname.split("/")[4];
+    sceneJob = {
+      id: "j_detection-scene-point",
+      type: "detection",
+      state: "succeeded",
+      mediaId: media.id,
+      projectId,
+      projectRevision: 1,
+      kind: "scene",
+      candidates: [
+        {
+          id: "c_scene-point",
+          mediaId: media.id,
+          projectId,
+          projectRevision: 1,
+          pointMs: 5000,
+          source: "scene",
+        },
+      ],
+    };
+    return route.fulfill({ status: 202, json: sceneJob });
+  });
+  await page.route(`${apiOrigin}/api/v1/jobs/j_detection-scene-point`, (route) =>
+    route.fulfill({ json: sceneJob }),
+  );
+  await page.goto("/");
+  await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await page.getByRole("button", { name: "Add to project" }).click();
+  await openTask(page, "Detection");
+  await page.getByRole("button", { name: "Find scene changes" }).click();
+  await expect(
+    page.getByText("1 candidates found. Review each before accepting.", { exact: true }),
+  ).toBeVisible();
+  const row = page.getByLabel("Detection candidates").getByRole("listitem");
+  await expect(row.getByRole("button", { name: "Add segment" })).toHaveCount(0);
+  await expect(row.getByRole("button", { name: "Seek to point" })).toBeVisible();
+  await row.getByRole("button", { name: "Seek to point" }).click();
+  await expect(page.getByLabel("Timeline playhead")).toHaveValue("5000");
+  await row.getByRole("button", { name: "Preview candidate 1" }).click();
+  await expect(page.getByLabel("Preview player")).toHaveAttribute("data-preview-offset", "5000");
+  await row.getByRole("button", { name: "Dismiss" }).click();
+  await expect(page.getByText("All candidates reviewed", { exact: true })).toBeVisible();
 });
 
 test("detection can be cancelled and reports failed jobs", async ({ page }) => {
@@ -853,12 +1144,14 @@ test("detection can be cancelled and reports failed jobs", async ({ page }) => {
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   await page.getByRole("button", { name: "Add to project" }).click();
   await openTask(page, "Detection");
-  await page.getByRole("button", { name: "Find silence" }).click();
+  await page.getByRole("button", { name: "Find pauses" }).click();
   await expect(page.getByRole("button", { name: "Cancel detection" })).toBeVisible();
   await page.getByRole("button", { name: "Cancel detection" }).click();
-  await expect(page.getByText("Detection cancelled.")).toBeVisible();
-  await page.getByRole("button", { name: "Find black frames" }).click();
-  await expect(page.getByText("Detection failed: detection_failed.")).toBeVisible();
+  await expect(page.getByText("Detection cancelled.", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Find black sections" }).click();
+  await expect(
+    page.getByText("Detection failed: detection_failed.", { exact: true }),
+  ).toBeVisible();
 });
 
 test("clears detection results when media context changes", async ({ page }) => {
@@ -891,7 +1184,6 @@ test("clears detection results when media context changes", async ({ page }) => 
             startMs: 1000,
             endMs: 1500,
             source: "silence",
-            confidence: 0.9,
           },
         ],
       },
@@ -901,7 +1193,7 @@ test("clears detection results when media context changes", async ({ page }) => 
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   await page.getByRole("button", { name: "Add to project" }).click();
   await openTask(page, "Detection");
-  await page.getByRole("button", { name: "Find silence" }).click();
+  await page.getByRole("button", { name: "Find pauses" }).click();
   await expect(page.getByRole("button", { name: "Cancel detection" })).toBeVisible();
   await pollStarted;
   await page.getByRole("button", { name: /second.mp4/ }).click();
@@ -930,7 +1222,9 @@ test("loads timeline assets for the visible range and keeps editing available on
   );
   expect(initialDuration).toBe(10_000);
   await expect(page.locator("canvas.timeline-canvas")).toBeVisible();
-  await page.getByRole("button", { name: "Zoom in" }).click();
+  await page.evaluate(() =>
+    globalThis.dispatchEvent(new CustomEvent("timeline-zoom", { detail: 2 })),
+  );
   await expect
     .poll(() =>
       requests.some(
@@ -991,7 +1285,7 @@ test("MVP browser behavior: list, metadata, settle, cancel, offset, markers, res
   await saveProject(page); // 7 markers save
 
   await loadProject(page, "p_demo-project");
-  await expect(page.getByText("Project loaded.")).toBeVisible(); // 8 project restores after reload
+  await expect(page.locator(".project-sidebar-header strong")).toHaveText("Demo project"); // 8 project restores after reload
   await openTask(page, "Cuts");
   await expect(page.getByLabel("Label cut 1")).toHaveValue("restored");
   expect(requestOrigins).not.toHaveLength(0);
@@ -1010,9 +1304,9 @@ test("keeps playback position, markers, and undo history synchronized", async ({
     player.dispatchEvent(new Event("timeupdate"));
   });
   await expect(page.getByLabel("Timeline playhead")).toHaveValue("2500");
-  await expect(page.getByRole("button", { name: "Undo" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Undo" })).toHaveCount(0);
   await page.getByRole("button", { name: "Set in" }).click();
-  await expect(page.getByLabel("In point")).toHaveValue("00:02.500");
+  await expect(page.locator("#timeline-description")).toContainText("In marker 00:02.500");
 });
 
 test("shows a safe preview failure and maps markers from the watched preview", async ({ page }) => {
@@ -1045,7 +1339,7 @@ test("shows a safe preview failure and maps markers from the watched preview", a
     player.dispatchEvent(new Event("timeupdate"));
   });
   await page.getByRole("button", { name: "Set in" }).click();
-  await expect(page.getByLabel("In point")).toHaveValue("00:01.500");
+  await expect(page.locator("#timeline-description")).toContainText("In marker 00:01.500");
 });
 
 test("mutes in the browser without rebuilding the server preview", async ({ page }) => {
@@ -1151,9 +1445,8 @@ test("renews whole-media playback without dirtying viewing state and honors paus
   await expect(video).toHaveAttribute("data-playback-intent", "paused");
   expect(await video.evaluate((element) => (element as HTMLVideoElement).volume)).toBe(0.35);
   await expect(video).toHaveJSProperty("muted", true);
-  await page.getByRole("button", { name: "Zoom in" }).click();
   await expect(page.locator("header").getByLabel("Project status")).toContainText("Saved");
-  await expect(page.getByRole("button", { name: "Undo" })).toBeDisabled();
+  await expect(page.getByRole("button", { name: "Undo" })).toHaveCount(0);
   expect(new URL(previewRequests[1]).searchParams.get("centerMs")).toBe("7250");
 });
 
@@ -1344,22 +1637,110 @@ test("shows unsupported preview guidance without making a preview request", asyn
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   await expect(
     page.getByText(
-      "Preview is unavailable in this browser. Use the timeline controls to set markers manually.",
+      "Preview is unavailable in this browser. Use the I and O keyboard shortcuts to set markers manually.",
     ),
   ).toBeVisible();
   await page.waitForTimeout(250);
   expect(previewRequests).toBe(0);
 });
 
+test("project recovery remains reachable with a collapsed media panel", async ({ page }) => {
+  await page.addInitScript(
+    ({ itemId, mediaId }) => {
+      if (!localStorage.getItem("videocutlist.project-recovery-test-seeded")) {
+        localStorage.setItem("videocutlist.project-recovery-test-seeded", "true");
+        localStorage.setItem(
+          "videocutlist.project-recovery.v1",
+          JSON.stringify({
+            version: 1,
+            projectId: "p_demo-project",
+            revision: 1,
+            schemaVersion: 2,
+            name: "Recovered project",
+            items: [
+              {
+                id: itemId,
+                mediaId,
+                segments: [{ startMs: 100, endMs: 300 }],
+                exportOptions: {},
+              },
+            ],
+            savedAt: 1_735_689_600_000,
+          }),
+        );
+      }
+    },
+    { itemId, mediaId: media.id },
+  );
+  await page.goto("/");
+  await page.getByRole("button", { name: "Hide media library" }).first().press("Enter");
+  await expect(page.getByRole("button", { name: "Show media library" }).first()).toBeVisible();
+  const recoveryNotice = page
+    .getByRole("status")
+    .filter({ hasText: "Local recovery is available" });
+  await expect(page.getByRole("button", { name: "Recover local edits" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Dismiss" })).toBeVisible();
+  await recoveryNotice.getByRole("button", { name: "Dismiss" }).click();
+  await expect(recoveryNotice).toHaveCount(0);
+  await page.reload();
+  await expect(page.getByRole("button", { name: "Recover local edits" })).toHaveCount(0);
+});
+
+test("conflict choices stay reachable in Settings and after a failed reload", async ({ page }) => {
+  let failReload = true;
+  await page.route(`${apiOrigin}/api/v1/projects/*`, async (route) => {
+    if (route.request().method() === "PUT")
+      return route.fulfill({
+        status: 409,
+        json: {
+          error: {
+            code: "revision_conflict",
+            message: "Project revision conflicts.",
+            requestId: "r-conflict",
+          },
+        },
+      });
+    if (route.request().method() === "GET" && failReload) return route.fulfill({ status: 503 });
+    return route.fallback();
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await page.getByRole("button", { name: "Add to project" }).click();
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const notice = page.getByRole("alert").filter({ hasText: "Another client saved this project." });
+  await expect(notice).toBeVisible();
+  await expect(notice.getByRole("button", { name: "Reload remote project" })).toBeVisible();
+  await expect(
+    notice.getByRole("button", { name: "Save local work as new project" }),
+  ).toBeVisible();
+  await notice.getByRole("button", { name: "Reload remote project" }).click();
+  await expect(notice).toBeVisible();
+  await expect(
+    notice.getByRole("button", { name: "Save local work as new project" }),
+  ).toBeVisible();
+  failReload = false;
+});
+
 test("save reports an optimistic revision conflict", async ({ page }) => {
   await page.route(`${apiOrigin}/api/v1/projects/*`, (route) =>
-    route.request().method() === "PUT" ? route.fulfill({ status: 409 }) : route.fallback(),
+    route.request().method() === "PUT"
+      ? route.fulfill({
+          status: 409,
+          json: {
+            error: {
+              code: "revision_conflict",
+              message: "Project revision conflicts.",
+              requestId: "r-conflict",
+            },
+          },
+        })
+      : route.fallback(),
   );
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   await addSelectedMediaToProject(page);
   await openTask(page, "Project");
-  await page.getByRole("button", { name: "Save project", exact: true }).click();
+  await page.getByRole("button", { name: "Save project from project header", exact: true }).click();
   await expect(
     page.getByRole("alert").filter({ hasText: "Another client saved this project." }),
   ).toBeVisible();
@@ -1373,15 +1754,7 @@ test("exports the saved segments, polls to a safe result, and shows warnings", a
   page.on("request", (request) => requests.push(new URL(request.url()).pathname));
   await page.route(`${apiOrigin}/api/v1/projects/*/exports`, async (route) => {
     expect(route.request().method()).toBe("POST");
-    expect(route.request().postDataJSON()).toEqual({
-      mode: "separate",
-      selection: "segments",
-      streamIndexes: [],
-      cutStrategy: "stream_copy_preferred",
-      container: "mkv",
-      destinationId: "download",
-      filenameTemplate: "{source}-{segment}.{ext}",
-    });
+    expect(route.request().postDataJSON()).toEqual({});
     await route.fulfill({
       json: {
         batchId: "b_export000001",
@@ -1412,6 +1785,37 @@ test("exports the saved segments, polls to a safe result, and shows warnings", a
             },
     });
   });
+  await page.route(`${apiOrigin}/api/v1/batches/b_export000001`, async (route) => {
+    const job =
+      polls < 1
+        ? { id: "j_export", type: "export", state: "queued", progress: 0 }
+        : polls === 1
+          ? { id: "j_export", type: "export", state: "running", progress: 0.5 }
+          : {
+              id: "j_export",
+              type: "export",
+              state: "succeeded",
+              progress: 1,
+              result: {
+                outputName: "camera-cut.mkv",
+                sizeBytes: 42,
+                retainUntil: "2026-08-20T12:00:00Z",
+                destinationKind: "download",
+              },
+              appliedStrategy: "stream_copy",
+              verified: true,
+              warnings: ["Cut may start at an earlier keyframe."],
+            };
+    return route.fulfill({
+      json: {
+        batchId: "b_export000001",
+        projectRevision: 1,
+        state: job.state,
+        progress: job.progress,
+        jobs: [job],
+      },
+    });
+  });
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   await page.getByLabel("Timeline playhead").fill("100");
@@ -1434,12 +1838,16 @@ test("exports the saved segments, polls to a safe result, and shows warnings", a
   expect(requests.findIndex((path) => /\/projects\/p_[^/]+$/.test(path))).toBeLessThan(
     requests.findIndex((path) => path.endsWith("/exports")),
   );
-  await expect(page.getByLabel("Export result")).toContainText("camera-cut.mkv");
-  await expect(page.getByLabel("Export result")).toContainText("42 bytes");
-  await expect(page.getByLabel("Export result")).toContainText("Verified output");
-  await expect(page.getByLabel("Export result")).not.toContainText("stream_copy");
-  await expect(page.getByRole("link", { name: "Download output 1" })).toBeVisible();
-  await expect(page.getByLabel("Export warnings")).toContainText("earlier keyframe");
+  const currentBatch = page.getByRole("region", { name: "Current batch" });
+  const result = currentBatch.locator(".export-job-result");
+  await expect(result).toContainText("camera-cut.mkv");
+  await expect(result).toContainText("42 bytes");
+  await expect(result).toContainText("Verified");
+  await expect(result).not.toContainText("stream_copy");
+  await expect(currentBatch.getByRole("link", { name: "Download output 1" })).toBeVisible();
+  await expect(
+    currentBatch.locator(".export-job-subdetails").filter({ hasText: "Warnings and review notes" }),
+  ).toContainText("earlier keyframe");
   await expect(page.locator("main")).not.toContainText("/private/export");
 });
 
@@ -1475,11 +1883,10 @@ test("reviews preflight blockers and only enables eligible downloads", async ({ 
   );
   await saveProject(page);
   await openTask(page, "Export");
-  await page.getByText("Export options", { exact: true }).click();
   await expect(page.getByLabel("Destination")).toHaveValue("download");
-  await expect(page.getByText("Video: h264")).toBeVisible();
-  await expect(page.getByText("Audio: aac")).toBeVisible();
-  await expect(page.getByText("Subtitle: ass")).toBeVisible();
+  await expect(page.getByText("Video: h264", { exact: true })).toBeVisible();
+  await expect(page.getByText("Audio: aac", { exact: true })).toBeVisible();
+  await expect(page.getByText("Subtitle: ass", { exact: true })).toBeVisible();
   await page.getByRole("checkbox", { name: "Audio: aac" }).uncheck();
   await saveProject(page);
   await openTask(page, "Export");
@@ -1487,7 +1894,7 @@ test("reviews preflight blockers and only enables eligible downloads", async ({ 
   await expect(page.getByRole("checkbox", { name: "Video: h264" })).toBeChecked();
   await expect(page.getByRole("checkbox", { name: "Audio: aac" })).not.toBeChecked();
   await expect(page.getByRole("checkbox", { name: "Subtitle: ass" })).toBeChecked();
-  await expect(page.getByLabel("Export summary")).toContainText("camera-Segment 001.mkv");
+  await expect(page.getByLabel("Export plan")).toContainText("camera-Segment 001.mkv");
   await expect(page.getByText("Selected streams: 2")).toHaveCount(0);
   await expect(page.getByText("Stream 1 cannot be exported.").first()).toBeVisible();
   await expect(page.getByText(/blocked:/)).toHaveCount(0);
@@ -1498,7 +1905,13 @@ test("shows stable failed and capacity messages and permits retry", async ({ pag
   let creates = 0;
   await page.route(`${apiOrigin}/api/v1/projects/*/exports`, async (route) => {
     creates += 1;
-    if (creates === 1) return route.fulfill({ status: 429 });
+    if (creates === 1)
+      return route.fulfill({
+        status: 429,
+        json: {
+          error: { code: "export_busy", message: "Export capacity is full.", requestId: "r-busy" },
+        },
+      });
     return route.fulfill({
       json: {
         batchId: "b_failed000001",
@@ -1549,17 +1962,115 @@ test("shows stable failed and capacity messages and permits retry", async ({ pag
 
 test("cancels an active export without showing a path", async ({ page }) => {
   let cancelled = false;
+  let batchPolls = 0;
+  let jobPolls = 0;
+  let releaseStaleBatch!: () => void;
+  let staleBatchPollStarted!: () => void;
+  let canonicalBatchPollStarted!: () => void;
+  let releaseCanonicalBatch!: () => void;
+  let releaseStale!: () => void;
+  let stalePollStarted!: () => void;
+  let releasePostCancel!: () => void;
+  let postCancelPollStarted!: () => void;
+  const staleBatchPoll = new Promise<void>((resolve) => {
+    releaseStaleBatch = resolve;
+  });
+  const staleBatchPollReady = new Promise<void>((resolve) => {
+    staleBatchPollStarted = resolve;
+  });
+  const canonicalBatchPollReady = new Promise<void>((resolve) => {
+    canonicalBatchPollStarted = resolve;
+  });
+  const canonicalBatchPoll = new Promise<void>((resolve) => {
+    releaseCanonicalBatch = resolve;
+  });
+  const stalePoll = new Promise<void>((resolve) => {
+    releaseStale = resolve;
+  });
+  const stalePollReady = new Promise<void>((resolve) => {
+    stalePollStarted = resolve;
+  });
+  const postCancelPoll = new Promise<void>((resolve) => {
+    releasePostCancel = resolve;
+  });
+  const postCancelPollReady = new Promise<void>((resolve) => {
+    postCancelPollStarted = resolve;
+  });
+  const queuedJob = {
+    id: "j_cancel",
+    batchId: "b_cancel000001",
+    projectItemId: itemId,
+    mediaLabel: "camera.mp4",
+    type: "export",
+    state: "queued",
+    progress: 0,
+  };
+  const succeededJob = {
+    id: "j_cancel-succeeded",
+    batchId: "b_cancel000001",
+    projectItemId: "i_second-item",
+    mediaLabel: "second.mp4",
+    type: "export",
+    state: "succeeded",
+    progress: 1,
+    result: {
+      outputName: "second-cut.mkv",
+      sizeBytes: 99,
+      retainUntil: "2026-08-20T12:00:00Z",
+      destinationKind: "download",
+    },
+    verified: true,
+  };
+  const queuedBatch = {
+    batchId: "b_cancel000001",
+    projectId: "p_demo-project",
+    projectRevision: 1,
+    state: "queued",
+    progress: 0,
+    jobs: [queuedJob, succeededJob],
+  };
+  const cancelledBatch = {
+    ...queuedBatch,
+    state: "cancelled",
+    progress: 1,
+    jobs: [{ ...queuedJob, state: "cancelled", progress: 1 }, succeededJob],
+  };
   await page.route(`${apiOrigin}/api/v1/projects/*/exports`, (route) =>
     route.fulfill({
       json: {
         batchId: "b_cancel000001",
-        jobs: [{ id: "j_cancel", type: "export", state: "queued", progress: 0 }],
+        jobs: [queuedJob, succeededJob],
       },
     }),
   );
-  await page.route(`${apiOrigin}/api/v1/batches/b_cancel000001`, (route) => {
-    if (route.request().method() === "DELETE") cancelled = true;
-    return route.fulfill({ status: 204 });
+  await page.route(`${apiOrigin}/api/v1/batches/b_cancel000001`, async (route) => {
+    if (route.request().method() === "DELETE") {
+      cancelled = true;
+      return route.fulfill({ status: 204 });
+    }
+    if (batchPolls++ === 0) {
+      staleBatchPollStarted();
+      await staleBatchPoll;
+      return route.fulfill({ json: queuedBatch });
+    }
+    canonicalBatchPollStarted();
+    await canonicalBatchPoll;
+    return route.fulfill({ json: cancelledBatch });
+  });
+  await page.route(`${apiOrigin}/api/v1/jobs/j_cancel`, async (route) => {
+    const poll = jobPolls++;
+    if (poll === 1) {
+      stalePollStarted();
+      await stalePoll;
+      return route.fulfill({ json: queuedJob });
+    }
+    if (poll === 2) {
+      postCancelPollStarted();
+      await postCancelPoll;
+    }
+    return route.fulfill({
+      json: cancelled ? { ...queuedJob, state: "cancelled", progress: 1 } : queuedJob,
+    });
   });
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
@@ -1575,10 +2086,351 @@ test("cancels an active export without showing a path", async ({ page }) => {
   await saveProject(page);
   await openTask(page, "Export");
   await page.getByRole("button", { name: "Create clips" }).click();
+  await staleBatchPollReady;
+  await stalePollReady;
   await page.getByRole("button", { name: "Cancel export" }).click();
-  await expect(page.getByText("Export cancelled.")).toBeVisible();
+  await expect(page.getByText("Export batch cancellation requested.")).toBeVisible();
   expect(cancelled).toBe(true);
+  await canonicalBatchPollReady;
+  await postCancelPollReady;
+  const currentBatch = page.getByRole("region", { name: "Current batch" });
+  await expect(currentBatch.locator(".export-job-card")).toHaveCount(2);
+  await expect(currentBatch.locator(".export-job-result")).toContainText("second-cut.mkv");
+  releaseStaleBatch();
+  releaseStale();
+  releaseCanonicalBatch();
+  await expect(page.getByText("Export queued.", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Export batch queued.", { exact: true })).toHaveCount(0);
+  releasePostCancel();
+  await expect(page.getByText("Export cancelled.")).toBeVisible();
+  await expect(currentBatch.locator(".export-job-card")).toHaveCount(2);
+  await expect(currentBatch.locator(".export-job-card").nth(0)).toContainText("cancelled");
+  await expect(currentBatch.locator(".export-job-card").nth(1)).toContainText("succeeded");
+  await expect(currentBatch.locator(".export-job-result")).toContainText("second-cut.mkv");
   await expect(page.locator("main")).not.toContainText("/private/export");
+});
+
+test("failed export cancellation restores the active job for retry", async ({ page }) => {
+  let cancelAttempts = 0;
+  let cancelled = false;
+  const queuedJob = {
+    id: "j_cancel-retry",
+    batchId: "b_cancel-retry",
+    projectItemId: itemId,
+    mediaLabel: "camera.mp4",
+    type: "export",
+    state: "queued",
+    progress: 0,
+  };
+  const cancelledJob = { ...queuedJob, state: "cancelled", progress: 1 };
+  const queuedBatch = {
+    batchId: "b_cancel-retry",
+    projectId: "p_demo-project",
+    projectRevision: 1,
+    state: "queued",
+    progress: 0,
+    jobs: [queuedJob],
+  };
+  const cancelledBatch = {
+    ...queuedBatch,
+    state: "cancelled",
+    progress: 1,
+    jobs: [cancelledJob],
+  };
+  await page.route(`${apiOrigin}/api/v1/projects/*/exports`, (route) =>
+    route.fulfill({ json: { batchId: queuedBatch.batchId, jobs: [queuedJob] } }),
+  );
+  await page.route(`${apiOrigin}/api/v1/batches/b_cancel-retry`, async (route) => {
+    if (route.request().method() === "DELETE") {
+      cancelAttempts += 1;
+      if (cancelAttempts === 1) return route.fulfill({ status: 503 });
+      cancelled = true;
+      return route.fulfill({ status: 204 });
+    }
+    return route.fulfill({ json: cancelled ? cancelledBatch : queuedBatch });
+  });
+  await page.route(`${apiOrigin}/api/v1/jobs/j_cancel-retry`, (route) =>
+    route.fulfill({ json: cancelled ? cancelledJob : queuedJob }),
+  );
+
+  await page.goto("/");
+  await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await setRange(page, 100, 700);
+  await expect(page.locator(".cut-row[data-segment-id]")).toHaveCount(1);
+  await saveProject(page);
+  await openTask(page, "Export");
+  const cancelButton = page.getByRole("button", { name: "Cancel export" });
+  await page.getByRole("button", { name: "Create clips" }).click();
+  await expect(cancelButton).toBeVisible();
+  await cancelButton.click();
+  await expect.poll(() => cancelAttempts).toBe(1);
+  await expect(cancelButton).toBeVisible();
+  await cancelButton.click();
+  await expect(page.getByText("Export cancelled.")).toBeVisible();
+  expect(cancelAttempts).toBe(2);
+  expect(cancelled).toBe(true);
+});
+
+test("completion winning batch cancellation keeps canonical output", async ({ page }) => {
+  let completed = false;
+  let batchReads = 0;
+  let jobReads = 0;
+  const queuedJob = {
+    id: "j_cancel-race",
+    batchId: "b_cancel-race",
+    projectItemId: itemId,
+    mediaLabel: "camera.mp4",
+    type: "export",
+    state: "queued",
+    progress: 0,
+  };
+  const succeededJob = {
+    ...queuedJob,
+    state: "succeeded",
+    progress: 1,
+    result: {
+      outputName: "camera-race.mkv",
+      sizeBytes: 42,
+      retainUntil: "2026-08-20T12:00:00Z",
+      destinationKind: "download",
+    },
+    verified: true,
+  };
+  const queuedBatch = {
+    batchId: "b_cancel-race",
+    projectId: "p_demo-project",
+    projectRevision: 1,
+    state: "queued",
+    progress: 0,
+    jobs: [queuedJob],
+  };
+  const succeededBatch = {
+    ...queuedBatch,
+    state: "succeeded",
+    progress: 1,
+    jobs: [succeededJob],
+  };
+  await page.route(`${apiOrigin}/api/v1/projects/*/exports`, (route) =>
+    route.fulfill({ json: { batchId: queuedBatch.batchId, jobs: [queuedJob] } }),
+  );
+  await page.route(`${apiOrigin}/api/v1/batches/b_cancel-race`, (route) => {
+    if (route.request().method() === "DELETE") {
+      completed = true;
+      return route.fulfill({ status: 204 });
+    }
+    batchReads += 1;
+    return route.fulfill({ json: completed ? succeededBatch : queuedBatch });
+  });
+  await page.route(`${apiOrigin}/api/v1/jobs/j_cancel-race`, (route) => {
+    jobReads += 1;
+    return route.fulfill({ json: completed ? succeededJob : queuedJob });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await setRange(page, 100, 700);
+  await expect(page.locator(".cut-row[data-segment-id]")).toHaveCount(1);
+  await saveProject(page);
+  await openTask(page, "Export");
+  await page.getByRole("button", { name: "Create clips" }).click();
+  await expect(page.getByRole("button", { name: "Cancel export" })).toBeVisible();
+  await page.getByRole("button", { name: "Cancel export" }).click();
+  await expect(page.getByText("Export complete.")).toBeVisible({ timeout: 5_000 });
+  await expect(page.getByRole("button", { name: "Cancel export" })).not.toBeVisible();
+  expect(completed).toBe(true);
+  expect(batchReads).toBeGreaterThan(1);
+  expect(jobReads).toBeGreaterThan(1);
+  await expect(
+    page.getByRole("region", { name: "Current batch" }).locator(".export-job-result"),
+  ).toContainText("camera-race.mkv");
+});
+
+test("QueueView cancellation keeps a completion-winning batch canonical", async ({ page }) => {
+  let completed = false;
+  const otherJob = {
+    id: "j_queue-current",
+    batchId: "b_queue-current",
+    projectItemId: itemId,
+    mediaLabel: "current.mp4",
+    type: "export",
+    state: "running",
+    progress: 0.5,
+  };
+  const targetQueuedJob = {
+    id: "j_queue-target",
+    batchId: "b_queue-target",
+    projectItemId: itemId,
+    mediaLabel: "camera.mp4",
+    type: "export",
+    state: "queued",
+    progress: 0,
+  };
+  const targetSucceededJob = {
+    ...targetQueuedJob,
+    state: "succeeded",
+    progress: 1,
+    result: {
+      outputName: "queue-race.mkv",
+      sizeBytes: 42,
+      retainUntil: "2026-08-20T12:00:00Z",
+      destinationKind: "download",
+    },
+    verified: true,
+  };
+  const otherBatch = {
+    batchId: "b_queue-current",
+    projectId: "p_demo-project",
+    projectRevision: 1,
+    state: "running",
+    progress: 0.5,
+    jobs: [otherJob],
+  };
+  const targetQueuedBatch = {
+    batchId: "b_queue-target",
+    projectId: "p_demo-project",
+    projectRevision: 1,
+    state: "queued",
+    progress: 0,
+    jobs: [targetQueuedJob],
+  };
+  const targetSucceededBatch = {
+    ...targetQueuedBatch,
+    state: "succeeded",
+    progress: 1,
+    jobs: [targetSucceededJob],
+  };
+  await page.route(`${apiOrigin}/api/v1/batches**`, async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (request.method() !== "GET" || url.pathname !== "/api/v1/batches") return route.fallback();
+    return route.fulfill({
+      json: { items: [otherBatch, completed ? targetSucceededBatch : targetQueuedBatch] },
+    });
+  });
+  await page.route(`${apiOrigin}/api/v1/batches/*`, async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    if (url.pathname === "/api/v1/batches/b_queue-target") {
+      if (request.method() === "DELETE") {
+        completed = true;
+        return route.fulfill({ status: 204 });
+      }
+      return route.fulfill({ json: completed ? targetSucceededBatch : targetQueuedBatch });
+    }
+    if (url.pathname === "/api/v1/batches/b_queue-current")
+      return route.fulfill({ json: otherBatch });
+    return route.fallback();
+  });
+  await page.route(`${apiOrigin}/api/v1/jobs/*`, async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname === "/api/v1/jobs/j_queue-target")
+      return route.fulfill({ json: completed ? targetSucceededJob : targetQueuedJob });
+    if (url.pathname === "/api/v1/jobs/j_queue-current") return route.fulfill({ json: otherJob });
+    return route.fallback();
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await openTask(page, "Export");
+  const targetCard = page.locator(".queue-batch").filter({ hasText: "b_queue-target" });
+  await expect(targetCard.getByRole("button", { name: "Cancel batch" })).toBeVisible();
+  await targetCard.getByRole("button", { name: "Cancel batch" }).click();
+  await expect(targetCard).toContainText("succeeded");
+  await expect(targetCard.locator(".export-job-result")).toContainText("queue-race.mkv");
+  await expect(targetCard.getByRole("button", { name: "Cancel batch" })).not.toBeVisible();
+  expect(completed).toBe(true);
+});
+
+test("mixed batch keeps a later active child selected and preserves output order", async ({
+  page,
+}) => {
+  let cancelled = false;
+  let runningJobReads = 0;
+  const succeededJob = {
+    id: "j_mixed-first",
+    batchId: "b_mixed-order",
+    projectItemId: itemId,
+    mediaLabel: "first.mp4",
+    type: "export",
+    state: "succeeded",
+    progress: 1,
+    result: {
+      outputName: "first-output.mkv",
+      sizeBytes: 42,
+      retainUntil: "2026-08-20T12:00:00Z",
+      destinationKind: "download",
+    },
+    verified: true,
+  };
+  const runningJob = {
+    id: "j_mixed-running",
+    batchId: "b_mixed-order",
+    projectItemId: "i_second-item",
+    mediaLabel: "second.mp4",
+    type: "export",
+    state: "running",
+    progress: 0.5,
+  };
+  const cancelledJob = { ...runningJob, state: "cancelled", progress: 1 };
+  const runningBatch = {
+    batchId: "b_mixed-order",
+    projectId: "p_demo-project",
+    projectRevision: 1,
+    state: "running",
+    progress: 0.5,
+    jobs: [succeededJob, runningJob],
+  };
+  const cancelledBatch = {
+    ...runningBatch,
+    state: "cancelled",
+    progress: 1,
+    jobs: [succeededJob, cancelledJob],
+  };
+  await page.route(`${apiOrigin}/api/v1/projects/*/exports`, (route) =>
+    route.fulfill({ json: { batchId: runningBatch.batchId, jobs: runningBatch.jobs } }),
+  );
+  await page.route(`${apiOrigin}/api/v1/batches/b_mixed-order`, async (route) => {
+    if (route.request().method() === "DELETE") {
+      cancelled = true;
+      return route.fulfill({ status: 204 });
+    }
+    return route.fulfill({ json: cancelled ? cancelledBatch : runningBatch });
+  });
+  await page.route(`${apiOrigin}/api/v1/jobs/j_mixed-first`, (route) =>
+    route.fulfill({ json: succeededJob }),
+  );
+  await page.route(`${apiOrigin}/api/v1/jobs/j_mixed-running`, async (route) => {
+    runningJobReads += 1;
+    return route.fulfill({ json: cancelled ? cancelledJob : runningJob });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await setRange(page, 100, 700);
+  await expect(page.locator(".cut-row[data-segment-id]")).toHaveCount(1);
+  await saveProject(page);
+  await openTask(page, "Export");
+  const exportButton = page.getByRole("button", { name: "Create clips" });
+  await exportButton.click();
+  await expect(page.getByRole("button", { name: "Cancel export" })).toBeVisible();
+  await expect(exportButton).toBeDisabled();
+  const currentBatch = page.getByRole("region", { name: "Current batch" });
+  const cards = currentBatch.locator(".export-job-card");
+  await expect(cards).toHaveCount(2);
+  await expect(cards.nth(0)).toContainText("first.mp4");
+  await expect(cards.nth(0).locator(".export-job-result")).toContainText("first-output.mkv");
+  await expect(cards.nth(1)).toContainText("second.mp4");
+  await expect(cards.nth(1).getByRole("button", { name: "Cancel job" })).toBeVisible();
+  await expect.poll(() => runningJobReads).toBeGreaterThan(0);
+
+  await page.getByRole("button", { name: "Cancel export" }).click();
+  await expect(page.getByRole("button", { name: "Cancel export" })).not.toBeVisible({
+    timeout: 5_000,
+  });
+  await expect(cards.nth(0)).toContainText("first.mp4");
+  await expect(cards.nth(0).locator(".export-job-result")).toContainText("first-output.mkv");
+  await expect(cards.nth(1)).toContainText("second.mp4");
+  expect(cancelled).toBe(true);
 });
 
 test("delayed project loads cannot replace a newer editor", async ({ page }) => {
@@ -1606,7 +2458,7 @@ test("delayed project loads cannot replace a newer editor", async ({ page }) => 
   await openTask(page, "Project");
   await loadProject(page, "p_race-load012");
   page.once("dialog", (dialog) => dialog.accept());
-  await page.getByRole("button", { name: "New project" }).click();
+  await newProject(page);
   release();
   await expect(page.getByRole("heading", { name: "Choose a video to begin" })).toBeVisible();
   await expect(page.getByText("Project loaded.")).toHaveCount(0);
@@ -1642,6 +2494,9 @@ test("delayed saves stay dirty and cannot launch obsolete exports", async ({ pag
       },
     });
   });
+  await page.route(`${apiOrigin}/api/v1/jobs/j_new`, (route) =>
+    route.fulfill({ json: { id: "j_new", type: "export", state: "queued", progress: 0 } }),
+  );
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   await addSelectedMediaToProject(page);
@@ -1655,7 +2510,7 @@ test("delayed saves stay dirty and cannot launch obsolete exports", async ({ pag
     "aria-pressed",
     "true",
   );
-  await page.getByRole("button", { name: "Save project", exact: true }).click();
+  await page.getByRole("button", { name: "Save project from project header", exact: true }).click();
   await openTask(page, "Export");
   await expect(page.getByRole("button", { name: "Create clips" })).toBeEnabled();
   await page.getByLabel("Timeline playhead").fill("1");
@@ -1734,10 +2589,10 @@ test("a delayed old-project save stays silent after New and the new project save
     "true",
   );
   await openTask(page, "Project");
-  await page.getByRole("button", { name: "Save project", exact: true }).click();
+  await page.getByRole("button", { name: "Save project from project header", exact: true }).click();
   await oldStart;
   page.once("dialog", (dialog) => dialog.accept());
-  await page.getByRole("button", { name: "New project" }).click();
+  await newProject(page);
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   await addSelectedMediaToProject(page);
   await page.getByLabel("Timeline playhead").fill("100");
@@ -1750,13 +2605,13 @@ test("a delayed old-project save stays silent after New and the new project save
     "true",
   );
   await openTask(page, "Project");
-  await page.getByRole("button", { name: "Save project", exact: true }).click();
+  await page.getByRole("button", { name: "Save project from project header", exact: true }).click();
   await newComplete;
   release();
   await oldComplete;
   await page.getByLabel("Timeline playhead").fill("701");
   await openTask(page, "Project");
-  await page.getByRole("button", { name: "Save project", exact: true }).click();
+  await page.getByRole("button", { name: "Save project from project header", exact: true }).click();
   await expect.poll(() => saves).toBe(3);
   await expect(page.getByText("Project saved (revision 9).")).toHaveCount(0);
 });
@@ -1809,7 +2664,7 @@ test("unmounting a deferred export save cannot start export, poll, or remember a
     "aria-pressed",
     "true",
   );
-  await page.getByRole("button", { name: "Save project", exact: true }).click();
+  await page.getByRole("button", { name: "Save project from project header", exact: true }).click();
   await saveStart;
   await page.close();
   release();
@@ -1842,12 +2697,8 @@ test("stale selection metadata cannot replace a refresh or newer selection statu
   await page.getByRole("button", { name: "Refresh media" }).click();
   release();
   await addSelectedMediaToProject(page);
-  await openTask(page, "Project");
-  await expect(
-    page.getByRole("list", { name: "Project media items" }).getByRole("button", {
-      name: /^second\.mp4/,
-    }),
-  ).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByLabel("Selected media")).toContainText("second.mp4");
+  await expect(page.getByRole("button", { name: "Add to project" })).toHaveCount(0);
   await expect(page.getByText(/Metadata request failed/)).toHaveCount(0);
 });
 
@@ -1885,12 +2736,8 @@ test("refresh metadata cannot restore an old selection", async ({ page }) => {
   await page.getByRole("button", { name: /second.mp4/ }).click();
   release();
   await addSelectedMediaToProject(page);
-  await openTask(page, "Project");
-  await expect(
-    page.getByRole("list", { name: "Project media items" }).getByRole("button", {
-      name: /^second\.mp4/,
-    }),
-  ).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByLabel("Selected media")).toContainText("second.mp4");
+  await expect(page.getByRole("button", { name: "Add to project" })).toHaveCount(0);
 });
 
 test("delayed cancellation cannot overwrite a replacement export", async ({ page }) => {
@@ -1913,6 +2760,9 @@ test("delayed cancellation cannot overwrite a replacement export", async ({ page
     route.fulfill({
       json: { id: "j_old", type: "export", state: "queued", progress: 0 },
     }),
+  );
+  await page.route(`${apiOrigin}/api/v1/jobs/j_new`, (route) =>
+    route.fulfill({ json: { id: "j_new", type: "export", state: "queued", progress: 0 } }),
   );
   await page.route(`${apiOrigin}/api/v1/batches/b_oldexport001`, async (route) => {
     await delayed;
@@ -1956,31 +2806,25 @@ test("new projects reset the editor and dirty changes need confirmation", async 
   });
   page.once("dialog", (dialog) => dialog.dismiss());
   await openTask(page, "Project");
+  await page.locator(".project-menu > summary").click();
   await page.getByRole("button", { name: "Load project" }).click();
   await page.waitForTimeout(50);
   expect(projectLoads).toBe(0);
   await page.getByRole("button", { name: /second.mp4/ }).click();
   await addSelectedMediaToProject(page);
-  await expect(
-    page.getByRole("list", { name: "Project media items" }).getByRole("button", {
-      name: /^second\.mp4/,
-    }),
-  ).toHaveAttribute("aria-pressed", "true");
-  await expect(
-    page.getByRole("list", { name: "Project media items" }).getByRole("listitem"),
-  ).toHaveCount(2);
-  const projectItems = page.getByRole("list", { name: "Project media items" });
-  await expect(projectItems.getByRole("listitem")).toHaveCount(2);
-  await page.getByText("Project details", { exact: true }).click();
-  await page.getByLabel("Project name").fill("Working draft");
+  await expect(page.getByRole("button", { name: "Add to project" })).toHaveCount(0);
+  await openTask(page, "Export");
+  const selectedScope = page.getByRole("radio", { name: "Selected project items" });
+  await expect(selectedScope).toBeVisible();
+  await selectedScope.check();
+  await expect(page.getByRole("checkbox", { name: /camera\.mp4/ })).toHaveCount(1);
+  await expect(page.getByRole("checkbox", { name: /second\.mp4/ })).toHaveCount(1);
   page.once("dialog", (dialog) => dialog.dismiss());
-  await page.getByRole("button", { name: "New project" }).click();
-  await expect(projectItems.getByRole("listitem")).toHaveCount(2);
-  await expect(page.getByLabel("Preview player")).toBeVisible();
+  await newProject(page);
+  await expect(page.getByLabel("Selected media")).toContainText("second.mp4");
   page.once("dialog", (dialog) => dialog.accept());
-  await page.getByRole("button", { name: "New project" }).click();
+  await newProject(page);
   await expect(page.getByRole("heading", { name: "Choose a video to begin" })).toBeVisible();
-  await expect(page.getByRole("list", { name: "Project media items" })).toHaveCount(0);
 });
 
 test("load fetches project media directly and corrupt recents do not block startup", async ({
@@ -2017,13 +2861,30 @@ test("load fetches project media directly and corrupt recents do not block start
   await page.route(`${apiOrigin}/api/v1/media/${outsideMedia.id}`, (route) =>
     route.fulfill({ json: outsideMedia }),
   );
+  await page.route(`${apiOrigin}/api/v1/media/${outsideMedia.id}/thumbnails**`, (route) =>
+    route.fulfill({ headers: { "content-type": "image/png" }, body: "outside-png-fixture" }),
+  );
+  await page.route(`${apiOrigin}/api/v1/media/${outsideMedia.id}/waveform**`, (route) =>
+    route.fulfill({ json: { startMs: 0, durationMs: 10000, peaks: [0.1, 0.5, 1] } }),
+  );
+  await page.route(`${apiOrigin}/api/v1/media/${outsideMedia.id}/preview**`, (route) =>
+    route.fulfill({
+      headers: {
+        "content-type": "video/mp4",
+        "X-Preview-Start": "0",
+        "X-Preview-Duration": "8000",
+        "X-Preview-Offset": "0",
+      },
+      body: "outside-fragment",
+    }),
+  );
   await page.goto("/");
   await expect(page.getByRole("button", { name: /camera.mp4/ })).toBeVisible();
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   await addSelectedMediaToProject(page);
   await openTask(page, "Project");
   await loadProject(page, "p_outside-media");
-  await expect(page.getByText("Project loaded.")).toBeVisible();
+  await expect(page.locator(".project-sidebar-header strong")).toHaveText("Outside media");
   await expect(
     page.locator(".media-list").getByRole("button", { name: /outside.mp4/ }),
   ).toBeVisible();
@@ -2143,6 +3004,11 @@ test("covers the responsive workspace and keyboard editing workflow", async ({ p
       },
     }),
   );
+  await page.route(`${apiOrigin}/api/v1/jobs/j_keyboard-flow01`, (route) =>
+    route.fulfill({
+      json: { id: "j_keyboard-flow01", type: "export", state: "queued", progress: 0 },
+    }),
+  );
   for (const viewport of [
     { width: 1440, height: 900 },
     { width: 1024, height: 768 },
@@ -2165,7 +3031,7 @@ test("covers the responsive workspace and keyboard editing workflow", async ({ p
   await page.keyboard.press("Enter");
   await page.waitForTimeout(300);
   await addSelectedMediaToProject(page);
-  const taskToggle = page.getByRole("button", { name: "Show editing tools" });
+  const taskToggle = page.getByRole("button", { name: /editing tools/ });
   if ((await taskToggle.getAttribute("aria-expanded")) === "false") await taskToggle.click();
 
   const exportTab = page.getByRole("tab", { name: "Export", exact: true });
@@ -2174,7 +3040,7 @@ test("covers the responsive workspace and keyboard editing workflow", async ({ p
   await page.keyboard.press("Enter");
   await expect(exportTab).toHaveAttribute("aria-selected", "true");
   await expect(page.getByText("Export options")).toBeVisible();
-  await expect(page.getByText("Export options").locator("..")).not.toHaveAttribute("open", "");
+  await expect(page.getByText("Export options").locator("..")).toHaveAttribute("open", "");
   await page.keyboard.press("ArrowLeft");
   await expect(detectionTab).toHaveAttribute("aria-selected", "true");
 
@@ -2193,16 +3059,16 @@ test("covers the responsive workspace and keyboard editing workflow", async ({ p
   );
   await expect(page.getByRole("list", { name: "Selected cuts" })).toContainText("00:02.000");
   await openTask(page, "Project");
-  const mediaToggle = page.getByRole("button", { name: "Show media library" });
+  const mediaToggle = page.getByRole("button", { name: /media library/ });
   const closeTasks = page.getByRole("button", { name: "Close segments panel" });
   if (await closeTasks.isVisible()) await closeTasks.click();
   if ((await mediaToggle.getAttribute("aria-expanded")) === "false") await mediaToggle.click();
-  await page.getByRole("button", { name: "Save project", exact: true }).focus();
+  await page.getByRole("button", { name: "Save project from project header", exact: true }).focus();
   await page.keyboard.press("Enter");
   await expect(page.locator(".project-sidebar-header strong")).toHaveText("Untitled project");
   await expect(projectStatus.getByText("Saved", { exact: true })).toBeVisible();
-  const closeMedia = page.getByRole("button", { name: "Close media panel" });
-  if (await closeMedia.isVisible()) await closeMedia.click();
+  const closeDrawer = page.getByRole("button", { name: "Close open panel", exact: true });
+  if (await closeDrawer.isVisible()) await closeDrawer.click({ position: { x: 385, y: 2 } });
   if ((await taskToggle.getAttribute("aria-expanded")) === "false") await taskToggle.click();
   await expect(taskToggle).toHaveAttribute("aria-expanded", "true");
 
@@ -2224,9 +3090,9 @@ test("covers the responsive workspace and keyboard editing workflow", async ({ p
   await detectionTab.focus();
   await page.keyboard.press("Enter");
   await expect(detectionTab).toHaveAttribute("aria-selected", "true");
-  await page.getByRole("button", { name: "Find silence" }).focus();
+  await page.getByRole("button", { name: "Find pauses" }).focus();
   await page.keyboard.press("Enter");
-  await expect(page.getByText(/1 candidates found/)).toBeVisible();
+  await expect(page.locator(".detection-status")).toContainText("1 candidates found");
 });
 
 test("keeps the preview stable and exposes familiar playback controls", async ({ page }) => {
@@ -2281,7 +3147,7 @@ test("keeps the preview stable and exposes familiar playback controls", async ({
       (window as unknown as { fullscreenRequested: boolean }).fullscreenRequested = true;
     };
   });
-  await page.getByRole("button", { name: "Fullscreen preview" }).click();
+  await video.dblclick();
   expect(
     await page.evaluate(
       () => (window as unknown as { fullscreenRequested: boolean }).fullscreenRequested,
@@ -2292,7 +3158,7 @@ test("keeps the preview stable and exposes familiar playback controls", async ({
   await page.keyboard.press("ArrowRight");
   expect(Number(await page.getByLabel("Timeline playhead").inputValue())).toBeGreaterThan(3000);
   const shortcutPosition = await page.getByLabel("Timeline playhead").inputValue();
-  await page.getByLabel("In point").focus();
+  await page.getByLabel("Preview volume").focus();
   await page.keyboard.press("ArrowRight");
   await expect(page.getByLabel("Timeline playhead")).toHaveValue(shortcutPosition);
   await page.getByRole("heading", { name: "Timeline" }).click();
@@ -2384,11 +3250,8 @@ test("renders separate timeline lanes and seeks through their shared interaction
   await expect.poll(async () => Number(await playhead.inputValue())).toBeGreaterThanOrEqual(8900);
   await expect.poll(async () => Number(await playhead.inputValue())).toBeLessThanOrEqual(9100);
 
-  await page.getByRole("button", { name: "New segment" }).click();
-  await page.getByLabel("In point").fill("00:08.500");
-  await page.getByLabel("In point").press("Enter");
-  await page.getByLabel("Out point").fill("00:09.500");
-  await page.getByLabel("Out point").press("Enter");
+  await startNewSegment(page);
+  await setRange(page, 8500, 9500);
   const timelineSegments = page.locator(".timeline-segment");
   await expect(timelineSegments).toHaveCount(2);
   await timelineSegments.nth(1).click();
@@ -2402,12 +3265,13 @@ test("adds, selects, splits, and safely removes cuts with the redesigned control
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   await expect(page.getByRole("tab", { name: "Cuts" })).toHaveAttribute("aria-selected", "true");
-  await expect(page.getByText("Set an In point to begin a cut.")).toBeVisible();
+  await expect(
+    page.getByText(
+      "Set In and Out on the timeline; a valid range becomes one selected segment automatically.",
+    ),
+  ).toBeVisible();
 
-  await page.getByLabel("In point").fill("00:01.000");
-  await page.getByLabel("In point").press("Enter");
-  await page.getByLabel("Out point").fill("00:03.000");
-  await page.getByLabel("Out point").press("Enter");
+  await setRange(page, 1000, 3000);
   const cuts = page.getByRole("list", { name: /Selected cuts/ }).getByRole("listitem");
   await expect(cuts).toHaveCount(1);
   await expect(cuts.first().getByRole("button", { name: "Select cut 1" })).toHaveAttribute(
@@ -2436,16 +3300,22 @@ test("adds, selects, splits, and safely removes cuts with the redesigned control
   await page.keyboard.press("Delete");
   await expect(cuts).toHaveCount(1);
 
-  await page.getByRole("button", { name: "Zoom in" }).click();
-  await expect(page.getByLabel("Timeline zoom level")).toHaveText("2×");
-  await expect(page.getByRole("button", { name: "Fit timeline" })).toBeVisible();
-  await page.getByRole("button", { name: "Zoom out" }).click();
-  await expect(page.getByLabel("Timeline zoom level")).toHaveText("1×");
+  await expect(page.locator(".timeline-visual")).toBeVisible();
   await openTask(page, "Export");
-  await page.getByText("Export options", { exact: true }).click();
   await expect(page.getByLabel(/Output arrangement/)).toContainText("Combine selected cuts");
   await expect(page.getByLabel("Processing")).toContainText("Fast copy");
   await expect(page.getByText(/not frame-exact/)).toBeVisible();
+});
+
+test("MCP settings renders an empty proposal list without a page error", async ({ page }) => {
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings" }).click();
+  await expect(page.getByRole("heading", { name: "MCP access" })).toBeVisible();
+  await expect(page.getByText("No export proposals are awaiting approval.")).toBeVisible();
+  await expect(page.getByLabel("Enable MCP", { exact: true })).not.toBeChecked();
+  expect(errors).toEqual([]);
 });
 
 test("persists appearance and recovers from invalid stored values", async ({ page }) => {
@@ -2528,7 +3398,9 @@ test("keeps motion reduced and overflow local at a narrow viewport", async ({ pa
     scroll: element.scrollWidth,
   }));
   expect(timelineOverflow.scroll).toBeLessThanOrEqual(timelineOverflow.client + 1);
-  await page.getByRole("button", { name: "Zoom in" }).click();
+  await page.evaluate(() =>
+    globalThis.dispatchEvent(new CustomEvent("timeline-zoom", { detail: 2 })),
+  );
   await expect
     .poll(() =>
       page
@@ -2552,11 +3424,10 @@ test("returning from Settings reattaches preview and timecode follows later seek
   await page.getByRole("button", { name: "Back to editor" }).click();
   await expect.poll(() => requests).toBe(2);
   await expect(page.locator("video")).toHaveAttribute("src", "blob:preview");
-  const timecode = page.getByRole("textbox", { name: "Timecode", exact: true });
-  await timecode.fill("00:02.000");
-  await timecode.press("Enter");
+  const timecode = page.getByLabel("Timeline playhead");
+  await timecode.fill("2000");
   await page.getByRole("button", { name: "Next preview step" }).click();
-  await expect(timecode).toHaveValue("00:03.000");
+  await expect(timecode).toHaveValue("3000");
 });
 
 test("automatically commits one named segment and starts a new draft", async ({ page }) => {
@@ -2569,14 +3440,9 @@ test("automatically commits one named segment and starts a new draft", async ({ 
   await page.getByRole("button", { name: "Set out" }).click();
 
   await expect(page.getByText("Segment 001", { exact: true }).first()).toBeVisible();
-  await expect(page.getByRole("button", { name: "Add to project" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "New segment" })).toBeVisible();
-  await expect(page.getByRole("button", { name: /Add cut/ })).toHaveCount(0);
-  await page.getByRole("button", { name: "New segment" }).click();
-  await playhead.fill("800");
-  await page.getByRole("button", { name: "Set in" }).click();
-  await playhead.fill("1200");
-  await page.getByRole("button", { name: "Set out" }).click();
+  await expect(page.getByRole("button", { name: "Set in", exact: true })).toBeEnabled();
+  await startNewSegment(page);
+  await setRange(page, 800, 1200);
   await expect(page.getByText("Segment 002", { exact: true }).first()).toBeVisible();
   await expect(page.locator("[data-segment-id]")).toHaveCount(2);
 });

@@ -10,19 +10,26 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image/png"
 	"io"
 	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sync"
+	"time"
 
 	"videocutlist/internal/db"
+	"videocutlist/internal/fdinput"
 	"videocutlist/internal/library/media/index"
 	"videocutlist/internal/projects"
 )
 
-const maxWaveformSamples = 4096
+const (
+	maxWaveformSamples = 4096
+	maxPNGBytes        = 8 << 20
+)
 
 type ProcessLimiter interface {
 	AcquireProcess() (func(), error)
@@ -38,36 +45,59 @@ type Service struct {
 	mu         sync.Mutex
 }
 
+// ValidateSource reopens the indexed source so callers cannot use a stale
+// catalog fingerprint for a conditional asset response or cache hit.
+func (s *Service) ValidateSource(ctx context.Context, mediaID string) error {
+	if s.Scanner == nil || s.Media == nil {
+		return errors.New("asset source validation is not configured")
+	}
+	source, _, err := s.Scanner.Open(ctx, s.Media, mediaID)
+	if err != nil {
+		return err
+	}
+	if err := source.Close(); err != nil {
+		return fmt.Errorf("close asset source: %w", err)
+	}
+	return nil
+}
+
 var renameAsset = os.Rename
 
-func (s *Service) Thumbnails(ctx context.Context, spec projects.AssetSpec) (projects.AssetResult, error) {
+func (s *Service) Thumbnails(ctx context.Context, spec projects.AssetSpec) (output projects.AssetResult, err error) {
 	if err := validate(spec, false); err != nil {
 		return projects.AssetResult{}, err
 	}
+	source, _, err := s.Scanner.Open(ctx, s.Media, spec.MediaID)
+	if err != nil {
+		return projects.AssetResult{}, err
+	}
+	defer func() {
+		if closeErr := source.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close thumbnail source: %w", closeErr))
+		}
+	}()
 	key, err := s.key(ctx, spec, "thumb")
 	if err != nil {
 		return projects.AssetResult{}, err
 	}
-	data, hit, err := s.cached(key, ".png")
+	data, hit, err := s.cached(key, ".png", validatePNG)
 	if err != nil {
 		return projects.AssetResult{}, err
 	}
 	if hit {
 		return result(data, "image/png", true, spec), nil
 	}
-	source, _, err := s.Scanner.Open(ctx, s.Media, spec.MediaID)
-	if err != nil {
-		return projects.AssetResult{}, err
-	}
-	defer source.Close()
 	file, ok := source.(*os.File)
 	if !ok {
 		return projects.AssetResult{}, errors.New("media source is not a file")
 	}
 	fps := float64(spec.Count) / (float64(spec.DurationMS) / 1000)
-	args := []string{"-nostdin", "-hide_banner", "-loglevel", "error", "-ss", ms(spec.StartMS), "-i", "/proc/self/fd/3", "-t", ms(spec.DurationMS), "-vf", fmt.Sprintf("fps=%g,scale=%d:-2,tile=%dx1", fps, spec.Width, spec.Count), "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "pipe:1"}
-	data, err = s.run(ctx, file, args, 8<<20)
+	args := []string{"-nostdin", "-hide_banner", "-loglevel", "error", "-ss", ms(spec.StartMS), "-i", fdinput.Path(3), "-t", ms(spec.DurationMS), "-vf", fmt.Sprintf("fps=%g,scale=%d:-2,tile=%dx1", fps, spec.Width, spec.Count), "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "pipe:1"}
+	data, err = s.run(ctx, file, args, maxPNGBytes)
 	if err != nil {
+		return projects.AssetResult{}, err
+	}
+	if err := validatePNG(data); err != nil {
 		return projects.AssetResult{}, err
 	}
 	if err := s.publish(ctx, key, ".png", data); err != nil {
@@ -75,27 +105,33 @@ func (s *Service) Thumbnails(ctx context.Context, spec projects.AssetSpec) (proj
 	}
 	return result(data, "image/png", false, spec), nil
 }
-
-func (s *Service) Waveform(ctx context.Context, spec projects.AssetSpec) (projects.AssetResult, error) {
+func (s *Service) Waveform(ctx context.Context, spec projects.AssetSpec) (output projects.AssetResult, err error) {
 	if err := validate(spec, true); err != nil {
 		return projects.AssetResult{}, err
 	}
-	key, err := s.key(ctx, spec, "wave")
+	source, item, err := s.Scanner.Open(ctx, s.Media, spec.MediaID)
 	if err != nil {
 		return projects.AssetResult{}, err
 	}
-	data, hit, err := s.cached(key, ".json")
+	defer func() {
+		if closeErr := source.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close waveform source: %w", closeErr))
+		}
+	}()
+	key, err := s.key(ctx, spec, "wave-v2")
+	if err != nil {
+		return projects.AssetResult{}, err
+	}
+	data, hit, err := s.cached(key, ".json", func(data []byte) error {
+		_, err := waveformResult(data, true, spec)
+		return err
+	})
 	if err != nil {
 		return projects.AssetResult{}, err
 	}
 	if hit {
 		return waveformResult(data, true, spec)
 	}
-	source, item, err := s.Scanner.Open(ctx, s.Media, spec.MediaID)
-	if err != nil {
-		return projects.AssetResult{}, err
-	}
-	defer source.Close()
 	if item.Metadata.Audio == nil {
 		return projects.AssetResult{}, projects.ErrNoAudio
 	}
@@ -103,32 +139,57 @@ func (s *Service) Waveform(ctx context.Context, spec projects.AssetSpec) (projec
 	if !ok {
 		return projects.AssetResult{}, errors.New("media source is not a file")
 	}
-	args := []string{"-nostdin", "-hide_banner", "-loglevel", "error", "-ss", ms(spec.StartMS), "-i", "/proc/self/fd/3", "-t", ms(spec.DurationMS), "-map", "0:a:0", "-ac", "1", "-ar", fmt.Sprint(min(spec.Samples*2, 48000)), "-f", "f32le", "pipe:1"}
+	args := []string{"-nostdin", "-hide_banner", "-loglevel", "error", "-ss", ms(spec.StartMS), "-i", fdinput.Path(3), "-t", ms(spec.DurationMS), "-map", "0:a:0", "-ac", "1", "-ar", fmt.Sprint(min(spec.Samples*2, 48000)), "-f", "f32le", "pipe:1"}
 	raw, err := s.run(ctx, file, args, 16<<20)
 	if err != nil {
 		return projects.AssetResult{}, err
 	}
-	var peakBuffer [maxWaveformSamples]float64
-	peaks := peakBuffer[:spec.Samples]
-	for i := range peaks {
-		start := len(raw) * i / spec.Samples
-		end := len(raw) * (i + 1) / spec.Samples
-		var max float64
-		for j := start; j+4 <= end; j += 4 {
-			var sample float32
-			_ = binary.Read(bytes.NewReader(raw[j:j+4]), binary.LittleEndian, &sample)
-			v := math.Abs(float64(sample))
-			if v > max {
-				max = v
-			}
-		}
-		peaks[i] = minFloat(max, 1)
+	peaks, err := waveformPeaks(raw, spec.Samples)
+	if err != nil {
+		return projects.AssetResult{}, err
 	}
 	data, _ = json.Marshal(map[string]any{"startMs": spec.StartMS, "durationMs": spec.DurationMS, "peaks": peaks})
 	if err := s.publish(ctx, key, ".json", data); err != nil {
 		return projects.AssetResult{}, err
 	}
 	return waveformResult(data, false, spec)
+}
+
+func waveformPeaks(raw []byte, buckets int) ([]float64, error) {
+	if len(raw) == 0 || len(raw)%4 != 0 {
+		return nil, errors.New("invalid float32 waveform output")
+	}
+	peaks := make([]float64, buckets)
+	samples := len(raw) / 4
+	for i := range peaks {
+		start, end := samples*i/buckets, samples*(i+1)/buckets
+		for j := start; j < end; j++ {
+			sample := math.Abs(float64(math.Float32frombits(binary.LittleEndian.Uint32(raw[j*4:]))))
+			if math.IsNaN(sample) || math.IsInf(sample, 0) {
+				return nil, errors.New("non-finite waveform sample")
+			}
+			peaks[i] = min(max(peaks[i], sample), 1)
+		}
+	}
+	return peaks, nil
+}
+
+func validatePNG(data []byte) error {
+	if len(data) > maxPNGBytes {
+		return errors.New("thumbnail PNG exceeds compressed-size limit")
+	}
+	config, err := png.DecodeConfig(bytes.NewReader(data))
+	if err != nil {
+		return fmt.Errorf("invalid thumbnail PNG: %w", err)
+	}
+	// Bound decoded memory as well as compressed subprocess output.
+	if int64(config.Width)*int64(config.Height) > 16<<20 {
+		return errors.New("thumbnail PNG exceeds pixel limit")
+	}
+	if _, err := png.Decode(bytes.NewReader(data)); err != nil {
+		return fmt.Errorf("invalid thumbnail PNG: %w", err)
+	}
+	return nil
 }
 
 func validate(s projects.AssetSpec, wave bool) error {
@@ -152,7 +213,12 @@ func (s *Service) key(ctx context.Context, spec projects.AssetSpec, kind string)
 	sum := sha256.Sum256([]byte(fmt.Sprintf("%s:%s:%d:%d:%d:%d:%d:%d", kind, item.ID, item.SizeBytes, item.MtimeNS, spec.StartMS, spec.DurationMS, spec.Count, spec.Width+spec.Samples)))
 	return hex.EncodeToString(sum[:]), nil
 }
-func (s *Service) cached(key, ext string) ([]byte, bool, error) {
+func (s *Service) cached(key, ext string, validate func([]byte) error) ([]byte, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := s.evictLocked(); err != nil {
+		return nil, false, err
+	}
 	p := filepath.Join(s.CacheDir, "assets", key+ext)
 	info, err := os.Stat(p)
 	if errors.Is(err, os.ErrNotExist) {
@@ -161,7 +227,7 @@ func (s *Service) cached(key, ext string) ([]byte, bool, error) {
 	if err != nil {
 		return nil, false, err
 	}
-	if !info.Mode().IsRegular() || info.Size() < 1 || info.Size() > s.MaxBytes {
+	if !info.Mode().IsRegular() || info.Size() < 1 || info.Size() > s.MaxBytes || ext == ".png" && info.Size() > maxPNGBytes {
 		_ = os.Remove(p)
 		return nil, false, nil
 	}
@@ -169,20 +235,24 @@ func (s *Service) cached(key, ext string) ([]byte, bool, error) {
 	if err != nil {
 		return nil, false, err
 	}
-	if int64(len(b)) != info.Size() {
+	if int64(len(b)) != info.Size() || validate != nil && validate(b) != nil {
+		_ = os.Remove(p)
 		return nil, false, nil
+	}
+	if err := os.Chtimes(p, time.Now(), time.Now()); err != nil {
+		return nil, false, err
 	}
 	return b, true, nil
 }
-func (s *Service) publish(ctx context.Context, key, ext string, b []byte) error {
+func (s *Service) publish(ctx context.Context, key, ext string, b []byte) (err error) {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if int64(len(b)) > s.MaxBytes {
 		return errors.New("asset exceeds cache limit")
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -195,12 +265,21 @@ func (s *Service) publish(ctx context.Context, key, ext string, b []byte) error 
 		return err
 	}
 	name := f.Name()
-	defer os.Remove(name)
+	published := false
+	defer func() {
+		// Once renamed, the temporary name is gone; cleanup is best-effort and
+		// must not turn a successful atomic publish into an error.
+		if removeErr := os.Remove(name); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) && !published {
+			err = errors.Join(err, fmt.Errorf("remove temporary asset: %w", removeErr))
+		}
+	}()
 	if _, err = f.Write(b); err == nil {
 		err = f.Sync()
 	}
 	if closeErr := f.Close(); err == nil {
 		err = closeErr
+	} else if closeErr != nil {
+		err = errors.Join(err, closeErr)
 	}
 	if err != nil {
 		return err
@@ -212,9 +291,71 @@ func (s *Service) publish(ctx context.Context, key, ext string, b []byte) error 
 	if err := renameAsset(name, final); err != nil {
 		return err
 	}
+	published = true
 	if err := ctx.Err(); err != nil {
 		return errors.Join(err, os.Remove(final))
 	}
+	if err := s.evictLocked(); err != nil {
+		_ = os.Remove(final)
+		return err
+	}
+	return nil
+}
+
+type assetFile struct {
+	path string
+	info os.FileInfo
+}
+
+func (s *Service) evictLocked() error {
+	root := filepath.Join(s.CacheDir, "assets")
+	var files []assetFile
+	var total int64
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err != nil || entry.IsDir() || (filepath.Ext(entry.Name()) != ".png" && filepath.Ext(entry.Name()) != ".json") {
+			return err
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+		total += info.Size()
+		files = append(files, assetFile{path: path, info: info})
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	slices.SortFunc(files, func(a, b assetFile) int { return a.info.ModTime().Compare(b.info.ModTime()) })
+	for _, file := range files {
+		if total <= s.MaxBytes {
+			break
+		}
+		if err := os.Remove(file.path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		total -= file.info.Size()
+	}
+	if total > s.MaxBytes {
+		return errors.New("asset cache disk limit exceeded")
+	}
+	return nil
+}
+
+// SetMaxBytes applies the per-artifact limit to subsequent reads and publishes.
+func (s *Service) SetMaxBytes(maxBytes int64) error {
+	if maxBytes < 1 {
+		return errors.New("asset cache limit must be positive")
+	}
+	s.mu.Lock()
+	s.MaxBytes = maxBytes
+	s.mu.Unlock()
 	return nil
 }
 
@@ -283,14 +424,28 @@ func result(b []byte, ct string, hit bool, s projects.AssetSpec) projects.AssetR
 }
 func waveformResult(b []byte, hit bool, s projects.AssetSpec) (projects.AssetResult, error) {
 	var v struct {
-		StartMS    int64     `json:"startMs"`
-		DurationMS int64     `json:"durationMs"`
+		StartMS    *int64    `json:"startMs"`
+		DurationMS *int64    `json:"durationMs"`
 		Peaks      []float64 `json:"peaks"`
 	}
 	if err := json.Unmarshal(b, &v); err != nil {
 		return projects.AssetResult{}, err
 	}
-	return projects.AssetResult{Peaks: v.Peaks, StartMS: v.StartMS, DurationMS: v.DurationMS, CacheStatus: status(hit), ContentType: "application/json"}, nil
+	if v.StartMS == nil || v.DurationMS == nil || v.Peaks == nil {
+		return projects.AssetResult{}, errors.New("waveform response is missing required fields")
+	}
+	if *v.StartMS != s.StartMS || *v.DurationMS != s.DurationMS {
+		return projects.AssetResult{}, errors.New("waveform response does not match requested range")
+	}
+	if len(v.Peaks) != s.Samples {
+		return projects.AssetResult{}, errors.New("waveform response has an invalid peak count")
+	}
+	for _, peak := range v.Peaks {
+		if math.IsNaN(peak) || math.IsInf(peak, 0) || peak < 0 || peak > 1 {
+			return projects.AssetResult{}, errors.New("waveform response has an invalid peak")
+		}
+	}
+	return projects.AssetResult{Peaks: v.Peaks, StartMS: *v.StartMS, DurationMS: *v.DurationMS, CacheStatus: status(hit), ContentType: "application/json"}, nil
 }
 func status(hit bool) string {
 	if hit {
@@ -299,15 +454,3 @@ func status(hit bool) string {
 	return "miss"
 }
 func ms(v int64) string { return fmt.Sprintf("%d.%03d", v/1000, v%1000) }
-func min(v, a int) int {
-	if v < a {
-		return v
-	}
-	return a
-}
-func minFloat(v, a float64) float64 {
-	if v < a {
-		return v
-	}
-	return a
-}

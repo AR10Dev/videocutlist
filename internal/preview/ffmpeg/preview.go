@@ -13,15 +13,15 @@ import (
 	"syscall"
 	"time"
 
+	"videocutlist/internal/fdinput"
 	"videocutlist/internal/projects"
 	"videocutlist/internal/projects/model"
 )
 
 const (
-	fdInput         = "/proc/self/fd/3"
 	defaultGrace    = 2 * time.Second
 	defaultStderr   = 64 << 10
-	softwareProfile = "software-h264-v1"
+	softwareProfile = "software-h264-baseline-l31-v2"
 )
 
 // Timing records lifecycle milestones without adding fields to the frozen
@@ -56,10 +56,10 @@ func BuildPreviewArgs(spec model.PreviewSpec) ([]string, error) {
 	}
 	args := []string{
 		"-nostdin", "-hide_banner", "-loglevel", "error",
-		"-ss", milliseconds(spec.StartMS), "-i", fdInput,
+		"-ss", milliseconds(spec.StartMS), "-i", fdinput.Path(3),
 		"-t", milliseconds(spec.DurationMS), "-map", "0:v:0",
 		"-vf", fmt.Sprintf("scale=%d:%d:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=%d:%d:(ow-iw)/2:(oh-ih)/2:black,fps=%d", spec.Width, spec.Height, spec.Width, spec.Height, spec.FPS),
-		"-c:v", "libx264", "-preset", "ultrafast", "-tune", "zerolatency", "-crf", "28", "-pix_fmt", "yuv420p",
+		"-c:v", "libx264", "-profile:v", "baseline", "-level:v", "3.1", "-preset", "ultrafast", "-tune", "zerolatency", "-crf", "28", "-pix_fmt", "yuv420p",
 		"-g", fmt.Sprintf("%d", spec.FPS), "-keyint_min", fmt.Sprintf("%d", spec.FPS), "-sc_threshold", "0",
 	}
 	if spec.Audio {
@@ -198,10 +198,13 @@ type timingState struct {
 
 func (s *timingState) firstByte() {
 	s.mu.Lock()
-	if s.timing.FirstByteAt.IsZero() {
-		s.timing.FirstByteAt = time.Now()
-		s.timing.SpawnToFirstByte = s.timing.FirstByteAt.Sub(s.timing.SpawnedAt)
+	if !s.timing.FirstByteAt.IsZero() {
+		// Later reads are ordinary chunks, not lifecycle milestones.
+		s.mu.Unlock()
+		return
 	}
+	s.timing.FirstByteAt = time.Now()
+	s.timing.SpawnToFirstByte = s.timing.FirstByteAt.Sub(s.timing.SpawnedAt)
 	s.mu.Unlock()
 	s.emit()
 }

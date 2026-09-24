@@ -2,7 +2,7 @@
 # Small runnable check for the fixture generator and its corrupt-media case.
 set -euo pipefail
 
-root=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
+root=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 "$root/test/harness/generate-fixtures.sh" "$tmp"

@@ -24,7 +24,11 @@ func TestSourceAdjacentDestinationUsesResolvedSourceLocation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer source.Close()
+	t.Cleanup(func() {
+		if err := source.Close(); err != nil {
+			t.Errorf("close source: %v", err)
+		}
+	})
 
 	prepared, err := prepareDestination(Destination{ID: "beside", Kind: KindSourceAdjacent, MediaRoot: mediaRoot}, source, "clip.mkv", SourceLocation{RootPath: mediaRoot, RelativePath: "camera/day/clip.mkv"})
 	if err != nil {
@@ -62,7 +66,11 @@ func TestSourceAdjacentDestinationRejectsTraversalAndEscapingSymlink(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer source.Close()
+	t.Cleanup(func() {
+		if err := source.Close(); err != nil {
+			t.Errorf("close source: %v", err)
+		}
+	})
 	destination := Destination{ID: "beside", Kind: KindSourceAdjacent, MediaRoot: mediaRoot}
 	for _, location := range []SourceLocation{
 		{RootPath: mediaRoot, RelativePath: "../outside.mkv"},
@@ -94,7 +102,9 @@ func TestPreparedDestinationPublishesWithoutOverwrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := temporary.WriteString("new"); err != nil {
-		temporary.Close()
+		if closeErr := temporary.Close(); closeErr != nil {
+			t.Errorf("close temporary: %v", closeErr)
+		}
 		t.Fatal(err)
 	}
 	if err := temporary.Close(); err != nil {
@@ -131,7 +141,11 @@ func TestSourceAdjacentDestinationRejectsReadOnlyOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer source.Close()
+	t.Cleanup(func() {
+		if err := source.Close(); err != nil {
+			t.Errorf("close source: %v", err)
+		}
+	})
 	_, err = prepareDestination(Destination{ID: "beside", Kind: KindSourceAdjacent, MediaRoot: mediaRoot}, source, "clip.mkv", SourceLocation{RootPath: mediaRoot, RelativePath: "camera/clip.mkv"})
 	if err == nil {
 		t.Fatal("accepted read-only source-adjacent output")
@@ -159,7 +173,9 @@ func TestPreparedDestinationPublishesThroughOpenedDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := temporary.WriteString("new"); err != nil {
-		temporary.Close()
+		if closeErr := temporary.Close(); closeErr != nil {
+			t.Errorf("close temporary: %v", closeErr)
+		}
 		t.Fatal(err)
 	}
 	if err := temporary.Close(); err != nil {

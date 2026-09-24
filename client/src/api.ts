@@ -1,3 +1,33 @@
+import type { components } from "./generated/api";
+
+/** Decode only the public error envelope; malformed/proxy errors retain a safe fallback. */
+export async function readApiError(
+  response: Response,
+  fallback = "Request could not be completed.",
+): Promise<components["schemas"]["Error"]["error"]> {
+  const body: unknown = await response.json().catch(() => undefined);
+  if (body && typeof body === "object" && "error" in body) {
+    const error = body.error;
+    if (
+      error &&
+      typeof error === "object" &&
+      "code" in error &&
+      typeof error.code === "string" &&
+      error.code &&
+      "message" in error &&
+      typeof error.message === "string" &&
+      "requestId" in error &&
+      typeof error.requestId === "string"
+    )
+      return { code: error.code, message: error.message, requestId: error.requestId };
+  }
+  return {
+    code: "http_error",
+    message: fallback,
+    requestId: response.headers.get("X-Request-ID") ?? "",
+  };
+}
+
 export type Authentication =
   | { type: "none" }
   | { type: "bearer"; token: string }
@@ -7,6 +37,8 @@ export type ClientConfiguration = {
   serverBaseUrl: string;
   authentication: Authentication;
 };
+
+export const authenticationRequiredEvent = "videocutlist:authentication-required";
 
 export const MAX_INTERCHANGE_FILE_BYTES = 1 << 20;
 export const validInterchangeFileSize = (size: number) =>
@@ -65,10 +97,9 @@ export function resolveBrowserConfiguration(browser: Window = window): ClientCon
     authentication: { type: "none" as const },
   };
   apiBase(configuration.serverBaseUrl);
-  return {
-    serverBaseUrl: configuration.serverBaseUrl,
-    authentication: validateAuthentication(configuration.authentication),
-  };
+  validateAuthentication(configuration.authentication);
+  browser.VIDEOCUTLIST_CONFIG = configuration;
+  return configuration;
 }
 
 export function createApiClient(
@@ -76,7 +107,7 @@ export function createApiClient(
   fetchImplementation: Fetch = fetch,
 ) {
   const base = apiBase(configuration.serverBaseUrl);
-  const authentication = validateAuthentication(configuration.authentication);
+  validateAuthentication(configuration.authentication);
 
   const url = (relativePath: string) => {
     if (
@@ -104,6 +135,7 @@ export function createApiClient(
   };
 
   const request = (relativePath: string, init: RequestInit = {}) => {
+    const authentication = validateAuthentication(configuration.authentication);
     const headers = new Headers(init.headers);
     headers.delete("Authorization");
     const credentials = authentication.type === "cookie" ? "include" : "omit";
@@ -113,6 +145,15 @@ export function createApiClient(
       ...init,
       credentials,
       headers,
+    }).then((response) => {
+      if (
+        response.status === 401 &&
+        configuration.authentication === authentication &&
+        !init.signal?.aborted &&
+        typeof window !== "undefined"
+      )
+        window.dispatchEvent(new Event(authenticationRequiredEvent));
+      return response;
     });
   };
 

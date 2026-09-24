@@ -1,6 +1,8 @@
 package config
 
 import (
+	"math"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -17,7 +19,7 @@ func TestLoadDefaults(t *testing.T) {
 	if c.ReadTimeout != 15*time.Second || c.WriteTimeout != 0 || c.IdleTimeout != time.Minute {
 		t.Fatalf("unexpected timeout defaults: %#v", c)
 	}
-	if c.AuthMode != "none" || c.PreviewGridMS != 500 {
+	if c.AuthMode != "none" || c.MCPEnabled || c.PreviewGridMS != 500 {
 		t.Fatalf("unexpected defaults: %#v", c)
 	}
 	if c.PublicBaseURL != "" || len(c.AllowedOrigins) != 0 {
@@ -28,6 +30,16 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if len(c.Destinations) != 2 || c.Destinations[1].ID != "server" || c.Destinations[1].Kind != "archive" {
 		t.Fatalf("destinations = %#v", c.Destinations)
+	}
+}
+
+func TestLoadMCPEnablement(t *testing.T) {
+	enabled, err := load(env(mergeEnv(baseEnv(), map[string]string{"VIDEOCUTLIST_MCP_ENABLED": "true"})))
+	if err != nil || !enabled.MCPEnabled || !enabled.RuntimeSettings().MCPEnabled {
+		t.Fatalf("enabled=%v runtime=%v err=%v", enabled.MCPEnabled, enabled.RuntimeSettings().MCPEnabled, err)
+	}
+	if _, err := load(env(mergeEnv(baseEnv(), map[string]string{"VIDEOCUTLIST_MCP_ENABLED": "sometimes"}))); err == nil {
+		t.Fatal("invalid MCP enablement was accepted")
 	}
 }
 
@@ -235,4 +247,15 @@ func mergeEnv(base, changes map[string]string) map[string]string {
 		values[key] = value
 	}
 	return values
+}
+
+func TestExportLimitSafetyBoundary(t *testing.T) {
+	for _, limit := range []int{0, 1, 64, 65, math.MaxInt} {
+		t.Run(strconv.Itoa(limit), func(t *testing.T) {
+			_, err := load(env(mergeEnv(baseEnv(), map[string]string{"VIDEOCUTLIST_EXPORT_LIMIT": strconv.Itoa(limit)})))
+			if (err == nil) != (limit >= 1 && limit <= 64) {
+				t.Fatalf("export limit %d: %v", limit, err)
+			}
+		})
+	}
 }

@@ -17,7 +17,9 @@ func init() {
 			os.Exit(2)
 		}
 	}
-	fmt.Fprint(os.Stdout, `{"format":{"duration":"1.2345","format_name":"mov,mp4"},"streams":[{"codec_type":"video","codec_name":"h264","width":320,"height":180,"avg_frame_rate":"30/1"},{"codec_type":"audio","codec_name":"aac","channels":2}]}`)
+	if _, err := fmt.Fprint(os.Stdout, `{"format":{"duration":"1.2345","format_name":"mov,mp4"},"streams":[{"codec_type":"video","codec_name":"h264","width":320,"height":180,"avg_frame_rate":"30/1"},{"codec_type":"audio","codec_name":"aac","channels":2}]}`); err != nil {
+		os.Exit(2)
+	}
 	os.Exit(0)
 }
 
@@ -28,7 +30,11 @@ func TestClientProbesOpenFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer source.Close()
+	t.Cleanup(func() {
+		if err := source.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	if _, err := source.WriteString("opened-media"); err != nil {
 		t.Fatal(err)
 	}

@@ -4,16 +4,16 @@ VideoCutlist has two kinds of configuration:
 
 - **Deployment configuration** comes from the process environment and Compose.
   It includes the listener, authentication, proxy/CORS policy, database/cache/
-  export locations, and the host-to-container mounts.
-- **Runtime settings** are administrator-only settings stored in the SQLite
-  database. They include media roots, destinations, preview/export limits, and
-  scan/cache policy. On a new database, the environment values seed the first
-  runtime-settings document; after that, changing the environment does not
-  overwrite settings saved through the Settings API.
+  export locations, media-root paths, destination paths, and container mounts.
+- **Runtime settings** are shared settings stored in SQLite: safe destination
+  labels/retention, preview/export limits, and scan/cache policy. The environment
+  seeds a new database; later environment changes do not overwrite its saved
+  settings, including seeded root locations.
 
-A media root is a path as seen by the server process. The server indexes media
-in place and does not copy original media. Never enter a host path in Settings
-when the server runs in a container.
+A media root is a path as seen by the server process. Configure roots in
+`VIDEOCUTLIST_MEDIA_ROOTS_JSON` when provisioning the database. The Settings
+page displays safe root aliases and availability, not paths or a path editor.
+The server indexes originals in place without copying them.
 
 ## Native deployment
 
@@ -48,13 +48,12 @@ VIDEOCUTLIST_MEDIA_ROOTS_JSON='{"media":"/srv/media"}' \
   /usr/local/bin/videocutlist
 ```
 
-Alternatively, an authenticated administrator can add or edit the absolute root
-in **Settings → Media roots**, then use **Rescan**. The root must be an
-existing directory readable by the service account. The current server binary
-does not configure a non-empty media-root allowlist; where a deployment or
-embedding supplies one, each root must remain beneath an allowlisted absolute
-base after symlink resolution. Do not work around a rejection by broadening
-permissions or creating an unsafe symlink.
+The root must be an existing directory readable by the service account. After
+startup, use **Settings → Rescan library** to discover changes under the
+configured roots. Changing a mount's contents does not require changing its
+configured path. Root locations seeded into an existing database are not
+overwritten by environment changes; do not delete the database to change a
+root, as that also deletes projects and job history.
 
 ## Docker and Podman
 
@@ -69,6 +68,22 @@ volumes:
   - ./exports:/var/lib/videocutlist/exports
   - /srv/media:/srv/videocutlist/media:ro
 ```
+
+Create a private environment file and generate the deployment bearer token
+(requires OpenSSL):
+
+```bash
+umask 077
+cp videocutlist.env.example videocutlist.env
+printf 'VIDEOCUTLIST_BEARER_TOKEN=%s\n' "$(openssl rand -hex 32)" >> videocutlist.env
+```
+
+The container listens on `0.0.0.0`, so bearer authentication is required even
+when the published host port is loopback-only. After startup, open
+`http://127.0.0.1:8787` and enter the token from the private environment file.
+The browser stores it only in memory, never in local/session storage, URLs, or
+the Vite bundle. Reloading requires entering it again. A trusted-proxy deployment
+instead handles sign-in at its proxy. Never commit the environment file.
 
 Prepare writable directories with ownership usable by the container, and verify
 that the media mount is read-only:
@@ -87,10 +102,11 @@ For rootless Podman, use the host UID/GID mapping reported by the runtime (or
 read-only bind-label option; preserve the `:ro` flag. Do not make the media
 mount writable just to solve an ownership error.
 
-After the container starts, enter `/srv/videocutlist/media` (the
-container-visible path) as the media root in Settings. The host path belongs
-only in `VIDEOCUTLIST_MEDIA_DIR`/Compose. If using several source directories,
-add separate read-only mounts and one matching container-visible alias for each.
+The example seeds `/srv/videocutlist/media` as the container-visible root.
+The host path belongs in `VIDEOCUTLIST_MEDIA_DIR`/Compose. For several source
+directories, configure separate read-only mounts and corresponding
+`VIDEOCUTLIST_MEDIA_ROOTS_JSON` aliases before provisioning the database.
+Settings shows those aliases and provides **Rescan library**.
 
 Compose uses `ghcr.io/ar10dev/videocutlist:latest` unless `VIDEOCUTLIST_IMAGE`
 is pinned. To build locally:
@@ -111,8 +127,9 @@ or back up source media; protect and back up originals through the storage
 system that owns them. See [export recovery](export-recovery.md) for durable
 export handling.
 
-The default listener and Compose port binding are loopback-only. Keep them that
-way for local use. Before any remote exposure:
+Native startup defaults to a loopback listener. Compose publishes to loopback
+on the host but uses an authenticated wildcard listener inside the container.
+Keep the host binding local unless remote exposure is deliberate:
 
 1. Enable `VIDEOCUTLIST_AUTH_MODE=bearer` with a long secret token, or put the
    service behind an authenticating TLS reverse proxy.
@@ -132,9 +149,10 @@ proxy-specific constraints.
 
 ## Troubleshooting
 
-- **Root missing in Settings:** confirm that the native absolute directory
-  exists, or that the Compose host directory is mounted at the exact path you
-  entered. In a container, use `/srv/videocutlist/media`, not `/srv/media`.
+- **Root missing in Settings:** check the root aliases used to provision the
+  database, the server-visible directory, and its read-only Compose mount.
+  Settings is not a path editor; changing seed environment values does not
+  overwrite roots already persisted in an existing database.
 - **Native directory unreadable:** inspect every parent with `namei -l` and
   test as the service account. Grant only required traverse/read access (ACLs
   are preferable to broad mode changes); never use `chmod -R 777`.

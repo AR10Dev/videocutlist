@@ -38,8 +38,8 @@ func HandlerFS(assets fs.FS) http.Handler {
 		encoding := ""
 		for _, candidate := range []struct{ suffix, encoding string }{{".br", "br"}, {".gz", "gzip"}} {
 			if strings.Contains(r.Header.Get("Accept-Encoding"), candidate.encoding) {
-				if compressed, compressedInfo, compressedData, found := readAsset(assets, file+candidate.suffix); found {
-					file, info, data, encoding = compressed, compressedInfo, compressedData, candidate.encoding
+				if _, compressedInfo, compressedData, found := readAsset(assets, file+candidate.suffix); found {
+					info, data, encoding = compressedInfo, compressedData, candidate.encoding
 					break
 				}
 			}

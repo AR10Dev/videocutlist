@@ -1,3 +1,32 @@
+import type { components } from "../../generated/api";
+
+type RuntimeSettings = components["schemas"]["RuntimeSettings"];
+type RuntimeSettingsInput = components["schemas"]["SettingsUpdate"]["settings"];
+
+export function validRuntimeSettingsInput(
+  value: Partial<RuntimeSettings>,
+): value is RuntimeSettingsInput {
+  const limits = [
+    value.exportLimit,
+    value.cacheMaxBytes,
+    value.previewGlobalLimit,
+    value.previewBeforeMs,
+    value.previewAfterMs,
+    value.previewMaxMs,
+    value.previewGridMs,
+    value.mediaMaxFiles,
+    value.mediaMaxDepth,
+  ];
+  return (
+    limits.every(
+      (limit) => typeof limit === "number" && Number.isSafeInteger(limit) && limit > 0,
+    ) &&
+    typeof value.mcpEnabled === "boolean" &&
+    value.exportLimit! <= 64 &&
+    value.previewBeforeMs! + value.previewAfterMs! <= value.previewMaxMs!
+  );
+}
+
 export const appearances = [
   "system",
   "light",

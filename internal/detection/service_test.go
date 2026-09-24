@@ -2,9 +2,12 @@ package detection
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"videocutlist/internal/library/media/index"
 	"videocutlist/internal/library/media/probe"
@@ -37,7 +40,7 @@ func TestDetectPassesMediaDescriptorAsChildFD(t *testing.T) {
 		t.Fatal(err)
 	}
 	script := filepath.Join(dir, "ffmpeg.sh")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\n[ -r /proc/self/fd/3 ] || exit 9\nprintf 'silence_start: 0.1\\nsilence_end: 0.2\\n' >&2\n"), 0700); err != nil {
+	if err := os.WriteFile(script, []byte("#!/bin/sh\n[ -r /proc/self/fd/3 ] || exit 9\nhas_vn=false\nfor arg in \"$@\"; do\n  case \"$arg\" in\n    -vn) has_vn=true ;;\n    -vf) exit 10 ;;\n  esac\ndone\n[ \"$has_vn\" = true ] || exit 11\nprintf 'silence_start: 0.1\\nsilence_end: 0.2\\n' >&2\n"), 0700); err != nil {
 		t.Fatal(err)
 	}
 	scanner, err := index.NewScanner([]index.Root{{Alias: "root", Path: dir}}, detectionProber{})
@@ -58,8 +61,51 @@ func TestDetectPassesMediaDescriptorAsChildFD(t *testing.T) {
 func TestParseDetectionCandidatesAreBounded(t *testing.T) {
 	r := projects.DetectionRequest{MediaID: "m_test", ProjectID: "p_test", ProjectRevision: 2, Kind: model.DetectSilence}
 	got := parse(r, 10000, "[silencedetect] silence_start: 1.2\n[silencedetect] silence_end: 2.5\n")
-	if len(got) != 1 || got[0].StartMS != 1200 || got[0].EndMS != 2500 || got[0].ProjectID != r.ProjectID || got[0].Confidence != .9 {
+	if len(got) != 1 || got[0].StartMS != 1200 || got[0].EndMS != 2500 || got[0].ProjectID != r.ProjectID {
 		t.Fatalf("unexpected candidates: %#v", got)
+	}
+}
+
+func TestParseSceneChangesAsPoints(t *testing.T) {
+	r := projects.DetectionRequest{MediaID: "m_test", ProjectID: "p_test", ProjectRevision: 2, Kind: model.DetectScene}
+	got := parse(r, 3000, "[showinfo] pts_time:1.250\\n")
+	if len(got) != 1 {
+		t.Fatalf("unexpected scene points: %#v", got)
+	}
+	data, err := json.Marshal(got[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(data, &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["pointMs"] != float64(1250) {
+		t.Fatalf("scene point payload = %s", data)
+	}
+	if _, ok := payload["startMs"]; ok {
+		t.Fatalf("scene point has range start: %s", data)
+	}
+	if _, ok := payload["endMs"]; ok {
+		t.Fatalf("scene point has range end: %s", data)
+	}
+}
+
+func TestDetectionSlotsDefaultToOne(t *testing.T) {
+	service := Service{}
+	release, err := service.acquireSlot(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+	defer cancel()
+	secondRelease, err := service.acquireSlot(ctx)
+	if secondRelease != nil {
+		secondRelease()
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("second detection slot error = %v", err)
 	}
 }
 

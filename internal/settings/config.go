@@ -13,6 +13,7 @@ import (
 	"unicode"
 
 	exporter "videocutlist/internal/export"
+	"videocutlist/internal/jobs"
 )
 
 const (
@@ -50,6 +51,7 @@ type Config struct {
 	MediaRoots         map[string]string
 	AuthMode           string
 	BearerToken        string
+	MCPEnabled         bool
 	TrustedProxyCIDRs  []string
 	FFmpegPath         string
 	FFprobePath        string
@@ -145,6 +147,9 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 			return Config{}, fmt.Errorf("VIDEOCUTLIST_BEARER_TOKEN must be non-empty and control-free in bearer mode")
 		}
 	}
+	if c.MCPEnabled, err = boolean(lookup, "VIDEOCUTLIST_MCP_ENABLED", false); err != nil {
+		return Config{}, err
+	}
 	trusted := value(lookup, "VIDEOCUTLIST_TRUSTED_PROXY_CIDRS", defaultTrustedProxies)
 	for _, cidr := range strings.Split(trusted, ",") {
 		cidr = strings.TrimSpace(cidr)
@@ -162,6 +167,9 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 	if c.ExportLimit, err = positiveInt(lookup, "VIDEOCUTLIST_EXPORT_LIMIT", defaultExportLimit); err != nil {
 		return Config{}, err
 	}
+	if c.ExportLimit > jobs.MaxWorkerLimit {
+		return Config{}, fmt.Errorf("VIDEOCUTLIST_EXPORT_LIMIT must be 1..%d", jobs.MaxWorkerLimit)
+	}
 	if c.MediaMaxFiles, err = positiveInt(lookup, "VIDEOCUTLIST_MEDIA_MAX_FILES", defaultMediaMaxFiles); err != nil {
 		return Config{}, err
 	}
@@ -170,6 +178,9 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 	}
 	if c.CacheMaxBytes, err = positiveInt64(lookup, "VIDEOCUTLIST_CACHE_MAX_BYTES", defaultCacheMaxBytes); err != nil {
 		return Config{}, err
+	}
+	if c.CacheMaxBytes < 2 {
+		return Config{}, fmt.Errorf("VIDEOCUTLIST_CACHE_MAX_BYTES must be at least 2")
 	}
 	if c.PreviewBeforeMS, err = positiveInt(lookup, "VIDEOCUTLIST_PREVIEW_BEFORE_MS", defaultPreviewBeforeMS); err != nil {
 		return Config{}, err
@@ -314,6 +325,14 @@ func value(lookup func(string) (string, bool), key, fallback string) string {
 
 func required(lookup func(string) (string, bool), key string) string {
 	return value(lookup, key, "")
+}
+
+func boolean(lookup func(string) (string, bool), key string, fallback bool) (bool, error) {
+	v, err := strconv.ParseBool(value(lookup, key, strconv.FormatBool(fallback)))
+	if err != nil {
+		return false, fmt.Errorf("%s must be a boolean", key)
+	}
+	return v, nil
 }
 
 func positiveInt(lookup func(string) (string, bool), key string, fallback int) (int, error) {
