@@ -1,6 +1,12 @@
-import { createSignal, For, Show } from "solid-js";
+import { createEffect, createSignal, For, Show } from "solid-js";
 import { ArrowDown, ArrowUp, Play, Repeat2, Scissors, Trash2 } from "lucide-solid";
-import { formatTime, parseTimecode, segmentIncluded, type Segment } from "../preview/model";
+import {
+  formatTime,
+  parseTimecode,
+  segmentIncluded,
+  validateSegmentLabel,
+  type Segment,
+} from "../preview/model";
 import { useWorkspace } from "../app/WorkspaceContext";
 
 export function CutsView() {
@@ -9,7 +15,20 @@ export function CutsView() {
     Record<string, Partial<Record<"start" | "end", string>>>
   >({});
   const [boundaryErrors, setBoundaryErrors] = createSignal<Record<string, string>>({});
+  const [labelDrafts, setLabelDrafts] = createSignal<Record<string, string>>({});
+  const [labelErrors, setLabelErrors] = createSignal<Record<string, string>>({});
   let canceledBoundaryKey: string | undefined;
+  let previousEditorContext: string | undefined;
+  createEffect(() => {
+    const context = workspace.editorContext();
+    if (context === previousEditorContext) return;
+    previousEditorContext = context;
+    setBoundaryDrafts({});
+    setBoundaryErrors({});
+    setLabelDrafts({});
+    setLabelErrors({});
+    canceledBoundaryKey = undefined;
+  });
   const segmentKey = (id: string | undefined, index: number) => id ?? `index-${index}`;
   const boundaryValue = (segment: Segment, index: number, boundary: "start" | "end") => {
     const key = segmentKey(segment.id, index);
@@ -17,6 +36,34 @@ export function CutsView() {
       boundaryDrafts()[key]?.[boundary] ??
       formatTime(boundary === "start" ? segment.startMs : segment.endMs, workspace.duration())
     );
+  };
+  const labelValue = (segment: Segment, index: number) =>
+    labelDrafts()[segmentKey(segment.id, index)] ?? segment.label ?? "";
+  const updateLabel = (index: number, segment: Segment, value: string) => {
+    const key = segmentKey(segment.id, index);
+    setLabelDrafts((current) => ({ ...current, [key]: value }));
+    const error = validateSegmentLabel(value);
+    if (error) {
+      setLabelErrors((current) => ({ ...current, [key]: error }));
+      workspace.setEditorStatus(error);
+      return;
+    }
+    setLabelErrors((current) => {
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+    workspace.updateSegmentLabel(index, value);
+  };
+  const commitLabel = (index: number, segment: Segment) => {
+    const key = segmentKey(segment.id, index);
+    const value = labelDrafts()[key];
+    if (value === undefined || validateSegmentLabel(value)) return;
+    setLabelDrafts((current) => {
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
   };
   const confirmBoundary = (
     index: number,
@@ -124,14 +171,33 @@ export function CutsView() {
                 <label class="cut-label">
                   Label
                   <input
-                    class="input input-sm"
+                    class="input input-sm validator"
+                    classList={{
+                      "input-error": Boolean(labelErrors()[segmentKey(segment.id, index())]),
+                    }}
                     aria-label={`Label cut ${index() + 1}`}
-                    value={segment.label ?? ""}
-                    placeholder="Custom name"
-                    onChange={(event) =>
-                      workspace.updateSegmentLabel(index(), event.currentTarget.value)
+                    aria-invalid={Boolean(labelErrors()[segmentKey(segment.id, index())])}
+                    aria-describedby={
+                      labelErrors()[segmentKey(segment.id, index())]
+                        ? `label-error-${index()}`
+                        : undefined
                     }
+                    value={labelValue(segment, index())}
+                    placeholder="Custom name"
+                    onInput={(event) => updateLabel(index(), segment, event.currentTarget.value)}
+                    onBlur={() => commitLabel(index(), segment)}
                   />
+                  <Show when={labelErrors()[segmentKey(segment.id, index())]}>
+                    {(message) => (
+                      <small
+                        id={`label-error-${index()}`}
+                        class="validator-hint control-help"
+                        role="alert"
+                      >
+                        {message()}
+                      </small>
+                    )}
+                  </Show>
                 </label>
                 <div class="cut-boundaries" aria-label={`Bounds for cut ${index() + 1}`}>
                   <label>

@@ -1,9 +1,12 @@
 package jobs
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"log"
 	"math"
 	"strconv"
 	"sync"
@@ -13,6 +16,20 @@ import (
 
 	_ "modernc.org/sqlite"
 )
+
+func waitForJobState(t *testing.T, jobs *JobsStore, id string, want JobState) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		job, err := jobs.Get(context.Background(), id)
+		if err == nil && job.State == want {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	job, err := jobs.Get(context.Background(), id)
+	t.Fatalf("small internal state = %#v, %v; want %s", job, err, want)
+}
 
 func openSchedulerTestDatabase(t *testing.T) *sql.DB {
 	t.Helper()
@@ -25,6 +42,35 @@ func openSchedulerTestDatabase(t *testing.T) *sql.DB {
 		t.Fatal(err)
 	}
 	return db
+}
+
+type synchronizedBuffer struct {
+	mu sync.Mutex
+	bytes.Buffer
+}
+
+func (b *synchronizedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.Buffer.Write(p)
+}
+
+func (b *synchronizedBuffer) Bytes() []byte {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return bytes.Clone(b.Buffer.Bytes())
+}
+
+func (b *synchronizedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.Buffer.String()
+}
+
+func (b *synchronizedBuffer) Len() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.Buffer.Len()
 }
 
 func TestSchedulerCancelBetweenClaimAndRegistrationSkipsRunner(t *testing.T) {
@@ -213,8 +259,49 @@ func TestSchedulerShutdownBetweenClaimAndRegistrationSkipsRunner(t *testing.T) {
 		t.Fatal("runner executed a job registered after shutdown")
 	}
 	stored, err := jobs.Get(t.Context(), job.ID)
-	if err != nil || stored.State != JobCancelled {
+	if err != nil || stored.State != JobFailed || stored.ErrorCode.String != "interrupted_by_restart" {
 		t.Fatalf("job = %#v, err = %v", stored, err)
+	}
+}
+
+func TestSchedulerShutdownPreservesQueuedAndFailsInterruptedWork(t *testing.T) {
+	db := openSchedulerTestDatabase(t)
+	t.Cleanup(func() { _ = db.Close() })
+	jobs, err := NewJobsStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	scheduler, err := NewScheduler(jobs, SchedulerConfig{QueueCapacity: 2, WorkerLimit: 1}, func(ctx context.Context, _ Job) error {
+		close(started)
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := Job{ID: "j_shutdown_active", BatchID: "b_shutdown_batch", Kind: JobScan, RequestJSON: `{}`}
+	second := Job{ID: "j_shutdown_queued", BatchID: "b_shutdown_batch", Kind: JobScan, RequestJSON: `{}`}
+	if _, err := scheduler.Submit(t.Context(), []Job{first, second}); err != nil {
+		t.Fatal(err)
+	}
+	scheduler.Start()
+	<-started
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	if err := scheduler.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+	active, err := jobs.Get(t.Context(), first.ID)
+	if err != nil || active.State != JobFailed || active.ErrorCode.String != "interrupted_by_restart" {
+		t.Fatalf("interrupted work = %#v, %v", active, err)
+	}
+	queued, err := jobs.Get(t.Context(), second.ID)
+	if err != nil || queued.State != JobQueued {
+		t.Fatalf("queued work = %#v, %v", queued, err)
+	}
+	if recovered, err := jobs.Recover(t.Context()); err != nil || recovered != 0 {
+		t.Fatalf("already finalized interruption recovered again: %d, %v", recovered, err)
 	}
 }
 
@@ -552,5 +639,145 @@ func TestSchedulerAdmissionReturnsCommittedJobsAfterContextCancellation(t *testi
 				}
 			}
 		})
+	}
+}
+
+func TestSchedulerRetriesTerminalTransitionPreservingRunnerResult(t *testing.T) {
+	database := openSchedulerTestDatabase(t)
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	jobs, err := NewJobsStore(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var executions atomic.Int32
+	var attempts atomic.Int32
+	var logs synchronizedBuffer
+	scheduler, err := NewScheduler(jobs, SchedulerConfig{
+		QueueCapacity: 1,
+		WorkerLimit:   1,
+		Logger:        log.New(&logs, "", 0),
+	}, func(context.Context, Job) error {
+		executions.Add(1)
+		return &ResultPersistenceError{
+			Result: `{"output":"published"}`,
+			Err:    errors.New("transient terminal write"),
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	scheduler.terminalTransition = func(ctx context.Context, id string, target JobState, result, _ string) (Job, error) {
+		if target != JobSucceeded || result != `{"output":"published"}` {
+			return Job{}, errors.New("scheduler supplied an unexpected terminal transition")
+		}
+		if got := attempts.Add(1); got < terminalTransitionAttempts {
+			return Job{}, errors.New("transient terminal write")
+		}
+		return jobs.Succeed(ctx, id, result)
+	}
+	scheduler.Start()
+	job := Job{ID: "j_000000000101", BatchID: "b_000000000101", Kind: JobScan, RequestJSON: `{}`}
+	if _, err := scheduler.Submit(t.Context(), []Job{job}); err != nil {
+		t.Fatal(err)
+	}
+	waitForJobState(t, jobs, job.ID, JobSucceeded)
+	if err := scheduler.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := jobs.Get(t.Context(), job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if executions.Load() != 1 {
+		t.Fatalf("runner executions = %d, want 1", executions.Load())
+	}
+	if attempts.Load() != terminalTransitionAttempts {
+		t.Fatalf("terminal attempts = %d, want %d", attempts.Load(), terminalTransitionAttempts)
+	}
+	if !stored.ResultJSON.Valid || stored.ResultJSON.String != `{"output":"published"}` {
+		t.Fatalf("stored result = %#v", stored.ResultJSON)
+	}
+	if logs.Len() != 0 {
+		t.Fatalf("unexpected exhaustion log = %q", logs.String())
+	}
+}
+
+func TestSchedulerSurfacesExhaustedTerminalTransitionWithoutEmptySuccess(t *testing.T) {
+	database := openSchedulerTestDatabase(t)
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	jobs, err := NewJobsStore(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var attempts atomic.Int32
+	var logs synchronizedBuffer
+	scheduler, err := NewScheduler(jobs, SchedulerConfig{
+		QueueCapacity: 1,
+		WorkerLimit:   1,
+		Logger:        log.New(&logs, "", 0),
+	}, func(context.Context, Job) error {
+		return &ResultPersistenceError{
+			Result: `{"output":"published"}`,
+			Err:    errors.New("permanent terminal write"),
+		}
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	scheduler.terminalTransition = func(context.Context, string, JobState, string, string) (Job, error) {
+		attempts.Add(1)
+		return Job{}, errors.New("permanent terminal write")
+	}
+	scheduler.Start()
+	job := Job{ID: "j_000000000102", BatchID: "b_000000000102", Kind: JobScan, RequestJSON: `{}`}
+	if _, err := scheduler.Submit(t.Context(), []Job{job}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if attempts.Load() == terminalTransitionAttempts {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if attempts.Load() != terminalTransitionAttempts {
+		t.Fatalf("terminal attempts = %d, want %d", attempts.Load(), terminalTransitionAttempts)
+	}
+	stored, err := jobs.Get(t.Context(), job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.State != JobRunning {
+		t.Fatalf("stored state = %s, want running after exhausted write", stored.State)
+	}
+	if stored.ResultJSON.Valid {
+		t.Fatalf("stored result unexpectedly set = %#v", stored.ResultJSON)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	if err := scheduler.Shutdown(ctx); err != nil {
+		t.Fatalf("shutdown after exhausted write = %v", err)
+	}
+	var event struct {
+		JobID         string   `json:"job_id"`
+		TargetState   JobState `json:"target_state"`
+		ErrorCategory string   `json:"error_category"`
+	}
+	if err := json.Unmarshal(logs.Bytes(), &event); err != nil {
+		t.Fatalf("terminal failure log is not structured JSON: %v", err)
+	}
+	if event.JobID != job.ID || event.TargetState != JobSucceeded || event.ErrorCategory != "terminal_transition" {
+		t.Fatalf("unexpected terminal failure event: %#v", event)
+	}
+	if logged := logs.String(); bytes.Contains([]byte(logged), []byte("permanent terminal write")) || bytes.Contains([]byte(logged), []byte(`{"output":"published"}`)) {
+		t.Fatalf("log leaked transition details = %q", logged)
 	}
 }

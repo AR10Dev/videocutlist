@@ -198,6 +198,12 @@ paths:
     get:
       summary: Stream a normalized preview
       operationId: streamPreview
+      description: >-
+        Revalidates the source before cache lookup. Changed sources return
+        409 source_changed and require a library refresh; missing sources return
+        404 not_found. Only process-capacity rejection returns 429 preview_busy
+        with Retry-After: 1. Deadline expiry returns 504 preview_timeout; unexpected
+        startup/cache failures return 500 internal_error.
       responses:
         "200":
           description: Fragmented MP4 preview
@@ -227,6 +233,8 @@ paths:
                 format: binary
         "404":
           $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
         "422":
           $ref: "#/components/responses/Error"
         "403":
@@ -237,9 +245,15 @@ paths:
           $ref: "#/components/responses/Error"
         "500":
           $ref: "#/components/responses/Error"
+        "504":
+          $ref: "#/components/responses/Error"
     head:
       summary: Check for a cached preview
       operationId: previewStatus
+      description: >-
+        Revalidates the source even for a cached preview. Source changes return
+        409; missing sources or absent cache entries return 404. Uses the same
+        validation, capacity, and deadline statuses as GET, without a body.
       responses:
         "200":
           description: Complete cached preview exists
@@ -249,7 +263,15 @@ paths:
           $ref: "#/components/responses/Error"
         "403":
           $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
+        "422":
+          $ref: "#/components/responses/Error"
+        "429":
+          $ref: "#/components/responses/Error"
         "500":
+          $ref: "#/components/responses/Error"
+        "504":
           $ref: "#/components/responses/Error"
   /projects:
     get:
@@ -373,7 +395,7 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/ExportInput"
+              $ref: "#/components/schemas/ExportSubmissionInput"
       responses:
         "202":
           description: Batch export queued
@@ -616,7 +638,7 @@ paths:
         schema:
           type: integer
           minimum: 0
-          maximum: 99
+          maximum: 999
     get:
       summary: Download one completed output
       operationId: downloadJobOutput
@@ -710,7 +732,15 @@ paths:
         - name: cursor
           in: query
           schema: {type: string}
+          description: Exclusive credential cursor returned by a previous page.
         - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 100}
+        - name: proposalCursor
+          in: query
+          schema: {type: string}
+          description: Exclusive pending-proposal cursor returned by a previous page.
+        - name: proposalLimit
           in: query
           schema: {type: integer, minimum: 1, maximum: 100}
       responses:
@@ -932,6 +962,8 @@ paths:
         PNG output is validated before publication and on cache reads; invalid
         generated output is a safe 500, never a published image. Output is bounded
         to 8 MiB compressed and 16777216 decoded pixels.
+        Source identity is revalidated before cache hits and conditional 304
+        responses; changed sources return 409 source_changed until refreshed.
       responses:
         "200":
           description: PNG strip with private, no-cache policy
@@ -946,6 +978,8 @@ paths:
             ETag: {schema: {type: string}}
         "404":
           $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
         "422":
           $ref: "#/components/responses/Error"
         "401":
@@ -953,6 +987,8 @@ paths:
         "403":
           $ref: "#/components/responses/Error"
         "500":
+          $ref: "#/components/responses/Error"
+        "504":
           $ref: "#/components/responses/Error"
   /media/{mediaId}/waveform:
     parameters:
@@ -972,6 +1008,8 @@ paths:
         whole float32 audio samples, normalized to 0..1. Unknown or repeated query
         keys and invalid bounds use the existing 422 invalid_asset response;
         media without audio uses 422 no_audio. Malformed generated output is 500.
+        Source identity is revalidated before cache hits and conditional 304
+        responses; changed sources return 409 source_changed until refreshed.
       responses:
         "200":
           description: Waveform with private, no-cache policy
@@ -986,6 +1024,8 @@ paths:
             ETag: {schema: {type: string}}
         "404":
           $ref: "#/components/responses/Error"
+        "409":
+          $ref: "#/components/responses/Error"
         "422":
           $ref: "#/components/responses/Error"
         "401":
@@ -993,6 +1033,8 @@ paths:
         "403":
           $ref: "#/components/responses/Error"
         "500":
+          $ref: "#/components/responses/Error"
+        "504":
           $ref: "#/components/responses/Error"
   /projects/{projectId}/interchange/{format}:
     parameters:
@@ -1275,12 +1317,12 @@ components:
             current job and queued work drains at the new limit.
         cacheMaxBytes:
           type: integer
-          minimum: 1
+          minimum: 2
           description: >-
-            Live preview-cache total budget and timeline-asset per-artifact limit
-            (not a combined cache budget). Subsequent publications use the current
-            limit, including in-flight generations. Oversized timeline cache entries
-            are misses. Existing preview entries are evicted on subsequent commits.
+            Combined cache disk budget, partitioned between preview clips (three
+            quarters) and timeline assets (one quarter), with at least one byte
+            per partition. Completed entries are evicted on publication; oversized
+            artifacts cannot be published.
         previewGlobalLimit:
           type: integer
         previewBeforeMs:
@@ -1392,6 +1434,7 @@ components:
           items:
             $ref: "#/components/schemas/ExportProposal"
         nextCursor: {type: string}
+        proposalNextCursor: {type: string}
     SettingsResponse:
       type: object
       required:
@@ -1745,6 +1788,18 @@ components:
           type: array
           items: {$ref: "#/components/schemas/DetectionCandidate"}
         errorCode: {type: string}
+    ExportSubmissionInput:
+      type: object
+      additionalProperties: false
+      properties:
+        itemIds:
+          type: array
+          uniqueItems: true
+          items:
+            type: string
+          description: >-
+            Optional ordered project-item selection; omitted selects all. Export
+            options are read from each saved project item.
     ExportInput:
       type: object
       additionalProperties: false

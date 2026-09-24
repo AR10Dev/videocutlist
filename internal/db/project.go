@@ -43,15 +43,6 @@ func NewProjectStore(db *sql.DB) (*ProjectStore, error) {
 	return &ProjectStore{db: db}, nil
 }
 
-// MigrateProjects applies the E01 project schema. Call after migration 001.
-func MigrateProjects(ctx context.Context, db *sql.DB) error {
-	if db == nil {
-		return errors.New("project database is required")
-	}
-	_, err := db.ExecContext(ctx, projectsMigration)
-	return err
-}
-
 func (s *ProjectStore) List(ctx context.Context, cursor string, limit int) (projects []ProjectSummary, next *string, err error) {
 	if limit <= 0 {
 		limit = 50
@@ -122,52 +113,81 @@ FROM projects WHERE id = ?`, id)
 }
 
 // Save creates at revision zero and otherwise conditionally increments revision.
-func (s *ProjectStore) Save(ctx context.Context, id string, expectedRevision int64, documentJSON string) (ProjectRecord, error) {
-	if id == "" || expectedRevision < 0 {
-		return ProjectRecord{}, errors.New("project id and revision are required")
-	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if expectedRevision == 0 {
-		_, err := s.db.ExecContext(ctx, `INSERT INTO projects
-(id, revision, document_json, created_at, updated_at) VALUES (?, 1, ?, ?, ?)`, id, documentJSON, now, now)
-		if err == nil {
-			return s.Get(ctx, id)
-		}
-		if _, existingErr := s.Get(ctx, id); existingErr == nil {
-			return ProjectRecord{}, ErrRevisionConflict
-		} else if !errors.Is(existingErr, ErrProjectNotFound) {
-			return ProjectRecord{}, existingErr
-		}
-		if exists, existsErr := s.idExists(ctx, id); existsErr != nil {
-			return ProjectRecord{}, existsErr
-		} else if exists {
-			return ProjectRecord{}, ErrProjectNotFound
-		}
-		return ProjectRecord{}, fmt.Errorf("create project: %w", err)
-	}
-	result, err := s.db.ExecContext(ctx, `UPDATE projects SET revision = revision + 1, document_json = ?, updated_at = ?
-WHERE id = ? AND revision = ?`, documentJSON, now, id, expectedRevision)
-	if err != nil {
-		return ProjectRecord{}, fmt.Errorf("update project: %w", err)
-	}
-	affected, err := result.RowsAffected()
+// The mutation and returned row share one transaction so a successful save can
+// never report another writer's revision or fail after the write committed.
+func (s *ProjectStore) Save(ctx context.Context, id string, expectedRevision int64, documentJSON string) (record ProjectRecord, err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return ProjectRecord{}, err
 	}
-	if affected == 1 {
-		return s.Get(ctx, id)
+	defer func() {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
+			err = errors.Join(err, fmt.Errorf("rollback project save: %w", rollbackErr))
+		}
+	}()
+	record, err = s.SaveTx(ctx, tx, id, expectedRevision, documentJSON)
+	if err != nil {
+		return ProjectRecord{}, err
 	}
-	if _, existingErr := s.Get(ctx, id); existingErr == nil {
-		return ProjectRecord{}, ErrRevisionConflict
-	} else if !errors.Is(existingErr, ErrProjectNotFound) {
-		return ProjectRecord{}, existingErr
-	}
-	return ProjectRecord{}, ErrProjectNotFound
+	return record, tx.Commit()
 }
 
-func (s *ProjectStore) idExists(ctx context.Context, id string) (bool, error) {
+// SaveTx persists a project mutation inside the supplied transaction without
+// committing it. The caller owns the transaction boundary.
+func (s *ProjectStore) SaveTx(ctx context.Context, tx *sql.Tx, id string, expectedRevision int64, documentJSON string) (record ProjectRecord, err error) {
+	if tx == nil || id == "" || expectedRevision < 0 {
+		return ProjectRecord{}, errors.New("project transaction, id, and revision are required")
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if expectedRevision == 0 {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO projects
+(id, revision, document_json, created_at, updated_at) VALUES (?, 1, ?, ?, ?)`, id, documentJSON, now, now); err != nil {
+			if _, existingErr := s.getTx(tx, id); existingErr == nil {
+				return ProjectRecord{}, ErrRevisionConflict
+			} else if !errors.Is(existingErr, ErrProjectNotFound) {
+				return ProjectRecord{}, existingErr
+			}
+			if exists, existsErr := s.idExistsTx(tx, id); existsErr != nil {
+				return ProjectRecord{}, existsErr
+			} else if exists {
+				return ProjectRecord{}, ErrProjectNotFound
+			}
+			return ProjectRecord{}, fmt.Errorf("create project: %w", err)
+		}
+	} else {
+		result, err := tx.ExecContext(ctx, `UPDATE projects SET revision = revision + 1, document_json = ?, updated_at = ?
+WHERE id = ? AND revision = ?`, documentJSON, now, id, expectedRevision)
+		if err != nil {
+			return ProjectRecord{}, fmt.Errorf("update project: %w", err)
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return ProjectRecord{}, err
+		}
+		if affected != 1 {
+			if _, existingErr := s.getTx(tx, id); existingErr == nil {
+				return ProjectRecord{}, ErrRevisionConflict
+			} else if !errors.Is(existingErr, ErrProjectNotFound) {
+				return ProjectRecord{}, existingErr
+			}
+			return ProjectRecord{}, ErrProjectNotFound
+		}
+	}
+	return s.getTx(tx, id)
+}
+
+func (s *ProjectStore) getTx(tx *sql.Tx, id string) (ProjectRecord, error) {
+	row := tx.QueryRow(`SELECT id, revision, document_json, created_at, updated_at FROM projects WHERE id = ?`, id)
+	record, err := scanProject(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ProjectRecord{}, ErrProjectNotFound
+	}
+	return record, err
+}
+
+func (s *ProjectStore) idExistsTx(tx *sql.Tx, id string) (bool, error) {
 	var one int
-	err := s.db.QueryRowContext(ctx, `SELECT 1 FROM projects WHERE id = ?`, id).Scan(&one)
+	err := tx.QueryRow(`SELECT 1 FROM projects WHERE id = ?`, id).Scan(&one)
 	if errors.Is(err, sql.ErrNoRows) {
 		return false, nil
 	}

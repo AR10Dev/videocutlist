@@ -168,6 +168,113 @@ func TestOpenDatabaseMigratesLegacyIdentityColumns(t *testing.T) {
 	}
 }
 
+func TestMediaBrowsePaginatesNestedFoldersAcrossRoots(t *testing.T) {
+	ctx := context.Background()
+	db, err := store.OpenDatabase(ctx, filepath.Join(t.TempDir(), "media.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	media, err := store.NewMediaStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootA := []index.Record{
+		{Media: index.Media{ID: "m_001", SizeBytes: 1, MtimeNS: 1}, RootAlias: "root-a", RelativePath: "nested/shared/a.mp4"},
+		{Media: index.Media{ID: "m_003", SizeBytes: 3, MtimeNS: 3}, RootAlias: "root-a", RelativePath: "nested/shared/c.mp4"},
+		{Media: index.Media{ID: "m_005", SizeBytes: 5, MtimeNS: 5}, RootAlias: "root-a", RelativePath: "nested/other/e.mp4"},
+		{Media: index.Media{ID: "m_007", SizeBytes: 7, MtimeNS: 7}, RootAlias: "root-a", RelativePath: "top-a.mp4"},
+	}
+	rootB := []index.Record{
+		{Media: index.Media{ID: "m_002", SizeBytes: 2, MtimeNS: 2}, RootAlias: "root-b", RelativePath: "nested/shared/b.mp4"},
+		{Media: index.Media{ID: "m_004", SizeBytes: 4, MtimeNS: 4}, RootAlias: "root-b", RelativePath: "top-b.mp4"},
+		{Media: index.Media{ID: "m_006", SizeBytes: 6, MtimeNS: 6}, RootAlias: "root-b", RelativePath: "other/root/b.mp4"},
+	}
+	if err := media.Sync(ctx, "root-a", rootA); err != nil {
+		t.Fatal(err)
+	}
+	if err := media.Sync(ctx, "root-b", rootB); err != nil {
+		t.Fatal(err)
+	}
+
+	folders, items, next, err := media.Browse(ctx, "", "", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantFolders := map[string]string{
+		index.FolderID("root-a", "nested"): "nested",
+		index.FolderID("root-b", "nested"): "nested",
+		index.FolderID("root-b", "other"):  "other",
+	}
+	for i, folder := range folders {
+		if i > 0 && folders[i-1].ID >= folder.ID {
+			t.Fatalf("folders are not sorted: %#v", folders)
+		}
+		label, ok := wantFolders[folder.ID]
+		if !ok || label != folder.Label {
+			t.Fatalf("unexpected root folder: %#v", folder)
+		}
+		delete(wantFolders, folder.ID)
+	}
+	if len(wantFolders) != 0 {
+		t.Fatalf("root folders missing: %#v", wantFolders)
+	}
+	if len(items) != 1 || items[0].ID != "m_004" || items[0].Name != "top-b.mp4" || next != "m_004" {
+		t.Fatalf("first root page = items %#v, next %q", items, next)
+	}
+
+	_, items, next, err = media.Browse(ctx, "", next, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].ID != "m_007" || items[0].Name != "top-a.mp4" || next != "" {
+		t.Fatalf("second root page = items %#v, next %q", items, next)
+	}
+	_, items, next, err = media.Browse(ctx, "", "m_007", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 0 || next != "" {
+		t.Fatalf("root page after end = items %#v, next %q", items, next)
+	}
+
+	shared := index.FolderID("root-a", "nested/shared")
+	_, items, next, err = media.Browse(ctx, shared, "", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].ID != "m_001" || next != "m_001" {
+		t.Fatalf("first nested page = items %#v, next %q", items, next)
+	}
+	_, items, next, err = media.Browse(ctx, shared, next, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 || items[0].ID != "m_003" || next != "" {
+		t.Fatalf("second nested page = items %#v, next %q", items, next)
+	}
+	_, items, next, err = media.Browse(ctx, shared, "m_003", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 0 || next != "" {
+		t.Fatalf("nested page after end = items %#v, next %q", items, next)
+	}
+
+	nested := index.FolderID("root-a", "nested")
+	folders, items, next, err = media.Browse(ctx, nested, "", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 0 || next != "" || len(folders) != 2 {
+		t.Fatalf("nested folder page = folders %#v, items %#v, next %q", folders, items, next)
+	}
+}
+
 func assertNoOwnerColumn(t *testing.T, db *sql.DB, table string) {
 	t.Helper()
 	var count int

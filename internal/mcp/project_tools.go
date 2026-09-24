@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"slices"
@@ -22,11 +23,13 @@ const (
 	cutlistOpLimit     = 100
 )
 
-// ProjectToolService is the existing project service surface needed by the MCP
-// project tools.
+// ProjectToolService is the existing project service surface needed for MCP
+// project tools. Creation must use the caller's transaction so project
+// persistence and credential scope changes commit or roll back together.
 type ProjectToolService interface {
 	projects.ProjectService
 	projects.ProjectListService
+	CreateInTx(context.Context, *sql.Tx, string, projects.ProjectInput, []projects.Media) (projects.Project, error)
 }
 
 // ProjectTools provides scoped project inspection and revision-checked cutlist edits.
@@ -92,20 +95,23 @@ func listProjects(ctx Context, service ProjectToolService, raw json.RawMessage) 
 		if err != nil {
 			return ToolResult{}, err
 		}
-		for _, project := range page.Items {
+		pageComplete := true
+		for position, project := range page.Items {
 			scanned++
 			cursor = project.ID
 			if ctx.Credential.AllowsProjectSummary(project.ID) {
 				items = append(items, project)
 				if len(items) == args.Limit {
+					pageComplete = position == len(page.Items)-1
 					break
 				}
 			}
 		}
-		if page.NextCursor == nil || len(items) == args.Limit || len(page.Items) == 0 {
-			if page.NextCursor == nil {
-				cursor = ""
-			}
+		if len(items) == args.Limit && !pageComplete {
+			break
+		}
+		if page.NextCursor == nil || len(page.Items) == 0 {
+			cursor = ""
 			break
 		}
 		cursor = *page.NextCursor
@@ -165,18 +171,20 @@ func createProjectResource(ctx Context, media MediaReader, raw json.RawMessage) 
 	return Resource{ProjectMedia: resources}, nil
 }
 
-func createProject(ctx Context, service projects.ProjectService, media MediaReader, credentials *CredentialStore, raw json.RawMessage) (ToolResult, error) {
+func createProject(ctx Context, service ProjectToolService, media MediaReader, credentials *CredentialStore, raw json.RawMessage) (ToolResult, error) {
 	args, err := decodeCreateProjectArgs(raw)
 	if err != nil {
 		return ToolResult{}, err
 	}
 	items := make([]model.ProjectItem, 0, len(args.MediaIDs))
 	resources := make([]MediaResource, 0, len(args.MediaIDs))
+	resolved := make([]projects.Media, 0, len(args.MediaIDs))
 	for _, mediaID := range args.MediaIDs {
 		item, err := media.Get(ctx.Request.Context(), mediaID)
 		if err != nil {
 			return ToolResult{}, err
 		}
+		resolved = append(resolved, item)
 		resources = append(resources, MediaResource{ID: item.ID, RootID: item.RootID})
 		itemID, err := randomIdentifier("i_", 18)
 		if err != nil {
@@ -187,18 +195,24 @@ func createProject(ctx Context, service projects.ProjectService, media MediaRead
 	if !ctx.Credential.AllowsCreateProject(resources) {
 		return ToolResult{}, ErrResourceDenied
 	}
+	if credentials == nil {
+		return ToolResult{}, errors.New("mcp credential store is required")
+	}
 	projectID, err := randomIdentifier("p_", 18)
 	if err != nil {
 		return ToolResult{}, err
 	}
-	project, err := service.Create(ctx.Request.Context(), projectID, projects.ProjectInput{Document: model.Document{SchemaVersion: model.ProjectSchemaVersion, Name: args.Name, Items: items}})
+	var project projects.Project
+	err = credentials.withTransaction(ctx.Request.Context(), func(tx *sql.Tx) error {
+		var err error
+		project, err = service.CreateInTx(ctx.Request.Context(), tx, projectID, projects.ProjectInput{Document: model.Document{SchemaVersion: model.ProjectSchemaVersion, Name: args.Name, Items: items}}, resolved)
+		if err != nil {
+			return err
+		}
+		_, err = credentials.grantProjectTx(ctx.Request.Context(), tx, ctx.Credential.ID, project.ID)
+		return err
+	})
 	if err != nil {
-		return ToolResult{}, err
-	}
-	if credentials == nil {
-		return ToolResult{}, errors.New("mcp credential store is required")
-	}
-	if _, err := credentials.GrantProject(ctx.Request.Context(), ctx.Credential.ID, project.ID); err != nil {
 		return ToolResult{}, err
 	}
 	return ToolResult{Content: []ToolContent{{Type: "text", Text: "Project created."}}, StructuredContent: projectResult(project)}, nil

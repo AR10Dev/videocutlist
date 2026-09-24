@@ -22,7 +22,7 @@ func (s *Server) downloadOutput(w http.ResponseWriter, r *http.Request, encoded,
 		return
 	}
 	position, err := strconv.Atoi(parts[1])
-	if err != nil || position < 0 || position > 99 {
+	if err != nil || position < 0 || position >= exportpolicy.MaxOutputs {
 		notFound(w, id)
 		return
 	}

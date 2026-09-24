@@ -104,6 +104,19 @@ func Preflight(request Request, metadata probe.Metadata) PreflightResult {
 	if len(result.Selection) == 0 {
 		result.Findings = append(result.Findings, Finding{Severity: "blocked", Code: "no_allowed_streams", Message: "at least one video, audio, or subtitle stream is required"})
 	}
+	// Output verification rejects every probed result without a video stream
+	// (probe normalize requires a video stream), so a selection without video
+	// would always produce a failed export; block it before queueing.
+	hasVideo := false
+	for _, index := range result.Selection {
+		if stream, ok := byIndex[index]; ok && stream.Type == "video" {
+			hasVideo = true
+			break
+		}
+	}
+	if !hasVideo {
+		result.Findings = append(result.Findings, Finding{Severity: "blocked", Code: "no_video_stream", Message: "exports require at least one video stream"})
+	}
 	for _, finding := range result.Findings {
 		if finding.Severity == "blocked" {
 			return result
@@ -117,15 +130,9 @@ func (s Service) preflightDestination(ctx context.Context, request Request, sour
 	if !atomicNoReplacePublicationSupported() {
 		return errAtomicNoReplaceUnsupported
 	}
-	destination := Destination{ID: "download", Kind: KindDownload, Root: s.OutputDir, Retention: s.Retention}
-	for _, candidate := range s.Destinations {
-		if candidate.ID == request.DestinationID || request.DestinationID == "" && candidate.ID == "download" {
-			destination = candidate
-			break
-		}
-	}
-	if request.DestinationID != "" && destination.ID != request.DestinationID {
-		return fmt.Errorf("unknown destination %q", request.DestinationID)
+	destination, err := s.destinationForRequest(request)
+	if err != nil {
+		return err
 	}
 	prepared, err := prepareDestination(destination, source, requestSourceName(source, request), SourceLocation{RootPath: request.SourceRoot, RelativePath: request.SourceRelative})
 	if err != nil {

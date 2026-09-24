@@ -103,6 +103,16 @@ func (p preparedDestination) createTempDir(prefix string) (*os.Root, *os.File, s
 
 func (p preparedDestination) remove(name string)    { _ = p.root.Remove(name) }
 func (p preparedDestination) removeAll(name string) { _ = p.root.RemoveAll(name) }
+func (p preparedDestination) removeOwned(owner manifestOutput) {
+	info, err := p.root.Lstat(owner.Name)
+	if err != nil || !info.Mode().IsRegular() {
+		return
+	}
+	device, inode, ok := manifestFileIdentity(info)
+	if ok && device == owner.Device && inode == owner.Inode {
+		_ = p.root.Remove(owner.Name)
+	}
+}
 func (p preparedDestination) writable() error {
 	info, err := p.root.Stat(".")
 	if err != nil {
@@ -202,6 +212,30 @@ func destinationRootAt(d Destination, source string, location SourceLocation) (s
 	default:
 		return "", errors.New("unsupported destination kind")
 	}
+}
+
+func (s Service) destinationForRequest(request Request) (Destination, error) {
+	if len(s.Destinations) == 0 {
+		if request.DestinationID != "" && request.DestinationID != "download" {
+			return Destination{}, fmt.Errorf("unknown destination %q", request.DestinationID)
+		}
+		if s.OutputDir == "" {
+			return Destination{}, errors.New("download destination is not configured")
+		}
+		return Destination{ID: "download", Kind: KindDownload, Root: s.OutputDir, Retention: s.Retention}, nil
+	}
+	for _, candidate := range s.Destinations {
+		if request.DestinationID != "" && candidate.ID == request.DestinationID {
+			return candidate, nil
+		}
+		if request.DestinationID == "" && candidate.ID == "download" {
+			return candidate, nil
+		}
+	}
+	if request.DestinationID == "" {
+		return Destination{}, errors.New("default download destination is not configured")
+	}
+	return Destination{}, fmt.Errorf("unknown destination %q", request.DestinationID)
 }
 
 func prepareDestination(d Destination, source *os.File, sourceName string, location SourceLocation) (preparedDestination, error) {

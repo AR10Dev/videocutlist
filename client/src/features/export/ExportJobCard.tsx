@@ -88,18 +88,27 @@ export function ExportJobCard(props: {
   batchId?: string;
   destinations: () => Destination[];
   canDownloadBatch?: boolean;
-  onCancel?: (id: string) => Promise<unknown>;
-  onRetry?: (id: string) => Promise<unknown>;
+  childJobPending?: (id: string) => boolean;
+  onCancel?: (id: string, batchId?: string) => Promise<unknown>;
+  onRetry?: (id: string, batchId?: string) => Promise<unknown>;
 }) {
   const outputs = () => jobOutputNames(props.job);
   const running = () => props.job.state === "queued" || props.job.state === "running";
   const destinationKind = () => props.job.result?.destinationKind;
   const downloadable = () => props.job.state === "succeeded" && destinationKind() === "download";
   const warningDetails = () => props.job.warningDetails ?? [];
+  const warnings = () => [
+    ...new Set(
+      warningDetails().length
+        ? warningDetails().map((warning) => warning.message)
+        : (props.job.warnings ?? []),
+    ),
+  ];
   const outputFailures = () => props.job.result?.outputFailures ?? [];
   const selectedStreams = () => props.job.selectedStreams ?? [];
   const destination = () =>
     destinationLabel(props.destinations(), props.job.result?.destinationId, destinationKind());
+  const actionPending = () => props.childJobPending?.(props.job.id) ?? false;
 
   return (
     <article class="export-job-card" aria-label={`Export job ${props.ordinal}`}>
@@ -110,7 +119,6 @@ export function ExportJobCard(props: {
           </h4>
           <p>
             <code>{props.job.id}</code>
-            <Show when={props.job.projectRevision}> · revision {props.job.projectRevision}</Show>
           </p>
         </div>
         <span
@@ -128,8 +136,8 @@ export function ExportJobCard(props: {
         </span>
       </header>
 
-      <div class="export-job-progress" aria-label={`Export job ${props.ordinal} status`}>
-        <Show when={props.job.progress !== undefined}>
+      <Show when={running()}>
+        <div class="export-job-progress" aria-label={`Export job ${props.ordinal} status`}>
           <progress
             class="progress progress-primary"
             value={Math.round((props.job.progress ?? 0) * 100)}
@@ -137,36 +145,20 @@ export function ExportJobCard(props: {
             aria-label={`Export job ${props.ordinal} progress`}
           />
           <span>{Math.round((props.job.progress ?? 0) * 100)}%</span>
-        </Show>
-        <Show when={props.job.state === "running"}>
-          <LoaderCircle class="spin" size={14} aria-label="Export running" />
-        </Show>
-      </div>
+          <Show when={props.job.state === "running"}>
+            <LoaderCircle class="spin" size={14} aria-label="Export running" />
+          </Show>
+        </div>
+      </Show>
 
-      <dl class="export-job-facts">
-        <dt>Requested cut</dt>
-        <dd>{strategyLabel(props.job.strategy)}</dd>
-        <dt>Applied cut</dt>
-        <dd>{strategyLabel(props.job.appliedStrategy)}</dd>
-        <dt>Arrangement</dt>
-        <dd>
-          {props.job.mode === "separate"
-            ? "One output per cut"
-            : props.job.mode === "merge"
-              ? "One merged output"
-              : "Not reported"}
-        </dd>
-        <dt>Selection</dt>
-        <dd>{selectionLabel(props.job.selection)}</dd>
+      <p class="export-job-summary">
+        {strategyLabel(props.job.appliedStrategy ?? props.job.strategy)} ·{" "}
+        {props.job.mode === "separate" ? "One output per cut" : "One merged output"} ·{" "}
+        {selectionLabel(props.job.selection)}
         <Show when={selectedStreams().length > 0}>
-          <dt>Selected streams</dt>
-          <dd>{selectedStreams().join(", ")}</dd>
+          {` · Streams ${selectedStreams().join(", ")}`}
         </Show>
-        <dt>Started</dt>
-        <dd>{formatJobDate(props.job.createdAt)}</dd>
-        <dt>Updated</dt>
-        <dd>{formatJobDate(props.job.updatedAt)}</dd>
-      </dl>
+      </p>
 
       <Show when={props.job.errorCode}>
         {(code) => (
@@ -182,7 +174,7 @@ export function ExportJobCard(props: {
           <div class="export-job-result">
             <div class="export-result-heading">
               <h5>
-                <Download size={15} aria-hidden="true" /> Published outputs
+                <Download size={15} aria-hidden="true" /> Output
               </h5>
               <span class={props.job.verified ? "text-success" : "text-warning"}>
                 {props.job.verified ? (
@@ -196,18 +188,10 @@ export function ExportJobCard(props: {
                 )}
               </span>
             </div>
-            <dl class="export-job-facts">
-              <dt>Container</dt>
-              <dd>{containerLabel(result().container ?? props.job.container)}</dd>
-              <dt>Destination</dt>
-              <dd>{destination()}</dd>
-              <dt>Destination type</dt>
-              <dd>{destinationKindLabel(result().destinationKind)}</dd>
-              <dt>Total size</dt>
-              <dd>{formatBytes(result().sizeBytes)}</dd>
-              <dt>Retained until</dt>
-              <dd>{formatJobDate(result().retainUntil)}</dd>
-            </dl>
+            <p class="export-job-summary">
+              {containerLabel(result().container ?? props.job.container)} · {destination()} ·{" "}
+              {destinationKindLabel(result().destinationKind)} · {formatBytes(result().sizeBytes)}
+            </p>
             <Show
               when={outputs().length > 0}
               fallback={<p class="export-muted-note">The server did not publish an output name.</p>}
@@ -231,30 +215,6 @@ export function ExportJobCard(props: {
               }
             >
               <BatchDownload batchId={props.batchId!} outputCount={outputs().length} />
-            </Show>
-            <Show when={!downloadable() && result().destinationKind}>
-              <p class="export-muted-note">
-                These outputs were saved to the configured server destination; browser download
-                actions are not available for this destination.
-              </p>
-            </Show>
-            <Show when={result().appliedStrategies?.length}>
-              <details class="export-job-subdetails">
-                <summary>Applied strategy per cut</summary>
-                <ul class="export-detail-list">
-                  <For each={result().appliedStrategies}>
-                    {(strategy) => (
-                      <li>
-                        Cut {strategy.segment}: {strategyLabel(strategy.strategy)}
-                        <Show when={strategy.outputName}>
-                          {" "}
-                          · <code>{strategy.outputName}</code>
-                        </Show>
-                      </li>
-                    )}
-                  </For>
-                </ul>
-              </details>
             </Show>
             <Show when={outputFailures().length > 0}>
               <div class="alert alert-warning alert-soft" role="alert">
@@ -280,23 +240,14 @@ export function ExportJobCard(props: {
         )}
       </Show>
 
-      <Show when={props.job.warnings?.length || warningDetails().length}>
-        <details class="export-job-subdetails" open>
-          <summary>Warnings and review notes</summary>
-          <ul class="export-detail-list">
-            <For each={props.job.warnings ?? []}>{(warning) => <li>{warning}</li>}</For>
-            <For each={warningDetails()}>
-              {(finding) => (
-                <li>
-                  {finding.code}: {finding.message}
-                  <Show when={finding.streamIndex !== undefined}>
-                    {" "}
-                    · stream {finding.streamIndex}
-                  </Show>
-                </li>
-              )}
-            </For>
-          </ul>
+      <Show when={warnings().length}>
+        <details class="export-job-subdetails collapse collapse-arrow">
+          <summary class="collapse-title">Warnings and review notes ({warnings().length})</summary>
+          <div class="collapse-content">
+            <ul class="export-detail-list">
+              <For each={warnings()}>{(warning) => <li>{warning}</li>}</For>
+            </ul>
+          </div>
         </details>
       </Show>
 
@@ -305,9 +256,14 @@ export function ExportJobCard(props: {
           <button
             class="btn btn-ghost btn-sm"
             type="button"
-            onClick={() => void props.onCancel!(props.job.id)}
+            disabled={actionPending()}
+            aria-busy={actionPending()}
+            onClick={() => void props.onCancel!(props.job.id, props.batchId)}
           >
-            <X size={15} aria-hidden="true" /> Cancel job
+            <Show when={actionPending()} fallback={<X size={15} aria-hidden="true" />}>
+              <span class="loading loading-spinner loading-xs" aria-hidden="true" />
+            </Show>{" "}
+            Cancel job
           </button>
         </div>
       </Show>
@@ -316,9 +272,14 @@ export function ExportJobCard(props: {
           <button
             class="btn btn-ghost btn-sm"
             type="button"
-            onClick={() => void props.onRetry!(props.job.id)}
+            disabled={actionPending()}
+            aria-busy={actionPending()}
+            onClick={() => void props.onRetry!(props.job.id, props.batchId)}
           >
-            <RotateCcw size={15} aria-hidden="true" /> Retry job
+            <Show when={actionPending()} fallback={<RotateCcw size={15} aria-hidden="true" />}>
+              <span class="loading loading-spinner loading-xs" aria-hidden="true" />
+            </Show>{" "}
+            Retry job
           </button>
         </div>
       </Show>

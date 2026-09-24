@@ -6,6 +6,9 @@ import (
 	"strings"
 )
 
+// MaxOutputs bounds separate export artifacts and every public list that addresses them.
+const MaxOutputs = 1000
+
 // Policy is the single source of truth for output naming, muxing, MIME, and
 // conservative stream compatibility.
 type Policy struct {

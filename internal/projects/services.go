@@ -57,6 +57,39 @@ type ProjectItemError struct {
 func (e *ProjectItemError) Error() string        { return "project item " + e.ItemID + ": " + e.Code }
 func (e *ProjectItemError) Is(target error) bool { return target == ErrInvalidProject }
 
+// SelectProjectItems validates an optional item-ID selection atomically and
+// returns matching items in their document order.
+func SelectProjectItems(document model.Document, itemIDs []string) ([]model.ProjectItem, error) {
+	if len(itemIDs) == 0 {
+		return slices.Clone(document.Items), nil
+	}
+	known := make(map[string]struct{}, len(document.Items))
+	for _, item := range document.Items {
+		known[item.ID] = struct{}{}
+	}
+	requested := make(map[string]struct{}, len(itemIDs))
+	for _, id := range itemIDs {
+		if id == "" {
+			return nil, &ProjectItemError{Code: "item_id_required"}
+		}
+		if _, duplicate := requested[id]; duplicate {
+			return nil, &ProjectItemError{ItemID: id, Code: "item_id_duplicate"}
+		}
+		if _, exists := known[id]; !exists {
+			return nil, &ProjectItemError{ItemID: id, Code: "item_id_unknown"}
+		}
+		requested[id] = struct{}{}
+	}
+	selected := make([]model.ProjectItem, 0, len(requested))
+	for _, item := range document.Items {
+		if _, ok := requested[item.ID]; ok {
+			selected = append(selected, item)
+		}
+	}
+	return selected, nil
+
+}
+
 type MediaUseCase struct {
 	Catalog    MediaCatalog
 	Configured bool
@@ -570,7 +603,7 @@ func safeOutputNames(name string, names []string) bool {
 	if name != "" {
 		return len(names) == 0 && safeOutputName(name)
 	}
-	if len(names) == 0 || len(names) > 100 {
+	if len(names) == 0 || len(names) > exportpolicy.MaxOutputs {
 		return false
 	}
 	for _, output := range names {
@@ -629,7 +662,7 @@ func safeOutputName(name string) bool {
 }
 
 func safeOutputFailures(failures []OutputFailure) bool {
-	if len(failures) > 100 {
+	if len(failures) > exportpolicy.MaxOutputs {
 		return false
 	}
 	for _, failure := range failures {

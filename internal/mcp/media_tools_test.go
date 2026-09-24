@@ -61,6 +61,42 @@ func TestMediaToolsScopeAndSafeMetadata(t *testing.T) {
 	}
 }
 
+func TestMediaToolsFinalFilteredPageDoesNotReturnCursor(t *testing.T) {
+	media := toolMedia{items: []projects.Media{
+		{ID: "m_a_skip", RootID: "camera", Name: "skip.mp4", DurationMS: 1000},
+		{ID: "m_b_match", RootID: "camera", Name: "match.mp4", DurationMS: 1000},
+	}}
+	credentials, secret := scopedTransportCredentials(t)
+	handler := newTransport(t, mcp.TransportConfig{Enabled: true, Credentials: credentials, Tools: mcp.MediaTools(media)})
+	session := initialize(t, handler, secret)
+
+	response := serve(handler, sessionRequest(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_media","arguments":{"query":"match","limit":1}}}`, secret, session))
+	if response.Code != 200 || !contains(response.Body.String(), "m_b_match") || contains(response.Body.String(), "m_a_skip") {
+		t.Fatalf("filtered media page = %s", response.Body.String())
+	}
+	if contains(response.Body.String(), `"nextCursor"`) {
+		t.Fatalf("final filtered media page returned cursor: %s", response.Body.String())
+	}
+}
+
+func TestMediaToolsRetainsUnconsumedFinalPageRows(t *testing.T) {
+	media := toolMedia{items: []projects.Media{
+		{ID: "m_a_match", RootID: "camera", Name: "match-a.mp4"},
+		{ID: "m_b_match", RootID: "camera", Name: "match-b.mp4"},
+	}}
+	credentials, secret := scopedTransportCredentials(t)
+	handler := newTransport(t, mcp.TransportConfig{Enabled: true, Credentials: credentials, Tools: mcp.MediaTools(media)})
+	session := initialize(t, handler, secret)
+	first := serve(handler, sessionRequest(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_media","arguments":{"limit":1}}}`, secret, session))
+	if !contains(first.Body.String(), `"nextCursor":"m_a_match"`) || contains(first.Body.String(), "m_b_match") {
+		t.Fatalf("first page lost continuation: %s", first.Body.String())
+	}
+	second := serve(handler, sessionRequest(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"list_media","arguments":{"limit":1,"cursor":"m_a_match"}}}`, secret, session))
+	if !contains(second.Body.String(), "m_b_match") || contains(second.Body.String(), "m_a_match") || contains(second.Body.String(), `"nextCursor"`) {
+		t.Fatalf("second page duplicated or lost rows: %s", second.Body.String())
+	}
+}
+
 func scopedTransportCredentials(t *testing.T) (*mcp.CredentialStore, string) {
 	t.Helper()
 	database, err := store.OpenDatabase(t.Context(), t.TempDir()+"/mcp.db")

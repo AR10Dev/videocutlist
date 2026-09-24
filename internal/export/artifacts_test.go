@@ -1,7 +1,9 @@
 package export
 
 import (
+	"archive/zip"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -60,8 +62,101 @@ func TestArtifactReconcilePublishesOnlyValidatedOwnedOutput(t *testing.T) {
 	if _, _, err := artifacts.Open(job.ID, 0, time.Now()); err != nil {
 		t.Fatalf("reconciled artifact unavailable: %v", err)
 	}
-	if _, err := os.Stat(manifest); !os.IsNotExist(err) {
-		t.Fatal("manifest was not removed after reconciliation")
+	if _, err := os.Stat(manifest); err != nil {
+		t.Fatalf("manifest was not retained as restart evidence: %v", err)
+	}
+}
+
+func TestArtifactReconcileRejectsMalformedExpiryAndKeepsZeroExpiryArchive(t *testing.T) {
+	dir := t.TempDir()
+	ffprobe, fixture := fakeFFprobe(t, probe.Metadata{Container: "matroska", DurationMS: 1000, Streams: sourceStreams().Streams})
+	fixtureData, err := os.ReadFile(fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	database, err := store.OpenDatabase(context.Background(), filepath.Join(dir, "jobs.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			t.Errorf("close database: %v", err)
+		}
+	})
+	jobs, err := jobqueue.NewJobsStore(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	createRunning := func(id string) {
+		t.Helper()
+		job := jobqueue.Job{ID: id, BatchID: "b_" + id, Kind: jobqueue.JobExport, ProjectID: "project", ProjectItemID: "item", RequestJSON: `{}`}
+		if _, err := jobs.Create(context.Background(), job); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := jobs.Start(context.Background(), id); err != nil {
+			t.Fatal(err)
+		}
+	}
+	malformedID := "j_reconcile_bad_expiry"
+	archiveID := "j_reconcile_archive_zero"
+	createRunning(malformedID)
+	createRunning(archiveID)
+	malformedOutput := filepath.Join(dir, "malformed.mkv")
+	archiveOutput := filepath.Join(dir, "archive.mkv")
+	for path := range map[string]string{malformedOutput: "malformed", archiveOutput: "archive"} {
+		if err := os.WriteFile(path, fixtureData, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	malformedManifest := filepath.Join(dir, manifestPrefix+malformedID+".json")
+	manifestJSON := `{"jobId":"` + malformedID + `","outputNames":["malformed.mkv"],"kind":"download","container":"mkv","expires":"not-a-time"}`
+	if err := os.WriteFile(malformedManifest, []byte(manifestJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	archiveManifest, err := WriteManifest(dir, archiveID, KindArchive, []string{"archive.mkv"}, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifacts := NewArtifactStore()
+	destinations := []Destination{
+		{ID: "download", Kind: KindDownload, Root: dir},
+		{ID: "server", Kind: KindArchive, Root: dir},
+	}
+	if err := artifacts.Reconcile(context.Background(), jobs, ffprobe, destinations); err != nil {
+		t.Fatal(err)
+	}
+	badJob, err := jobs.Get(context.Background(), malformedID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if badJob.State != jobqueue.JobRunning {
+		t.Fatalf("malformed expiry changed job state to %s", badJob.State)
+	}
+	if _, err := os.Stat(malformedOutput); !os.IsNotExist(err) {
+		t.Fatal("malformed-expiry output was not removed")
+	}
+	if _, err := os.Stat(malformedManifest); !os.IsNotExist(err) {
+		t.Fatal("malformed-expiry manifest was not removed")
+	}
+	archiveJob, err := jobs.Get(context.Background(), archiveID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if archiveJob.State != jobqueue.JobSucceeded {
+		t.Fatalf("zero-expiry archive state = %s", archiveJob.State)
+	}
+	if _, err := os.Stat(archiveOutput); err != nil {
+		t.Fatalf("zero-expiry archive output was removed: %v", err)
+	}
+	if _, err := os.Stat(archiveManifest); err != nil {
+		t.Fatalf("zero-expiry archive manifest was removed: %v", err)
+	}
+	var result Result
+	if err := json.Unmarshal([]byte(archiveJob.ResultJSON.String), &result); err != nil {
+		t.Fatal(err)
+	}
+	if !result.RetainUntil.IsZero() || result.DestinationKind != KindArchive {
+		t.Fatalf("recovered archive result = %#v", result)
 	}
 }
 
@@ -137,6 +232,147 @@ func TestArtifactReconcileCleansCancelledPublishedManifestAndPreservesSucceededS
 	storedSucceeded, err := jobs.Get(context.Background(), succeeded.ID)
 	if err != nil || storedSucceeded.State != jobqueue.JobSucceeded || !storedSucceeded.ResultJSON.Valid {
 		t.Fatalf("succeeded job = %#v, err = %v", storedSucceeded, err)
+	}
+}
+
+func TestArtifactReconcileAdoptsSuccessfulManifestForCleanup(t *testing.T) {
+	dir := t.TempDir()
+	ffprobe, fixture := fakeFFprobe(t, probe.Metadata{Container: "matroska", DurationMS: 1000, Streams: sourceStreams().Streams})
+	fixtureData, err := os.ReadFile(fixture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	database, err := store.OpenDatabase(context.Background(), filepath.Join(dir, "jobs.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	jobs, err := jobqueue.NewJobsStore(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := jobqueue.Job{ID: "j_reconcile_success", BatchID: "b_reconcile_success", Kind: jobqueue.JobExport, ProjectID: "p_reconcile_success", ProjectItemID: "i_aaaaaaaaaaaaaaaaaaaaaaaa", RequestJSON: `{}`}
+	if _, err := jobs.Create(context.Background(), job); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := jobs.Start(context.Background(), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := jobs.Succeed(context.Background(), job.ID, `{"outputName":"success.mkv"}`); err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(dir, "success.mkv")
+	if err := os.WriteFile(output, fixtureData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := WriteManifest(dir, job.ID, KindDownload, []string{"success.mkv"}, time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Each fresh store models another restart. The durable manifest must remain
+	// available for both adoptions until expiry cleanup owns the file.
+	var artifacts *ArtifactStore
+	for range 2 {
+		artifacts = NewArtifactStore()
+		if err := artifacts.Reconcile(context.Background(), jobs, ffprobe, []Destination{{Kind: KindDownload, Root: dir}}); err != nil {
+			t.Fatal(err)
+		}
+		opened, _, err := artifacts.Open(job.ID, 0, time.Now())
+		if err != nil {
+			t.Fatalf("successful artifact not registered for downloads: %v", err)
+		}
+		if err := opened.Close(); err != nil {
+			t.Fatalf("close adopted artifact: %v", err)
+		}
+		if _, err := os.Stat(manifest); err != nil {
+			t.Fatalf("restart evidence was removed before expiry: %v", err)
+		}
+	}
+	artifacts.Cleanup(time.Now().Add(2 * time.Hour))
+	if _, err := os.Stat(output); !os.IsNotExist(err) {
+		t.Fatal("adopted artifact was not expired by cleanup")
+	}
+	if _, err := os.Stat(manifest); !os.IsNotExist(err) {
+		t.Fatal("expired artifact manifest was not cleaned")
+	}
+}
+
+func TestArtifactReconcileAdoptsBatchArchiveManifestForCleanup(t *testing.T) {
+	dir := t.TempDir()
+	database, err := store.OpenDatabase(context.Background(), filepath.Join(dir, "jobs.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	jobs, err := jobqueue.NewJobsStore(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := jobqueue.Job{ID: "j_reconcile_archive", BatchID: "b_reconcile_archive", Kind: jobqueue.JobExport, ProjectID: "p_reconcile_archive", ProjectItemID: "i_aaaaaaaaaaaaaaaaaaaaaaaa", RequestJSON: `{}`}
+	if _, err := jobs.Create(context.Background(), job); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := jobs.Start(context.Background(), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := jobs.Succeed(context.Background(), job.ID, `{"outputNames":["videocutlist-clips-batch.zip"],"destinationKind":"download"}`); err != nil {
+		t.Fatal(err)
+	}
+	archive := filepath.Join(dir, "videocutlist-clips-batch.zip")
+	archiveFile, err := os.Create(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	archiveWriter := zip.NewWriter(archiveFile)
+	entry, err := archiveWriter.Create("clip.mkv")
+	if err != nil {
+		_ = archiveFile.Close()
+		t.Fatal(err)
+	}
+	if _, err := entry.Write([]byte("archive entry")); err != nil {
+		_ = archiveFile.Close()
+		t.Fatal(err)
+	}
+	if err := archiveWriter.Close(); err != nil {
+		_ = archiveFile.Close()
+		t.Fatal(err)
+	}
+	if err := archiveFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := WriteManifest(dir, job.BatchID, KindDownload, []string{"videocutlist-clips-batch.zip"}, time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var artifacts *ArtifactStore
+	for range 2 {
+		artifacts = NewArtifactStore()
+		if err := artifacts.Reconcile(context.Background(), jobs, "missing-ffprobe", []Destination{{Kind: KindDownload, Root: dir}}); err != nil {
+			t.Fatal(err)
+		}
+		opened, adopted, err := artifacts.Open(job.BatchID, 0, time.Now())
+		if err != nil {
+			t.Fatalf("archive not registered after restart: %v", err)
+		}
+		if err := opened.Close(); err != nil {
+			t.Fatalf("close adopted archive: %v", err)
+		}
+		if adopted.Name != "videocutlist-clips-batch.zip" {
+			t.Fatalf("adopted name = %q", adopted.Name)
+		}
+		if _, err := os.Stat(manifest); err != nil {
+			t.Fatalf("archive restart evidence was removed: %v", err)
+		}
+	}
+	if _, err := os.Stat(archive); err != nil {
+		t.Fatalf("archive was removed: %v", err)
+	}
+	artifacts.Cleanup(time.Now().Add(2 * time.Hour))
+	if _, err := os.Stat(archive); !os.IsNotExist(err) {
+		t.Fatal("adopted archive was not expired by cleanup")
+	}
+	if _, err := os.Stat(manifest); !os.IsNotExist(err) {
+		t.Fatal("expired archive manifest was not cleaned")
 	}
 }
 

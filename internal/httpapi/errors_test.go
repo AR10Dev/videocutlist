@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -31,6 +32,29 @@ type errorMediaCatalog struct {
 
 func (m errorMediaCatalog) Get(_ context.Context, id string) (projects.Media, error) {
 	return projects.Media{ID: id, DurationMS: 1000}, m.err
+}
+
+func TestProjectValidationErrorsGiveSafeActions(t *testing.T) {
+	for _, test := range []struct {
+		code, message string
+	}{
+		{"media_unavailable", "A project video is no longer available. Refresh the media library and try again."},
+		{"invalid", "A project item has invalid editor or export settings. Reload the project and try again."},
+	} {
+		t.Run(test.code, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			projectError(response, "request-id", &projects.ProjectItemError{ItemID: "i_aaaaaaaaaaaaaaaaaaaaaaaa", Code: test.code})
+			var envelope struct {
+				Error struct{ Code, Message, RequestID string }
+			}
+			if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+				t.Fatal(err)
+			}
+			if response.Code != http.StatusUnprocessableEntity || envelope.Error.Code != "invalid_project" || envelope.Error.Message != test.message {
+				t.Fatalf("response = %d %s", response.Code, response.Body.String())
+			}
+		})
+	}
 }
 
 func TestProjectAndMediaErrorsPreserveClassification(t *testing.T) {

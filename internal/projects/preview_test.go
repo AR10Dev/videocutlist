@@ -144,6 +144,69 @@ func TestPreviewCancellationStopsProcessAndDiscardsPartial(t *testing.T) {
 	}
 }
 
+type failingPartial struct{}
+
+func (failingPartial) Write([]byte) (int, error)               { return 0, errors.New("partial write failed") }
+func (failingPartial) Commit(context.Context, Validator) error { return errors.New("unused") }
+func (failingPartial) Discard() error                          { return nil }
+
+type failingCache struct{}
+
+func (failingCache) Open(context.Context, string, Validator) (io.ReadCloser, error) {
+	return nil, ErrCacheMiss
+}
+func (failingCache) Begin(string) (PreviewPartial, error) { return failingPartial{}, nil }
+
+type partialFailureRunner struct{}
+
+func (partialFailureRunner) Start(ctx context.Context, _ model.PreviewSpec) (*RunningPreview, error) {
+	return &RunningPreview{
+		Stdout: io.NopCloser(bytes.NewReader([]byte("chunk"))),
+		Wait: func() error {
+			<-ctx.Done()
+			return ctx.Err()
+		},
+	}, nil
+}
+
+func TestPreviewPartialWriteFailureStillReleasesProcess(t *testing.T) {
+	runner := &partialFailureRunner{}
+	limiter, err := NewPreviewLimits(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, err := NewPreviewManager(failingCache{}, runner, func(context.Context, string) error { return nil }, limiter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	reader, _, err := manager.Preview(ctx, testSpec("m_partial_fail"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = reader.Close() })
+	readDone := make(chan error, 1)
+	go func() {
+		_, readErr := io.ReadAll(reader)
+		readDone <- readErr
+	}()
+	select {
+	case readErr := <-readDone:
+		if readErr == nil {
+			t.Fatal("partial-write failure was not surfaced to the reader")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("preview reader hung after a partial-write failure")
+	}
+	_ = reader.Close()
+	second, _, err := manager.Preview(ctx, testSpec("m_second"))
+	if err != nil {
+		t.Fatalf("process slot leaked after partial-write failure: %v", err)
+	}
+	_ = second.Close()
+}
+
 func newManager(t *testing.T, runner PreviewRunner, global int) (*PreviewManager, *cache.Store) {
 	t.Helper()
 	store, err := cache.New(t.TempDir(), 1<<20)

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"videocutlist/internal/db"
 	jobqueue "videocutlist/internal/jobs"
@@ -43,7 +44,6 @@ type BatchExportUseCase struct {
 	Settings  *store.RuntimeSettingsState
 	// RunSnapshot executes an immutable export snapshot after source validation.
 	RunSnapshot     func(context.Context, string, ExportSnapshot) (string, error)
-	ClearManifest   func(string)
 	RemoveArtifacts func(string) error
 }
 
@@ -55,21 +55,16 @@ func (b BatchExportUseCase) Submit(ctx context.Context, request BatchExportReque
 	if err != nil {
 		return "", nil, err
 	}
-	selected := make(map[string]struct{}, len(request.ItemIDs))
-	for _, id := range request.ItemIDs {
-		selected[id] = struct{}{}
+	items, err := SelectProjectItems(project.Document, request.ItemIDs)
+	if err != nil {
+		return "", nil, err
 	}
 	batchID, err := newID("b_")
 	if err != nil {
 		return "", nil, err
 	}
-	jobs := make([]jobqueue.Job, 0, len(project.Document.Items))
-	for _, item := range project.Document.Items {
-		if len(selected) > 0 {
-			if _, ok := selected[item.ID]; !ok {
-				continue
-			}
-		}
+	jobs := make([]jobqueue.Job, 0, len(items))
+	for _, item := range items {
 		media, err := b.Media.Get(ctx, item.MediaID)
 		if err != nil {
 			return "", nil, &ProjectItemError{ItemID: item.ID, Code: "media_unavailable"}
@@ -145,7 +140,9 @@ func (b BatchExportUseCase) RunQueuedSnapshot(ctx context.Context, job jobqueue.
 	}
 	// Complete this durable CAS even after runner cancellation; its result
 	// decides whether published artifacts are retained or rolled back.
-	if _, err = b.Jobs.Succeed(context.Background(), job.ID, result); err != nil {
+	persistCtx, persistCancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer persistCancel()
+	if _, err = b.Jobs.Succeed(persistCtx, job.ID, result); err != nil {
 		if errors.Is(err, jobqueue.ErrJobState) && b.RemoveArtifacts != nil {
 			current, getErr := b.Jobs.Get(context.Background(), job.ID)
 			if getErr == nil && current.State == jobqueue.JobCancelled {
@@ -154,16 +151,9 @@ func (b BatchExportUseCase) RunQueuedSnapshot(ctx context.Context, job jobqueue.
 				}
 			}
 		}
-		return err
-	}
-	if b.ClearManifest != nil {
-		b.ClearManifest(job.ID)
+		return &jobqueue.ResultPersistenceError{Result: result, Err: err}
 	}
 	return nil
-}
-
-func (b BatchExportUseCase) Progress(ctx context.Context, batchID string) (jobqueue.JobState, float64, error) {
-	return b.Jobs.Batch(ctx, batchID)
 }
 
 func (b BatchExportUseCase) Get(ctx context.Context, batchID string) (Batch, error) {

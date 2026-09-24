@@ -254,7 +254,9 @@ test("panel toggles announce the action for their current state", async ({ page 
   await expect(tasksToggle).toHaveAccessibleName("Hide editing tools");
 });
 
-test("panel layout persists and narrow drawers remain exclusive", async ({ page }) => {
+test("panel widths persist, desktop sidebars reopen, and narrow drawers stay exclusive", async ({
+  page,
+}) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto("/");
   await page.evaluate(() => localStorage.clear());
@@ -266,12 +268,17 @@ test("panel layout persists and narrow drawers remain exclusive", async ({ page 
   await mediaResizer.focus();
   await mediaResizer.press("ArrowRight");
   await expect(mediaResizer).toHaveAttribute("aria-valuenow", "256");
-  await mediaResizer.press("Home");
-  await expect(mediaResizer).toHaveAttribute("aria-valuenow", "240");
+  await page.reload();
+  await expect(mediaResizer).toHaveAttribute("aria-valuenow", "256");
   await mediaToggle.click();
   await expect(mediaToggle).toHaveAttribute("aria-expanded", "false");
+  await segmentsToggle.click();
+  await expect(segmentsToggle).toHaveAttribute("aria-expanded", "false");
   await page.reload();
-  await expect(mediaToggle).toHaveAttribute("aria-expanded", "false");
+  await expect(mediaToggle).toHaveAttribute("aria-expanded", "true");
+  await expect(segmentsToggle).toHaveAttribute("aria-expanded", "true");
+  await mediaResizer.press("Home");
+  await expect(mediaResizer).toHaveAttribute("aria-valuenow", "240");
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.reload();
@@ -529,6 +536,16 @@ test("cut labels and per-row split work without invisible menu inputs", async ({
 });
 
 test("a multi-item JSON cut list restores as a new unsaved project", async ({ page }) => {
+  await page.route(`${origin}/api/v1/destinations`, (route) =>
+    route.fulfill({
+      json: {
+        destinations: [
+          { id: "download", label: "Downloads", kind: "download", retention: "24h" },
+          { id: "archive", label: "Review archive", kind: "archive", retention: "durable" },
+        ],
+      },
+    }),
+  );
   await chooseMedia(page);
   await page.getByRole("button", { name: "Add to project" }).click();
   await openProjectTools(page);
@@ -550,6 +567,10 @@ test("a multi-item JSON cut list restores as a new unsaved project", async ({ pa
   await page.getByRole("tab", { name: "Export", exact: true }).click();
   await page.getByRole("radio", { name: "Selected project items" }).check();
   await expect(page.getByLabel("Project items to export").getByRole("checkbox")).toHaveCount(2);
+  const destinations = page.getByLabel("Project items to export").getByLabel(/Destination for/);
+  await expect(destinations).toHaveCount(2);
+  await destinations.nth(1).selectOption("archive");
+  await expect(page.getByLabel("Export plan")).toContainText("2 destinations");
   const saved = page.waitForRequest(
     (request) => request.method() === "PUT" && request.url().includes("/projects/"),
   );
@@ -557,6 +578,12 @@ test("a multi-item JSON cut list restores as a new unsaved project", async ({ pa
   expect((await saved).postDataJSON()).toMatchObject({
     revision: 0,
     name: project.name,
-    items: document.items,
+    items: [
+      document.items[0],
+      {
+        ...document.items[1],
+        exportOptions: { destinationId: "archive" },
+      },
+    ],
   });
 });

@@ -208,6 +208,7 @@ type PreviewService interface {
 	Cached(context.Context, PreviewSpec) (bool, error)
 }
 type AssetService interface {
+	ValidateSource(context.Context, string) error
 	Thumbnails(context.Context, AssetSpec) (AssetResult, error)
 	Waveform(context.Context, AssetSpec) (AssetResult, error)
 }

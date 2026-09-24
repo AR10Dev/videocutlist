@@ -52,15 +52,20 @@ The Compose file works with either Docker Compose or Podman Compose:
 
 ```bash
 cd deployments/containers
+umask 077
 cp videocutlist.env.example videocutlist.env
+printf 'VIDEOCUTLIST_BEARER_TOKEN=%s\n' "$(openssl rand -hex 32)" >> videocutlist.env
 # Put originals in ./media, or set VIDEOCUTLIST_MEDIA_DIR to another directory.
-docker compose up -d --build
-# podman compose up -d --build
+docker compose up -d
+# podman compose up -d
 ```
 
-Open <http://127.0.0.1:8787>. The default port binding is loopback-only; set
-`VIDEOCUTLIST_BIND_ADDRESS=0.0.0.0` only with authentication and a firewall.
-See the [container deployment guide](docs/runbooks/containers.md).
+Open <http://127.0.0.1:8787> and enter the generated bearer token from your private
+`videocutlist.env`. The browser keeps it in memory only; reload requires sign-in
+again. Never commit that file or put the token in a URL or frontend build.
+The host port binding is loopback-only; the container listener requires
+authentication even for local publishing. See the [container deployment
+guide](docs/runbooks/containers.md) for directory permissions and remote TLS.
 
 ## MCP clients
 

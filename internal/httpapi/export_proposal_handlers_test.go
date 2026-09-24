@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -78,9 +79,15 @@ func TestExportProposalHTTPApprovalAndSettingsListDetails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	proposal, err := service.Prepare(t.Context(), mcp.ProposalRequest{CredentialID: created.ID, ProjectID: projectID, ProjectRevision: 1, Export: projects.ExportInput{Mode: "merge", Selection: "segments", CutStrategy: "stream_copy_preferred", Container: "mp4", DestinationID: "download"}})
+	proposalRequest := mcp.ProposalRequest{CredentialID: created.ID, ProjectID: projectID, ProjectRevision: 1, Export: projects.ExportInput{Mode: "merge", Selection: "segments", CutStrategy: "stream_copy_preferred", Container: "mp4", DestinationID: "download"}}
+	proposal, err := service.Prepare(t.Context(), proposalRequest)
 	if err != nil {
 		t.Fatal(err)
+	}
+	for range 2 {
+		if _, err := service.Prepare(t.Context(), proposalRequest); err != nil {
+			t.Fatal(err)
+		}
 	}
 	authenticator, _ := NewAuthenticator(AuthConfig{Mode: "none"})
 	server, err := New(Config{Authenticator: authenticator, Media: &routeTestMedia{}, Preview: routeTestPreview{}, Projects: routeTestProjects{}, BatchExports: &routeTestBatchExports{}, Jobs: &routeTestJobs{}, Settings: settingsdomain.NewRuntimeService(runtimeSettings, nil, nil), RuntimeSettings: store.NewRuntimeSettingsState(record.Settings), MCPCredentials: credentials, ExportProposals: service})
@@ -90,6 +97,32 @@ func TestExportProposalHTTPApprovalAndSettingsListDetails(t *testing.T) {
 	settings := mcpAdminRequest(server, http.MethodGet, "/api/v1/settings/mcp", "", "")
 	if settings.Code != http.StatusOK || !strings.Contains(settings.Body.String(), proposal.ID) || !strings.Contains(settings.Body.String(), "clip.mp4") {
 		t.Fatalf("settings status=%d body=%s", settings.Code, settings.Body.String())
+	}
+	firstPage := mcpAdminRequest(server, http.MethodGet, "/api/v1/settings/mcp?proposalLimit=2", "", "")
+	var page struct {
+		Proposals          []mcp.ExportProposal `json:"proposals"`
+		ProposalNextCursor string               `json:"proposalNextCursor"`
+	}
+	if err := json.Unmarshal(firstPage.Body.Bytes(), &page); err != nil {
+		t.Fatal(err)
+	}
+	if firstPage.Code != http.StatusOK || len(page.Proposals) != 2 || page.ProposalNextCursor == "" {
+		t.Fatalf("first proposal page=%s", firstPage.Body.String())
+	}
+	secondPage := mcpAdminRequest(server, http.MethodGet, "/api/v1/settings/mcp?proposalLimit=2&proposalCursor="+page.ProposalNextCursor, "", "")
+	var rest struct {
+		Proposals          []mcp.ExportProposal `json:"proposals"`
+		ProposalNextCursor string               `json:"proposalNextCursor"`
+	}
+	if err := json.Unmarshal(secondPage.Body.Bytes(), &rest); err != nil {
+		t.Fatal(err)
+	}
+	if secondPage.Code != http.StatusOK || len(rest.Proposals) != 1 || rest.ProposalNextCursor != "" || rest.Proposals[0].ID == page.Proposals[0].ID {
+		t.Fatalf("second proposal page=%s", secondPage.Body.String())
+	}
+	invalidCursor := mcpAdminRequest(server, http.MethodGet, "/api/v1/settings/mcp?proposalCursor=invalid", "", "")
+	if invalidCursor.Code != http.StatusBadRequest || !strings.Contains(invalidCursor.Body.String(), `"code":"invalid_query"`) {
+		t.Fatalf("invalid proposal cursor status=%d body=%s", invalidCursor.Code, invalidCursor.Body.String())
 	}
 	approved := mcpAdminRequest(server, http.MethodPost, "/api/v1/export-proposals/"+proposal.ID+"/approval", "", "")
 	if approved.Code != http.StatusOK || !strings.Contains(approved.Body.String(), `"approvedAt"`) {

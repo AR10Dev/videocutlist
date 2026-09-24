@@ -414,6 +414,16 @@ export function MCPSettings() {
                 </For>
               </ul>
             </Show>
+            <Show when={settings().proposalNextCursor}>
+              <button
+                class="btn btn-sm"
+                type="button"
+                disabled={settingsPending() || mcpLoading() || mcpPending()}
+                onClick={() => void loadMCPSettings(undefined, settings().proposalNextCursor)}
+              >
+                Load more proposals
+              </button>
+            </Show>
             <h4>Credentials</h4>
             <Show when={settings().nextCursor}>
               <button

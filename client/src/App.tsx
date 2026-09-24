@@ -69,6 +69,9 @@ export function App() {
     moveTask,
   } = panel;
   let shortcutClose: HTMLButtonElement | undefined;
+  let shortcutDialog: HTMLDialogElement | undefined;
+  let shortcutReturnFocus: HTMLElement | undefined;
+  let shortcutWasOpen = false;
   let projectMenu: HTMLDetailsElement | undefined;
   const [projectDialogOpen, setProjectDialogOpen] = createSignal(false);
 
@@ -81,7 +84,14 @@ export function App() {
     setProjectDialogOpen(false);
     queueMicrotask(() => projectMenu?.querySelector<HTMLElement>("summary")?.focus());
   };
+  const shortcutFocusTarget = () => {
+    const active = document.activeElement;
+    if (projectMenu?.contains(active))
+      return projectMenu.querySelector<HTMLElement>("summary") ?? undefined;
+    return active instanceof HTMLElement ? active : undefined;
+  };
   const openHelp = () => {
+    shortcutReturnFocus = shortcutFocusTarget();
     closeProjectMenu();
     controller.setShortcutHelpOpen(true);
   };
@@ -101,7 +111,27 @@ export function App() {
     void openSettings();
   };
   createEffect(() => {
-    if (controller.shortcutHelpOpen()) queueMicrotask(() => shortcutClose?.focus());
+    const open = controller.shortcutHelpOpen();
+    if (open) {
+      if (!shortcutWasOpen) {
+        shortcutWasOpen = true;
+        shortcutReturnFocus ??= shortcutFocusTarget();
+      }
+      queueMicrotask(() => {
+        if (!controller.shortcutHelpOpen() || !shortcutDialog) return;
+        if (!shortcutDialog.open) shortcutDialog.showModal();
+        shortcutClose?.focus();
+      });
+      return;
+    }
+    if (!shortcutWasOpen) return;
+    shortcutWasOpen = false;
+    if (shortcutDialog?.open) shortcutDialog.close();
+    const returnFocus = shortcutReturnFocus;
+    shortcutReturnFocus = undefined;
+    queueMicrotask(() => {
+      if (returnFocus?.isConnected) returnFocus.focus();
+    });
   });
   createEffect(() => {
     if (controller.projects.saveConflict()) openMediaPanel(false);
@@ -146,16 +176,14 @@ export function App() {
         </Show>
         <Show when={controller.shortcutHelpOpen()}>
           <dialog
-            open
-            class="modal modal-open"
+            ref={(element) => (shortcutDialog = element)}
+            class="modal"
             role="dialog"
             aria-modal="true"
             aria-labelledby="shortcut-help-heading"
-            onKeyDown={(event) => {
-              if (event.key === "Escape") {
-                event.preventDefault();
-                controller.setShortcutHelpOpen(false);
-              }
+            onCancel={(event) => {
+              event.preventDefault();
+              controller.setShortcutHelpOpen(false);
             }}
           >
             <div class="modal-box">
@@ -234,7 +262,8 @@ export function App() {
                   <kbd class="kbd kbd-sm">Shift+/</kbd> Open this reference
                 </span>
                 <span>
-                  <kbd class="kbd kbd-sm">Esc</kbd> Start a new segment draft
+                  <kbd class="kbd kbd-sm">Esc</kbd> Deselect the active cut or clear incomplete
+                  marks
                 </span>
               </div>
               <div class="modal-action">

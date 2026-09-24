@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 
+	"videocutlist/internal/fdinput"
 	jobqueue "videocutlist/internal/jobs"
 	"videocutlist/internal/library/media/index"
 	"videocutlist/internal/projects"
@@ -72,8 +73,11 @@ func (s *Service) Detect(ctx context.Context, request projects.DetectionRequest)
 	if sceneThreshold == 0 {
 		sceneThreshold = 0.4
 	}
-	filter := map[model.DetectionKind]string{model.DetectBlack: fmt.Sprintf("blackdetect=d=%g:pix_th=0.10", minDuration), model.DetectScene: fmt.Sprintf("select='gt(scene,%g)',showinfo", sceneThreshold)}[request.Kind]
-	args := []string{"-hide_banner", "-nostats", "-i", "/proc/self/fd/3"}
+	filter := map[model.DetectionKind]string{
+		model.DetectBlack: fmt.Sprintf("blackdetect=d=%g:pix_th=0.10", minDuration),
+		model.DetectScene: fmt.Sprintf("select='gt(scene,%g)',showinfo", sceneThreshold),
+	}[request.Kind]
+	args := []string{"-hide_banner", "-nostats", "-i", fdinput.Path(3)}
 	if request.Kind == model.DetectSilence {
 		args = append(args, "-vn", "-af", fmt.Sprintf("silencedetect=noise=%gdB:d=%g", noiseDB, minDuration))
 	} else {

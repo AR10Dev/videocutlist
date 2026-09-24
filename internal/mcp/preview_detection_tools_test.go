@@ -9,7 +9,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-
+	"time"
+	store "videocutlist/internal/db"
 	"videocutlist/internal/projects"
 	"videocutlist/internal/projects/model"
 )
@@ -87,3 +88,41 @@ func TestPreviewDetectionToolsUseBoundedOpaqueInputs(t *testing.T) {
 }
 
 func testRequest() *http.Request { return httptest.NewRequest("POST", "/mcp", nil) }
+
+func TestDetectionTransportAuthorizesSelectedMedia(t *testing.T) {
+	database, err := store.OpenDatabase(t.Context(), t.TempDir()+"/detection.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	credentials, err := NewCredentialStoreWithClock(database, time.Now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expires := time.Now().Add(time.Hour)
+	created, err := credentials.Create(t.Context(), CredentialInput{
+		Name: "detection", Permissions: []Permission{PermissionMediaRead, PermissionProjectsRead, PermissionDetectionRun},
+		MediaScope:   MediaScope{Kind: MediaScopeRoots, RootIDs: []string{"root"}},
+		ProjectScope: ProjectScope{Kind: ProjectScopeAll}, ExpiresAt: &expires,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	credential, err := credentials.Authenticate(t.Context(), created.Secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mediaID := "m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	media := previewToolMedia{item: projects.Media{ID: mediaID, RootID: "root", DurationMS: 10_000}}
+	project := previewToolProjects{project: projects.Project{ID: "p_test", Revision: 1, Document: model.Document{Items: []model.ProjectItem{{ID: "i_aaaaaaaaaaaaaaaaaaaaaaaa", MediaID: mediaID}}}}}
+	detection := &previewToolDetection{}
+	transport := &transport{config: TransportConfig{Credentials: credentials, Tools: PreviewDetectionTools(media, previewToolPreview{}, detection, project)}}
+	result, rpcErr := transport.callTool(testRequest(), []byte(`{"name":"start_detection","arguments":{"projectId":"p_test","projectItemId":"i_aaaaaaaaaaaaaaaaaaaaaaaa","mediaId":"`+mediaID+`","projectRevision":1,"kind":"scene"}}`), credential)
+	if rpcErr != nil {
+		t.Fatalf("authorized detection rejected: %#v", rpcErr)
+	}
+	toolResult, ok := result.(ToolResult)
+	if !ok || toolResult.IsError || toolResult.StructuredContent["id"] != "j_aaaaaaaaaaaa" {
+		t.Fatalf("detection did not return queued job: %#v", result)
+	}
+}

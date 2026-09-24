@@ -22,6 +22,7 @@ import {
   nextSegmentName,
   normalizeSegments,
   newSegmentId,
+  validateSegmentLabel,
   validateSegments,
   type Segment,
 } from "../preview/model";
@@ -37,6 +38,8 @@ type Track = {
 
 export function createEditorController(deps: {
   selected: Accessor<Media | undefined>;
+  contextKey?: Accessor<string | undefined>;
+  segmentIdentityScope?: Accessor<string | undefined>;
   setStatus: Setter<string>;
   markDirty: () => void;
   setPreviewCenterMs: (ms: number) => void;
@@ -57,7 +60,9 @@ export function createEditorController(deps: {
   const [timeline, setTimeline] = createSignal<TimelineHistory>(
     createTimelineHistory({ playheadMs: 0, segments: [], zoom: 1 }),
   );
-  let selectedMediaId: string | undefined;
+  const contextKey = deps.contextKey ?? (() => deps.selected()?.id);
+  const segmentIdentityScope = deps.segmentIdentityScope ?? (() => deps.selected()?.id);
+  let selectedContextKey: string | undefined;
   let mediaSwitchDiscardedDraft = false;
   const present = () => timeline().present;
   const playheadMs = () => present().playheadMs;
@@ -109,7 +114,7 @@ export function createEditorController(deps: {
     const normalizedEditChanges = editChanges.segments
       ? {
           ...editChanges,
-          segments: normalizeSegments(editChanges.segments, deps.selected()?.id ?? "media"),
+          segments: normalizeSegments(editChanges.segments, segmentIdentityScope() ?? "media"),
         }
       : editChanges;
     let next = timeline();
@@ -334,16 +339,24 @@ export function createEditorController(deps: {
       ...timeline(),
       present: {
         ...present(),
-        segments: normalizeSegments(preview, deps.selected()?.id ?? "media"),
+        segments: normalizeSegments(preview, segmentIdentityScope() ?? "media"),
       },
     });
   };
-  const updateSegmentLabel = (index: number, label: string) =>
+  const updateSegmentLabel = (index: number, label: string) => {
+    const error = validateSegmentLabel(label);
+    if (error) {
+      setEditorStatus(error);
+      return false;
+    }
+    setEditorStatus("");
     updateTimeline({
       segments: present().segments.map((segment: Segment, position: number) =>
         position === index ? { ...segment, label: label.trim() || undefined } : segment,
       ),
     });
+    return true;
+  };
   const updateSegmentIncluded = (index: number, included: boolean) => {
     const segment = present().segments[index];
     if (!segment || (segment.included !== false) === included) return;
@@ -370,16 +383,15 @@ export function createEditorController(deps: {
   };
 
   createEffect(() => {
-    const item = deps.selected();
-    if (item?.id === selectedMediaId) return;
+    const currentContextKey = contextKey();
+    if (currentContextKey === selectedContextKey) return;
     const hadDraft =
       mediaSwitchDiscardedDraft || present().inMs !== undefined || present().outMs !== undefined;
     mediaSwitchDiscardedDraft = false;
-    selectedMediaId = item?.id;
+    selectedContextKey = currentContextKey;
     setEditorStatus(hadDraft ? "Incomplete marks were discarded when switching media." : "");
     setActiveIndex();
     setEditingActive(false);
-    clearDraft();
   });
 
   const syncHistorySelection = (

@@ -276,10 +276,11 @@ describe("projects controller", () => {
     controller.dispose();
   });
 
-  it("debounces saves, keeps recovery, and stays saved when cache refresh fails", async () => {
+  it("debounces saves, keeps recovery, and ignores recents storage failures", async () => {
+    const storage = memoryStorage();
     Object.defineProperty(globalThis, "localStorage", {
       configurable: true,
-      value: memoryStorage(),
+      value: storage,
     });
     const item: EditableProjectItem = {
       id: "i_autosave1234567890123456",
@@ -379,13 +380,19 @@ describe("projects controller", () => {
     controller.captureRecovery();
     expect(controller.recovery()?.items[0].mediaId).toBe(media.id);
     expect(JSON.stringify(controller.recovery())).not.toContain(media.name);
+    const persistedSetItem = storage.setItem;
+    storage.setItem = (key, value) => {
+      if (key === "videocutlist.recent-projects.v1" || key === "videocutlist.active-project.v2")
+        throw new Error("storage quota exceeded");
+      persistedSetItem(key, value);
+    };
     controller.scheduleAutosave();
     await new Promise((resolve) => setTimeout(resolve, 800));
     expect(requests).toBe(1);
     expect(controller.saveState()).toBe("saved");
+    expect(controller.saveError()).toBe("");
     expect(dirty()).toBe(false);
     expect(controller.recovery()).toBeUndefined();
-
     // A new editor context must win even if the old PUT has committed and its cache refresh is pending.
     let finishRefresh!: () => void;
     let refreshStarted!: () => void;

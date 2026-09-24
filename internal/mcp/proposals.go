@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"time"
 
 	exporter "videocutlist/internal/export"
@@ -16,7 +17,11 @@ import (
 	"videocutlist/internal/projects/model"
 )
 
-const ProposalTTL = 15 * time.Minute
+const (
+	ProposalTTL         = 15 * time.Minute
+	proposalPageDefault = 25
+	proposalPageLimit   = 100
+)
 
 var (
 	ErrProposalNotFound       = errors.New("export proposal not found")
@@ -25,6 +30,7 @@ var (
 	ErrProposalStale          = errors.New("export proposal inputs changed")
 	ErrProposalBlocked        = errors.New("export proposal is blocked by preflight")
 	ErrProposalData           = errors.New("invalid stored export proposal")
+	ErrInvalidProposalCursor  = errors.New("invalid export proposal cursor")
 )
 
 type ProposalRequest struct {
@@ -240,38 +246,89 @@ func (s *ProposalService) Get(ctx context.Context, id string) (ExportProposal, e
 	return cloneProposal(proposal), nil
 }
 
-func (s *ProposalService) ListPending(ctx context.Context, limit int) ([]ExportProposal, error) {
-	if limit < 1 || limit > 100 {
-		limit = 25
+func (s *ProposalService) ListPending(ctx context.Context, cursor string, limit int) ([]ExportProposal, *string, error) {
+	if limit < 1 || limit > proposalPageLimit {
+		limit = proposalPageDefault
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT id FROM export_proposals WHERE approved_at IS NULL AND expires_at > ? ORDER BY created_at DESC LIMIT ?`, formatTime(s.currentTime()), limit)
+	position, err := decodeProposalCursor(cursor)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	var ids []string
+	where := `approved_at IS NULL AND expires_at > ?`
+	args := []any{formatTime(s.currentTime())}
+	if cursor != "" {
+		where += ` AND (created_at < ? OR (created_at = ? AND id < ?))`
+		args = append(args, position.createdAt, position.createdAt, position.id)
+	}
+	args = append(args, limit+1)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,created_at FROM export_proposals WHERE `+where+` ORDER BY created_at DESC,id DESC LIMIT ?`, args...)
+	if err != nil {
+		return nil, nil, err
+	}
+	type proposalRow struct {
+		id        string
+		createdAt string
+	}
+	rowsList := make([]proposalRow, 0, limit+1)
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
+		var row proposalRow
+		if err := rows.Scan(&row.id, &row.createdAt); err != nil {
 			_ = rows.Close()
-			return nil, err
+			return nil, nil, err
 		}
-		ids = append(ids, id)
+		rowsList = append(rowsList, row)
 	}
 	if err := rows.Close(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	proposals := make([]ExportProposal, 0, len(ids))
-	for _, id := range ids {
-		proposal, err := s.Get(ctx, id)
+	var next *string
+	if len(rowsList) > limit {
+		cursor := encodeProposalCursor(rowsList[limit-1].createdAt, rowsList[limit-1].id)
+		next = new(cursor)
+		rowsList = rowsList[:limit]
+	}
+	proposals := make([]ExportProposal, 0, len(rowsList))
+	for _, row := range rowsList {
+		proposal, err := s.Get(ctx, row.id)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		proposals = append(proposals, proposal)
 	}
-	return proposals, nil
+	return proposals, next, nil
+}
+
+type proposalCursor struct {
+	createdAt string
+	id        string
+}
+
+func encodeProposalCursor(createdAt, id string) string {
+	return base64.RawURLEncoding.EncodeToString([]byte(createdAt + "\x00" + id))
+}
+
+func decodeProposalCursor(value string) (proposalCursor, error) {
+	if value == "" {
+		return proposalCursor{}, nil
+	}
+	if len(value) > 256 {
+		return proposalCursor{}, ErrInvalidProposalCursor
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(value)
+	if err != nil {
+		return proposalCursor{}, ErrInvalidProposalCursor
+	}
+	createdAt, id, ok := strings.Cut(string(raw), "\x00")
+	if !ok || !validProposalID(id) {
+		return proposalCursor{}, ErrInvalidProposalCursor
+	}
+	if _, err := parseTime(createdAt); err != nil {
+		return proposalCursor{}, ErrInvalidProposalCursor
+	}
+	return proposalCursor{createdAt: createdAt, id: id}, nil
 }
 
 func (s *ProposalService) Approve(ctx context.Context, id string) (ExportProposal, error) {
@@ -404,9 +461,13 @@ func (s *ProposalService) resourceForProposal(ctx context.Context, proposal Expo
 }
 
 func (s *ProposalService) resolveProject(ctx context.Context, project projects.Project, selectedIDs []string) ([]model.ProjectItem, []projects.Media, Resource, error) {
+	selectAll := len(selectedIDs) == 0
 	selected := make(map[string]struct{}, len(selectedIDs))
 	for _, id := range selectedIDs {
 		if id == "" {
+			return nil, nil, Resource{}, ErrProposalStale
+		}
+		if _, duplicate := selected[id]; duplicate {
 			return nil, nil, Resource{}, ErrProposalStale
 		}
 		selected[id] = struct{}{}
@@ -420,7 +481,7 @@ func (s *ProposalService) resolveProject(ctx context.Context, project projects.P
 			return nil, nil, Resource{}, ErrProposalStale
 		}
 		all = append(all, MediaResource{ID: media.ID, RootID: media.RootID})
-		if len(selected) == 0 {
+		if selectAll {
 			items = append(items, item)
 			selectedMedia = append(selectedMedia, media)
 		} else if _, ok := selected[item.ID]; ok {
@@ -474,12 +535,18 @@ func validRanges(ranges []model.Segment) bool {
 	if len(ranges) == 0 || len(ranges) > 100 {
 		return false
 	}
+	// ResolveRanges would drop every explicitly excluded segment, producing a
+	// snapshot with zero segments that Run later rejects; refuse it up front.
+	included := false
 	for _, segment := range ranges {
 		if segment.StartMS < 0 || segment.EndMS <= segment.StartMS || len(segment.ID) > 64 || len(segment.Label) > 120 {
 			return false
 		}
+		if segment.IsIncluded() {
+			included = true
+		}
 	}
-	return true
+	return included
 }
 
 func cloneProposal(value ExportProposal) ExportProposal {

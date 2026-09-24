@@ -820,6 +820,73 @@ test("restores the durable queue and retries a failed child as a new job", async
   await expect(originalBatch).toContainText("b_failedqueue01");
   await expect(originalBatch).toContainText("source_changed");
 });
+test("child retry exposes pending state, rejects visibly, and ignores duplicate clicks", async ({
+  page,
+}, testInfo) => {
+  const failedJob = {
+    id: "j_retry-rejected01",
+    batchId: "b_retry-rejected01",
+    projectItemId: itemId,
+    mediaLabel: "camera.mp4",
+    type: "export",
+    state: "failed",
+    progress: 1,
+    errorCode: "source_changed",
+  };
+  const failedBatch = {
+    batchId: "b_retry-rejected01",
+    projectId: "p_demo-project",
+    projectRevision: 4,
+    state: "failed",
+    progress: 1,
+    jobs: [failedJob],
+  };
+  let retryCalls = 0;
+  let releaseRetry!: () => void;
+  const retryResponse = new Promise<void>((resolve) => {
+    releaseRetry = resolve;
+  });
+  await page.route(`${apiOrigin}/api/v1/batches**`, async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname;
+    if (request.method() === "GET")
+      return route.fulfill({
+        json: path === "/api/v1/batches" ? { items: [failedBatch] } : failedBatch,
+      });
+    return route.fallback();
+  });
+  await page.route(`${apiOrigin}/api/v1/jobs/${failedJob.id}`, async (route) => {
+    if (route.request().method() === "GET") return route.fulfill({ json: failedJob });
+    return route.fallback();
+  });
+  await page.route(`${apiOrigin}/api/v1/jobs/${failedJob.id}/retry`, async (route) => {
+    retryCalls += 1;
+    await retryResponse;
+    await route.abort();
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Select camera.mp4" }).click();
+  await addSelectedMediaToProject(page);
+  await openTask(page, "Export");
+  const card = page
+    .getByRole("region", { name: "Export queue" })
+    .getByRole("article", { name: "Export job 1" });
+  const retry = card.getByRole("button", { name: "Retry job" });
+  await retry.click();
+  await expect.poll(() => retryCalls).toBe(1);
+  await expect(retry).toBeDisabled();
+  await page.screenshot({ path: testInfo.outputPath("child-retry-pending.png"), fullPage: true });
+  await retry.evaluate((button) =>
+    button.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true })),
+  );
+  expect(retryCalls).toBe(1);
+  releaseRetry();
+  await expect(page.locator(".export-status")).toContainText(/failed|could not|try again/i);
+  await expect(retry).toBeEnabled();
+  await retry.click();
+  await expect.poll(() => retryCalls).toBe(2);
+});
 
 test("reload restores the active project and permits child and batch cancellation", async ({
   page,
@@ -943,6 +1010,27 @@ test("detection polls, previews, and supports sequential keyboard review", async
   await expect(page.getByLabel("What to export", { exact: true })).toHaveValue("segments");
   await openTask(page, "Cuts");
   await expect(page.getByText(/1 selected/)).toBeVisible();
+});
+
+test("detection recovers when the first status request fails", async ({ page }) => {
+  let statusRequests = 0;
+  await page.route(`${apiOrigin}/api/v1/jobs/j_detection-silence-*`, (route) => {
+    if (route.request().method() === "GET" && ++statusRequests === 1)
+      return route.fulfill({
+        status: 503,
+        json: { error: { code: "unavailable", message: "try again", requestId: "r" } },
+      });
+    return route.fallback();
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await page.getByRole("button", { name: "Add to project" }).click();
+  await openTask(page, "Detection");
+  await page.getByRole("button", { name: "Find pauses" }).click();
+  await expect(
+    page.getByText("1 candidates found. Review each before accepting.", { exact: true }),
+  ).toBeVisible();
+  expect(statusRequests).toBeGreaterThan(1);
 });
 
 test("bulk detection acceptance skips unsafe candidates and undoes as one edit", async ({
@@ -1559,15 +1647,6 @@ test("shows unsupported preview guidance without making a preview request", asyn
 test("project recovery remains reachable with a collapsed media panel", async ({ page }) => {
   await page.addInitScript(
     ({ itemId, mediaId }) => {
-      localStorage.setItem(
-        "videocutlist.workspace-panels.v1",
-        JSON.stringify({
-          mediaWidth: 240,
-          segmentsWidth: 300,
-          mediaCollapsed: true,
-          segmentsCollapsed: true,
-        }),
-      );
       if (!localStorage.getItem("videocutlist.project-recovery-test-seeded")) {
         localStorage.setItem("videocutlist.project-recovery-test-seeded", "true");
         localStorage.setItem(
@@ -1594,6 +1673,8 @@ test("project recovery remains reachable with a collapsed media panel", async ({
     { itemId, mediaId: media.id },
   );
   await page.goto("/");
+  await page.getByRole("button", { name: "Hide media library" }).first().press("Enter");
+  await expect(page.getByRole("button", { name: "Show media library" }).first()).toBeVisible();
   const recoveryNotice = page
     .getByRole("status")
     .filter({ hasText: "Local recovery is available" });
@@ -1673,15 +1754,7 @@ test("exports the saved segments, polls to a safe result, and shows warnings", a
   page.on("request", (request) => requests.push(new URL(request.url()).pathname));
   await page.route(`${apiOrigin}/api/v1/projects/*/exports`, async (route) => {
     expect(route.request().method()).toBe("POST");
-    expect(route.request().postDataJSON()).toEqual({
-      mode: "separate",
-      selection: "segments",
-      streamIndexes: [],
-      cutStrategy: "stream_copy_preferred",
-      container: "mkv",
-      destinationId: "download",
-      filenameTemplate: "{source}-{segment}.{ext}",
-    });
+    expect(route.request().postDataJSON()).toEqual({});
     await route.fulfill({
       json: {
         batchId: "b_export000001",

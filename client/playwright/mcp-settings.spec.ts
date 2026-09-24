@@ -120,7 +120,9 @@ test("MCP refresh, pagination, exact approval, scopes and revoke remain reachabl
   let approved = false;
   await page.route(`${origin}/settings/mcp*`, (route) => {
     if (failed) return route.fulfill({ status: 503 });
-    const more = new URL(route.request().url()).searchParams.get("cursor") === "page-2";
+    const params = new URL(route.request().url()).searchParams;
+    const more = params.get("cursor") === "page-2";
+    const proposalMore = params.get("proposalCursor") === "proposal-page-2";
     return route.fulfill({
       json: {
         ...initial,
@@ -135,7 +137,13 @@ test("MCP refresh, pagination, exact approval, scopes and revoke remain reachabl
             ]
           : [credential],
         nextCursor: more ? undefined : "page-2",
-        proposals: refreshed && !approved ? [proposal] : [],
+        proposals:
+          refreshed && !approved
+            ? proposalMore
+              ? [{ ...proposal, id: "proposal-2" }]
+              : [proposal]
+            : [],
+        proposalNextCursor: refreshed && !approved && !proposalMore ? "proposal-page-2" : undefined,
       } satisfies Schema["MCPSettingsResponse"],
     });
   });
@@ -183,7 +191,9 @@ test("MCP refresh, pagination, exact approval, scopes and revoke remain reachabl
     "keyframe_limited",
   ])
     await expect(proposals).toContainText(detail);
-  await page.getByRole("button", { name: "Approve exact proposal" }).click();
+  await page.getByRole("button", { name: "Load more proposals" }).click();
+  await expect(proposals).toContainText("Proposal proposal-2");
+  await page.getByRole("button", { name: "Approve exact proposal" }).first().click();
   await expect(page.getByText("No export proposals are awaiting approval.")).toBeVisible();
   await page.getByRole("button", { name: "Load more credentials" }).click();
   await expect(page.getByRole("button", { name: "Revoke Scoped assistant" })).toBeVisible();

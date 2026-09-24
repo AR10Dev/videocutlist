@@ -97,6 +97,7 @@ export type ProjectsControllerDeps = {
   setDestinationId: Setter<string>;
   setFilenameTemplate: Setter<string>;
   editableItems: () => EditableProjectItem[];
+  resetEditorContext?: () => void;
   clearDetectionContext: () => void;
   setDiagnostics: () => void;
   setStatus: Setter<string>;
@@ -134,8 +135,12 @@ export function createProjectsController(deps: ProjectsControllerDeps) {
       ...recent.filter((item) => (item as { id?: string }).id !== id),
     ].slice(0, 20);
     deps.setRecent(next);
-    localStorage.setItem(recentProjectsKey, JSON.stringify(next));
-    localStorage.setItem("videocutlist.active-project.v2", id);
+    try {
+      localStorage.setItem(recentProjectsKey, JSON.stringify(next));
+      localStorage.setItem("videocutlist.active-project.v2", id);
+    } catch {
+      // Recent projects are optional browser state; a durable save must still succeed.
+    }
   };
   const captureRecovery = () => {
     if (!deps.dirty()) return;
@@ -184,6 +189,7 @@ export function createProjectsController(deps: ProjectsControllerDeps) {
       items: deps.editableItems(),
     };
     if (!validProjectId(snapshot.project)) return void failSave("Project ID is invalid.");
+    if (!snapshot.name.trim()) return void failSave("Project name is required.");
     if (!snapshot.items.length) return void failSave("Add media before saving.");
     for (const item of snapshot.items) {
       const error = validateSegments(item.timeline.present.segments, item.media.durationMs);
@@ -223,7 +229,12 @@ export function createProjectsController(deps: ProjectsControllerDeps) {
         return;
       }
       if (!response.ok) {
-        if (sameProject()) failSave(`Project save failed (${response.status}). Retry when ready.`);
+        if (sameProject())
+          failSave(
+            error?.code === "invalid_project"
+              ? error.message
+              : `Project save failed (${response.status}). Retry when ready.`,
+          );
         return;
       }
       const project = (await response.json()) as Project;
@@ -372,6 +383,7 @@ export function createProjectsController(deps: ProjectsControllerDeps) {
       )
         return;
       const first = restored[0];
+      deps.resetEditorContext?.();
       deps.setProjectId(project.id);
       deps.setProjectName(project.name);
       deps.setRevision(project.revision);
@@ -421,6 +433,7 @@ export function createProjectsController(deps: ProjectsControllerDeps) {
     if (!confirmDiscard(deps.dirty(), () => window.confirm("Discard unsaved changes?"))) return;
     cancelAutosave();
     contextVersion++;
+    deps.resetEditorContext?.();
     setSaveConflict(false);
     deps.clearDetectionContext();
     projectRequest?.abort();
@@ -465,6 +478,7 @@ export function createProjectsController(deps: ProjectsControllerDeps) {
   const saveAsNewProject = () => {
     cancelAutosave();
     contextVersion++;
+    deps.resetEditorContext?.();
     setSaveConflict(false);
     deps.setProjectId(newProjectId());
     deps.setRevision(0);

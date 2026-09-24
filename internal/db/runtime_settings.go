@@ -221,6 +221,9 @@ func ValidateRuntimeSettings(settings RuntimeSettings) error {
 	if settings.ExportLimit < 1 || settings.ExportLimit > jobs.MaxWorkerLimit {
 		return fmt.Errorf("export limit must be 1..%d", jobs.MaxWorkerLimit)
 	}
+	if settings.CacheMaxBytes < 2 {
+		return errors.New("cache limit must be at least 2 bytes")
+	}
 	if settings.CacheMaxBytes < 1 || settings.PreviewGlobalLimit < 1 || settings.PreviewBeforeMS < 1 || settings.PreviewAfterMS < 1 || settings.PreviewMaxMS < 1 || settings.PreviewGridMS < 1 || settings.MediaMaxFiles < 1 || settings.MediaMaxDepth < 1 {
 		return errors.New("runtime limits must be positive")
 	}

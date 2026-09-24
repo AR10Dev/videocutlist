@@ -496,14 +496,16 @@ test("new items use the remembered destination and unavailable preferences expla
   await expect(page.getByLabel("Destination")).toHaveValue("download");
 });
 
-test("export task keeps scope options and the queue in one workspace panel", async ({ page }) => {
+test("export task keeps options and the queue together without redundant single-item scope", async ({
+  page,
+}) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Select camera.mp4" }).click();
   await addToProject(page);
   await addSegment(page);
 
   await openExport(page);
-  await expect(page.getByRole("group", { name: "Export scope" })).toBeVisible();
+  await expect(page.getByRole("group", { name: "Export scope" })).toHaveCount(0);
   await expect(page.locator(".export-plan")).toContainText("Included cuts");
   await expect(page.getByText("Filename preview", { exact: true })).toBeVisible();
   await expect(page.getByLabel("Output arrangement")).toBeVisible();

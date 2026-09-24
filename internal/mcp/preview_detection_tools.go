@@ -18,7 +18,7 @@ func PreviewDetectionTools(media MediaReader, preview interface {
 	Start(context.Context, projects.PreviewSpec) (projects.PreviewResult, error)
 }, detection interface {
 	Create(context.Context, string, projects.DetectionRequest) (projects.DetectionJob, error)
-}, project ProjectToolService) []Tool {
+}, project projects.ProjectService) []Tool {
 	if media == nil || preview == nil || detection == nil || project == nil {
 		return nil
 	}
@@ -55,7 +55,16 @@ func PreviewDetectionTools(media MediaReader, preview interface {
 			if err != nil {
 				return Resource{}, err
 			}
-			return projectResourceByID(ctx, project, media, args.ProjectID)
+			resource, err := projectResourceByID(ctx, project, media, args.ProjectID)
+			if err != nil {
+				return Resource{}, err
+			}
+			item, err := media.Get(ctx.Request.Context(), args.MediaID)
+			if err != nil {
+				return Resource{}, err
+			}
+			resource.MediaID, resource.RootID = item.ID, item.RootID
+			return resource, nil
 		}, Call: func(ctx Context, raw json.RawMessage) (ToolResult, error) {
 			args, err := detectionArguments(raw)
 			if err != nil {

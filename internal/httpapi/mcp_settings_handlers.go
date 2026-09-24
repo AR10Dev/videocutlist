@@ -36,15 +36,25 @@ func (s *Server) getMCPSettings(w http.ResponseWriter, r *http.Request, id strin
 		httpx.Error(w, http.StatusNotFound, "mcp_settings_unavailable", "MCP settings are not available.", id)
 		return
 	}
-	if !queryKeys(r, "cursor", "limit") {
+	if !queryKeys(r, "cursor", "limit", "proposalCursor", "proposalLimit") {
 		httpx.Error(w, http.StatusBadRequest, "invalid_query", "Query parameters are invalid.", id)
 		return
 	}
+	query := r.URL.Query()
 	limit := 0
-	if raw := r.URL.Query().Get("limit"); raw != "" {
+	if raw := query.Get("limit"); raw != "" {
 		var err error
 		limit, err = strconv.Atoi(raw)
 		if err != nil || limit < 1 || limit > 100 {
+			httpx.Error(w, http.StatusBadRequest, "invalid_query", "Query parameters are invalid.", id)
+			return
+		}
+	}
+	proposalLimit := 0
+	if raw := query.Get("proposalLimit"); raw != "" {
+		var err error
+		proposalLimit, err = strconv.Atoi(raw)
+		if err != nil || proposalLimit < 1 || proposalLimit > 100 {
 			httpx.Error(w, http.StatusBadRequest, "invalid_query", "Query parameters are invalid.", id)
 			return
 		}
@@ -54,16 +64,25 @@ func (s *Server) getMCPSettings(w http.ResponseWriter, r *http.Request, id strin
 		httpx.Error(w, http.StatusInternalServerError, "mcp_settings_unavailable", "MCP settings are temporarily unavailable.", id)
 		return
 	}
-	credentials, next, err := s.config.MCPCredentials.List(r.Context(), r.URL.Query().Get("cursor"), limit)
+	credentials, next, err := s.config.MCPCredentials.List(r.Context(), query.Get("cursor"), limit)
 	if err != nil {
-		httpx.Error(w, http.StatusBadRequest, "invalid_query", "Query parameters are invalid.", id)
+		if errors.Is(err, mcp.ErrCredentialNotFound) {
+			httpx.Error(w, http.StatusBadRequest, "invalid_query", "Query parameters are invalid.", id)
+		} else {
+			httpx.Error(w, http.StatusInternalServerError, "mcp_settings_unavailable", "MCP settings are temporarily unavailable.", id)
+		}
 		return
 	}
 	proposals := []mcp.ExportProposal{}
+	var proposalNext *string
 	if s.config.ExportProposals != nil {
-		proposals, err = s.config.ExportProposals.ListPending(r.Context(), 25)
+		proposals, proposalNext, err = s.config.ExportProposals.ListPending(r.Context(), query.Get("proposalCursor"), proposalLimit)
 		if err != nil {
-			httpx.Error(w, http.StatusInternalServerError, "export_proposals_unavailable", "Export proposals are temporarily unavailable.", id)
+			if errors.Is(err, mcp.ErrInvalidProposalCursor) {
+				httpx.Error(w, http.StatusBadRequest, "invalid_query", "Query parameters are invalid.", id)
+			} else {
+				httpx.Error(w, http.StatusInternalServerError, "export_proposals_unavailable", "Export proposals are temporarily unavailable.", id)
+			}
 			return
 		}
 	}
@@ -96,6 +115,9 @@ func (s *Server) getMCPSettings(w http.ResponseWriter, r *http.Request, id strin
 	}
 	if next != nil {
 		response["nextCursor"] = *next
+	}
+	if proposalNext != nil {
+		response["proposalNextCursor"] = *proposalNext
 	}
 	httpx.WriteJSON(w, http.StatusOK, response)
 }

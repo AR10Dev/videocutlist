@@ -6,47 +6,6 @@ import (
 	"fmt"
 )
 
-// CancelBatch requests cancellation for every queued or running child.
-func (s *JobsStore) CancelBatch(ctx context.Context, batchID string) (err error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id FROM jobs WHERE batch_id=? AND state IN ('queued','running')`, batchID)
-	if err != nil {
-		return err
-	}
-	rowsClosed := false
-	closeRows := func() error {
-		if rowsClosed {
-			return nil
-		}
-		rowsClosed = true
-		return rows.Close()
-	}
-	defer func() {
-		if closeErr := closeRows(); closeErr != nil {
-			err = errors.Join(err, fmt.Errorf("close batch cancellation rows: %w", closeErr))
-		}
-	}()
-	var ids []string
-	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
-			return err
-		}
-		ids = append(ids, id)
-	}
-	if err := rows.Err(); err != nil {
-		return err
-	}
-	if closeErr := closeRows(); closeErr != nil {
-		return fmt.Errorf("close batch cancellation rows: %w", closeErr)
-	}
-	for _, id := range ids {
-		if _, err := s.Cancel(ctx, id); err != nil && !errors.Is(err, ErrJobState) {
-			return err
-		}
-	}
-	return nil
-}
-
 func (s *JobsStore) ListByBatch(ctx context.Context, batchID string) (result []Job, err error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT id,batch_id,kind,COALESCE(project_id,''),COALESCE(project_item_id,''),COALESCE(proposal_id,''),COALESCE(credential_id,''),state,request_json,result_json,error_code,created_at,updated_at FROM jobs WHERE batch_id=? ORDER BY created_at,id`, batchID)
 	if err != nil {

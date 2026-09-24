@@ -16,9 +16,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sync"
+	"time"
 
 	"videocutlist/internal/db"
+	"videocutlist/internal/fdinput"
 	"videocutlist/internal/library/media/index"
 	"videocutlist/internal/projects"
 )
@@ -42,12 +45,37 @@ type Service struct {
 	mu         sync.Mutex
 }
 
+// ValidateSource reopens the indexed source so callers cannot use a stale
+// catalog fingerprint for a conditional asset response or cache hit.
+func (s *Service) ValidateSource(ctx context.Context, mediaID string) error {
+	if s.Scanner == nil || s.Media == nil {
+		return errors.New("asset source validation is not configured")
+	}
+	source, _, err := s.Scanner.Open(ctx, s.Media, mediaID)
+	if err != nil {
+		return err
+	}
+	if err := source.Close(); err != nil {
+		return fmt.Errorf("close asset source: %w", err)
+	}
+	return nil
+}
+
 var renameAsset = os.Rename
 
 func (s *Service) Thumbnails(ctx context.Context, spec projects.AssetSpec) (output projects.AssetResult, err error) {
 	if err := validate(spec, false); err != nil {
 		return projects.AssetResult{}, err
 	}
+	source, _, err := s.Scanner.Open(ctx, s.Media, spec.MediaID)
+	if err != nil {
+		return projects.AssetResult{}, err
+	}
+	defer func() {
+		if closeErr := source.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close thumbnail source: %w", closeErr))
+		}
+	}()
 	key, err := s.key(ctx, spec, "thumb")
 	if err != nil {
 		return projects.AssetResult{}, err
@@ -59,21 +87,12 @@ func (s *Service) Thumbnails(ctx context.Context, spec projects.AssetSpec) (outp
 	if hit {
 		return result(data, "image/png", true, spec), nil
 	}
-	source, _, err := s.Scanner.Open(ctx, s.Media, spec.MediaID)
-	if err != nil {
-		return projects.AssetResult{}, err
-	}
-	defer func() {
-		if closeErr := source.Close(); closeErr != nil {
-			err = errors.Join(err, fmt.Errorf("close thumbnail source: %w", closeErr))
-		}
-	}()
 	file, ok := source.(*os.File)
 	if !ok {
 		return projects.AssetResult{}, errors.New("media source is not a file")
 	}
 	fps := float64(spec.Count) / (float64(spec.DurationMS) / 1000)
-	args := []string{"-nostdin", "-hide_banner", "-loglevel", "error", "-ss", ms(spec.StartMS), "-i", "/proc/self/fd/3", "-t", ms(spec.DurationMS), "-vf", fmt.Sprintf("fps=%g,scale=%d:-2,tile=%dx1", fps, spec.Width, spec.Count), "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "pipe:1"}
+	args := []string{"-nostdin", "-hide_banner", "-loglevel", "error", "-ss", ms(spec.StartMS), "-i", fdinput.Path(3), "-t", ms(spec.DurationMS), "-vf", fmt.Sprintf("fps=%g,scale=%d:-2,tile=%dx1", fps, spec.Width, spec.Count), "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "pipe:1"}
 	data, err = s.run(ctx, file, args, maxPNGBytes)
 	if err != nil {
 		return projects.AssetResult{}, err
@@ -86,11 +105,19 @@ func (s *Service) Thumbnails(ctx context.Context, spec projects.AssetSpec) (outp
 	}
 	return result(data, "image/png", false, spec), nil
 }
-
 func (s *Service) Waveform(ctx context.Context, spec projects.AssetSpec) (output projects.AssetResult, err error) {
 	if err := validate(spec, true); err != nil {
 		return projects.AssetResult{}, err
 	}
+	source, item, err := s.Scanner.Open(ctx, s.Media, spec.MediaID)
+	if err != nil {
+		return projects.AssetResult{}, err
+	}
+	defer func() {
+		if closeErr := source.Close(); closeErr != nil {
+			err = errors.Join(err, fmt.Errorf("close waveform source: %w", closeErr))
+		}
+	}()
 	key, err := s.key(ctx, spec, "wave-v2")
 	if err != nil {
 		return projects.AssetResult{}, err
@@ -105,15 +132,6 @@ func (s *Service) Waveform(ctx context.Context, spec projects.AssetSpec) (output
 	if hit {
 		return waveformResult(data, true, spec)
 	}
-	source, item, err := s.Scanner.Open(ctx, s.Media, spec.MediaID)
-	if err != nil {
-		return projects.AssetResult{}, err
-	}
-	defer func() {
-		if closeErr := source.Close(); closeErr != nil {
-			err = errors.Join(err, fmt.Errorf("close waveform source: %w", closeErr))
-		}
-	}()
 	if item.Metadata.Audio == nil {
 		return projects.AssetResult{}, projects.ErrNoAudio
 	}
@@ -121,7 +139,7 @@ func (s *Service) Waveform(ctx context.Context, spec projects.AssetSpec) (output
 	if !ok {
 		return projects.AssetResult{}, errors.New("media source is not a file")
 	}
-	args := []string{"-nostdin", "-hide_banner", "-loglevel", "error", "-ss", ms(spec.StartMS), "-i", "/proc/self/fd/3", "-t", ms(spec.DurationMS), "-map", "0:a:0", "-ac", "1", "-ar", fmt.Sprint(min(spec.Samples*2, 48000)), "-f", "f32le", "pipe:1"}
+	args := []string{"-nostdin", "-hide_banner", "-loglevel", "error", "-ss", ms(spec.StartMS), "-i", fdinput.Path(3), "-t", ms(spec.DurationMS), "-map", "0:a:0", "-ac", "1", "-ar", fmt.Sprint(min(spec.Samples*2, 48000)), "-f", "f32le", "pipe:1"}
 	raw, err := s.run(ctx, file, args, 16<<20)
 	if err != nil {
 		return projects.AssetResult{}, err
@@ -198,6 +216,9 @@ func (s *Service) key(ctx context.Context, spec projects.AssetSpec, kind string)
 func (s *Service) cached(key, ext string, validate func([]byte) error) ([]byte, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if err := s.evictLocked(); err != nil {
+		return nil, false, err
+	}
 	p := filepath.Join(s.CacheDir, "assets", key+ext)
 	info, err := os.Stat(p)
 	if errors.Is(err, os.ErrNotExist) {
@@ -217,6 +238,9 @@ func (s *Service) cached(key, ext string, validate func([]byte) error) ([]byte, 
 	if int64(len(b)) != info.Size() || validate != nil && validate(b) != nil {
 		_ = os.Remove(p)
 		return nil, false, nil
+	}
+	if err := os.Chtimes(p, time.Now(), time.Now()); err != nil {
+		return nil, false, err
 	}
 	return b, true, nil
 }
@@ -270,6 +294,56 @@ func (s *Service) publish(ctx context.Context, key, ext string, b []byte) (err e
 	published = true
 	if err := ctx.Err(); err != nil {
 		return errors.Join(err, os.Remove(final))
+	}
+	if err := s.evictLocked(); err != nil {
+		_ = os.Remove(final)
+		return err
+	}
+	return nil
+}
+
+type assetFile struct {
+	path string
+	info os.FileInfo
+}
+
+func (s *Service) evictLocked() error {
+	root := filepath.Join(s.CacheDir, "assets")
+	var files []assetFile
+	var total int64
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err != nil || entry.IsDir() || (filepath.Ext(entry.Name()) != ".png" && filepath.Ext(entry.Name()) != ".json") {
+			return err
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+		total += info.Size()
+		files = append(files, assetFile{path: path, info: info})
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	slices.SortFunc(files, func(a, b assetFile) int { return a.info.ModTime().Compare(b.info.ModTime()) })
+	for _, file := range files {
+		if total <= s.MaxBytes {
+			break
+		}
+		if err := os.Remove(file.path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		total -= file.info.Size()
+	}
+	if total > s.MaxBytes {
+		return errors.New("asset cache disk limit exceeded")
 	}
 	return nil
 }

@@ -115,6 +115,8 @@ func TestPreflightBlocksInvalidExplicitSelections(t *testing.T) {
 		{"unknown", []int{9}, []probe.Stream{{Index: 0, Type: "video"}}, "unknown_stream_index"},
 		{"duplicate", []int{0, 0}, []probe.Stream{{Index: 0, Type: "video"}}, "duplicate_stream_index"},
 		{"no-allowed-streams", nil, []probe.Stream{{Index: 1, Type: "attachment"}}, "no_allowed_streams"},
+		{"audio-only-selection", []int{1}, []probe.Stream{{Index: 0, Type: "video"}, {Index: 1, Type: "audio"}}, "no_video_stream"},
+		{"subtitle-only-selection", []int{1}, []probe.Stream{{Index: 0, Type: "video"}, {Index: 1, Type: "subtitle"}}, "no_video_stream"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

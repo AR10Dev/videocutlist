@@ -3,6 +3,7 @@ package mcp_test
 import (
 	"cmp"
 	"context"
+	"database/sql"
 	"slices"
 	"sync"
 	"testing"
@@ -30,6 +31,10 @@ func (s *projectToolsService) Create(_ context.Context, id string, input project
 	s.projects[id] = project
 	s.lastCreated = id
 	return project, nil
+}
+
+func (s *projectToolsService) CreateInTx(ctx context.Context, _ *sql.Tx, id string, input projects.ProjectInput, _ []projects.Media) (projects.Project, error) {
+	return s.Create(ctx, id, input)
 }
 
 func (s *projectToolsService) Get(_ context.Context, id string) (projects.Project, error) {

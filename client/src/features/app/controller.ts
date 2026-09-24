@@ -73,6 +73,9 @@ export function createWorkspaceController() {
   const [dirty, setDirty] = createSignal(false);
   const [projectItems, setProjectItems] = createSignal<EditableProjectItem[]>([]);
   const [activeItemId, setActiveItemId] = createSignal<string>();
+  const [editorContextRevision, setEditorContextRevision] = createSignal(0);
+  const advanceEditorContext = () => setEditorContextRevision((value) => value + 1);
+  const editorContext = () => `${projectId()}::${selected()?.id ?? ""}::${editorContextRevision()}`;
   const [recent, setRecent] = createSignal<RecentProject[]>(
     (() => {
       try {
@@ -94,6 +97,8 @@ export function createWorkspaceController() {
   const exportRef: { current?: ReturnType<typeof createExportController> } = {};
   const editorFeature = createEditorController({
     selected,
+    contextKey: editorContext,
+    segmentIdentityScope: activeItemId,
     setStatus,
     markDirty,
     setPreviewCenterMs: (ms) => previewRef.current?.setPreviewCenterMs(ms),
@@ -155,6 +160,8 @@ export function createWorkspaceController() {
     editorVersion: () => editorVersion,
     status,
     projectItems,
+    setProjectItems,
+    activeItemId,
     editableItems: () => editableItems(),
     segments: () => timeline().present.segments,
     tracks: () => tracks(),
@@ -210,6 +217,7 @@ export function createWorkspaceController() {
     cancelExport,
     cancelBatch,
     cancelChildJob,
+    childJobPending,
     retryChildJob,
     destinationCapabilities,
   } = exportFeature;
@@ -238,7 +246,8 @@ export function createWorkspaceController() {
         : item,
     );
   const activateItem = (item: EditableProjectItem) => {
-    if (item.media.id !== selected()?.id) editorFeature.prepareMediaSwitch();
+    editorFeature.prepareMediaSwitch();
+    advanceEditorContext();
     setProjectItems(editableItems());
     setActiveItemId(item.id);
     setSelected(item.media);
@@ -324,6 +333,7 @@ export function createWorkspaceController() {
   exportRef.current = exportFeature;
   const chooseMedia = (item: Media) => {
     editorFeature.prepareMediaSwitch();
+    advanceEditorContext();
     clearDetectionContext();
     const items = editableItems();
     const existing = items.find((entry) => entry.media.id === item.id);
@@ -354,6 +364,7 @@ export function createWorkspaceController() {
     if (!item) return;
     const items = editableItems();
     const existing = items.find((entry) => entry.media.id === item.id);
+    if (existing && existing.id === activeItemId()) return;
     if (existing) {
       activateItem(existing);
       setStatus(`Activated ${item.name} in the project.`);
@@ -364,7 +375,7 @@ export function createWorkspaceController() {
       timeline: timeline(),
     };
     setProjectItems([...items, added]);
-    activateItem(added);
+    setActiveItemId(added.id);
     setSelectedExportItems((ids) => (ids.includes(added.id) ? ids : [...ids, added.id]));
     markDirty();
     setStatus(`Added ${item.name} to the project.`);
@@ -407,6 +418,8 @@ export function createWorkspaceController() {
     activeItemId,
     projectId,
     revision,
+    editorVersion: () => editorVersion,
+    saveConflict: () => projectsRef.current?.saveConflict() ?? false,
     segments: () => present().segments,
     saveProject: () => projectsFeature.saveProject(),
     updateSegments: (segments) => updateTimeline({ segments }),
@@ -459,6 +472,7 @@ export function createWorkspaceController() {
     setFilenameTemplate,
     editableItems,
     editorVersion: () => editorVersion,
+    resetEditorContext: advanceEditorContext,
     clearDetectionContext,
     setDiagnostics,
     setStatus,
@@ -531,6 +545,7 @@ export function createWorkspaceController() {
     setDirty,
     projectItems,
     activeItemId,
+    editorContext,
     selectedExportItems,
     setSelectedExportItems,
     exportScope,
@@ -563,6 +578,7 @@ export function createWorkspaceController() {
     preflightPending,
     preflightError,
     exportPending,
+    childJobPending,
     destinationsLoading,
     destinationsError,
     retryDestinations,

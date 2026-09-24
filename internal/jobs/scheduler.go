@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 )
@@ -15,6 +16,28 @@ var (
 	ErrSourceChanged    = errors.New("source_changed")
 )
 
+const (
+	terminalTransitionAttempts = 3
+	terminalTransitionTimeout  = 100 * time.Millisecond
+	terminalTransitionBackoff  = 10 * time.Millisecond
+)
+
+// ResultPersistenceError reports that a runner produced a durable result but
+// could not persist it. The scheduler retries the terminal write without
+// rerunning the runner.
+type ResultPersistenceError struct {
+	Result string
+	Err    error
+}
+
+func (e *ResultPersistenceError) Error() string {
+	return "job terminal result persistence failed"
+}
+
+func (e *ResultPersistenceError) Unwrap() error {
+	return e.Err
+}
+
 // MaxWorkerLimit is a resource-safety ceiling, not recommended concurrency.
 const MaxWorkerLimit = 64
 
@@ -22,6 +45,7 @@ const MaxWorkerLimit = 64
 type SchedulerConfig struct {
 	QueueCapacity int
 	WorkerLimit   int
+	Logger        *log.Logger
 }
 
 func (c SchedulerConfig) validate() error {
@@ -33,6 +57,8 @@ func (c SchedulerConfig) validate() error {
 
 // JobRunner executes one claimed job. It must not expose filesystem paths in
 // returned errors because those are persisted as job failure codes only.
+// Runners that own a durable result should return ResultPersistenceError when
+// its terminal write fails so the scheduler can retry without rerunning work.
 type JobRunner func(context.Context, Job) error
 
 // Scheduler claims durable jobs and bounds concurrent executions.
@@ -40,6 +66,7 @@ type Scheduler struct {
 	jobs   *JobsStore
 	runner JobRunner
 	config SchedulerConfig
+	logger *log.Logger
 	ctx    context.Context
 	cancel context.CancelFunc
 
@@ -54,10 +81,12 @@ type Scheduler struct {
 	afterCommit func()
 	// afterDeregister is a test seam for cancellation after runner completion.
 	afterDeregister func()
-	stopped         bool
-	wake            chan struct{}
-	stop            chan struct{}
-	done            sync.WaitGroup
+	// terminalTransition wraps one durable terminal write for fault injection.
+	terminalTransition func(context.Context, string, JobState, string, string) (Job, error)
+	stopped            bool
+	wake               chan struct{}
+	stop               chan struct{}
+	done               sync.WaitGroup
 }
 
 func NewScheduler(jobs *JobsStore, config SchedulerConfig, runner JobRunner) (*Scheduler, error) {
@@ -67,8 +96,12 @@ func NewScheduler(jobs *JobsStore, config SchedulerConfig, runner JobRunner) (*S
 	if err := config.validate(); err != nil {
 		return nil, err
 	}
+	logger := config.Logger
+	if logger == nil {
+		logger = log.Default()
+	}
 	ctx, cancel := context.WithCancel(context.Background())
-	return &Scheduler{jobs: jobs, runner: runner, config: config, ctx: ctx, cancel: cancel, running: make(map[string]runningJob), wake: make(chan struct{}, 1), stop: make(chan struct{})}, nil
+	return &Scheduler{jobs: jobs, runner: runner, config: config, logger: logger, ctx: ctx, cancel: cancel, running: make(map[string]runningJob), wake: make(chan struct{}, 1), stop: make(chan struct{})}, nil
 }
 
 // Submit atomically admits a whole batch or creates none of its child jobs.
@@ -250,7 +283,7 @@ func (s *Scheduler) Shutdown(ctx context.Context) error {
 		s.stopped = true
 		close(s.stop)
 		for _, running := range s.running {
-			running.cancel()
+			running.cancel(ErrSchedulerStopped)
 		}
 	}
 	s.mu.Unlock()
@@ -322,7 +355,7 @@ func (s *Scheduler) Cancel(ctx context.Context, id string) (Job, error) {
 		return Job{}, err
 	}
 	if running, ok := s.running[id]; ok {
-		running.cancel()
+		running.cancel(nil)
 	}
 	return job, nil
 }
@@ -365,48 +398,135 @@ func (s *Scheduler) worker() {
 		if s.afterClaim != nil {
 			s.afterClaim()
 		}
-		ctx, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancelCause(context.Background())
 		s.mu.Lock()
 		if s.stopped {
-			cancel()
+			cancel(ErrSchedulerStopped)
 		}
 		s.running[job.ID] = runningJob{cancel: cancel}
 		s.mu.Unlock()
-		current, getErr := s.jobs.Get(context.Background(), job.ID)
+		current, getErr := s.jobs.Get(ctx, job.ID)
 		if ctx.Err() != nil || getErr != nil || current.State != JobRunning {
 			err = context.Canceled
 		} else {
 			err = s.runner(ctx, job)
 		}
 		s.mu.Lock()
-		cancelled := ctx.Err() != nil
+		cancellation := context.Cause(ctx)
 		delete(s.running, job.ID)
 		s.mu.Unlock()
 		if s.afterDeregister != nil {
 			s.afterDeregister()
 		}
-		cancel()
-		if err == nil {
-			// Runners that produce durable results transition the job themselves.
-			// Do not overwrite those results with the scheduler's empty default.
-			current, getErr := s.jobs.Get(context.Background(), job.ID)
-			if getErr == nil && current.State == JobRunning {
-				_, _ = s.jobs.Succeed(context.Background(), job.ID, `{}`)
-			}
-		} else if cancelled {
-			_, _ = s.jobs.Cancel(context.Background(), job.ID)
-		} else {
-			code := "job_failed"
-			if errors.Is(err, ErrSourceChanged) {
-				code = "source_changed"
-			}
-			_, _ = s.jobs.Fail(context.Background(), job.ID, code)
-		}
+		cancel(nil)
+		s.finalize(job, err, cancellation)
 	}
 }
 
+func (s *Scheduler) finalize(job Job, runnerErr, cancellation error) {
+	target, result, code := terminalTarget(runnerErr, cancellation)
+	current, err := s.readTerminalState(job.ID)
+	if err != nil {
+		s.logTerminalFailure(job.ID, target, "terminal_state_read")
+		return
+	}
+	if current.State != JobRunning {
+		return
+	}
+	if _, err := s.persistTerminal(job.ID, target, result, code); err == nil {
+		return
+	}
+	current, readErr := s.readTerminalState(job.ID)
+	if readErr == nil && current.State != JobRunning {
+		return
+	}
+	s.logTerminalFailure(job.ID, target, "terminal_transition")
+}
+
+func terminalTarget(runnerErr, cancellation error) (JobState, string, string) {
+	// A published result still wins shutdown; an explicit cancellation has
+	// already committed its terminal CAS and cannot be overwritten.
+	if resultErr, ok := errors.AsType[*ResultPersistenceError](runnerErr); ok {
+		return JobSucceeded, resultErr.Result, ""
+	}
+	if errors.Is(cancellation, ErrSchedulerStopped) {
+		return JobFailed, "", "interrupted_by_restart"
+	}
+	if cancellation != nil {
+		return JobCancelled, "", ""
+	}
+	if runnerErr == nil {
+		return JobSucceeded, `{}`, ""
+	}
+	code := "job_failed"
+	if errors.Is(runnerErr, ErrSourceChanged) {
+		code = "source_changed"
+	}
+	return JobFailed, "", code
+}
+
+func (s *Scheduler) readTerminalState(id string) (Job, error) {
+	var lastErr error
+	for attempt := range terminalTransitionAttempts {
+		ctx, cancel := context.WithTimeout(context.Background(), terminalTransitionTimeout)
+		job, err := s.jobs.Get(ctx, id)
+		cancel()
+		if err == nil {
+			return job, nil
+		}
+		lastErr = err
+		if errors.Is(err, ErrJobNotFound) {
+			break
+		}
+		if attempt+1 < terminalTransitionAttempts {
+			time.Sleep(terminalTransitionBackoff)
+		}
+	}
+	return Job{}, lastErr
+}
+
+func (s *Scheduler) persistTerminal(id string, target JobState, result, code string) (Job, error) {
+	var lastErr error
+	for attempt := range terminalTransitionAttempts {
+		ctx, cancel := context.WithTimeout(context.Background(), terminalTransitionTimeout)
+		job, err := s.applyTerminal(ctx, id, target, result, code)
+		cancel()
+		if err == nil {
+			return job, nil
+		}
+		lastErr = err
+		if errors.Is(err, ErrJobState) || errors.Is(err, ErrJobNotFound) {
+			break
+		}
+		if attempt+1 < terminalTransitionAttempts {
+			time.Sleep(terminalTransitionBackoff)
+		}
+	}
+	return Job{}, lastErr
+}
+
+func (s *Scheduler) applyTerminal(ctx context.Context, id string, target JobState, result, code string) (Job, error) {
+	if s.terminalTransition != nil {
+		return s.terminalTransition(ctx, id, target, result, code)
+	}
+	switch target {
+	case JobSucceeded:
+		return s.jobs.Succeed(ctx, id, result)
+	case JobFailed:
+		return s.jobs.Fail(ctx, id, code)
+	case JobCancelled:
+		return s.jobs.Cancel(ctx, id)
+	default:
+		return Job{}, errors.New("unsupported terminal job state")
+	}
+}
+
+func (s *Scheduler) logTerminalFailure(id string, target JobState, category string) {
+	s.logger.Printf(`{"event":"job_terminal_failure","job_id":%q,"target_state":%q,"error_category":%q}`, id, target, category)
+}
+
 type runningJob struct {
-	cancel context.CancelFunc
+	cancel context.CancelCauseFunc
 }
 
 func (s *Scheduler) claim(ctx context.Context) (job Job, err error) {

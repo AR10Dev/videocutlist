@@ -179,6 +179,9 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 	if c.CacheMaxBytes, err = positiveInt64(lookup, "VIDEOCUTLIST_CACHE_MAX_BYTES", defaultCacheMaxBytes); err != nil {
 		return Config{}, err
 	}
+	if c.CacheMaxBytes < 2 {
+		return Config{}, fmt.Errorf("VIDEOCUTLIST_CACHE_MAX_BYTES must be at least 2")
+	}
 	if c.PreviewBeforeMS, err = positiveInt(lookup, "VIDEOCUTLIST_PREVIEW_BEFORE_MS", defaultPreviewBeforeMS); err != nil {
 		return Config{}, err
 	}

@@ -190,6 +190,28 @@ describe("settings controller", () => {
     expect(state.mcpSettings()?.enabled).toBe(true);
   });
 
+  it("appends proposal pages without losing older pending proposals", async () => {
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(
+        Response.json({
+          ...mcp,
+          proposals: [{ id: "ep_first" }],
+          proposalNextCursor: "ep_first",
+        }),
+      )
+      .mockResolvedValueOnce(Response.json({ ...mcp, proposals: [{ id: "ep_second" }] }));
+    const state = controller(fetch);
+    await state.loadMCPSettings();
+    await state.loadMCPSettings(undefined, state.mcpSettings()?.proposalNextCursor);
+
+    expect(String(fetch.mock.calls[1][0])).toContain("proposalCursor=ep_first");
+    expect(state.mcpSettings()?.proposals.map((proposal) => proposal.id)).toEqual([
+      "ep_first",
+      "ep_second",
+    ]);
+    expect(state.mcpSettings()?.proposalNextCursor).toBeUndefined();
+  });
   it("distinguishes CORS denial from administrator authorization and offers no stale settings", async () => {
     const fetch = vi
       .fn<typeof globalThis.fetch>()

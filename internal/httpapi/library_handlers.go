@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"strconv"
 
 	"videocutlist/internal/projects"
 )
@@ -21,14 +20,10 @@ func (s *Server) browseMedia(writer http.ResponseWriter, request *http.Request, 
 		httpx.Error(writer, 422, "invalid_query", "Query parameters are invalid.", id)
 		return
 	}
-	limit := 50
-	var err error
-	if q.Get("limit") != "" {
-		limit, err = strconv.Atoi(q.Get("limit"))
-		if err != nil || limit < 1 || limit > 100 {
-			httpx.Error(writer, 422, "invalid_query", "Query parameters are invalid.", id)
-			return
-		}
+	limit, err := parseLimit(q.Get("limit"))
+	if err != nil {
+		httpx.Error(writer, 422, "invalid_query", "Query parameters are invalid.", id)
+		return
 	}
 	page, err := s.config.Media.Browse(request.Context(), folderID, cursor, limit)
 	if err != nil {
@@ -43,14 +38,10 @@ func (s *Server) listMedia(writer http.ResponseWriter, request *http.Request, id
 		httpx.Error(writer, 422, "invalid_query", "Query parameters are invalid.", id)
 		return
 	}
-	limit := 50
-	var err error
-	if value := request.URL.Query().Get("limit"); value != "" {
-		limit, err = strconv.Atoi(value)
-		if err != nil || limit < 1 || limit > 100 {
-			httpx.Error(writer, 422, "invalid_query", "Query parameters are invalid.", id)
-			return
-		}
+	limit, err := parseLimit(request.URL.Query().Get("limit"))
+	if err != nil {
+		httpx.Error(writer, 422, "invalid_query", "Query parameters are invalid.", id)
+		return
 	}
 	cursor := request.URL.Query().Get("cursor")
 	if len(cursor) > 128 || cursor != "" && !validMediaID(cursor) {

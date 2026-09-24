@@ -13,6 +13,8 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"videocutlist/internal/fdinput"
 )
 
 const maxOutputBytes = 1 << 20
@@ -79,7 +81,7 @@ func (c Client) FrameTimes(ctx context.Context, source *os.File) ([]int64, error
 	if path == "" {
 		path = "ffprobe"
 	}
-	cmd := exec.CommandContext(ctx, path, "-v", "error", "-select_streams", "v:0", "-show_entries", "frame=best_effort_timestamp_time", "-of", "json", "/proc/self/fd/3")
+	cmd := exec.CommandContext(ctx, path, "-v", "error", "-select_streams", "v:0", "-show_entries", "frame=best_effort_timestamp_time", "-of", "json", fdinput.Path(3))
 	cmd.ExtraFiles = []*os.File{source}
 	var stdout, stderr limitedBuffer
 	stdout.limit, stderr.limit = maxOutputBytes, maxOutputBytes
@@ -118,7 +120,7 @@ func (c Client) Keyframes(ctx context.Context, source *os.File) ([]int64, error)
 	if path == "" {
 		path = "ffprobe"
 	}
-	cmd := exec.CommandContext(ctx, path, "-v", "error", "-select_streams", "v:0", "-show_entries", "frame=best_effort_timestamp_time,key_frame", "-of", "json", "/proc/self/fd/3")
+	cmd := exec.CommandContext(ctx, path, "-v", "error", "-select_streams", "v:0", "-show_entries", "frame=best_effort_timestamp_time,key_frame", "-of", "json", fdinput.Path(3))
 	cmd.ExtraFiles = []*os.File{source}
 	var stdout, stderr limitedBuffer
 	stdout.limit, stderr.limit = maxOutputBytes, maxOutputBytes
@@ -155,7 +157,7 @@ func (c Client) ProbeFile(ctx context.Context, source *os.File) (Metadata, error
 	if source == nil {
 		return Metadata{}, errors.New("ffprobe source is required")
 	}
-	return c.run(ctx, "/proc/self/fd/3", []*os.File{source})
+	return c.run(ctx, fdinput.Path(3), []*os.File{source})
 }
 
 func (c Client) run(ctx context.Context, input string, files []*os.File) (Metadata, error) {

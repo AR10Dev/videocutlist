@@ -22,7 +22,8 @@ export function createWorkspacePanelController(deps: {
     const defaults = defaultPanelPreferences();
     try {
       const parsed = parsePanelPreferences(window.localStorage.getItem(PANEL_PREFERENCES_KEY));
-      return window.innerWidth < 1050 ? parsed : clampPanelPreferences(parsed, window.innerWidth);
+      const initial = { ...parsed, mediaCollapsed: false, segmentsCollapsed: false };
+      return window.innerWidth < 1050 ? initial : clampPanelPreferences(initial, window.innerWidth);
     } catch {
       return defaults;
     }

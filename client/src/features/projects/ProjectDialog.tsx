@@ -38,7 +38,7 @@ export function ProjectDialog(props: { onClose: () => void }) {
         const error = validateSegments(segments, selected.durationMs);
         if (error) throw new Error(error);
         workspace.updateTimeline({ segments });
-        workspace.markDirty();
+        workspace.addMediaToProject();
         workspace.setStatus("Cut list imported. Save the project to keep it.");
       })
       .catch((error) =>

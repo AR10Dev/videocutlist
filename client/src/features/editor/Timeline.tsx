@@ -41,15 +41,22 @@ export function Timeline() {
   };
   const updateWindow = () => {
     if (!scroller || !timeline) return;
-    const next = visibleTimelineWindow(
-      scroller.scrollLeft,
-      scroller.clientWidth,
-      timeline.getBoundingClientRect().width,
-      workspace.duration(),
-    );
+    const next = {
+      ...visibleTimelineWindow(
+        scroller.scrollLeft,
+        scroller.clientWidth,
+        timeline.getBoundingClientRect().width,
+        workspace.duration(),
+      ),
+      widthPx: scroller.clientWidth,
+    };
     setVisibleWindow(next);
     const current = workspace.visibleTimelineRange();
-    if (current.startMs !== next.startMs || current.endMs !== next.endMs)
+    if (
+      current.startMs !== next.startMs ||
+      current.endMs !== next.endMs ||
+      current.widthPx !== next.widthPx
+    )
       workspace.setVisibleTimelineRange(next);
   };
   const positionFromPointer = (clientX: number, target: DragTarget = { kind: "playhead" }) => {

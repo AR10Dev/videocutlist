@@ -338,11 +338,41 @@ func (s *CredentialStore) GrantProject(ctx context.Context, credentialID, projec
 	if !validCredentialID(credentialID) || !validSafeIdentifier(projectID) {
 		return Credential{}, ErrCredentialNotFound
 	}
+	var granted Credential
+	err := s.withTransaction(ctx, func(tx *sql.Tx) error {
+		var err error
+		granted, err = s.grantProjectTx(ctx, tx, credentialID, projectID)
+		return err
+	})
+	if err != nil {
+		return Credential{}, err
+	}
+	return granted, nil
+}
+
+func (s *CredentialStore) withTransaction(ctx context.Context, fn func(*sql.Tx) error) (err error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return Credential{}, fmt.Errorf("begin mcp project grant: %w", err)
+		return fmt.Errorf("begin mcp transaction: %w", err)
 	}
-	defer func() { _ = tx.Rollback() }()
+	defer func() {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
+			err = errors.Join(err, fmt.Errorf("rollback mcp transaction: %w", rollbackErr))
+		}
+	}()
+	if err := fn(tx); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit mcp transaction: %w", err)
+	}
+	return nil
+}
+
+func (s *CredentialStore) grantProjectTx(ctx context.Context, tx *sql.Tx, credentialID, projectID string) (Credential, error) {
+	if tx == nil || !validCredentialID(credentialID) || !validSafeIdentifier(projectID) {
+		return Credential{}, ErrCredentialNotFound
+	}
 	record, err := scanCredential(tx.QueryRowContext(ctx, `SELECT id, token_identifier, token_verifier, name, permissions_json, media_scope_json, project_scope_json, expires_at, revoked_at, unattended_exports, created_at, last_used_at, updated_at FROM mcp_credentials WHERE id = ?`, credentialID))
 	if errors.Is(err, sql.ErrNoRows) {
 		return Credential{}, ErrCredentialNotFound
@@ -354,7 +384,10 @@ func (s *CredentialStore) GrantProject(ctx context.Context, credentialID, projec
 		return Credential{}, err
 	}
 	if record.ProjectScope.Kind == ProjectScopeAll || slices.Contains(record.ProjectScope.ProjectIDs, projectID) {
-		return cloneCredential(record.Credential), tx.Commit()
+		return cloneCredential(record.Credential), nil
+	}
+	if len(record.ProjectScope.ProjectIDs) >= scopeIDLimit {
+		return Credential{}, ErrCredentialInvalid
 	}
 	record.ProjectScope.ProjectIDs = append(record.ProjectScope.ProjectIDs, projectID)
 	slices.Sort(record.ProjectScope.ProjectIDs)
@@ -362,7 +395,8 @@ func (s *CredentialStore) GrantProject(ctx context.Context, credentialID, projec
 	if err != nil {
 		return Credential{}, err
 	}
-	result, err := tx.ExecContext(ctx, `UPDATE mcp_credentials SET project_scope_json = ?, updated_at = ? WHERE id = ? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)`, string(scope), formatTime(s.currentTime()), credentialID, formatTime(s.currentTime()))
+	now := s.currentTime()
+	result, err := tx.ExecContext(ctx, `UPDATE mcp_credentials SET project_scope_json = ?, updated_at = ? WHERE id = ? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)`, string(scope), formatTime(now), credentialID, formatTime(now))
 	if err != nil {
 		return Credential{}, fmt.Errorf("grant mcp project: %w", err)
 	}
@@ -372,9 +406,6 @@ func (s *CredentialStore) GrantProject(ctx context.Context, credentialID, projec
 	}
 	if updated != 1 {
 		return Credential{}, ErrCredentialUnauthorized
-	}
-	if err := tx.Commit(); err != nil {
-		return Credential{}, fmt.Errorf("commit mcp project grant: %w", err)
 	}
 	return cloneCredential(record.Credential), nil
 }

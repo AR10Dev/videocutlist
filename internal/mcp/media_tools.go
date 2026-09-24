@@ -94,20 +94,30 @@ func listMedia(ctx Context, media MediaReader, raw json.RawMessage) (ToolResult,
 		if err != nil {
 			return ToolResult{}, err
 		}
-		for _, item := range page.Items {
+		pageComplete := true
+		for position, item := range page.Items {
 			scanned++
 			cursor = item.ID
 			if ctx.Credential.AllowsMedia(item.ID, item.RootID) && strings.Contains(strings.ToLower(item.Name), strings.ToLower(args.Query)) {
 				items = append(items, safeMedia(item))
 				if len(items) == args.Limit {
+					pageComplete = position == len(page.Items)-1
 					break
 				}
 			}
 		}
-		if page.NextCursor == nil || len(items) == args.Limit || len(page.Items) == 0 {
-			if page.NextCursor == nil {
-				cursor = ""
+		if len(items) == args.Limit {
+			if pageComplete {
+				if page.NextCursor == nil {
+					cursor = ""
+				} else {
+					cursor = *page.NextCursor
+				}
 			}
+			break
+		}
+		if page.NextCursor == nil || len(page.Items) == 0 {
+			cursor = ""
 			break
 		}
 		cursor = *page.NextCursor

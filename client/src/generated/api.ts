@@ -156,13 +156,19 @@ export interface paths {
       };
       cookie?: never;
     };
-    /** Stream a normalized preview */
+    /**
+     * Stream a normalized preview
+     * @description Revalidates the source before cache lookup. Changed sources return 409 source_changed and require a library refresh; missing sources return 404 not_found. Only process-capacity rejection returns 429 preview_busy with Retry-After: 1. Deadline expiry returns 504 preview_timeout; unexpected startup/cache failures return 500 internal_error.
+     */
     get: operations["streamPreview"];
     put?: never;
     post?: never;
     delete?: never;
     options?: never;
-    /** Check for a cached preview */
+    /**
+     * Check for a cached preview
+     * @description Revalidates the source even for a cached preview. Source changes return 409; missing sources or absent cache entries return 404. Uses the same validation, capacity, and deadline statuses as GET, without a body.
+     */
     head: operations["previewStatus"];
     patch?: never;
     trace?: never;
@@ -581,7 +587,7 @@ export interface paths {
     };
     /**
      * Read a PNG timeline thumbnail strip
-     * @description Duration is clamped to the remaining media duration. Unknown or repeated query keys are rejected. Existing validation responses use 422 invalid_asset. PNG output is validated before publication and on cache reads; invalid generated output is a safe 500, never a published image. Output is bounded to 8 MiB compressed and 16777216 decoded pixels.
+     * @description Duration is clamped to the remaining media duration. Unknown or repeated query keys are rejected. Existing validation responses use 422 invalid_asset. PNG output is validated before publication and on cache reads; invalid generated output is a safe 500, never a published image. Output is bounded to 8 MiB compressed and 16777216 decoded pixels. Source identity is revalidated before cache hits and conditional 304 responses; changed sources return 409 source_changed until refreshed.
      */
     get: operations["getThumbnails"];
     put?: never;
@@ -610,7 +616,7 @@ export interface paths {
     };
     /**
      * Read normalized timeline waveform peaks
-     * @description Duration is clamped to the remaining media duration. Each peak covers whole float32 audio samples, normalized to 0..1. Unknown or repeated query keys and invalid bounds use the existing 422 invalid_asset response; media without audio uses 422 no_audio. Malformed generated output is 500.
+     * @description Duration is clamped to the remaining media duration. Each peak covers whole float32 audio samples, normalized to 0..1. Unknown or repeated query keys and invalid bounds use the existing 422 invalid_asset response; media without audio uses 422 no_audio. Malformed generated output is 500. Source identity is revalidated before cache hits and conditional 304 responses; changed sources return 409 source_changed until refreshed.
      */
     get: operations["getWaveform"];
     put?: never;
@@ -738,7 +744,7 @@ export interface components {
       destinations?: components["schemas"]["RuntimeDestination"][];
       /** @description Live shared scheduler worker limit for export, detection, and library scan jobs. 64 is a safety ceiling, not recommended concurrency. Admission allows at most four times this limit in queued/running jobs. Increases allow more workers immediately. Decreases do not cancel active jobs or discard queued work; excess workers retire after their current job and queued work drains at the new limit. */
       exportLimit: number;
-      /** @description Live preview-cache total budget and timeline-asset per-artifact limit (not a combined cache budget). Subsequent publications use the current limit, including in-flight generations. Oversized timeline cache entries are misses. Existing preview entries are evicted on subsequent commits. */
+      /** @description Combined cache disk budget, partitioned between preview clips (three quarters) and timeline assets (one quarter), with at least one byte per partition. Completed entries are evicted on publication; oversized artifacts cannot be published. */
       cacheMaxBytes: number;
       previewGlobalLimit: number;
       previewBeforeMs: number;
@@ -806,6 +812,7 @@ export interface components {
       credentials: components["schemas"]["MCPCredential"][];
       proposals: components["schemas"]["ExportProposal"][];
       nextCursor?: string;
+      proposalNextCursor?: string;
     };
     SettingsResponse: {
       settings: components["schemas"]["RuntimeSettings"];
@@ -960,6 +967,10 @@ export interface components {
       kind: "silence" | "black" | "scene";
       candidates?: components["schemas"]["DetectionCandidate"][];
       errorCode?: string;
+    };
+    ExportSubmissionInput: {
+      /** @description Optional ordered project-item selection; omitted selects all. Export options are read from each saved project item. */
+      itemIds?: string[];
     };
     ExportInput: {
       /** @enum {string} */
@@ -1383,9 +1394,11 @@ export interface operations {
       401: components["responses"]["Error"];
       403: components["responses"]["Error"];
       404: components["responses"]["Error"];
+      409: components["responses"]["Error"];
       422: components["responses"]["Error"];
       429: components["responses"]["Error"];
       500: components["responses"]["Error"];
+      504: components["responses"]["Error"];
     };
   };
   previewStatus: {
@@ -1420,7 +1433,11 @@ export interface operations {
         };
         content?: never;
       };
+      409: components["responses"]["Error"];
+      422: components["responses"]["Error"];
+      429: components["responses"]["Error"];
       500: components["responses"]["Error"];
+      504: components["responses"]["Error"];
     };
   };
   listProjects: {
@@ -1551,7 +1568,7 @@ export interface operations {
     };
     requestBody: {
       content: {
-        "application/json": components["schemas"]["ExportInput"];
+        "application/json": components["schemas"]["ExportSubmissionInput"];
       };
     };
     responses: {
@@ -1635,7 +1652,7 @@ export interface operations {
     };
     requestBody?: never;
     responses: {
-      /** @description Batch cancellation requested */
+      /** @description Cancellation is requested for each queued or running child; 204 does not mean every runner has exited or its resources are released. Terminal children remain unchanged. */
       204: {
         headers: {
           [name: string]: unknown;
@@ -1767,7 +1784,7 @@ export interface operations {
     };
     requestBody?: never;
     responses: {
-      /** @description Cancelled or already terminal */
+      /** @description Cancellation is durably accepted for queued or running jobs, but 204 does not mean the runner process or its resources have stopped. Already terminal jobs are unchanged. */
       204: {
         headers: {
           [name: string]: unknown;
@@ -1894,8 +1911,12 @@ export interface operations {
   getMCPSettings: {
     parameters: {
       query?: {
+        /** @description Exclusive credential cursor returned by a previous page. */
         cursor?: string;
         limit?: number;
+        /** @description Exclusive pending-proposal cursor returned by a previous page. */
+        proposalCursor?: string;
+        proposalLimit?: number;
       };
       header?: never;
       path?: never;
@@ -2112,7 +2133,7 @@ export interface operations {
     };
     requestBody?: never;
     responses: {
-      /** @description Cancellation requested or job already terminal */
+      /** @description Cancellation is durably accepted for queued or running scans, but 204 does not mean the runner process or its resources have stopped. Already terminal jobs are unchanged. */
       204: {
         headers: {
           [name: string]: unknown;
@@ -2165,8 +2186,10 @@ export interface operations {
       401: components["responses"]["Error"];
       403: components["responses"]["Error"];
       404: components["responses"]["Error"];
+      409: components["responses"]["Error"];
       422: components["responses"]["Error"];
       500: components["responses"]["Error"];
+      504: components["responses"]["Error"];
     };
   };
   getWaveform: {
@@ -2208,8 +2231,10 @@ export interface operations {
       401: components["responses"]["Error"];
       403: components["responses"]["Error"];
       404: components["responses"]["Error"];
+      409: components["responses"]["Error"];
       422: components["responses"]["Error"];
       500: components["responses"]["Error"];
+      504: components["responses"]["Error"];
     };
   };
   exportInterchange: {

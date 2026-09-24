@@ -72,12 +72,18 @@ func (m MediaCatalog) Get(ctx context.Context, id string) (projects.Media, error
 }
 func (m MediaCatalog) Refresh(ctx context.Context) error         { return m.Scanner.Refresh(ctx, m.Store) }
 func (m MediaCatalog) RootStatuses() map[string]index.RootStatus { return m.Scanner.RootStatuses() }
+
+// Preview validates the current source identity before deriving a spec so a
+// changed file can never satisfy an older cache key (hit or miss).
 func (m MediaCatalog) Preview(ctx context.Context, request projects.PreviewSpec) (model.PreviewSpec, error) {
-	item, err := m.Store.Get(ctx, request.MediaID)
+	file, item, err := m.Scanner.Open(ctx, m.Store, request.MediaID)
 	if err != nil {
 		return model.PreviewSpec{}, err
 	}
-	return preview(item.Media, request), nil
+	if closeErr := file.Close(); closeErr != nil {
+		return model.PreviewSpec{}, fmt.Errorf("close preview source: %w", closeErr)
+	}
+	return preview(item, request), nil
 }
 func media(item index.Media, roots ...string) projects.Media {
 	rootID := ""
@@ -95,7 +101,7 @@ func media(item index.Media, roots ...string) projects.Media {
 	return projects.Media{ID: item.ID, RootID: rootID, Name: item.Name, DurationMS: item.Metadata.DurationMS, SizeBytes: item.SizeBytes, Container: item.Metadata.Container, Streams: streams, ETag: index.SourceFingerprint(item)}
 }
 func preview(item index.Media, request projects.PreviewSpec) model.PreviewSpec {
-	return model.PreviewSpec{MediaID: item.ID, SizeBytes: item.SizeBytes, MtimeNS: item.MtimeNS, StartMS: request.StartMS, DurationMS: request.WindowMS, OffsetMS: request.OffsetMS, Width: 1280, Height: 720, FPS: 30, Audio: !request.Mute, Encoder: "software-h264-v1", EncoderImpl: "libx264"}
+	return model.PreviewSpec{MediaID: item.ID, SizeBytes: item.SizeBytes, MtimeNS: item.MtimeNS, StartMS: request.StartMS, DurationMS: request.WindowMS, OffsetMS: request.OffsetMS, Width: 1280, Height: 720, FPS: 30, Audio: !request.Mute, Encoder: "software-h264-baseline-l31-v2", EncoderImpl: "libx264"}
 }
 
 type PreviewCache struct{ Store *cache.Store }
@@ -212,6 +218,12 @@ func (e ExportExecutor) Preflight(ctx context.Context, _ string, project project
 		request.SourceRelative = location.RelativePath
 		request.SourceName = media.Name
 		request.SourceSizeBytes = media.SizeBytes
+		if request.Mode == "separate" && len(exporter.ResolveRanges(item.Segments, request.Selection, media.Metadata.DurationMS)) > exporter.MaxExportOutputs {
+			result.Allowed = false
+			result.Findings = append(result.Findings, projects.ExportFinding{Severity: "blocked", Code: "too_many_outputs", Message: fmt.Sprintf("Separate exports support at most %d outputs.", exporter.MaxExportOutputs)})
+			_ = file.Close()
+			continue
+		}
 		request.SourceMtimeNS = media.MtimeNS
 		preflight, preflightErr := service.Preflight(ctx, file, request)
 		closeErr := file.Close()
@@ -323,7 +335,7 @@ func (e ExportExecutor) Download(ctx context.Context, jobID string, position int
 }
 
 const (
-	maxBatchArchiveOutputs = 1000
+	maxBatchArchiveOutputs = exporter.MaxExportOutputs
 	maxBatchArchiveBytes   = int64(4 << 30)
 )
 
@@ -470,7 +482,14 @@ func (e ExportExecutor) prepareBatchArchive(ctx context.Context, batchID, archiv
 	if err := validateBatchArchive(ctx, temporaryPath, len(outputs), total); err != nil {
 		return nil, "", err
 	}
-	name, path, err := publishBatchArchive(temporaryPath, archiveRoot, batchID)
+	name, path, err := publishBatchArchiveWithManifest(temporaryPath, archiveRoot, batchID, func(candidate, _ string) (func(), error) {
+		manifest, err := exporter.WriteManifestWithOwners(archiveRoot, batchID, exporter.KindDownload, []string{candidate}, []string{temporaryPath}, expires, "zip")
+		if err != nil {
+			return nil, exporter.ErrOutputUnavailable
+		}
+		e.Service.Artifacts.RegisterManifest(batchID, manifest)
+		return func() { e.Service.Artifacts.ClearManifest(batchID) }, nil
+	})
 	if err != nil {
 		return nil, "", err
 	}
@@ -480,6 +499,8 @@ func (e ExportExecutor) prepareBatchArchive(ctx context.Context, batchID, archiv
 	if err != nil {
 		if removeErr := os.Remove(path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
 			err = errors.Join(err, fmt.Errorf("remove unpublished batch archive: %w", removeErr))
+		} else {
+			e.Service.Artifacts.ClearManifest(batchID)
 		}
 		return nil, "", err
 	}
@@ -509,14 +530,15 @@ func validateBatchArchive(ctx context.Context, path string, count int, expectedB
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if !validBatchArchiveName(entry.Name) || entry.FileInfo().IsDir() || entry.UncompressedSize64 > uint64(maxBatchArchiveBytes-total) {
+		if !validBatchArchiveName(entry.Name) || entry.FileInfo().IsDir() || entry.FileInfo().Mode()&os.ModeSymlink != 0 || entry.UncompressedSize64 > uint64(maxBatchArchiveBytes-total) {
 			return exporter.ErrOutputUnavailable
 		}
 		reader, err := entry.Open()
 		if err != nil {
 			return exporter.ErrOutputUnavailable
 		}
-		copied, copyErr := io.Copy(io.Discard, contextReader{ctx: ctx, reader: reader})
+		limit := int64(entry.UncompressedSize64) + 1
+		copied, copyErr := io.Copy(io.Discard, io.LimitReader(contextReader{ctx: ctx, reader: reader}, limit))
 		closeErr := reader.Close()
 		if copyErr != nil {
 			return copyErr
@@ -532,7 +554,7 @@ func validateBatchArchive(ctx context.Context, path string, count int, expectedB
 	return nil
 }
 
-func publishBatchArchive(temporaryPath, archiveRoot, batchID string) (string, string, error) {
+func publishBatchArchiveWithManifest(temporaryPath, archiveRoot, batchID string, beforeLink func(name, path string) (func(), error)) (string, string, error) {
 	token := "batch"
 	if validBatchArchiveToken(batchID) {
 		token = batchID
@@ -543,10 +565,29 @@ func publishBatchArchive(temporaryPath, archiveRoot, batchID string) (string, st
 			name = fmt.Sprintf("videocutlist-clips-%s-%d.zip", token, attempt)
 		}
 		path := filepath.Join(archiveRoot, name)
+		if _, err := os.Lstat(path); err == nil {
+			continue
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return "", "", exporter.ErrOutputUnavailable
+		}
+		var cleanup func()
+		if beforeLink != nil {
+			var err error
+			cleanup, err = beforeLink(name, path)
+			if err != nil {
+				return "", "", err
+			}
+		}
 		if err := os.Link(temporaryPath, path); err == nil {
 			return name, path, nil
 		} else if !errors.Is(err, os.ErrExist) {
+			if cleanup != nil {
+				cleanup()
+			}
 			return "", "", exporter.ErrOutputUnavailable
+		}
+		if cleanup != nil {
+			cleanup()
 		}
 	}
 	return "", "", exporter.ErrOutputUnavailable

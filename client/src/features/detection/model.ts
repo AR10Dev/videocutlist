@@ -3,7 +3,6 @@ import type { Segment } from "../preview/model";
 
 export type DetectionKind = components["schemas"]["DetectionInput"]["kind"];
 export type RangeCandidate = components["schemas"]["DetectionRangeCandidate"];
-export type PointCandidate = components["schemas"]["DetectionPointCandidate"];
 export type Candidate = components["schemas"]["DetectionCandidate"];
 export type DetectionProject = {
   id: string;

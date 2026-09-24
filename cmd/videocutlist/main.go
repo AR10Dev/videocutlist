@@ -85,7 +85,8 @@ func run(ctx context.Context) (runErr error) {
 	if err != nil {
 		return err
 	}
-	cacheStore, err := cache.New(cfg.CacheDir, cfg.CacheMaxBytes)
+	previewCacheBytes, timelineCacheBytes := runtime.CacheBudgets(cfg.CacheMaxBytes)
+	cacheStore, err := cache.New(cfg.CacheDir, previewCacheBytes)
 	if err != nil {
 		return err
 	}
@@ -109,7 +110,7 @@ func run(ctx context.Context) (runErr error) {
 		return err
 	}
 	previewService := projects.PreviewUseCase{Catalog: mediaCatalog, Manager: previewManager}
-	assetService := &assets.Service{Scanner: scanner, Media: mediaStore, FFmpegPath: cfg.FFmpegPath, CacheDir: cfg.CacheDir, MaxBytes: cfg.CacheMaxBytes, Capacity: limiter}
+	assetService := &assets.Service{Scanner: scanner, Media: mediaStore, FFmpegPath: cfg.FFmpegPath, CacheDir: cfg.CacheDir, MaxBytes: timelineCacheBytes, Capacity: limiter}
 	projectService := projects.ProjectUseCase{Repository: runtime.ProjectRepository{Store: projectStore}, Media: mediaCatalog}
 	artifacts := exporter.NewArtifactStore()
 	if err := artifacts.Reconcile(ctx, unifiedJobs, cfg.FFprobePath, cfg.Destinations); err != nil {
@@ -134,9 +135,9 @@ func run(ctx context.Context) (runErr error) {
 		FFmpegPath: cfg.FFmpegPath, FFprobePath: cfg.FFprobePath, OutputDir: cfg.ExportDir, Destinations: cfg.Destinations, Artifacts: artifacts, Capacity: limiter,
 	})
 	exportExecutor.Settings = runtimeState
-	batchExports := projects.BatchExportUseCase{Projects: runtime.ProjectRepository{Store: projectStore}, Media: mediaCatalog, Jobs: unifiedJobs, Settings: runtimeState, ClearManifest: artifacts.ClearManifest, RemoveArtifacts: artifacts.Remove}
+	batchExports := projects.BatchExportUseCase{Projects: runtime.ProjectRepository{Store: projectStore}, Media: mediaCatalog, Jobs: unifiedJobs, Settings: runtimeState, RemoveArtifacts: artifacts.Remove}
 	queuedJobs := runtime.QueuedJobs{Jobs: unifiedJobs, Exports: &batchExports, Media: mediaService, Detection: detectionService, Catalog: mediaCatalog}
-	scheduler, err := jobqueue.NewScheduler(unifiedJobs, jobqueue.SchedulerConfig{QueueCapacity: cfg.ExportLimit * 4, WorkerLimit: cfg.ExportLimit}, queuedJobs.Run)
+	scheduler, err := jobqueue.NewScheduler(unifiedJobs, jobqueue.SchedulerConfig{QueueCapacity: cfg.ExportLimit * 4, WorkerLimit: cfg.ExportLimit, Logger: logger}, queuedJobs.Run)
 	if err != nil {
 		return err
 	}
@@ -207,8 +208,8 @@ func run(ctx context.Context) (runErr error) {
 		return err
 	}
 	mux := http.NewServeMux()
-	mux.Handle("/mcp/download/", httpapi.CORS(cfg.AllowedOrigins, mcpDownloads))
-	mux.Handle("/mcp", httpapi.CORS(cfg.AllowedOrigins, mcpTransport))
+	mux.Handle("/mcp/download/", httpapi.MCPCORS(cfg.AllowedOrigins, mcpDownloads))
+	mux.Handle("/mcp", httpapi.MCPCORS(cfg.AllowedOrigins, mcpTransport))
 	mux.Handle("/api/", apiServer)
 	mux.Handle("/metrics", apiServer)
 	mux.Handle("/", httpapi.CORS(cfg.AllowedOrigins, webassets.DefaultHandler()))

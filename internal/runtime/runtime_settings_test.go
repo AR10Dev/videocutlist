@@ -149,7 +149,7 @@ func TestRuntimeSettingsApplierUpdatesSchedulerAndBothCaches(t *testing.T) {
 	service := settingsdomain.NewRuntimeService(settingsStore, state, applier.Apply)
 	for _, limit := range []int{0, 65, math.MaxInt} {
 		invalid := defaults
-		invalid.ExportLimit, invalid.CacheMaxBytes = limit, 1
+		invalid.ExportLimit = limit
 		if err := applier.Apply(t.Context(), invalid); err == nil {
 			t.Fatal("unsafe limit accepted")
 		}
@@ -176,7 +176,7 @@ func TestRuntimeSettingsApplierUpdatesSchedulerAndBothCaches(t *testing.T) {
 	}
 	next()
 	candidate := defaults
-	candidate.ExportLimit, candidate.CacheMaxBytes = 2, 1
+	candidate.ExportLimit, candidate.CacheMaxBytes = 2, 2
 	record, err = service.Update(t.Context(), record.Revision, candidate, settingsdomain.DeploymentDocument{})
 	if err != nil {
 		t.Fatal(err)

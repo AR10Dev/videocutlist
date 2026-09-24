@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	jobqueue "videocutlist/internal/jobs"
 	"videocutlist/internal/projects"
 )
 
@@ -87,6 +88,52 @@ func TestExportToolsKeepJobsOwnedAndDownloadsRevocable(t *testing.T) {
 	downloadHandler.ServeHTTP(downloadResponse, downloadRequest)
 	if downloadResponse.Code != http.StatusUnauthorized {
 		t.Fatalf("revoked protected download status=%d", downloadResponse.Code)
+	}
+}
+
+type rejectedCancellationJobs struct{ *jobqueue.Scheduler }
+
+func (rejectedCancellationJobs) Cancel(context.Context, string) (jobqueue.Job, error) {
+	return jobqueue.Job{}, jobqueue.ErrJobState
+}
+
+func TestCancelJobRejectsCompletedJob(t *testing.T) {
+	service, _, _, _, now := newProposalTestService(t, false)
+	expires := now.Add(time.Hour)
+	owner, err := service.Credentials.Create(t.Context(), CredentialInput{
+		Name: "cancel owner", Permissions: []Permission{PermissionExportsPrepare, PermissionExportsRun, PermissionJobsCancel},
+		MediaScope: MediaScope{Kind: MediaScopeAll}, ProjectScope: ProjectScope{Kind: ProjectScopeAll}, ExpiresAt: &expires,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	proposal := prepareProposal(t, service, owner.ID)
+	if _, err := service.Approve(t.Context(), proposal.ID); err != nil {
+		t.Fatal(err)
+	}
+	_, created, err := service.Execute(t.Context(), proposal.ID, owner.ID)
+	if err != nil || len(created) != 1 {
+		t.Fatalf("execute = %#v, %v", created, err)
+	}
+	store, err := jobqueue.NewJobsStore(service.db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := created[0].ID
+	if _, err := store.Start(t.Context(), id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Succeed(t.Context(), id, `{}`); err != nil {
+		t.Fatal(err)
+	}
+	ctx := Context{Request: httptest.NewRequest("POST", "/mcp", nil), Credential: owner.Credential}
+	cancel := toolNamed(t, ExportTools(service, rejectedCancellationJobs{service.Scheduler}, exportToolDownload{}), "cancel_job")
+	if _, err := cancel.Call(ctx, []byte(`{"jobId":"`+id+`"}`)); !errors.Is(err, jobqueue.ErrJobState) {
+		t.Fatalf("completed job cancellation = %v, want invalid transition", err)
+	}
+	job, err := store.Get(t.Context(), id)
+	if err != nil || job.State != jobqueue.JobSucceeded {
+		t.Fatalf("completed job after cancellation = %+v, %v", job, err)
 	}
 }
 

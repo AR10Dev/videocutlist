@@ -95,14 +95,19 @@ export function createSettingsController(api: ApiClient) {
       if (settingsRequest === controller) setServerSettingsLoading(false);
     }
   };
-  const loadMCPSettings = async (cursor?: string) => {
+  const loadMCPSettings = async (cursor?: string, proposalCursor?: string) => {
     if (mcpLoading() || settingsPending()) return false;
     setMCPLoading(true);
     setMCPLoadError("");
     try {
-      const response = await api.request(
-        `settings/mcp${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ""}`,
-      );
+      const query = new URLSearchParams();
+      if (cursor) query.set("cursor", cursor);
+      if (proposalCursor) {
+        query.set("proposalCursor", proposalCursor);
+        query.set("proposalLimit", "25");
+      }
+      const suffix = query.toString() ? `?${query}` : "";
+      const response = await api.request(`settings/mcp${suffix}`);
       if (!response.ok)
         throw new Error(
           "MCP settings could not be refreshed. Displayed data may be outdated. Retry refresh.",
@@ -112,7 +117,24 @@ export function createSettingsController(api: ApiClient) {
         ...value,
         credentials: cursor
           ? [...(current?.credentials ?? []), ...value.credentials]
-          : value.credentials,
+          : proposalCursor
+            ? (current?.credentials ?? value.credentials)
+            : value.credentials,
+        nextCursor: cursor
+          ? value.nextCursor
+          : proposalCursor
+            ? current?.nextCursor
+            : value.nextCursor,
+        proposals: proposalCursor
+          ? [...(current?.proposals ?? []), ...value.proposals]
+          : cursor
+            ? (current?.proposals ?? value.proposals)
+            : value.proposals,
+        proposalNextCursor: proposalCursor
+          ? value.proposalNextCursor
+          : cursor
+            ? current?.proposalNextCursor
+            : value.proposalNextCursor,
         endpoint: new URL(value.endpoint, api.url("settings")).toString(),
       }));
       return true;

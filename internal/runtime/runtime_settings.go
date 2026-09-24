@@ -24,6 +24,19 @@ type RuntimeSettingsApplier struct {
 	Scheduler     *jobs.Scheduler
 }
 
+// CacheBudgets partitions one configured disk budget between preview clips and timeline assets.
+func CacheBudgets(total int64) (preview, timeline int64) {
+	timeline = total / 4
+	if timeline < 1 {
+		timeline = 1
+	}
+	preview = total - timeline
+	if preview < 1 {
+		preview = 1
+	}
+	return preview, timeline
+}
+
 func (a RuntimeSettingsApplier) Apply(ctx context.Context, settings store.RuntimeSettings) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -36,8 +49,14 @@ func (a RuntimeSettingsApplier) Apply(ctx context.Context, settings store.Runtim
 			return a.Scanner.ReconfigureLimits(index.ScanLimits{MaxFiles: value.MediaMaxFiles, MaxDepth: value.MediaMaxDepth})
 		},
 		func(value store.RuntimeSettings) error { return a.PreviewLimits.SetLimits(value.PreviewGlobalLimit) },
-		func(value store.RuntimeSettings) error { return a.PreviewCache.SetMaxBytes(value.CacheMaxBytes) },
-		func(value store.RuntimeSettings) error { return a.Assets.SetMaxBytes(value.CacheMaxBytes) },
+		func(value store.RuntimeSettings) error {
+			preview, _ := CacheBudgets(value.CacheMaxBytes)
+			return a.PreviewCache.SetMaxBytes(preview)
+		},
+		func(value store.RuntimeSettings) error {
+			_, timeline := CacheBudgets(value.CacheMaxBytes)
+			return a.Assets.SetMaxBytes(timeline)
+		},
 		func(value store.RuntimeSettings) error {
 			return a.Scheduler.SetLimits(jobs.SchedulerConfig{QueueCapacity: value.ExportLimit * 4, WorkerLimit: value.ExportLimit})
 		},

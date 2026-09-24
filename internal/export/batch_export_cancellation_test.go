@@ -83,7 +83,6 @@ func TestBatchExportCancellationCleansPublishedArtifactsAfterCAS(t *testing.T) {
 			uc := projects.BatchExportUseCase{
 				Media:           exportRaceMediaCatalog{media: projects.Media{ID: "m_media", ETag: "v1", SizeBytes: 1, DurationMS: 100}},
 				Jobs:            jobs,
-				ClearManifest:   artifacts.ClearManifest,
 				RemoveArtifacts: removeArtifacts,
 				RunSnapshot: func(context.Context, string, projects.ExportSnapshot) (string, error) {
 					if test.cancelFirst {
@@ -120,8 +119,8 @@ func TestBatchExportCancellationCleansPublishedArtifactsAfterCAS(t *testing.T) {
 			if _, statErr := os.Stat(outputPath); statErr != nil {
 				t.Fatalf("successful published output was removed: %v", statErr)
 			}
-			if _, statErr := os.Stat(manifestPath); !os.IsNotExist(statErr) {
-				t.Fatal("successful manifest was not cleared")
+			if _, statErr := os.Stat(manifestPath); statErr != nil {
+				t.Fatalf("successful manifest was not retained: %v", statErr)
 			}
 			file, _, openErr := artifacts.Open(job.ID, 0, time.Now())
 			if openErr != nil {

@@ -84,7 +84,7 @@ func ExportTools(proposals *ProposalService, jobs interface {
 			if err != nil {
 				return ToolResult{}, err
 			}
-			if _, err := jobs.Cancel(ctx.Request.Context(), job.ID); err != nil && !errors.Is(err, jobqueue.ErrJobState) {
+			if _, err := jobs.Cancel(ctx.Request.Context(), job.ID); err != nil {
 				return ToolResult{}, err
 			}
 			job, err = jobs.Get(ctx.Request.Context(), job.ID)

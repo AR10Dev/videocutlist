@@ -66,6 +66,21 @@ func TestParseRoute(t *testing.T) {
 	}
 }
 
+func TestRouteForUsesBoundedMetricLabels(t *testing.T) {
+	for _, test := range []struct {
+		path, want string
+	}{
+		{"/metrics", "/metrics"},
+		{"/api/v1/unknown/" + strings.Repeat("secret", 20), "/api/v1/unknown"},
+		{"/api/not-a-route", "/api/v1/unknown"},
+		{"/unknown/" + strings.Repeat("secret", 20), "/unknown"},
+	} {
+		if got := routeFor(test.path); got != test.want {
+			t.Errorf("routeFor(%q) = %q, want %q", test.path, got, test.want)
+		}
+	}
+}
+
 // routeCoverage is the production route inventory. Keep one entry here for every
 // routeKind so adding a route without a black-box case fails this check.
 func TestRouteCoverageInventory(t *testing.T) {
@@ -288,6 +303,7 @@ func TestBrowseMediaDispatchesOpaqueQueryToProductionService(t *testing.T) {
 
 type routeTestAssets struct{}
 
+func (routeTestAssets) ValidateSource(context.Context, string) error { return nil }
 func (routeTestAssets) Thumbnails(context.Context, AssetSpec) (AssetResult, error) {
 	return AssetResult{Reader: io.NopCloser(bytes.NewReader([]byte("png")))}, nil
 }

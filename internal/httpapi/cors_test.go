@@ -204,3 +204,87 @@ func TestCORSDoesNotReplaceMCPProtocolWithREST(t *testing.T) {
 		t.Fatalf("MCP received REST error: %d %s", response.Code, response.Body.String())
 	}
 }
+func TestMCPCORSAllowsProtocolAndSessionHeaders(t *testing.T) {
+	called := false
+	handler := MCPCORS([]string{"https://editor.example.test"}, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called = true
+		w.Header().Set("Mcp-Session-Id", "session")
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	preflight := httptest.NewRequest(http.MethodOptions, "http://api.test/mcp", nil)
+	preflight.Header.Set("Origin", "https://editor.example.test")
+	preflight.Header.Set("Access-Control-Request-Method", http.MethodPost)
+	preflight.Header.Set("Access-Control-Request-Headers", "Authorization, Content-Type, MCP-Protocol-Version, Mcp-Session-Id")
+	preflightResponse := httptest.NewRecorder()
+	handler.ServeHTTP(preflightResponse, preflight)
+	if preflightResponse.Code != http.StatusNoContent || preflightResponse.Header().Get("Access-Control-Allow-Methods") != "GET, POST, DELETE" || preflightResponse.Header().Get("Access-Control-Allow-Headers") != "Authorization, Content-Type, MCP-Protocol-Version, Mcp-Session-Id" {
+		t.Fatalf("MCP preflight = %d %#v", preflightResponse.Code, preflightResponse.Header())
+	}
+	if preflightResponse.Header().Get("Access-Control-Expose-Headers") != "" {
+		t.Fatal("MCP preflight exposed response headers")
+	}
+
+	actual := httptest.NewRequest(http.MethodPost, "http://api.test/mcp", nil)
+	actual.Header.Set("Origin", "https://editor.example.test")
+	actualResponse := httptest.NewRecorder()
+	handler.ServeHTTP(actualResponse, actual)
+	if actualResponse.Code != http.StatusOK || !called || actualResponse.Header().Get("Access-Control-Expose-Headers") != "Mcp-Session-Id" {
+		t.Fatalf("MCP response = %d called=%v %#v", actualResponse.Code, called, actualResponse.Header())
+	}
+}
+
+func TestMCPCORSRejectsForeignOriginsAndRESTDoesNotAcceptMCPHeaders(t *testing.T) {
+	mcp := MCPCORS([]string{"https://editor.example.test"}, http.NotFoundHandler())
+	foreign := httptest.NewRequest(http.MethodOptions, "http://api.test/mcp", nil)
+	foreign.Header.Set("Origin", "https://attacker.example.test")
+	foreign.Header.Set("Access-Control-Request-Method", http.MethodPost)
+	foreign.Header.Set("Access-Control-Request-Headers", "MCP-Protocol-Version, Mcp-Session-Id")
+	foreignResponse := httptest.NewRecorder()
+	mcp.ServeHTTP(foreignResponse, foreign)
+	if foreignResponse.Code != http.StatusForbidden || foreignResponse.Body.Len() != 0 {
+		t.Fatalf("foreign MCP preflight = %d %q", foreignResponse.Code, foreignResponse.Body.String())
+	}
+
+	rest := CORS([]string{"https://editor.example.test"}, http.NotFoundHandler())
+	restRequest := httptest.NewRequest(http.MethodOptions, "http://api.test/api/v1/media", nil)
+	restRequest.Header.Set("Origin", "https://editor.example.test")
+	restRequest.Header.Set("Access-Control-Request-Method", http.MethodPost)
+	restRequest.Header.Set("Access-Control-Request-Headers", "MCP-Protocol-Version")
+	restResponse := httptest.NewRecorder()
+	rest.ServeHTTP(restResponse, restRequest)
+	if restResponse.Code != http.StatusForbidden {
+		t.Fatalf("REST accepted MCP preflight: %d", restResponse.Code)
+	}
+}
+
+func TestCORSSameOriginUsesOnlyTrustedForwardedAuthority(t *testing.T) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})
+	proxied, err := TrustedProxy([]string{"127.0.0.0/8"}, CORS(nil, next))
+	if err != nil {
+		t.Fatal(err)
+	}
+	trusted := httptest.NewRequest(http.MethodGet, "http://internal.test/assets/app.js", nil)
+	trusted.RemoteAddr = "127.0.0.1:8080"
+	trusted.Header.Set("Origin", "https://public.example.test")
+	trusted.Header.Set("X-Forwarded-Host", "public.example.test")
+	trusted.Header.Set("X-Forwarded-Proto", "https")
+	response := httptest.NewRecorder()
+	proxied.ServeHTTP(response, trusted)
+	if response.Code != http.StatusNoContent {
+		t.Fatalf("trusted proxied same-origin status = %d", response.Code)
+	}
+
+	untrusted := httptest.NewRequest(http.MethodGet, "http://internal.test/assets/app.js", nil)
+	untrusted.RemoteAddr = "203.0.113.9:8080"
+	untrusted.Header.Set("Origin", "https://public.example.test")
+	untrusted.Header.Set("X-Forwarded-Host", "public.example.test")
+	untrusted.Header.Set("X-Forwarded-Proto", "https")
+	response = httptest.NewRecorder()
+	proxied.ServeHTTP(response, untrusted)
+	if response.Code != http.StatusForbidden {
+		t.Fatalf("untrusted forwarded same-origin status = %d", response.Code)
+	}
+}

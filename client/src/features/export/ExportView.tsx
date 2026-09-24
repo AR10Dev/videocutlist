@@ -4,7 +4,6 @@ import {
   CheckCircle2,
   CircleAlert,
   Download,
-  FileOutput,
   LoaderCircle,
   RefreshCw,
   ShieldCheck,
@@ -60,19 +59,6 @@ const containerLabel = (container?: ExportContainer) => {
   }
 };
 
-const destinationTypeLabel = (kind?: string) => {
-  switch (kind) {
-    case "download":
-      return "Browser download";
-    case "archive":
-      return "Server archive";
-    case "source_adjacent":
-      return "Beside source";
-    default:
-      return "Configured destination";
-  }
-};
-
 function FindingIcon(props: { severity: ExportFinding["severity"] }) {
   return props.severity === "allowed" ? (
     <CheckCircle2 size={16} aria-hidden="true" />
@@ -102,7 +88,6 @@ export function ExportView(props: ExportViewProps = {}) {
     exportJob,
     batchJobs,
     batchId,
-    exportRevision,
     exportStatus,
     exportPending,
     destinationStatus,
@@ -154,8 +139,28 @@ export function ExportView(props: ExportViewProps = {}) {
       (destination) =>
         destination.kind !== "source_adjacent" || destinationCapabilities().saveBesideSource,
     );
-  const selectedDestination = () =>
-    availableDestinations().find((destination) => destination.id === destinationId());
+  const itemDestinationId = (id: string) =>
+    editableItems().find((item) => item.id === id)?.exportOptions.destinationId ?? "download";
+  const exportDestinationLabel = () => {
+    const labels = [
+      ...new Set(
+        exportItemIDs().map(
+          (id) =>
+            availableDestinations().find((destination) => destination.id === itemDestinationId(id))
+              ?.label ?? itemDestinationId(id),
+        ),
+      ),
+    ];
+    return labels.length === 1 ? labels[0] : `${labels.length} destinations`;
+  };
+  const unavailableDestinationItem = () =>
+    editableItems().find(
+      (item) =>
+        exportItemIDs().includes(item.id) &&
+        !availableDestinations().some(
+          (destination) => destination.id === itemDestinationId(item.id),
+        ),
+    );
   const sourceAdjacentConfigured = () =>
     destinations().some((destination) => destination.kind === "source_adjacent");
   const selectedStreamIndexes = () => streamIndexes();
@@ -175,7 +180,8 @@ export function ExportView(props: ExportViewProps = {}) {
     if (destinationsLoading()) return "Loading configured destinations…";
     if (destinationsError()) return "Destinations could not be loaded.";
     if (!availableDestinations().length) return "No export destination is configured.";
-    if (!selectedDestination()) return "Choose an available export destination.";
+    if (unavailableDestinationItem())
+      return `Choose an available destination for ${unavailableDestinationItem()!.media.name}.`;
     if (preflightPending()) return "Checking export requirements…";
     if (blockedFinding()) return blockedFinding()!.message;
     if (preflight()?.allowed === false)
@@ -198,12 +204,7 @@ export function ExportView(props: ExportViewProps = {}) {
       aria-labelledby={headingId}
     >
       <header class="export-heading-row export-page-heading">
-        <div>
-          <h2 id={headingId}>{props.dialog ? "Export clips" : "Export"}</h2>
-          <p>
-            Turn the saved cut list into verified {containerLabel(exportContainer())} artifacts.
-          </p>
-        </div>
+        <h2 id={headingId}>{props.dialog ? "Export clips" : "Export"}</h2>
         <Show when={props.onClose}>
           <button class="btn btn-ghost btn-sm" type="button" onClick={props.onClose}>
             Close
@@ -229,14 +230,11 @@ export function ExportView(props: ExportViewProps = {}) {
       </Show>
 
       <Show when={workspace.selected()} fallback={<EmptyExportState />}>
-        <div class="export-plan" aria-label="Export plan">
-          <div class="export-plan-heading">
-            <div>
-              <h3>Export plan</h3>
-              <p>Review the scope and expected artifacts before queueing work.</p>
-            </div>
-            <FileOutput size={20} aria-hidden="true" />
-          </div>
+        <div
+          class="export-plan"
+          classList={{ hidden: projectItems().length === 0 }}
+          aria-label="Export plan"
+        >
           <dl>
             <dt>Scope</dt>
             <dd>{scopeLabel()}</dd>
@@ -245,14 +243,11 @@ export function ExportView(props: ExportViewProps = {}) {
               {exportSelection() === "segments" ? includedCount() : requestedRanges()} ·{" "}
               {formatTime(totalDuration(), Math.max(totalDuration(), 1))} requested
             </dd>
-            <dt>Arrangement</dt>
-            <dd>{exportMode() === "merge" ? "One clip per media item" : "One clip per cut"}</dd>
-            <dt>Container</dt>
-            <dd>{containerLabel(exportContainer())}</dd>
-            <dt>Destination</dt>
-            <dd>{selectedDestination()?.label ?? (destinationId() || "Not selected")}</dd>
-            <dt>Expected outputs</dt>
-            <dd>{expectedOutputs()}</dd>
+            <dt>Output</dt>
+            <dd>
+              {expectedOutputs()} {expectedOutputs() === 1 ? "clip" : "clips"} ·{" "}
+              {containerLabel(exportContainer())} · {exportDestinationLabel()}
+            </dd>
           </dl>
           <Show when={exportSelection() === "segments" && excludedCount() > 0}>
             <p class="export-muted-note">
@@ -265,10 +260,7 @@ export function ExportView(props: ExportViewProps = {}) {
               <strong>Filename preview</strong>
               <code>{filenameTemplate() || "{source}-{segment}.{ext}"}</code>
             </div>
-            <Show
-              when={summary().some((item) => item.filenamePreviews.length > 0)}
-              fallback={<p class="export-muted-note">Add a range to preview its output name.</p>}
-            >
+            <Show when={summary().some((item) => item.filenamePreviews.length > 0)}>
               <ul aria-label="Filename previews">
                 <For each={summary()}>
                   {(item) => (
@@ -283,9 +275,6 @@ export function ExportView(props: ExportViewProps = {}) {
                 </For>
               </ul>
             </Show>
-            <p class="export-muted-note">
-              The server sanitizes names and adds collision-safe suffixes.
-            </p>
           </div>
         </div>
 
@@ -318,13 +307,10 @@ export function ExportView(props: ExportViewProps = {}) {
           </div>
         </Show>
 
-        <Show when={preflight() || preflightPending()}>
-          <section class="export-preflight" aria-labelledby="export-preflight-heading">
+        <Show when={preflightFindings().length > 0}>
+          <section class="export-preflight" aria-label="Server preflight">
             <div class="export-section-heading">
-              <div>
-                <h3 id="export-preflight-heading">Server preflight</h3>
-                <p>These are the backend’s current stream and publication checks.</p>
-              </div>
+              <h3 id="export-preflight-heading">Export checks</h3>
               <Show when={preflight()}>
                 <span
                   class={`badge badge-sm ${preflight()!.allowed ? "badge-success" : "badge-error"}`}
@@ -333,29 +319,7 @@ export function ExportView(props: ExportViewProps = {}) {
                 </span>
               </Show>
             </div>
-            <Show when={preflight()?.selection.length}>
-              <div class="export-resolved-selection">
-                <strong>Resolved streams</strong>
-                <span>
-                  {preflight()!
-                    .selection.map((index) => {
-                      const track = tracks().find((item) => item.index === index);
-                      return track ? trackLabel(track) : `Stream ${index}`;
-                    })
-                    .join(", ")}
-                </span>
-              </div>
-            </Show>
-            <Show
-              when={preflightFindings().length > 0}
-              fallback={
-                <p class="export-muted-note">
-                  {preflightPending()
-                    ? "Waiting for the server response…"
-                    : "No additional findings."}
-                </p>
-              }
-            >
+            <Show when={preflightFindings().length > 0}>
               <div class="export-findings" aria-label="Export preflight findings">
                 <For each={preflightFindings()}>
                   {(finding) => (
@@ -382,13 +346,14 @@ export function ExportView(props: ExportViewProps = {}) {
           </section>
         </Show>
 
-        <fieldset class="export-items" aria-label="Export scope">
+        <fieldset
+          class="export-items"
+          classList={{ hidden: projectItems().length <= 1 }}
+          aria-label="Export scope"
+        >
           <legend>Export scope</legend>
           <div class="export-section-heading">
-            <div>
-              <h3>Choose what enters this batch</h3>
-              <p>Scope is evaluated against the project revision saved before queueing.</p>
-            </div>
+            <h3>Clips to export</h3>
           </div>
           <Show
             when={projectItems().length > 1}
@@ -406,7 +371,7 @@ export function ExportView(props: ExportViewProps = {}) {
                 />
                 <span>
                   <strong>Active media item</strong>
-                  <small>Export only {selected()?.name ?? "the current item"}.</small>
+                  <small>{selected()?.name ?? "Current item"}</small>
                 </span>
               </label>
               <label>
@@ -420,46 +385,57 @@ export function ExportView(props: ExportViewProps = {}) {
                 />
                 <span>
                   <strong>Selected project items</strong>
-                  <small>Build one batch from the checked project items.</small>
+                  <small>Choose multiple items</small>
                 </span>
               </label>
             </div>
-            <Show
-              when={exportScope() === "selected"}
-              fallback={
-                <p class="export-muted-note">
-                  Only the active media item enters this export. Choose selected project items to
-                  include more than the active media.
-                </p>
-              }
-            >
-              <div class="export-item-checklist" aria-label="Project items to export">
+            <Show when={exportScope() === "selected"} fallback={null}>
+              <ul class="list export-item-checklist" aria-label="Project items to export">
                 <For each={projectItems()}>
-                  {(item) => (
-                    <label>
-                      <input
-                        class="checkbox checkbox-sm"
-                        type="checkbox"
-                        checked={selectedExportItems().includes(item.id)}
-                        onChange={(event) =>
-                          setSelectedExportItems((ids) =>
-                            event.currentTarget.checked
-                              ? [...new Set([...ids, item.id])]
-                              : ids.filter((id) => id !== item.id),
-                          )
-                        }
-                      />
-                      <span>
-                        <strong>{item.media.name}</strong>
-                        <small>
-                          {item.timeline.present.segments.length} cut
-                          {item.timeline.present.segments.length === 1 ? "" : "s"} · {item.id}
-                        </small>
-                      </span>
-                    </label>
+                  {(item, index) => (
+                    <li class="list-row export-item-row">
+                      <label class="export-item-choice">
+                        <input
+                          class="checkbox checkbox-sm"
+                          type="checkbox"
+                          checked={selectedExportItems().includes(item.id)}
+                          onChange={(event) =>
+                            setSelectedExportItems((ids) =>
+                              event.currentTarget.checked
+                                ? [...new Set([...ids, item.id])]
+                                : ids.filter((id) => id !== item.id),
+                            )
+                          }
+                        />
+                        <span>
+                          <strong>{item.media.name}</strong>
+                          <small>
+                            {item.timeline.present.segments.length} cut
+                            {item.timeline.present.segments.length === 1 ? "" : "s"}
+                          </small>
+                        </span>
+                      </label>
+                      <label class="export-item-destination">
+                        <span>Destination</span>
+                        <select
+                          class="select select-sm"
+                          aria-label={`Destination for ${item.media.name} clip ${index() + 1}`}
+                          value={itemDestinationId(item.id)}
+                          onChange={(event) =>
+                            exportFeature.setItemDestination(item.id, event.currentTarget.value)
+                          }
+                        >
+                          <For each={availableDestinations()}>
+                            {(destination) => (
+                              <option value={destination.id}>{destination.label}</option>
+                            )}
+                          </For>
+                        </select>
+                      </label>
+                    </li>
                   )}
                 </For>
-              </div>
+              </ul>
               <div class="controls">
                 <button
                   class="btn btn-ghost btn-xs"
@@ -544,11 +520,7 @@ export function ExportView(props: ExportViewProps = {}) {
 
             <fieldset class="export-track-fieldset">
               <legend>Tracks</legend>
-              <p>
-                {automaticTracks()
-                  ? "Automatic selection keeps every supported video, audio, and subtitle stream."
-                  : "Choose at least one supported stream for this export."}
-              </p>
+              <p>{automaticTracks() ? "Automatic" : "Custom selection"}</p>
               <Show when={!automaticTracks()}>
                 <button
                   class="btn btn-ghost btn-xs"
@@ -606,11 +578,6 @@ export function ExportView(props: ExportViewProps = {}) {
                   </span>
                 </div>
               </Show>
-              <Show when={preflight()?.selection.length && automaticTracks()}>
-                <p class="control-help">
-                  Server resolved streams: {preflight()!.selection.join(", ")}.
-                </p>
-              </Show>
               <Show when={selectedStreamIndexes().length > 0}>
                 <p class="control-help">Explicit streams: {selectedStreamIndexes().join(", ")}.</p>
               </Show>
@@ -640,27 +607,20 @@ export function ExportView(props: ExportViewProps = {}) {
               </select>
             </label>
             <Show when={cutStrategy() === "stream_copy_preferred"}>
-              <p class="control-help">
-                Fast copy avoids re-encoding, but boundaries may move to nearby keyframes and are
-                not frame-exact.
-              </p>
+              <p class="control-help">Fastest; non-keyframe cuts are not frame-exact.</p>
             </Show>
             <Show when={cutStrategy() === "precise_reencode"}>
-              <p class="control-help">
-                Precise encode re-encodes the selected ranges. The server marks these outputs for
-                review because codec behavior still needs inspection.
-              </p>
+              <p class="control-help">Re-encodes for precise cut boundaries.</p>
             </Show>
             <Show when={cutStrategy() === "hybrid_smart_cut"}>
-              <p class="control-help">
-                Hybrid smart cut is limited to compatible H.264 constant-frame-rate MKV sources; the
-                server reports any stream-copy fallback per cut.
-              </p>
+              <p class="control-help">Precise boundaries for compatible H.264 MKV sources.</p>
             </Show>
 
             <div class="export-destination-field">
               <label>
-                Destination
+                {exportScope() === "selected" && exportItemIDs().length > 1
+                  ? "Active item destination"
+                  : "Destination"}
                 <Show when={!destinationsLoading() && availableDestinations().length > 0}>
                   <select
                     class="select select-bordered select-sm"
@@ -674,35 +634,12 @@ export function ExportView(props: ExportViewProps = {}) {
                   </select>
                 </Show>
               </label>
-              <Show when={selectedDestination()}>
-                {(destination) => (
-                  <div class="destination-description">
-                    <div>
-                      <strong>{destination().label}</strong>
-                      <span>
-                        {destination().description || "No destination description provided."}
-                      </span>
-                    </div>
-                    <dl>
-                      <dt>Type</dt>
-                      <dd>{destinationTypeLabel(destination().kind)}</dd>
-                      <dt>Retention</dt>
-                      <dd>{destination().retention || "Durable"}</dd>
-                    </dl>
-                  </div>
-                )}
-              </Show>
               <Show
                 when={sourceAdjacentConfigured() && !destinationCapabilities().saveBesideSource}
               >
                 <p class="control-help">
                   Saving beside the source is configured but unavailable in this deployment; the
                   server intentionally withholds that destination.
-                </p>
-              </Show>
-              <Show when={destinationId() === "download"}>
-                <p class="control-help">
-                  Browser downloads use authenticated output actions after completion.
                 </p>
               </Show>
             </div>
@@ -766,12 +703,7 @@ export function ExportView(props: ExportViewProps = {}) {
         <Show when={batchId()}>
           <section class="export-activity" aria-labelledby="export-activity-heading">
             <div class="export-section-heading">
-              <div>
-                <h3 id="export-activity-heading">Current batch</h3>
-                <p>
-                  Batch <code>{batchId()}</code> · saved project revision {exportRevision() ?? "—"}
-                </p>
-              </div>
+              <h3 id="export-activity-heading">Current batch</h3>
               <Show when={batchLoading()}>
                 <LoaderCircle class="spin" size={16} aria-label="Updating batch" />
               </Show>
@@ -800,6 +732,7 @@ export function ExportView(props: ExportViewProps = {}) {
                         item.state === "succeeded" && item.result?.destinationKind === "download",
                     )}
                     onCancel={workspace.cancelChildJob}
+                    childJobPending={workspace.childJobPending}
                     onRetry={workspace.retryChildJob}
                   />
                 )}

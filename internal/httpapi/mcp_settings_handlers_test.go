@@ -161,6 +161,56 @@ func TestMCPEnablementUsesPersistedRuntimeSettings(t *testing.T) {
 	}
 }
 
+func TestMCPSettingsQueryAndStorageErrorsUseSafeEnvelopes(t *testing.T) {
+	settingsDatabase, err := store.OpenDatabase(t.Context(), t.TempDir()+"/mcp-settings-errors.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentialsDatabase, err := store.OpenDatabase(t.Context(), t.TempDir()+"/mcp-credentials-errors.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = settingsDatabase.Close()
+		_ = credentialsDatabase.Close()
+	})
+	runtimeSettings, err := store.NewRuntimeSettingsStore(settingsDatabase)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := runtimeSettings.Seed(t.Context(), testRuntimeSettings())
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentials, err := mcp.NewCredentialStore(credentialsDatabase)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authenticator, err := NewAuthenticator(AuthConfig{Mode: "none"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := New(Config{
+		Authenticator: authenticator, Media: &routeTestMedia{}, Preview: routeTestPreview{},
+		Projects: routeTestProjects{}, BatchExports: &routeTestBatchExports{}, Jobs: &routeTestJobs{},
+		Settings: settingsdomain.NewRuntimeService(runtimeSettings, nil, nil), RuntimeSettings: store.NewRuntimeSettingsState(record.Settings), MCPCredentials: credentials,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	invalid := mcpAdminRequest(server, http.MethodGet, "/api/v1/settings/mcp?cursor=invalid", "", "")
+	if invalid.Code != http.StatusBadRequest || !strings.Contains(invalid.Body.String(), `"code":"invalid_query"`) {
+		t.Fatalf("invalid cursor status=%d body=%s", invalid.Code, invalid.Body.String())
+	}
+	if err := credentialsDatabase.Close(); err != nil {
+		t.Fatal(err)
+	}
+	failed := mcpAdminRequest(server, http.MethodGet, "/api/v1/settings/mcp", "", "")
+	if failed.Code != http.StatusInternalServerError || strings.Contains(failed.Body.String(), `"code":"invalid_query"`) {
+		t.Fatalf("storage failure status=%d body=%s", failed.Code, failed.Body.String())
+	}
+}
+
 func mcpAdminRequest(server http.Handler, method, path, body, token string) *httptest.ResponseRecorder {
 	request := httptest.NewRequest(method, path, strings.NewReader(body))
 	if token != "" {

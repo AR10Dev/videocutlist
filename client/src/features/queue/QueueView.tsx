@@ -14,8 +14,9 @@ function BatchCard(props: {
   ordinal: number;
   destinations: () => Destination[];
   cancelBatch: (id: string) => Promise<unknown>;
-  cancelChildJob: (id: string) => Promise<unknown>;
-  retryChildJob: (id: string) => Promise<unknown>;
+  cancelChildJob: (id: string, batchId?: string) => Promise<unknown>;
+  retryChildJob: (id: string, batchId?: string) => Promise<unknown>;
+  childJobPending: (id: string) => boolean;
 }) {
   const completedJobs = () => props.batch.jobs.filter((job) => job.state === "succeeded");
   const outputs = () => completedJobs().flatMap((job) => jobOutputNames(job));
@@ -46,10 +47,6 @@ function BatchCard(props: {
           <h3>Export batch</h3>
           <p>
             <code>{props.batch.batchId}</code>
-            <Show when={props.batch.projectRevision}>
-              {" "}
-              · revision {props.batch.projectRevision}
-            </Show>
           </p>
         </div>
         <span
@@ -66,14 +63,16 @@ function BatchCard(props: {
           {props.batch.state}
         </span>
       </header>
-      <div class="queue-batch-progress" aria-label={`Export batch ${props.ordinal} progress`}>
-        <progress
-          class="progress progress-primary"
-          value={Math.round(props.batch.progress * 100)}
-          max="100"
-        />
-        <span>{Math.round(props.batch.progress * 100)}%</span>
-      </div>
+      <Show when={isBatchActive(props.batch)}>
+        <div class="queue-batch-progress" aria-label={`Export batch ${props.ordinal} progress`}>
+          <progress
+            class="progress progress-primary"
+            value={Math.round(props.batch.progress * 100)}
+            max="100"
+          />
+          <span>{Math.round(props.batch.progress * 100)}%</span>
+        </div>
+      </Show>
       <p class="queue-batch-summary">
         {props.batch.jobs.length} job{props.batch.jobs.length === 1 ? "" : "s"} · {outputs().length}{" "}
         output{outputs().length === 1 ? "" : "s"} published
@@ -109,6 +108,7 @@ function BatchCard(props: {
               ordinal={index() + 1}
               batchId={props.batch.batchId}
               destinations={props.destinations}
+              childJobPending={props.childJobPending}
               onCancel={props.cancelChildJob}
               onRetry={props.retryChildJob}
             />
@@ -124,7 +124,8 @@ function BatchCard(props: {
 
 export function QueueView() {
   const workspace = useWorkspace();
-  const { batches, destinations, cancelBatch, cancelChildJob, retryChildJob } = workspace;
+  const { batches, destinations, cancelBatch, cancelChildJob, retryChildJob, childJobPending } =
+    workspace;
   const activeOrRecent = () => {
     const current = batches();
     const visible = current.filter(isBatchActive);
@@ -142,7 +143,6 @@ export function QueueView() {
       <header class="queue-heading-row">
         <div>
           <h2 id="queue-heading">Export queue</h2>
-          <p class="queue-description">Exports continue while you keep editing.</p>
         </div>
         <div class="queue-heading-actions">
           <span class="badge badge-sm">{batches().length} total</span>
@@ -196,6 +196,7 @@ export function QueueView() {
                 cancelBatch={cancelBatch}
                 cancelChildJob={cancelChildJob}
                 retryChildJob={retryChildJob}
+                childJobPending={childJobPending}
               />
             )}
           </For>
@@ -214,6 +215,7 @@ export function QueueView() {
                       cancelBatch={cancelBatch}
                       cancelChildJob={cancelChildJob}
                       retryChildJob={retryChildJob}
+                      childJobPending={childJobPending}
                     />
                   )}
                 </For>

@@ -35,19 +35,28 @@ non-loopback deployment must configure `bearer` or `trusted_proxy` access.
 - Clamp center into the media duration, grid the center, then shift the window
   at file boundaries while preserving the selected timestamp in the window.
 - The exact original selection maps to `X-Preview-Offset`.
-- Profile `software-h264-v1`: at most 1280x720, 30 fps, H.264 libx264,
-  yuv420p, AAC stereo 48 kHz, fragmented MP4.
+- Profile `software-h264-baseline-l31-v2`: at most 1280x720, 30 fps, H.264 libx264
+  constrained baseline level 3.1 (`avc1.42C01F`), yuv420p, AAC stereo 48 kHz, fragmented MP4.
 
 ## Cache key
 
 Hash compact JSON serialized in this fixed field order:
 
 ```json
-{"v":1,"media":{"id":"","sizeBytes":0,"mtimeNs":0},"preview":{"startMs":0,"durationMs":0,"width":1280,"height":720,"fps":30,"audio":true,"videoCodec":"h264","audioCodec":"aac","mux":"fmp4"},"encoder":{"profile":"software-h264-v1"}}
+{"v":1,"media":{"id":"","sizeBytes":0,"mtimeNs":0},"preview":{"startMs":0,"durationMs":0,"width":1280,"height":720,"fps":30,"audio":true,"videoCodec":"h264","audioCodec":"aac","mux":"fmp4"},"encoder":{"profile":"software-h264-baseline-l31-v2"}}
 ```
 
 Use lowercase SHA-256 hex and `previews/<0:2>/<2:4>/<hash>.mp4`.
 Incomplete files end in `.partial`; only atomic rename publishes a hit.
+Before cache lookup, preview requests reopen the indexed source beneath its
+configured root and verify its size and modification time. Changed sources are
+rejected until the catalog is refreshed; cache hits do not bypass this check.
+Timeline thumbnails and waveforms enforce the same source-fingerprint check,
+including conditional `304` responses. A changed source returns `409
+source_changed`; a missing source returns `404 not_found`. Preview capacity
+rejection alone returns `429 preview_busy` with `Retry-After: 1`; deadlines
+return `504 preview_timeout` (or `asset_timeout` for timeline assets), and
+unexpected startup/cache failures return `500`.
 
 ## Projects and jobs
 
@@ -69,6 +78,9 @@ Incomplete files end in `.partial`; only atomic rename publishes a hit.
   worker concurrency; excess submissions return HTTP 429.
 - On restart, queued jobs remain queued. Running jobs become failed with
   `interrupted_by_restart` unless artifact reconciliation proves completion.
+  Graceful shutdown also fails interrupted active work with this code rather
+  than reporting a user cancellation. Already-published durable results still
+  win shutdown; explicit user cancellation remains a terminal CAS.
 - MVP exports use MKV and `stream_copy_preferred`; no smart-boundary re-encode.
   Non-keyframe accuracy limitations are explicit structured warnings. Publication
   requires a descriptor-relative atomic no-replace rename: Linux uses
@@ -104,6 +116,9 @@ Incomplete files end in `.partial`; only atomic rename publishes a hit.
   and stream-copy limitations are reported before submission. Browser requests
   identify media and destinations by opaque IDs and never carry original-media
   filesystem paths.
+- Segment labels use the same 200-Unicode-code-point limit in browser and
+  server validation. Slashes and backslashes in labels are ordinary text,
+  including CSV/chapter interchange; they are not filesystem paths.
 
 ## Authentication
 
@@ -170,8 +185,10 @@ origins must be same-origin or exactly allowed by `VIDEOCUTLIST_ALLOWED_ORIGINS`
 Public base URLs and allowed origins accept only absolute HTTP(S) values
 without credentials, query, or fragment; origins also have no path.
 `VIDEOCUTLIST_ALLOWED_ORIGINS` is comma-separated and empty by default. Requests
-without `Origin` and requests whose origin exactly matches the listener are
-same-origin. Other browser origins must exactly match the configured list.
+without `Origin` and requests whose origin exactly matches the effective request
+origin are same-origin. For trusted proxies this uses validated forwarded
+host/protocol; untrusted forwarded headers cannot affect it. Other browser
+origins must exactly match the configured list.
 
 `VIDEOCUTLIST_DESTINATIONS_JSON` is an optional, deployment-owned array of typed
 export destinations. The default provides `download` (browser download) and
@@ -183,6 +200,8 @@ and the boolean `capabilities.saveBesideSource`. No destination or media path is
 returned. Save-beside-source is unavailable for a source that cannot be
 revalidated beneath that configured media root or whose adjacent export folder
 is not writable.
+An omitted destination resolves only to a configured `download` entry; custom
+configurations without one must select a destination explicitly.
 Allowed responses echo that origin, set
 `Access-Control-Allow-Credentials: true`, vary on `Origin`, and expose
 `ETag`, `X-Request-ID`, `X-Preview-Start`, `X-Preview-Duration`,
@@ -195,6 +214,11 @@ Allowed preflights require `OPTIONS`, `Origin`, and
 `Authorization`, `Content-Type`, `If-Match`, and `If-None-Match`. Valid
 preflights return 204 before authentication. Disallowed or malformed
 cross-origin requests return 403 before application services run.
+
+MCP uses a separate CORS policy for `GET`, `POST`, and `DELETE`. It permits
+`Authorization`, `Content-Type`, `MCP-Protocol-Version`, and `Mcp-Session-Id`,
+and exposes `Mcp-Session-Id` so allowlisted browser clients can establish and
+continue Streamable HTTP sessions. This does not expand the REST header policy.
 
 ## Trusted reverse proxies
 
@@ -212,9 +236,9 @@ first untrusted address. Every hop must be an IP literal. Forwarded protocol is
 control-character-free value. Malformed trusted forwarded data returns 400.
 The preserved transport peer address is never replaced by forwarded data.
 
-Server middleware order is CORS, then trusted-proxy parsing, then the API/static
-handler. No connectivity-provider header or address rule participates in this
-layer.
+Server middleware parses trusted-proxy context before the route's CORS and
+API/static handler. This lets CORS compare the validated public origin behind
+TLS termination. No connectivity-provider header or address rule participates.
 
 Read and idle timeouts must be positive Go durations. Write timeout may be
 zero so streamed previews are not terminated by a whole-response deadline.
@@ -244,6 +268,10 @@ When absent, the client uses the current page origin and no authentication.
 All application requests resolve beneath the normalized
 `<serverBaseUrl>/api/v1/` boundary. Bearer tokens are never read from build-time
 environment variables.
+On a `401`, the bundled browser offers a bearer-token access form. It verifies
+the supplied token against the protected Settings endpoint before reopening
+the workspace. The token remains in memory only: no URL, local/session storage,
+or generated frontend file stores it. Reloading requires sign-in again.
 
 ## Logging and metrics
 
@@ -253,6 +281,11 @@ Structured JSON fields are: `request_id`, `media_id`,
 `spawn_to_first_byte_ms`, `total_job_ms`, `bytes_streamed`, `cancel_reason`,
 and `error_code`.
 
-Metric names are defined by the `/metrics` handler. Labels are restricted to
-bounded route templates, methods, status classes, cache state, cancellation
-reason, and encoder profile. Paths and unique IDs are never labels.
+The `/metrics` handler exports real HTTP request counts, cumulative latency
+sum/count, preview cache hit/miss counts, preview stream read failures, and
+HTTP-submitted export job counts. Unsupported active-job, cache-byte, eviction,
+stream-byte, and preview-timing gauges/counters are not emitted as fake zeros.
+`http_request_duration_seconds` is a Prometheus summary with `_sum` and `_count`
+series, not a last-request gauge. Labels use bounded route templates, standard
+HTTP methods (unknown methods become `OTHER`), status classes, and cache states;
+paths and unique IDs are never labels.

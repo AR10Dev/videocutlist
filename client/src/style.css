@@ -1740,19 +1740,19 @@
   .export-activity,
   .export-items {
     display: grid;
-    gap: 10px;
-    padding: 12px;
-    border: 1px solid var(--panel-border);
-    border-radius: 7px;
-    background: var(--surface);
+    gap: 9px;
+    padding-block: 8px;
+    border: 0;
+    border-bottom: 1px solid var(--panel-border);
+    background: transparent;
   }
-  .export-plan {
-    border-top: 3px solid var(--color-primary);
+  .export-plan.hidden,
+  .export-items.hidden {
+    display: none;
   }
-  .export-plan dl,
-  .export-job-facts {
+  .export-plan dl {
     margin: 0;
-    font-size: 0.73rem;
+    font-size: 0.76rem;
   }
   .export-plan .export-filename-preview {
     margin-top: 0;
@@ -1777,18 +1777,6 @@
   }
   .export-preflight {
     background: color-mix(in srgb, var(--surface) 78%, var(--color-info));
-  }
-  .export-resolved-selection {
-    display: grid;
-    gap: 3px;
-    padding: 8px;
-    border-left: 2px solid var(--color-info);
-    background: color-mix(in srgb, var(--color-info) 9%, var(--surface));
-    font-size: 0.72rem;
-  }
-  .export-resolved-selection span {
-    color: var(--text-muted);
-    line-height: 1.35;
   }
   .export-findings {
     gap: 6px;
@@ -1851,8 +1839,7 @@
   .export-scope-modes {
     gap: 6px;
   }
-  .export-scope-modes label,
-  .export-item-checklist label {
+  .export-scope-modes label {
     display: flex;
     align-items: flex-start;
     gap: 8px;
@@ -1872,7 +1859,7 @@
     margin-top: 2px;
   }
   .export-scope-modes label > span,
-  .export-item-checklist label > span,
+  .export-item-choice > span,
   .stream-row > span {
     display: grid;
     min-width: 0;
@@ -1888,13 +1875,29 @@
   }
   .export-item-checklist {
     display: grid;
-    gap: 5px;
+    gap: 0;
   }
-  .export-item-checklist label {
+  .export-item-row {
+    grid-template-columns: minmax(0, 1fr) minmax(9rem, 12rem);
     align-items: center;
+    gap: 12px;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--panel-border);
   }
-  .export-item-checklist label > span {
+  .export-item-choice {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+  .export-item-choice > span {
     overflow: hidden;
+  }
+  .export-item-destination {
+    display: grid;
+    gap: 3px;
+    color: var(--text-muted);
+    font-size: 0.68rem;
   }
   .export-item-checklist strong,
   .export-item-checklist small {
@@ -1904,10 +1907,10 @@
   }
   .export-track-fieldset {
     display: grid;
-    gap: 7px;
+    gap: 6px;
     margin: 0;
-    padding: 9px;
-    background: color-mix(in srgb, var(--surface) 84%, var(--surface-raised));
+    padding: 0;
+    border: 0;
   }
   .export-track-fieldset > p {
     margin: 0;
@@ -1919,11 +1922,8 @@
   .export-track-list .stream-row {
     align-items: flex-start;
     min-height: 34px;
-    padding: 6px;
-    border-radius: 4px;
-  }
-  .export-track-list .stream-row:has(input:checked) {
-    background: color-mix(in srgb, var(--color-primary) 8%, var(--surface));
+    padding-block: 5px;
+    border-bottom: 1px solid var(--panel-border);
   }
   .export-track-list strong {
     font-size: 0.76rem;
@@ -1932,37 +1932,13 @@
     display: grid;
     gap: 8px;
   }
-  .destination-description {
-    display: grid;
-    gap: 8px;
-    padding: 9px;
-    border-left: 2px solid var(--color-secondary);
-    background: color-mix(in srgb, var(--color-secondary) 8%, var(--surface));
-  }
-  .destination-description > div {
-    display: grid;
-    min-width: 0;
-    gap: 2px;
-  }
-  .destination-description span {
-    color: var(--text-muted);
-    font-size: 0.72rem;
-    line-height: 1.35;
-    overflow-wrap: anywhere;
-  }
-  .destination-description dl {
-    margin: 0;
-    font-size: 0.7rem;
-  }
   .export-submit-row {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 10px;
-    padding: 11px 12px;
-    border: 1px solid var(--panel-border);
-    border-radius: 7px;
-    background: color-mix(in srgb, var(--color-primary) 8%, var(--surface-raised));
+    padding-block: 12px;
+    border-block: 1px solid var(--panel-border);
   }
   .export-submit-row > div:first-child {
     display: grid;
@@ -1978,11 +1954,9 @@
   }
   .export-job-card {
     display: grid;
-    gap: 9px;
-    padding: 10px;
-    border: 1px solid var(--panel-border);
-    border-radius: 6px;
-    background: var(--surface-raised);
+    gap: 8px;
+    padding-block: 10px;
+    border-top: 1px solid var(--panel-border);
   }
   .export-job-card-heading,
   .queue-batch-heading {
@@ -2025,15 +1999,15 @@
     font-size: 0.68rem;
     font-variant-numeric: tabular-nums;
   }
-  .export-job-facts {
-    grid-template-columns: max-content minmax(0, 1fr);
-    gap: 3px 8px;
+  .export-job-summary {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: 0.72rem;
+    line-height: 1.4;
   }
   .export-job-result {
     display: grid;
-    gap: 8px;
-    padding-top: 9px;
-    border-top: 1px solid var(--panel-border);
+    gap: 7px;
   }
   .export-result-heading {
     display: flex;
@@ -2093,16 +2067,15 @@
     gap: 6px;
   }
   .export-activity {
-    gap: 10px;
-    background: color-mix(in srgb, var(--surface) 82%, var(--color-secondary));
+    gap: 8px;
   }
   .export-activity > .export-section-heading p {
     overflow-wrap: anywhere;
   }
   .queue-panel {
-    gap: 10px;
+    gap: 8px;
     margin-top: 4px;
-    padding: 12px;
+    padding-top: 12px;
     border-top: 1px solid var(--panel-border);
   }
   .queue-heading-row {
@@ -2121,11 +2094,9 @@
   }
   .queue-batch {
     display: grid;
-    gap: 9px;
-    padding: 11px;
-    border: 1px solid var(--panel-border);
-    border-radius: 7px;
-    background: var(--surface);
+    gap: 8px;
+    padding-block: 9px;
+    border-top: 1px solid var(--panel-border);
   }
   .queue-batch-summary {
     margin: 0;
@@ -2144,8 +2115,7 @@
     font-size: 0.72rem;
   }
   .queue-history {
-    border: 1px solid var(--panel-border);
-    border-radius: 6px;
+    border-top: 1px solid var(--panel-border);
   }
   .queue-history .collapse-title {
     min-height: 38px;

@@ -12,19 +12,22 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"videocutlist/internal/exportpolicy"
+	"videocutlist/internal/fdinput"
 	"videocutlist/internal/library/media/probe"
 	"videocutlist/internal/projects"
 	"videocutlist/internal/projects/model"
 )
 
 const maxStderrBytes = 64 << 10
+
+// MaxExportOutputs is the shared separate-export artifact bound.
+const MaxExportOutputs = exportpolicy.MaxOutputs
 
 var (
 	ErrCancelled                      = errors.New("export cancelled")
@@ -158,6 +161,9 @@ func (s Service) Run(ctx context.Context, source *os.File, document model.Docume
 	if len(segments) == 0 {
 		return Result{}, fmt.Errorf("%w: at least one segment is required", ErrInvalidRequest)
 	}
+	if request.Mode == "separate" && len(segments) > MaxExportOutputs {
+		return Result{}, fmt.Errorf("%w: separate export exceeds %d outputs", ErrInvalidRequest, MaxExportOutputs)
+	}
 	for _, segment := range segments {
 		if segment.StartMS < 0 || segment.EndMS <= segment.StartMS {
 			return Result{}, fmt.Errorf("%w: invalid segment bounds", ErrInvalidRequest)
@@ -193,15 +199,9 @@ func (s Service) Run(ctx context.Context, source *os.File, document model.Docume
 			return Result{}, fmt.Errorf("%w: source changed", ErrInvalidRequest)
 		}
 	}
-	destination := Destination{ID: "download", Kind: KindDownload, Root: s.OutputDir, Retention: s.Retention}
-	for _, candidate := range s.Destinations {
-		if candidate.ID == request.DestinationID || request.DestinationID == "" && candidate.ID == "download" {
-			destination = candidate
-			break
-		}
-	}
-	if request.DestinationID != "" && destination.ID != request.DestinationID {
-		return Result{}, fmt.Errorf("%w: unknown destination", ErrInvalidRequest)
+	destination, err := s.destinationForRequest(request)
+	if err != nil {
+		return Result{}, fmt.Errorf("%w: %v", ErrInvalidRequest, err)
 	}
 	prepared, err := prepareDestination(destination, source, sourceName, SourceLocation{RootPath: request.SourceRoot, RelativePath: request.SourceRelative})
 	if err != nil {
@@ -217,17 +217,13 @@ func (s Service) Run(ctx context.Context, source *os.File, document model.Docume
 	manifestPublished := false
 	mergeCommitted := false
 	mergePublished := false
+	var mergeOwner manifestOutput
 	defer func() {
 		if !mergeCommitted && mergePublished {
-			prepared.remove(outputName)
+			prepared.removeOwned(mergeOwner)
 		}
 	}()
 	if s.Artifacts != nil && request.JobID != "" && request.Mode != "separate" {
-		manifestPath, err = writeManifestAt(prepared.root, outputDir, request.JobID, destination.Kind, []string{outputName}, now(s).Add(destinationRetention(destination, s)), request.Container)
-		if err != nil {
-			return Result{}, err
-		}
-		s.Artifacts.RegisterManifest(request.JobID, manifestPath)
 		defer func() {
 			if manifestPath != "" && !manifestPublished {
 				s.Artifacts.ClearManifest(request.JobID)
@@ -287,9 +283,11 @@ func (s Service) Run(ctx context.Context, source *os.File, document model.Docume
 	appliedStrategies := segmentStrategies(request.CutStrategy, segments, keyframes)
 	if request.Mode == "separate" {
 		result := Result{Container: request.Container, OutputNames: make([]string, 0, len(segmentFiles)), OutputFailures: segmentFailures, RetainUntil: now(s).Add(destinationRetention(destination, s)), DestinationID: destination.ID, DestinationKind: destination.Kind, AppliedStrategy: uniformStrategy(appliedStrategies), AppliedStrategies: appliedStrategies}
-		published := make([]string, 0, len(segmentFiles))
+		publishedOwners := make([]manifestOutput, 0, len(segmentFiles))
 		committed := false
 		separateNames := make([]string, len(segmentFiles))
+		separateOwners := make([]manifestOutput, len(segmentFiles))
+		reservedNames := make(map[string]bool, len(segmentFiles))
 		for i := range separateNames {
 			if segmentFiles[i] == "" {
 				continue
@@ -297,27 +295,28 @@ func (s Service) Run(ctx context.Context, source *os.File, document model.Docume
 			separateNames[i], err = prepared.outputFileName(request, sourceName, i, now(s))
 			if err != nil {
 				result.OutputFailures = append(result.OutputFailures, OutputFailure{Segment: i + 1, Code: "output_name_failed", Message: safeFailureMessage(err)})
+				continue
 			}
-		}
-		if s.Artifacts != nil && request.JobID != "" {
-			manifestNames := nonEmptyNames(separateNames)
-			if len(manifestNames) > 0 {
-				manifestPath, err = writeManifestAt(prepared.root, outputDir, request.JobID, destination.Kind, manifestNames, result.RetainUntil, request.Container)
-				if err != nil {
-					return Result{}, err
-				}
-				s.Artifacts.RegisterManifest(request.JobID, manifestPath)
+			base := separateNames[i]
+			for suffix := 1; reservedNames[separateNames[i]]; suffix++ {
+				extension := filepath.Ext(base)
+				separateNames[i] = fmt.Sprintf("%s-%d%s", strings.TrimSuffix(base, extension), suffix, extension)
 			}
-			defer func() {
-				if !committed {
-					s.Artifacts.ClearManifest(request.JobID)
-				}
-			}()
+			reservedNames[separateNames[i]] = true
+			info, statErr := workRoot.Stat(segmentFiles[i])
+			if statErr != nil {
+				return Result{}, statErr
+			}
+			device, inode, ok := manifestFileIdentity(info)
+			if !ok {
+				return Result{}, errors.New("cannot establish temporary output ownership")
+			}
+			separateOwners[i] = manifestOutput{Name: separateNames[i], Device: device, Inode: inode}
 		}
 		defer func() {
 			if !committed {
-				for _, name := range published {
-					prepared.remove(name)
+				for _, owner := range publishedOwners {
+					prepared.removeOwned(owner)
 				}
 			}
 		}()
@@ -351,8 +350,29 @@ func (s Service) Run(ctx context.Context, source *os.File, document model.Docume
 				result.OutputFailures = append(result.OutputFailures, OutputFailure{Segment: i + 1, Code: "output_validation_failed", Message: "temporary output changed during validation"})
 				continue
 			}
+			device, inode, identityOK := manifestFileIdentity(currentInfo)
+			if !identityOK {
+				return Result{}, errors.New("cannot establish temporary output ownership")
+			}
 			name := separateNames[i]
 			for attempt := 0; ; attempt++ {
+				if s.Artifacts != nil && request.JobID != "" {
+					separateNames[i] = name
+					separateOwners[i] = manifestOutput{Name: name, Device: device, Inode: inode}
+					pendingNames := make([]string, 0, len(separateNames))
+					pendingOwners := make([]manifestOutput, 0, len(separateOwners))
+					for position, plannedName := range separateNames {
+						if plannedName != "" {
+							pendingNames = append(pendingNames, plannedName)
+							pendingOwners = append(pendingOwners, separateOwners[position])
+						}
+					}
+					manifestPath, err = writeManifestAtWithOwners(prepared.root, outputDir, request.JobID, destination.Kind, destination.ID, pendingNames, pendingOwners, result.RetainUntil, request.Container)
+					if err != nil {
+						return Result{}, err
+					}
+					s.Artifacts.RegisterManifest(request.JobID, manifestPath)
+				}
 				err = prepared.publishFrom(workDirectory, filepath.Join(workDirName, segmentFile), segmentFile, name)
 				if err == nil {
 					break
@@ -375,10 +395,13 @@ func (s Service) Run(ctx context.Context, source *os.File, document model.Docume
 			if name == "" {
 				continue
 			}
-			published = append(published, name)
-			info, err := prepared.root.Stat(name)
+			publishedOwners = append(publishedOwners, manifestOutput{Name: name, Device: device, Inode: inode})
+			info, err := prepared.root.Lstat(name)
 			if err != nil {
 				return Result{}, err
+			}
+			if !info.Mode().IsRegular() || !os.SameFile(currentInfo, info) {
+				return Result{}, errors.New("published output changed")
 			}
 			result.OutputNames = append(result.OutputNames, name)
 			result.AppliedStrategies[i].OutputName = name
@@ -397,7 +420,7 @@ func (s Service) Run(ctx context.Context, source *os.File, document model.Docume
 		}
 		if s.Artifacts != nil && request.JobID != "" {
 			manifestNames := result.OutputNames
-			manifestPath, err = writeManifestAt(prepared.root, outputDir, request.JobID, destination.Kind, manifestNames, result.RetainUntil, request.Container)
+			manifestPath, err = writeManifestAtWithOwners(prepared.root, outputDir, request.JobID, destination.Kind, destination.ID, manifestNames, publishedOwners, result.RetainUntil, request.Container)
 			if err != nil {
 				return Result{}, err
 			}
@@ -437,12 +460,29 @@ func (s Service) Run(ctx context.Context, source *os.File, document model.Docume
 	if err := verifyOutputFile(ctx, s.FFprobePath, temporaryOutput, metadata, request.StreamIndexes, expectedDuration, request.Container); err != nil {
 		return Result{}, fmt.Errorf("validate export: %w", err)
 	}
+	temporaryInfo, err := temporaryOutput.Stat()
+	if err != nil {
+		return Result{}, err
+	}
+	device, inode, identityOK := manifestFileIdentity(temporaryInfo)
+	if !identityOK {
+		return Result{}, errors.New("cannot establish temporary output ownership")
+	}
 	if err := temporaryOutput.Close(); err != nil {
 		return Result{}, err
 	}
 	temporaryOutputClosed = true
 	finalPath := filepath.Join(outputDir, outputName)
 	for attempt := 0; ; attempt++ {
+		mergeOwner = manifestOutput{Name: outputName, Device: device, Inode: inode}
+		if s.Artifacts != nil && request.JobID != "" {
+			owners := []manifestOutput{{Name: outputName, Device: device, Inode: inode}}
+			manifestPath, err = writeManifestAtWithOwners(prepared.root, outputDir, request.JobID, destination.Kind, destination.ID, []string{outputName}, owners, now(s).Add(destinationRetention(destination, s)), request.Container)
+			if err != nil {
+				return Result{}, err
+			}
+			s.Artifacts.RegisterManifest(request.JobID, manifestPath)
+		}
 		err = prepared.publish(temporaryName, outputName)
 		if err == nil {
 			mergePublished = true
@@ -456,17 +496,13 @@ func (s Service) Run(ctx context.Context, source *os.File, document model.Docume
 			return Result{}, err
 		}
 		finalPath = filepath.Join(outputDir, outputName)
-		if s.Artifacts != nil && request.JobID != "" {
-			manifestPath, err = writeManifestAt(prepared.root, outputDir, request.JobID, destination.Kind, []string{outputName}, now(s).Add(destinationRetention(destination, s)), request.Container)
-			if err != nil {
-				return Result{}, err
-			}
-			s.Artifacts.RegisterManifest(request.JobID, manifestPath)
-		}
 	}
-	info, err := prepared.root.Stat(outputName)
+	info, err := prepared.root.Lstat(outputName)
 	if err != nil {
 		return Result{}, err
+	}
+	if !info.Mode().IsRegular() || !os.SameFile(temporaryInfo, info) {
+		return Result{}, errors.New("published output changed")
 	}
 	result := Result{Container: request.Container, OutputName: outputName, SizeBytes: info.Size(), RetainUntil: now(s).Add(destinationRetention(destination, s)), DestinationID: destination.ID, DestinationKind: destination.Kind, AppliedStrategy: uniformStrategy(appliedStrategies), AppliedStrategies: appliedStrategies, Verified: request.CutStrategy != "precise_reencode"}
 	if s.Artifacts != nil {
@@ -698,21 +734,17 @@ func (s Service) runWithOutput(ctx context.Context, source, output, directory *o
 			outputArgs = append(outputArgs, "-movflags", "+faststart")
 		}
 		outputArgs = append(outputArgs, "-f", policy.Muxer)
-		if runtime.GOOS == "linux" {
-			outputDescriptor := 3 + len(extraFiles) - 1
-			args = append(outputArgs, fmt.Sprintf("/proc/self/fd/%d", outputDescriptor))
-		} else {
-			args = append(outputArgs, output.Name())
-		}
+		outputDescriptor := 3 + len(extraFiles) - 1
+		args = append(outputArgs, fdinput.Path(uintptr(outputDescriptor)))
 	}
 	if directory != nil {
 		extraFiles = append(extraFiles, directory)
 	}
 	cmd := exec.Command(path, args...)
-	if directory != nil && runtime.GOOS == "linux" {
+	if directory != nil {
 		// Cmd.Dir is resolved before ExtraFiles are installed in the child;
 		// use the already-open parent descriptor, not its child slot.
-		cmd.Dir = fmt.Sprintf("/proc/self/fd/%d", directory.Fd())
+		cmd.Dir = fdinput.Directory(directory)
 	}
 	cmd.ExtraFiles = extraFiles
 	var stderr limitedBuffer
@@ -756,11 +788,11 @@ func runCommand(ctx context.Context, cmd *exec.Cmd) error {
 	}
 }
 
+// sourceArgument names the inherited source descriptor for FFmpeg input. The
+// Linux and Darwin paths are seekable so input-side -ss works; other platforms
+// fall back to FFmpeg pipe syntax, where only output-side seeks work.
 func sourceArgument() string {
-	if runtime.GOOS == "linux" {
-		return "/proc/self/fd/3" // A fixed inherited descriptor remains seekable for input-side -ss.
-	}
-	return "pipe:3"
+	return fdinput.Path(3)
 }
 
 func validateStreamIndexes(indexes []int, streams []probe.Stream) error {
@@ -915,16 +947,6 @@ func (p preparedDestination) outputFileName(request Request, source string, segm
 		}
 	}
 	return "", errors.New("could not allocate collision-safe export name")
-}
-
-func nonEmptyNames(names []string) []string {
-	result := make([]string, 0, len(names))
-	for _, name := range names {
-		if name != "" {
-			result = append(result, name)
-		}
-	}
-	return result
 }
 
 func safeFailureMessage(err error) string {

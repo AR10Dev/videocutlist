@@ -16,7 +16,6 @@ import (
 
 	"videocutlist/internal/db"
 	"videocutlist/internal/exportpolicy"
-	jobqueue "videocutlist/internal/jobs"
 	"videocutlist/internal/mcp"
 	"videocutlist/internal/projects"
 	"videocutlist/internal/projects/interchange"
@@ -82,6 +81,9 @@ func (p ProjectInput) input() projects.ProjectInput {
 
 type Project = projects.Project
 type ExportInput = projects.ExportInput
+type ExportSubmissionInput struct {
+	ItemIDs []string `json:"itemIds,omitempty"`
+}
 
 type Job = projects.Job
 type PreviewSpec = projects.PreviewSpec
@@ -117,7 +119,6 @@ type DestinationCapabilities struct {
 }
 type BatchExportService interface {
 	Submit(context.Context, projects.BatchExportRequest) (string, []projects.Job, error)
-	Progress(context.Context, string) (jobqueue.JobState, float64, error)
 	Get(context.Context, string) (projects.Batch, error)
 	List(context.Context, int) (projects.BatchPage, error)
 	Retry(context.Context, string) (projects.Batch, error)
@@ -403,6 +404,16 @@ func optionalInt(value string, fallback int64) (int64, error) {
 	}
 	return strconv.ParseInt(value, 10, 64)
 }
+func parseLimit(value string) (int, error) {
+	if value == "" {
+		return 50, nil
+	}
+	limit, err := strconv.Atoi(value)
+	if err != nil || limit < 1 || limit > 100 {
+		return 0, errors.New("invalid limit")
+	}
+	return limit, nil
+}
 func assetNotModified(w http.ResponseWriter, r *http.Request, item Media, kind string) bool {
 	sum := sha256.Sum256([]byte(kind + "\x00" + item.ETag + "\x00" + r.URL.RawQuery))
 	etag := `"` + hex.EncodeToString(sum[:]) + `"`
@@ -447,10 +458,14 @@ func internalError(writer http.ResponseWriter, id string) {
 	httpx.Error(writer, 500, "internal_error", "Request could not be completed.", id)
 }
 func routeFor(path string) string {
-	if strings.HasPrefix(path, "/api/v1/") {
+	switch {
+	case path == "/metrics":
+		return "/metrics"
+	case path == "/api" || strings.HasPrefix(path, "/api/"):
 		return "/api/v1/unknown"
+	default:
+		return "/unknown"
 	}
-	return path
 }
 
 type statusWriter struct {
