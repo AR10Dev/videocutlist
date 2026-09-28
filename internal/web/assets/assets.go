@@ -156,6 +156,9 @@ func (s *Service) Waveform(ctx context.Context, spec projects.AssetSpec) (output
 }
 
 func waveformPeaks(raw []byte, buckets int) ([]float64, error) {
+	if buckets < 16 || buckets > maxWaveformSamples {
+		return nil, errors.New("invalid waveform sample count")
+	}
 	if len(raw) == 0 || len(raw)%4 != 0 {
 		return nil, errors.New("invalid float32 waveform output")
 	}

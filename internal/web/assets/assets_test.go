@@ -84,6 +84,11 @@ func TestValidateRejectsExcessiveWaveformSamples(t *testing.T) {
 	if err := validate(projects.AssetSpec{DurationMS: 1, Samples: maxWaveformSamples + 1}, true); err == nil {
 		t.Fatal("validate accepted excessive waveform samples")
 	}
+	for _, samples := range []int{-1, 0, 15, maxWaveformSamples + 1} {
+		if _, err := waveformPeaks([]byte{0, 0, 0, 0}, samples); err == nil {
+			t.Fatalf("waveformPeaks accepted %d sample buckets", samples)
+		}
+	}
 }
 
 func TestRunRejectsOversizedOutput(t *testing.T) {
