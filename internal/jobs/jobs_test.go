@@ -3,6 +3,7 @@ package jobs_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 
@@ -51,6 +52,49 @@ func TestUnifiedJobsTransitionsAndDerivedBatch(t *testing.T) {
 	}
 	if _, err = jobs.Create(ctx, store.Job{ID: "j_000000000003", BatchID: "b_000000000003", Kind: store.JobScan, ProjectID: "p", RequestJSON: `{}`}); err == nil {
 		t.Fatal("scan project reference accepted")
+	}
+}
+
+func TestJobsMigrationReplacesQueueIndexOnExistingDatabase(t *testing.T) {
+	path := t.TempDir() + "/jobs.db"
+	first, err := db.OpenDatabase(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.ExecContext(t.Context(), `DROP INDEX jobs_state_created_id; CREATE INDEX IF NOT EXISTS jobs_state_updated ON jobs (state, updated_at)`); err != nil {
+		_ = first.Close()
+		t.Fatal(err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	upgraded, err := db.OpenDatabase(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := upgraded.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	for name, want := range map[string]int{"jobs_state_updated": 0, "jobs_state_created_id": 1} {
+		var count int
+		if err := upgraded.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = ?`, name).Scan(&count); err != nil {
+			t.Fatal(err)
+		}
+		if count != want {
+			t.Errorf("%s count = %d, want %d", name, count, want)
+		}
+	}
+	var id, parent, unused int
+	var detail string
+	err = upgraded.QueryRowContext(t.Context(), `EXPLAIN QUERY PLAN SELECT id FROM jobs WHERE state = 'queued' ORDER BY created_at, id LIMIT 1`).Scan(&id, &parent, &unused, &detail)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(detail, "USING COVERING INDEX jobs_state_created_id") {
+		t.Fatalf("claim query does not use the queue-order index: %s", detail)
 	}
 }
 

@@ -323,6 +323,9 @@ func TestProductionProcessSecurityBoundaries(t *testing.T) {
 	if status, body := request(http.MethodPost, "/api/v1/automation", bearerToken, map[string]string{"Origin": "https://untrusted.example"}); status != http.StatusForbidden || strings.Contains(body, root) {
 		t.Fatalf("automation origin status=%d body=%s", status, body)
 	}
+	if status, body := request(http.MethodGet, "/metrics", "", nil); status != http.StatusUnauthorized || strings.Contains(body, "http_requests_total") {
+		t.Fatalf("unauthenticated metrics status=%d body=%s", status, body)
+	}
 	metrics := p.request(t, http.MethodGet, "/metrics")
 	metricsBody, metricsErr := io.ReadAll(metrics.Body)
 	contentType := metrics.Header.Get("Content-Type")

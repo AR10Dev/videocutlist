@@ -33,7 +33,7 @@ jobs:
           ref: ${{ inputs.tag || github.ref }}
       - uses: actions/setup-go@v7.0.0
         with:
-          go-version: "1.26.6"
+          go-version: "1.26.8"
       - uses: pnpm/action-setup@v6.0.10
         with:
           version: 10.34.5
@@ -48,6 +48,7 @@ jobs:
         run: |
           mkdir -p "$GOBIN"
           go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.1
+          go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
           go install mvdan.cc/sh/v3/cmd/shfmt@v3.13.1
           sudo apt-get update
           sudo apt-get install -y shellcheck
@@ -68,6 +69,7 @@ jobs:
             exit 1
           fi
       - run: make check
+      - run: govulncheck ./...
 
   publish-image:
     needs: validate

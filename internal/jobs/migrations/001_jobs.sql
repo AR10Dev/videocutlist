@@ -15,5 +15,6 @@ CREATE TABLE IF NOT EXISTS jobs (
     CHECK ((kind = 'library_scan' AND project_id IS NULL AND project_item_id IS NULL) OR (kind != 'library_scan' AND project_id IS NOT NULL AND project_item_id IS NOT NULL))
 );
 CREATE INDEX IF NOT EXISTS jobs_batch_updated ON jobs (batch_id, updated_at);
-CREATE INDEX IF NOT EXISTS jobs_state_updated ON jobs (state, updated_at);
+CREATE INDEX IF NOT EXISTS jobs_state_created_id ON jobs (state, created_at, id);
+DROP INDEX IF EXISTS jobs_state_updated;
 CREATE UNIQUE INDEX IF NOT EXISTS jobs_proposal_item ON jobs (proposal_id, project_item_id) WHERE proposal_id IS NOT NULL;

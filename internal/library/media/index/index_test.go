@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"videocutlist/internal/library/media/probe"
 )
@@ -255,6 +256,42 @@ func TestOpenRejectsSymlinkReplacementAfterIndexing(t *testing.T) {
 		return
 	}
 	t.Fatal("expected indexed media")
+}
+
+func TestOpenRejectsSameStatSymlinkReplacement(t *testing.T) {
+	root := t.TempDir()
+	original := filepath.Join(root, "clip.mp4")
+	replacement := filepath.Join(root, "other.mp4")
+	stamp := time.Unix(1234, 0)
+	for path, data := range map[string]string{original: "good", replacement: "evil"} {
+		if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(path, stamp, stamp); err != nil {
+			t.Fatal(err)
+		}
+	}
+	scanner, err := NewScanner([]Root{{Alias: "camera", Path: root}}, fakeProbe{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog := &memoryCatalog{}
+	if err := scanner.Refresh(t.Context(), catalog); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(original); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("other.mp4", original); err != nil {
+		t.Fatal(err)
+	}
+	file, _, err := scanner.Open(t.Context(), catalog, MediaID("camera", "clip.mp4"))
+	if file != nil {
+		_ = file.Close()
+	}
+	if !errors.Is(err, ErrSourceChanged) {
+		t.Fatalf("same-stat symlink replacement error = %v, want ErrSourceChanged", err)
+	}
 }
 
 func TestOpenKeepsOriginalRootAcrossPathReplacement(t *testing.T) {
