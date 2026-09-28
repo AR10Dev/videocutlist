@@ -147,3 +147,29 @@ func TestVerifyOutputRejectsProbeCorruptionAndInvalidContainer(t *testing.T) {
 		t.Fatalf("error = %v, want container rejection", err)
 	}
 }
+
+func TestVerifyOutputRejectsTruncatedDurationWithoutRejectingStreamCopyDrift(t *testing.T) {
+	source := sourceStreams()
+	for _, test := range []struct {
+		name       string
+		durationMS int64
+		wantError  bool
+	}{
+		{name: "truncated-long-clip", durationMS: 22_000, wantError: true},
+		{name: "truncated-short-clip", durationMS: 100, wantError: true},
+		{name: "short-copy-drift", durationMS: 1100},
+		{name: "long-copy-drift", durationMS: 25_000},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			expected := int64(30_000)
+			if strings.Contains(test.name, "short") {
+				expected = 2000
+			}
+			ffprobe, output := fakeFFprobe(t, probe.Metadata{Container: "matroska", DurationMS: test.durationMS, Streams: []probe.Stream{source.Streams[0]}})
+			err := verifyOutput(t.Context(), ffprobe, output, source, []int{0}, expected)
+			if (err != nil) != test.wantError {
+				t.Fatalf("duration %dms for expected %dms: error = %v", test.durationMS, expected, err)
+			}
+		})
+	}
+}

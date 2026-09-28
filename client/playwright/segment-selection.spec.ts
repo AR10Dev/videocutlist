@@ -471,6 +471,37 @@ test("segment rows show values and support reorder and removal", async ({ page }
   await expect(rows.nth(0)).toContainText("00:00.100");
 });
 
+test("typing a cut label keeps its input mounted across edits, selection, and reorder", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await setRange(page, 100, 700);
+  await startNewSegment(page);
+  await setRange(page, 800, 900);
+  const rows = page.getByRole("list", { name: "Selected cuts" }).getByRole("listitem");
+  const first = rows.nth(0);
+  const label = first.getByRole("textbox", { name: "Label cut 1" });
+  const originalId = await first.getAttribute("data-segment-id");
+  await label.fill("");
+  await label.focus();
+  for (const letter of "Opening") {
+    await page.keyboard.type(letter);
+    await expect(label).toBeFocused();
+  }
+  await expect(label).toHaveValue("Opening");
+  await rows.nth(1).getByRole("button", { name: "Select cut 2" }).click();
+  await expect(first.getByRole("textbox", { name: "Label cut 1" })).toHaveValue("Opening");
+  await first.getByRole("button", { name: "Move cut 1 down" }).click();
+  const moved = rows.nth(1);
+  await expect(moved).toHaveAttribute("data-segment-id", originalId!);
+  await expect(moved.getByRole("textbox", { name: "Label cut 2" })).toHaveValue("Opening");
+  await moved.getByRole("textbox", { name: "Label cut 2" }).focus();
+  await page.keyboard.type("!");
+  await expect(moved.getByRole("textbox", { name: "Label cut 2" })).toBeFocused();
+  await expect(moved.getByRole("textbox", { name: "Label cut 2" })).toHaveValue("Opening!");
+});
+
 test("keyboard editing keeps drafts separate from active cuts and is discoverable", async ({
   page,
 }) => {
@@ -616,6 +647,107 @@ test("browser theme selection persists and keeps focusable controls readable", a
   await expect(page.getByText("Settings revision 1")).toBeVisible();
   await expect(page.locator(".left-sidebar")).not.toBeVisible();
   await expect(page.getByRole("button", { name: "Back to editor" })).toBeVisible();
+});
+
+test("browser export defaults never silently change a saved project's options", async ({
+  page,
+}) => {
+  let savedOptions: { cutStrategy?: string; filenameTemplate?: string } | undefined;
+  await page.route(`${apiOrigin}/api/v1/projects/*`, async (route) => {
+    if (route.request().method() !== "PUT") return route.fallback();
+    const body = route.request().postDataJSON() as {
+      items: Array<{ exportOptions: { cutStrategy?: string; filenameTemplate?: string } }>;
+    };
+    savedOptions = body.items[0].exportOptions;
+    return route.fallback();
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await setRange(page, 100, 700);
+  await saveProject(page);
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByLabel("Cut strategy").selectOption("precise_reencode");
+  await page.getByLabel("Filename template").fill("future-{segment}.{ext}");
+  await page.getByRole("checkbox", { name: "Mute previews" }).check();
+  await page.getByRole("button", { name: "Back to editor" }).click();
+  await expect(page.getByRole("status", { name: "Project status" })).toHaveText("Saved");
+  await expect(page.getByRole("button", { name: "Mute preview", exact: true })).toBeVisible();
+  await openTask(page, "Export");
+  await expect(page.getByLabel("Processing")).toHaveValue("stream_copy_preferred");
+  await expect(page.getByLabel("Filename template")).toHaveValue("{source}-{segment}.{ext}");
+  savedOptions = undefined;
+  await page.getByRole("button", { name: "Save project from project header", exact: true }).click();
+  await expect
+    .poll(() => savedOptions)
+    .toMatchObject({
+      cutStrategy: "stream_copy_preferred",
+      filenameTemplate: "{source}-{segment}.{ext}",
+    });
+  await page.getByRole("button", { name: /second.mp4/ }).click();
+  await expect(page.getByRole("button", { name: "Unmute preview", exact: true })).toBeVisible();
+  await openTask(page, "Export");
+  await expect(page.getByLabel("Processing")).toHaveValue("precise_reencode");
+  await expect(page.getByLabel("Filename template")).toHaveValue("future-{segment}.{ext}");
+  await openTask(page, "Export");
+  await page.getByText("Advanced naming", { exact: true }).click();
+  await page.getByLabel("Filename template").fill("é".repeat(80));
+  await expect(page.getByLabel("Filename template")).toHaveValue("é".repeat(80));
+  await page.getByLabel("Filename template").fill("é".repeat(81));
+  await expect(page.getByLabel("Filename template")).toHaveValue("é".repeat(80));
+});
+
+test("hidden waveform skips requests until re-enabled without reloading thumbnails", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    localStorage.setItem("videocutlist.waveform-visible.v1", "false");
+  });
+  let waveformRequests = 0;
+  let thumbnailRequests = 0;
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname.endsWith("/waveform")) waveformRequests++;
+    if (new URL(request.url()).pathname.endsWith("/thumbnails")) thumbnailRequests++;
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await expect(page.getByRole("img", { name: "Waveform lane" })).toHaveCount(0);
+  await expect.poll(() => thumbnailRequests).toBeGreaterThan(0);
+  expect(waveformRequests).toBe(0);
+  const thumbnailsBefore = thumbnailRequests;
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("checkbox", { name: "Show waveform" }).check();
+  await expect.poll(() => waveformRequests).toBeGreaterThan(0);
+  expect(thumbnailRequests).toBe(thumbnailsBefore);
+  await page.getByRole("button", { name: "Back to editor" }).click();
+  await expect(page.getByRole("img", { name: "Waveform lane" })).toBeVisible();
+});
+
+test("unavailable browser storage still permits settings reset and new project", async ({
+  page,
+}) => {
+  await page.addInitScript(() => {
+    for (const method of ["getItem", "setItem", "removeItem"] as const) {
+      Object.defineProperty(Storage.prototype, method, {
+        configurable: true,
+        value: () => {
+          throw new DOMException("Blocked", "SecurityError");
+        },
+      });
+    }
+  });
+  const errors: string[] = [];
+  page.on("pageerror", (error) => errors.push(error.message));
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByLabel("Filename template").fill("clip-{segment}.{ext}");
+  await page.getByLabel("Filename template").fill("x".repeat(161));
+  await expect(page.getByLabel("Filename template")).toHaveValue("x".repeat(160));
+  await page.getByRole("button", { name: "Reset browser preferences" }).click();
+  await expect(page.getByLabel("Filename template")).toHaveValue("{source}-{segment}.{ext}");
+  await page.getByRole("button", { name: "Back to editor" }).click();
+  await newProject(page);
+  await expect(page.getByRole("status", { name: "Project status" })).toContainText("Not saved yet");
+  expect(errors).toEqual([]);
 });
 
 test("edits independent project items and submits a durable batch", async ({ page }) => {
@@ -1831,7 +1963,7 @@ test("exports the saved segments, polls to a safe result, and shows warnings", a
   await openTask(page, "Export");
   await page.getByRole("button", { name: "Create clips" }).click();
   await expect(page.getByText(/Export (queued|running)\./)).toBeVisible();
-  await expect(page.getByRole("link", { name: "Download output 1" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Download output 1" })).toHaveCount(0);
   await expect(page.getByText("Export complete.")).toBeVisible({
     timeout: 4_000,
   });
@@ -1844,7 +1976,7 @@ test("exports the saved segments, polls to a safe result, and shows warnings", a
   await expect(result).toContainText("42 bytes");
   await expect(result).toContainText("Verified");
   await expect(result).not.toContainText("stream_copy");
-  await expect(currentBatch.getByRole("link", { name: "Download output 1" })).toBeVisible();
+  await expect(currentBatch.getByRole("button", { name: "Download output 1" })).toBeVisible();
   await expect(
     currentBatch.locator(".export-job-subdetails").filter({ hasText: "Warnings and review notes" }),
   ).toContainText("earlier keyframe");
@@ -1957,7 +2089,7 @@ test("shows stable failed and capacity messages and permits retry", async ({ pag
   await expect(
     page.getByText("Export was interrupted by a server restart. Try again."),
   ).toBeVisible({ timeout: 3_000 });
-  await expect(page.getByRole("link", { name: "Download output 1" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Download output 1" })).toHaveCount(0);
 });
 
 test("cancels an active export without showing a path", async ({ page }) => {

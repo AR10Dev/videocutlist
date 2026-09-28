@@ -4,7 +4,8 @@ import { canStreamPreview } from "../preview/model";
 import {
   appearances,
   defaultSettings,
-  settingsKey,
+  maxFilenameTemplateLength,
+  validFilenameTemplateLength,
   type AppSettings,
   type Appearance,
 } from "./model";
@@ -13,7 +14,7 @@ import { MCPSettings } from "./MCPSettings";
 
 export function SettingsView(props: { onClose?: () => void } = {}) {
   const {
-    setSettings,
+    settings,
     settingsOpen,
     setSettingsOpen,
     appearance,
@@ -26,13 +27,9 @@ export function SettingsView(props: { onClose?: () => void } = {}) {
     serverSettingsLoading,
     loadServerSettings,
     rescanPending,
-    muted,
-    setMuted,
     diagnostics,
-    cutStrategy,
-    setCutStrategy,
-    filenameTemplate,
-    setFilenameTemplate,
+    waveformVisible,
+    setWaveformVisibility,
     saveSettings,
     saveRuntimeSettings,
     rescanLibrary,
@@ -82,26 +79,24 @@ export function SettingsView(props: { onClose?: () => void } = {}) {
           <input
             class="checkbox checkbox-sm"
             type="checkbox"
-            checked={muted()}
-            onChange={(event) => {
-              const value = event.currentTarget.checked;
-              setMuted(value);
-              saveSettings({ muted: value });
-            }}
+            checked={settings().muted}
+            onChange={(event) => saveSettings({ muted: event.currentTarget.checked })}
           />{" "}
           Mute previews
+        </label>
+        <label>
+          <input
+            class="checkbox checkbox-sm"
+            type="checkbox"
+            checked={waveformVisible()}
+            onChange={(event) => setWaveformVisibility(event.currentTarget.checked)}
+          />{" "}
+          Show waveform
         </label>
         <button
           class="btn btn-ghost btn-sm"
           type="button"
-          onClick={() => {
-            setSettings(defaultSettings);
-            setCutStrategy(defaultSettings.cutStrategy);
-            setFilenameTemplate(defaultSettings.filenameTemplate);
-            setMuted(defaultSettings.muted);
-            setAppearance(defaultSettings.appearance);
-            localStorage.setItem(settingsKey, JSON.stringify(defaultSettings));
-          }}
+          onClick={() => saveSettings(defaultSettings)}
         >
           Reset browser preferences
         </button>
@@ -140,16 +135,17 @@ export function SettingsView(props: { onClose?: () => void } = {}) {
       </section>
       <section aria-labelledby="exports-settings-heading">
         <h3 id="exports-settings-heading">Export defaults</h3>
+        <p>Changes here apply to new media, not the active project's saved export options.</p>
         <label>
           Cut strategy
           <select
             class="select select-bordered select-sm mt-1 w-full"
-            value={cutStrategy()}
-            onChange={(event) => {
-              const value = event.currentTarget.value as AppSettings["cutStrategy"];
-              setCutStrategy(value);
-              saveSettings({ cutStrategy: value });
-            }}
+            value={settings().cutStrategy}
+            onChange={(event) =>
+              saveSettings({
+                cutStrategy: event.currentTarget.value as AppSettings["cutStrategy"],
+              })
+            }
           >
             <option value="stream_copy_preferred">Stream copy preferred</option>
             <option value="precise_reencode">Precise re-encode</option>
@@ -160,10 +156,14 @@ export function SettingsView(props: { onClose?: () => void } = {}) {
           Filename template
           <input
             class="input input-bordered input-sm mt-1 w-full"
-            value={filenameTemplate()}
+            maxLength={maxFilenameTemplateLength}
+            value={settings().filenameTemplate}
             onInput={(event) => {
               const value = event.currentTarget.value;
-              setFilenameTemplate(value);
+              if (!validFilenameTemplateLength(value)) {
+                event.currentTarget.value = settings().filenameTemplate;
+                return;
+              }
               saveSettings({ filenameTemplate: value });
             }}
           />

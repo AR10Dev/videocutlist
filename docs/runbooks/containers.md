@@ -6,14 +6,14 @@ VideoCutlist has two kinds of configuration:
   It includes the listener, authentication, proxy/CORS policy, database/cache/
   export locations, media-root paths, destination paths, and container mounts.
 - **Runtime settings** are shared settings stored in SQLite: safe destination
-  labels/retention, preview/export limits, and scan/cache policy. The environment
-  seeds a new database; later environment changes do not overwrite its saved
-  settings, including seeded root locations.
+  labels/retention, preview/export limits, and scan/cache policy. Existing saved
+  values survive restarts. Deployment-owned root and destination locations are
+  reconciled from the environment on startup rather than replacing these settings.
 
 A media root is a path as seen by the server process. Configure roots in
-`VIDEOCUTLIST_MEDIA_ROOTS_JSON` when provisioning the database. The Settings
-page displays safe root aliases and availability, not paths or a path editor.
-The server indexes originals in place without copying them.
+`VIDEOCUTLIST_MEDIA_ROOTS_JSON`; startup reconciles configured aliases against
+persisted roots. The Settings page displays safe root aliases and availability,
+not paths or a path editor. The server indexes originals in place without copying them.
 
 ## Native deployment
 
@@ -38,7 +38,7 @@ sudo install -d -o videocutlist -g videocutlist -m 0750 /var/lib/videocutlist/ex
 sudo install -d -o videocutlist -g videocutlist -m 0750 /var/cache/videocutlist/previews
 ```
 
-Set an absolute native root in the environment for the initial database seed:
+Set an absolute native root in the deployment environment:
 
 ```bash
 VIDEOCUTLIST_DATABASE_PATH=/var/lib/videocutlist/data/videocutlist.db \
@@ -51,9 +51,9 @@ VIDEOCUTLIST_MEDIA_ROOTS_JSON='{"media":"/srv/media"}' \
 The root must be an existing directory readable by the service account. After
 startup, use **Settings → Rescan library** to discover changes under the
 configured roots. Changing a mount's contents does not require changing its
-configured path. Root locations seeded into an existing database are not
-overwritten by environment changes; do not delete the database to change a
-root, as that also deletes projects and job history.
+configured path. Root alias/path changes are reconciled on restart without
+deleting the database, projects, or job history; media belonging to removed
+aliases remains in history but is unavailable until its root is configured again.
 
 ## Docker and Podman
 
@@ -102,11 +102,11 @@ For rootless Podman, use the host UID/GID mapping reported by the runtime (or
 read-only bind-label option; preserve the `:ro` flag. Do not make the media
 mount writable just to solve an ownership error.
 
-The example seeds `/srv/videocutlist/media` as the container-visible root.
+The example configures `/srv/videocutlist/media` as the container-visible root.
 The host path belongs in `VIDEOCUTLIST_MEDIA_DIR`/Compose. For several source
 directories, configure separate read-only mounts and corresponding
-`VIDEOCUTLIST_MEDIA_ROOTS_JSON` aliases before provisioning the database.
-Settings shows those aliases and provides **Rescan library**.
+`VIDEOCUTLIST_MEDIA_ROOTS_JSON` aliases. Restart to reconcile aliases; Settings
+shows those aliases and provides **Rescan library**.
 
 Compose uses `ghcr.io/ar10dev/videocutlist:latest` unless `VIDEOCUTLIST_IMAGE`
 is pinned. To build locally:
@@ -115,6 +115,13 @@ is pinned. To build locally:
 docker build -f Dockerfile -t videocutlist:local ../..
 VIDEOCUTLIST_IMAGE=videocutlist:local docker compose up -d
 ```
+
+For a local Podman development deployment, `make test-podman` builds and
+replaces `videocutlist-local`. It retains the database under
+`$VIDEOCUTLIST_APP_DIR/data` (default
+`~/.config/podman/videocutlist/data`) and the exports on redeploy. Back up
+these directories before intentionally resetting them; the deploy script does
+not erase them.
 
 ## Persistence, backup, and security
 
@@ -147,12 +154,22 @@ Keep the host binding local unless remote exposure is deliberate:
 See the [reverse-proxy contract](../../deployments/reverse-proxy/README.md) for
 proxy-specific constraints.
 
+Browser export downloads stream through a same-origin service worker at
+`/download-sw.js`, scoped to `/download-stream/`. The client origin must be a
+secure browser context (HTTPS, or trusted localhost/loopback HTTP) and must
+serve that script as JavaScript; hosting the UI under a path prefix without
+serving the worker at the origin root will disable downloads. If the API is on
+another origin, allow the exact client origin and `Authorization` preflights
+through `VIDEOCUTLIST_ALLOWED_ORIGINS`; a HTTPS client must use a HTTPS API to
+avoid mixed-content blocking. Browser bearer tokens remain in memory and are
+never placed in download URLs or persistent storage.
+
 ## Troubleshooting
 
-- **Root missing in Settings:** check the root aliases used to provision the
-  database, the server-visible directory, and its read-only Compose mount.
-  Settings is not a path editor; changing seed environment values does not
-  overwrite roots already persisted in an existing database.
+- **Root missing in Settings:** check the configured root aliases, the
+  server-visible directory, and its read-only Compose mount. Settings is not
+  a path editor; update the deployment environment and restart to reconcile
+  roots without deleting saved projects or job history.
 - **Native directory unreadable:** inspect every parent with `namei -l` and
   test as the service account. Grant only required traverse/read access (ACLs
   are preferable to broad mode changes); never use `chmod -R 777`.

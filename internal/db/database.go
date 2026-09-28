@@ -42,6 +42,8 @@ var exportProposalsMigration string
 //go:embed migrations/009_export_proposals_media_source.sql
 var exportProposalsMediaSourceMigration string
 
+const exportProposalMediaSourceVersion = 9
+
 // OpenDatabase opens the single-host SQLite store and applies ordered,
 // idempotent migrations.
 func OpenDatabase(ctx context.Context, path string) (*sql.DB, error) {
@@ -68,12 +70,15 @@ func OpenDatabase(ctx context.Context, path string) (*sql.DB, error) {
 		runtimeSettingsMigration,
 		mcpCredentialsMigration,
 		exportProposalsMigration,
-		exportProposalsMediaSourceMigration,
 	} {
 		if _, err := db.ExecContext(ctx, statement); err != nil {
 			_ = db.Close()
 			return nil, fmt.Errorf("migrate database: %w", err)
 		}
+	}
+	if err := migrateExportProposalsMediaSource(ctx, db); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("migrate export proposal media source: %w", err)
 	}
 	if err := jobs.Migrate(ctx, db); err != nil {
 		_ = db.Close()
@@ -92,6 +97,35 @@ func OpenDatabase(ctx context.Context, path string) (*sql.DB, error) {
 		return nil, fmt.Errorf("migrate unified jobs: %w", err)
 	}
 	return db, nil
+}
+
+// Migration 009 rebuilds a table, so the data copy, rename, and version marker
+// must commit together. Unversioned databases run it once, including older
+// installs which already applied the original unmarked migration.
+func migrateExportProposalsMediaSource(ctx context.Context, db *sql.DB) (err error) {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
+			err = errors.Join(err, fmt.Errorf("rollback export proposal migration: %w", rollbackErr))
+		}
+	}()
+	var version int
+	if err := tx.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil {
+		return err
+	}
+	if version >= exportProposalMediaSourceVersion {
+		return tx.Commit()
+	}
+	if _, err := tx.ExecContext(ctx, exportProposalsMediaSourceMigration); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`PRAGMA user_version = %d`, exportProposalMediaSourceVersion)); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 type legacyProjectDocument struct {

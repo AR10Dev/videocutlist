@@ -54,6 +54,16 @@ type Request struct {
 	SourceMtimeNS   int64  `json:"-"`
 }
 
+func (request Request) withDefaults() Request {
+	options := (model.ExportOptions{
+		Mode: request.Mode, Selection: request.Selection,
+		CutStrategy: request.CutStrategy, Container: request.Container,
+	}).WithExportDefaults()
+	request.Mode, request.Selection = options.Mode, options.Selection
+	request.CutStrategy, request.Container = options.CutStrategy, options.Container
+	return request
+}
+
 type Warning struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
@@ -106,6 +116,7 @@ func (s Service) Run(ctx context.Context, source *os.File, document model.Docume
 	if source == nil {
 		return Result{}, errors.New("export source is required")
 	}
+	request = request.withDefaults()
 	policy, policyOK := exportpolicy.For(request.Container)
 	if !policyOK {
 		return Result{}, fmt.Errorf("%w: unsupported export container", ErrInvalidRequest)
@@ -223,9 +234,9 @@ func (s Service) Run(ctx context.Context, source *os.File, document model.Docume
 			prepared.removeOwned(mergeOwner)
 		}
 	}()
-	if s.Artifacts != nil && request.JobID != "" && request.Mode != "separate" {
+	if s.Artifacts != nil && request.JobID != "" {
 		defer func() {
-			if manifestPath != "" && !manifestPublished {
+			if !manifestPublished {
 				s.Artifacts.ClearManifest(request.JobID)
 			}
 		}()
@@ -431,6 +442,7 @@ func (s Service) Run(ctx context.Context, source *os.File, document model.Docume
 			}
 			s.Artifacts.Put(request.JobID, values)
 		}
+		manifestPublished = true
 		committed = true
 		return result, nil
 	}

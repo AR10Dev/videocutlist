@@ -10,6 +10,7 @@ import {
   SlidersHorizontal,
 } from "lucide-solid";
 import { formatTime, hybridSmartCutKnownIneligible } from "../preview/model";
+import { maxFilenameTemplateLength } from "../settings/model";
 import { useWorkspace } from "../app/WorkspaceContext";
 import { summarizeExports } from "./summary";
 import { QueueView } from "../queue/QueueView";
@@ -650,9 +651,12 @@ export function ExportView(props: ExportViewProps = {}) {
                 Filename template
                 <input
                   class="input input-bordered input-sm"
-                  maxLength={160}
+                  maxLength={maxFilenameTemplateLength}
                   value={filenameTemplate()}
-                  onInput={(event) => exportFeature.setTemplate(event.currentTarget.value)}
+                  onInput={(event) => {
+                    if (!exportFeature.setTemplate(event.currentTarget.value))
+                      event.currentTarget.value = filenameTemplate();
+                  }}
                 />
               </label>
               <p class="control-help">

@@ -9,6 +9,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
+	"sync"
 	"testing"
 	"time"
 
@@ -53,6 +55,18 @@ func TestPreflightRequestUsesPersistedOptionsForSelectedItems(t *testing.T) {
 	}, false)
 	if request.Mode != "separate" || request.Selection != "gaps" || request.CutStrategy != "precise_reencode" || request.DestinationID != "archive" || len(request.StreamIndexes) != 1 || request.StreamIndexes[0] != 1 {
 		t.Fatalf("preflight request = %#v", request)
+	}
+}
+
+func TestPreflightRequestDefaultsOnlyPersistedOptions(t *testing.T) {
+	item := model.ProjectItem{ExportOptions: model.ExportOptions{DestinationID: "download"}}
+	request := preflightRequest(item, projects.ExportInput{}, false)
+	if request.Mode != "separate" || request.Selection != "segments" || request.CutStrategy != "stream_copy_preferred" || request.Container != "mkv" || request.DestinationID != "download" {
+		t.Fatalf("saved optional export options = %#v", request)
+	}
+	explicit := preflightRequest(item, projects.ExportInput{Mode: "merge"}, true)
+	if explicit.Mode != "merge" || explicit.Selection != "" || explicit.Container != "" {
+		t.Fatalf("explicit API export input was modified: %#v", explicit)
 	}
 }
 
@@ -426,6 +440,157 @@ func TestExportExecutorDownloadBatchPublishesValidatedArchive(t *testing.T) {
 	}
 	if _, err := os.Stat(manifestPath); !os.IsNotExist(err) {
 		t.Fatal("expired batch archive manifest was not removed")
+	}
+}
+
+func TestExportExecutorConcurrentBatchDownloadsShareOneOwnedArchive(t *testing.T) {
+	ctx := t.Context()
+	root := t.TempDir()
+	const batchID = "b_concurrent_zip"
+	expected := map[string][]byte{
+		"first.mkv":  bytes.Repeat([]byte("first output"), 1<<17),
+		"second.mkv": bytes.Repeat([]byte("second output"), 1<<17),
+	}
+	for name, content := range expected {
+		if err := os.WriteFile(filepath.Join(root, name), content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	database, err := store.OpenDatabase(ctx, filepath.Join(t.TempDir(), "videocutlist.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	jobs, err := jobqueue.NewJobsStore(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for id, name := range map[string]string{"j_concurrent_one": "first.mkv", "j_concurrent_two": "second.mkv"} {
+		result, err := json.Marshal(export.Result{OutputName: name, RetainUntil: time.Now().Add(time.Hour), DestinationKind: export.KindDownload})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := jobs.Create(ctx, jobqueue.Job{ID: id, BatchID: batchID, Kind: jobqueue.JobExport, ProjectID: "project", ProjectItemID: id, RequestJSON: `{}`}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := jobs.Start(ctx, id); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := jobs.Succeed(ctx, id, string(result)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("batch archive publication requires a process-shared filesystem lock")
+	}
+	unlock, err := acquireBatchArchiveLock(ctx, filepath.Join(root, ".videocutlist-batches.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	releaseLock := func() {
+		if unlock != nil {
+			unlock()
+			unlock = nil
+		}
+	}
+	t.Cleanup(releaseLock)
+	cancelCtx, cancel := context.WithCancel(ctx)
+	cancelled := make(chan error, 1)
+	first := ExportExecutor{Jobs: jobs, Service: export.Service{OutputDir: root, Artifacts: export.NewArtifactStore()}}
+	second := ExportExecutor{Jobs: jobs, Service: export.Service{OutputDir: root, Artifacts: export.NewArtifactStore()}}
+	go func() {
+		file, _, err := first.DownloadBatch(cancelCtx, batchID)
+		if file != nil {
+			_ = file.Close()
+		}
+		cancelled <- err
+	}()
+	cancel()
+	if err := <-cancelled; !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled lock waiter = %v", err)
+	}
+	releaseLock()
+
+	type download struct {
+		name string
+		data []byte
+		err  error
+	}
+	const callers = 8
+	results := make(chan download, callers)
+	start := make(chan struct{})
+	var group sync.WaitGroup
+	for i := range callers {
+		executor := first
+		if i%2 != 0 {
+			executor = second
+		}
+		group.Go(func() {
+			<-start
+			file, name, err := executor.DownloadBatch(ctx, batchID)
+			if err != nil {
+				results <- download{err: err}
+				return
+			}
+			data, readErr := io.ReadAll(file)
+			closeErr := file.Close()
+			results <- download{name: name, data: data, err: errors.Join(readErr, closeErr)}
+		})
+	}
+	close(start)
+	group.Wait()
+	close(results)
+	var archiveName string
+	for result := range results {
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		if archiveName == "" {
+			archiveName = result.name
+		} else if result.name != archiveName {
+			t.Fatalf("competing archives %q and %q", archiveName, result.name)
+		}
+		archive, err := zip.NewReader(bytes.NewReader(result.data), int64(len(result.data)))
+		if err != nil {
+			t.Fatalf("downloaded ZIP invalid: %v", err)
+		}
+		if len(archive.File) != len(expected) {
+			t.Fatalf("downloaded ZIP has %d entries, want %d", len(archive.File), len(expected))
+		}
+		for _, entry := range archive.File {
+			reader, err := entry.Open()
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, readErr := io.ReadAll(reader)
+			closeErr := reader.Close()
+			if readErr != nil || closeErr != nil || !bytes.Equal(data, expected[entry.Name]) {
+				t.Fatalf("ZIP entry %q differs from export: read=%v close=%v", entry.Name, readErr, closeErr)
+			}
+		}
+	}
+	archives, err := filepath.Glob(filepath.Join(root, "videocutlist-clips-*.zip"))
+	if err != nil || len(archives) != 1 || filepath.Base(archives[0]) != archiveName {
+		t.Fatalf("published archives = %v: %v", archives, err)
+	}
+	partials, err := filepath.Glob(filepath.Join(root, ".videocutlist-batch-*.zip"))
+	if err != nil || len(partials) != 0 {
+		t.Fatalf("orphan temporary archives = %v: %v", partials, err)
+	}
+	recovered := export.NewArtifactStore()
+	if err := recovered.Reconcile(ctx, jobs, "missing-ffprobe", []export.Destination{{ID: "download", Kind: export.KindDownload, Root: root}}); err != nil {
+		t.Fatal(err)
+	}
+	recoveredFile, artifact, err := recovered.Open(batchID, 0, time.Now())
+	if err != nil || artifact.Name != archiveName {
+		t.Fatalf("durable archive name=%q err=%v; want %q", artifact.Name, err, archiveName)
+	}
+	if err := recoveredFile.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 

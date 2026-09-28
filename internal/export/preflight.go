@@ -26,6 +26,7 @@ type PreflightResult struct {
 // Preflight is the single export stream policy. Empty selection deterministically
 // chooses video, audio, and subtitle streams; data and attachments never pass.
 func Preflight(request Request, metadata probe.Metadata) PreflightResult {
+	request = request.withDefaults()
 	result := PreflightResult{Selection: slices.Clone(request.StreamIndexes)}
 	if request.Selection == "" {
 		request.Selection = "segments"
@@ -158,6 +159,7 @@ func (s Service) Preflight(ctx context.Context, source *os.File, request Request
 	if source == nil {
 		return PreflightResult{}, fmt.Errorf("export source is required")
 	}
+	request = request.withDefaults()
 	metadata, err := (probe.Client{Path: s.FFprobePath}).ProbeFile(ctx, source)
 	if err != nil {
 		return PreflightResult{}, fmt.Errorf("probe export source: %w", err)

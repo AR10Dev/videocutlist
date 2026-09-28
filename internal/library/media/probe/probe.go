@@ -2,6 +2,7 @@
 package probe
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -74,45 +75,18 @@ func (c Client) Probe(ctx context.Context, filename string) (Metadata, error) {
 // pathname after the media resolver has checked it.
 // FrameTimes returns video frame timestamps in milliseconds from an open descriptor.
 func (c Client) FrameTimes(ctx context.Context, source *os.File) ([]int64, error) {
-	if source == nil {
-		return nil, errors.New("ffprobe source is required")
-	}
-	path := c.Path
-	if path == "" {
-		path = "ffprobe"
-	}
-	cmd := exec.CommandContext(ctx, path, "-v", "error", "-select_streams", "v:0", "-show_entries", "frame=best_effort_timestamp_time", "-of", "json", fdinput.Path(3))
-	cmd.ExtraFiles = []*os.File{source}
-	var stdout, stderr limitedBuffer
-	stdout.limit, stderr.limit = maxOutputBytes, maxOutputBytes
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("ffprobe frame times: %w", err)
-	}
-	var parsed struct {
-		Frames []struct {
-			Timestamp string `json:"best_effort_timestamp_time"`
-		} `json:"frames"`
-	}
-	if err := json.Unmarshal(stdout.Bytes(), &parsed); err != nil {
-		return nil, fmt.Errorf("ffprobe frame times: %w", err)
-	}
-	result := make([]int64, 0, len(parsed.Frames))
-	for _, frame := range parsed.Frames {
-		value, err := strconv.ParseFloat(frame.Timestamp, 64)
-		if err != nil || value < 0 {
-			return nil, errors.New("invalid video frame timestamp")
-		}
-		result = append(result, int64(math.Round(value*1000)))
-	}
-	if len(result) < 2 {
-		return nil, errors.New("insufficient video frame timestamps")
-	}
-	return result, nil
+	return c.frameTimestamps(ctx, source, false)
 }
 
 // Keyframes returns video keyframe timestamps in milliseconds from an open descriptor.
 func (c Client) Keyframes(ctx context.Context, source *os.File) ([]int64, error) {
+	return c.frameTimestamps(ctx, source, true)
+}
+
+// FFprobe's CSV query emits one timestamp per line. Consume it as it arrives:
+// a fixed stdout cap would reject ordinary long recordings, while decoding the
+// entire JSON response would keep both the response and its frames in memory.
+func (c Client) frameTimestamps(ctx context.Context, source *os.File, keyframes bool) ([]int64, error) {
 	if source == nil {
 		return nil, errors.New("ffprobe source is required")
 	}
@@ -120,35 +94,65 @@ func (c Client) Keyframes(ctx context.Context, source *os.File) ([]int64, error)
 	if path == "" {
 		path = "ffprobe"
 	}
-	cmd := exec.CommandContext(ctx, path, "-v", "error", "-select_streams", "v:0", "-show_entries", "frame=best_effort_timestamp_time,key_frame", "-of", "json", fdinput.Path(3))
+	args := []string{"-v", "error", "-select_streams", "v:0"}
+	if keyframes {
+		args = append(args, "-skip_frame", "nokey")
+	}
+	args = append(args, "-show_frames", "-show_entries", "frame=best_effort_timestamp_time", "-of", "csv=p=0", fdinput.Path(3))
+	cmd := exec.CommandContext(ctx, path, args...)
 	cmd.ExtraFiles = []*os.File{source}
-	var stdout, stderr limitedBuffer
-	stdout.limit, stderr.limit = maxOutputBytes, maxOutputBytes
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
-	if err := cmd.Run(); err != nil {
-		return nil, fmt.Errorf("ffprobe keyframes: %w", err)
+	var stderr limitedBuffer
+	stderr.limit = maxOutputBytes
+	cmd.Stderr = &stderr
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("ffprobe frames: %w", err)
 	}
-	var parsed struct {
-		Frames []struct {
-			Timestamp string `json:"best_effort_timestamp_time"`
-			Key       int    `json:"key_frame"`
-		} `json:"frames"`
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("ffprobe frames: %w", err)
 	}
-	if err := json.Unmarshal(stdout.Bytes(), &parsed); err != nil {
-		return nil, fmt.Errorf("ffprobe keyframes: %w", err)
-	}
+	const maxFrameLineBytes = 64 << 10
+	const maxFrameTimestamps = 1 << 23 // 64 MiB of int64 timestamps at most.
+	scanner := bufio.NewScanner(stdout)
+	scanner.Buffer(make([]byte, 128), maxFrameLineBytes)
 	result := make([]int64, 0)
-	for _, frame := range parsed.Frames {
-		if frame.Key != 1 {
-			continue
+	var parseErr error
+	for scanner.Scan() {
+		// FFprobe appends side-data descriptions (such as H.264 SEI) as
+		// additional CSV fields even when only the timestamp was requested.
+		timestamp, _, _ := strings.Cut(scanner.Text(), ",")
+		value, err := strconv.ParseFloat(timestamp, 64)
+		if err != nil || math.IsNaN(value) || math.IsInf(value, 0) || value < 0 || value > float64(math.MaxInt64)/1000 {
+			parseErr = errors.New("invalid video frame timestamp")
+			break
 		}
-		value, err := strconv.ParseFloat(frame.Timestamp, 64)
-		if err == nil && value >= 0 {
-			result = append(result, int64(math.Round(value*1000)))
+		if len(result) == maxFrameTimestamps {
+			parseErr = ErrOutputTooLarge
+			break
 		}
+		result = append(result, int64(math.Round(value*1000)))
 	}
-	if len(result) == 0 {
+	if parseErr == nil {
+		parseErr = scanner.Err()
+	}
+	if parseErr != nil {
+		_ = cmd.Process.Kill()
+	}
+	waitErr := cmd.Wait()
+	if errors.Is(stderr.err, ErrOutputTooLarge) {
+		return nil, ErrOutputTooLarge
+	}
+	if parseErr != nil {
+		return nil, fmt.Errorf("ffprobe frames: %w", parseErr)
+	}
+	if waitErr != nil {
+		return nil, fmt.Errorf("ffprobe frames: %w", waitErr)
+	}
+	if keyframes && len(result) == 0 {
 		return nil, errors.New("no video keyframes")
+	}
+	if !keyframes && len(result) < 2 {
+		return nil, errors.New("insufficient video frame timestamps")
 	}
 	return result, nil
 }

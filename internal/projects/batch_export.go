@@ -72,7 +72,9 @@ func (b BatchExportUseCase) Submit(ctx context.Context, request BatchExportReque
 		if strings.ContainsAny(item.ExportOptions.FilenameTemplate, `/\\`) {
 			return "", nil, &ProjectItemError{ItemID: item.ID, Code: "invalid_filename"}
 		}
-		snapshot := ExportSnapshot{ProjectRevision: project.Revision, MediaLabel: media.Name, Item: cloneProjectItem(item), Source: SourceSnapshot{MediaID: media.ID, RootID: media.RootID, ETag: media.ETag, SizeBytes: media.SizeBytes, DurationMS: media.DurationMS}, RuntimeSettings: runtimeSettings(b.Settings)}
+		resolved := cloneProjectItem(item)
+		resolved.ExportOptions = resolved.ExportOptions.WithExportDefaults()
+		snapshot := ExportSnapshot{ProjectRevision: project.Revision, MediaLabel: media.Name, Item: resolved, Source: SourceSnapshot{MediaID: media.ID, RootID: media.RootID, ETag: media.ETag, SizeBytes: media.SizeBytes, DurationMS: media.DurationMS}, RuntimeSettings: runtimeSettings(b.Settings)}
 		payload, err := json.Marshal(snapshot)
 		if err != nil {
 			return "", nil, err
@@ -124,6 +126,7 @@ func (b BatchExportUseCase) RunQueuedSnapshot(ctx context.Context, job jobqueue.
 	if err := json.Unmarshal([]byte(job.RequestJSON), &snapshot); err != nil {
 		return errors.New("invalid export snapshot")
 	}
+	snapshot.Item.ExportOptions = snapshot.Item.ExportOptions.WithExportDefaults()
 	media, err := b.Media.Get(ctx, snapshot.Source.MediaID)
 	if err != nil {
 		return fmt.Errorf("%w: media unavailable", jobqueue.ErrSourceChanged)

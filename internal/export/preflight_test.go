@@ -17,6 +17,18 @@ func findingCodes(result PreflightResult) map[string]bool {
 	return codes
 }
 
+func TestPreflightAcceptsOptionalSavedExportSettings(t *testing.T) {
+	metadata := probe.Metadata{Streams: []probe.Stream{{Index: 0, Type: "video", Codec: "h264"}}}
+	result := Preflight(Request{}, metadata)
+	if !result.Allowed || len(result.Selection) != 1 || result.Selection[0] != 0 || !findingCodes(result)["stream_copy_boundaries"] {
+		t.Fatalf("optional export settings blocked: %+v", result)
+	}
+	invalid := Preflight(Request{CutStrategy: "invalid"}, metadata)
+	if invalid.Allowed || !findingCodes(invalid)["unsupported_strategy"] {
+		t.Fatalf("explicitly invalid export strategy accepted: %+v", invalid)
+	}
+}
+
 func TestPreflightDefaultStreamCombinations(t *testing.T) {
 	tests := []struct {
 		name      string

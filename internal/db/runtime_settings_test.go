@@ -191,6 +191,43 @@ func TestRuntimeSettingsExportLimitSafetyBoundary(t *testing.T) {
 	}
 }
 
+func TestRuntimeSettingsRejectsUnsafePreviewConcurrency(t *testing.T) {
+	database, err := store.OpenDatabase(t.Context(), t.TempDir()+"/settings.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	settings, err := store.NewRuntimeSettingsStore(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial, err := settings.Seed(t.Context(), validRuntimeSettings())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, limit := range []int{1, store.MaxPreviewGlobalLimit} {
+		update := initial.Settings
+		update.PreviewGlobalLimit = limit
+		initial, err = settings.Update(t.Context(), initial.Revision, update)
+		if err != nil {
+			t.Fatalf("valid limit %d: %v", limit, err)
+		}
+	}
+	for _, limit := range []int{0, store.MaxPreviewGlobalLimit + 1, math.MaxInt} {
+		update := initial.Settings
+		update.PreviewGlobalLimit = limit
+		if _, err := settings.Update(t.Context(), initial.Revision, update); err == nil {
+			t.Fatalf("accepted unsafe preview concurrency %d", limit)
+		}
+	}
+	if _, err := database.ExecContext(t.Context(), `UPDATE runtime_settings SET document_json = json_set(document_json, '$.previewGlobalLimit', ?)`, store.MaxPreviewGlobalLimit+1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := settings.Get(t.Context()); err == nil {
+		t.Fatal("loaded unsafe persisted preview concurrency")
+	}
+}
+
 func TestRuntimeSettingsSeedRefreshesDeploymentOwnedPaths(t *testing.T) {
 	ctx := t.Context()
 	database, err := store.OpenDatabase(ctx, t.TempDir()+"/settings.db")

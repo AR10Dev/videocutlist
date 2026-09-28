@@ -281,7 +281,6 @@ func preflightItems(project projects.Project, itemIDs []string) ([]model.Project
 }
 
 func preflightRequest(item model.ProjectItem, input projects.ExportInput, useInput bool) exporter.Request {
-	options := item.ExportOptions
 	if useInput {
 		return exporter.Request{
 			Mode: input.Mode, Selection: input.Selection, StreamIndexes: input.StreamIndexes,
@@ -289,6 +288,7 @@ func preflightRequest(item model.ProjectItem, input projects.ExportInput, useInp
 			DestinationID: input.DestinationID, FilenameTemplate: input.FilenameTemplate,
 		}
 	}
+	options := item.ExportOptions.WithExportDefaults()
 	return exporter.Request{
 		Mode: options.Mode, Selection: options.Selection, StreamIndexes: options.StreamIndexes,
 		CutStrategy: options.CutStrategy, Container: options.Container,
@@ -346,8 +346,8 @@ type batchArchiveOutput struct {
 }
 
 // DownloadBatch prepares a verified ZIP from completed browser-download outputs.
-// The archive is linked into place only after every entry and the ZIP directory
-// have been validated; cancellation removes the unpublished temporary file.
+// A shared filesystem lock serializes archive publication across processes while
+// cancellation removes unpublished temporary files.
 func (e ExportExecutor) DownloadBatch(ctx context.Context, batchID string) (io.ReadCloser, string, error) {
 	if e.Service.Artifacts == nil || e.Jobs == nil {
 		return nil, "", jobqueue.ErrJobNotFound
@@ -394,7 +394,91 @@ func (e ExportExecutor) DownloadBatch(ctx context.Context, batchID string) (io.R
 	if len(outputs) == 0 || archiveRoot == "" || !expires.After(time.Now().UTC()) {
 		return nil, "", exporter.ErrOutputUnavailable
 	}
+	return e.downloadBatchWithLock(ctx, batchID, archiveRoot, outputs, expires)
+}
+
+func (e ExportExecutor) downloadBatchWithLock(ctx context.Context, batchID, archiveRoot string, outputs []batchArchiveOutput, expires time.Time) (io.ReadCloser, string, error) {
+	// One lock inode per output directory avoids leaving a lock file for every
+	// batch. It must remain in place so waiting processes lock the same inode.
+	unlock, err := acquireBatchArchiveLock(ctx, filepath.Join(archiveRoot, ".videocutlist-batches.lock"))
+	if err != nil {
+		return nil, "", err
+	}
+	defer unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, "", err
+	}
+	if file, artifact, err := e.Service.Artifacts.Open(batchID, 0, time.Now().UTC()); err == nil {
+		return file, artifact.Name, nil
+	}
+	if file, name, found, err := e.openPublishedBatchArchive(ctx, batchID, archiveRoot, len(outputs)); found || err != nil {
+		return file, name, err
+	}
 	return e.prepareBatchArchive(ctx, batchID, archiveRoot, outputs, expires)
+}
+
+// A second process has its own in-memory artifact store. Reuse the durable,
+// owner-verified manifest instead of publishing a second archive for that batch.
+func (e ExportExecutor) openPublishedBatchArchive(ctx context.Context, batchID, archiveRoot string, count int) (io.ReadCloser, string, bool, error) {
+	manifestPath := filepath.Join(archiveRoot, ".videocutlist-export-"+batchID+".json")
+	data, err := os.ReadFile(manifestPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, "", false, nil
+	}
+	if err != nil {
+		return nil, "", true, exporter.ErrOutputUnavailable
+	}
+	var manifest struct {
+		JobID        string   `json:"jobId"`
+		Kind         string   `json:"kind"`
+		Container    string   `json:"container"`
+		Expires      string   `json:"expires"`
+		OutputNames  []string `json:"outputNames"`
+		OutputOwners []struct {
+			Name   string `json:"name"`
+			Device uint64 `json:"device"`
+			Inode  uint64 `json:"inode"`
+		} `json:"outputOwners"`
+	}
+	if json.Unmarshal(data, &manifest) != nil || manifest.JobID != batchID || manifest.Kind != exporter.KindDownload ||
+		manifest.Container != "zip" || len(manifest.OutputNames) != 1 || len(manifest.OutputOwners) != 1 {
+		return nil, "", true, exporter.ErrOutputUnavailable
+	}
+	name, owner := manifest.OutputNames[0], manifest.OutputOwners[0]
+	expiry, err := time.Parse(time.RFC3339Nano, manifest.Expires)
+	if err != nil || !expiry.After(time.Now().UTC()) || owner.Name != name || owner.Device == 0 || owner.Inode == 0 ||
+		!validBatchArchiveName(name) || !strings.HasPrefix(name, "videocutlist-clips-"+batchID) || filepath.Ext(name) != ".zip" {
+		return nil, "", true, exporter.ErrOutputUnavailable
+	}
+	path := filepath.Join(archiveRoot, name)
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return nil, "", true, exporter.ErrOutputUnavailable
+	}
+	device, inode, ok := batchArchiveFileIdentity(info)
+	if !ok || device != owner.Device || inode != owner.Inode {
+		return nil, "", true, exporter.ErrOutputUnavailable
+	}
+	if err := validateBatchArchive(ctx, path, count, -1); err != nil {
+		return nil, "", true, err
+	}
+	e.Service.Artifacts.Put(batchID, []exporter.Artifact{{Path: path, Name: name, Kind: exporter.KindDownload, Expires: expiry}})
+	file, artifact, err := e.Service.Artifacts.Open(batchID, 0, time.Now().UTC())
+	if err != nil {
+		return nil, "", true, err
+	}
+	stat, err := file.(interface{ Stat() (os.FileInfo, error) }).Stat()
+	if err != nil {
+		_ = file.Close()
+		return nil, "", true, exporter.ErrOutputUnavailable
+	}
+	device, inode, ok = batchArchiveFileIdentity(stat)
+	if !ok || device != owner.Device || inode != owner.Inode {
+		_ = file.Close()
+		return nil, "", true, exporter.ErrOutputUnavailable
+	}
+	e.Service.Artifacts.RegisterManifest(batchID, manifestPath)
+	return file, artifact.Name, true, nil
 }
 
 func (e ExportExecutor) prepareBatchArchive(ctx context.Context, batchID, archiveRoot string, outputs []batchArchiveOutput, expires time.Time) (reader io.ReadCloser, name string, err error) {
@@ -548,7 +632,7 @@ func validateBatchArchive(ctx context.Context, path string, count int, expectedB
 		}
 		total += copied
 	}
-	if total != expectedBytes {
+	if expectedBytes >= 0 && total != expectedBytes {
 		return exporter.ErrOutputUnavailable
 	}
 	return nil
@@ -695,12 +779,13 @@ func (e ExportExecutor) ExecuteBatchSnapshot(ctx context.Context, id string, sna
 		applyRuntimeSettings(&service, *snapshot.RuntimeSettings)
 	}
 	item := snapshot.Item
+	options := item.ExportOptions.WithExportDefaults()
 	document := model.Document{SchemaVersion: model.ProjectSchemaVersion, Name: "Batch export", Items: []model.ProjectItem{item}}
 	result, err := service.Run(ctx, file, document, exporter.Request{
-		Mode: item.ExportOptions.Mode, Selection: item.ExportOptions.Selection,
-		StreamIndexes: item.ExportOptions.StreamIndexes, CutStrategy: item.ExportOptions.CutStrategy,
-		Container: item.ExportOptions.Container, DestinationID: item.ExportOptions.DestinationID,
-		FilenameTemplate: item.ExportOptions.FilenameTemplate, JobID: id,
+		Mode: options.Mode, Selection: options.Selection,
+		StreamIndexes: options.StreamIndexes, CutStrategy: options.CutStrategy,
+		Container: options.Container, DestinationID: options.DestinationID,
+		FilenameTemplate: options.FilenameTemplate, JobID: id,
 		SourceRoot: location.RootPath, SourceRelative: location.RelativePath, SourceName: media.Name,
 		SourceSizeBytes: media.SizeBytes, SourceMtimeNS: media.MtimeNS,
 	})

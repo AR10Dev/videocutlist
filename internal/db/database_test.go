@@ -45,6 +45,33 @@ func TestMediaSyncRollbackPreservesPreviousCatalog(t *testing.T) {
 	}
 }
 
+func TestReconcileRootsHidesOnlyRemovedAliases(t *testing.T) {
+	database, err := store.OpenDatabase(t.Context(), t.TempDir()+"/media.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	media, err := store.NewMediaStore(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, alias := range []string{"retained", "removed"} {
+		record := index.Record{Media: index.Media{ID: index.MediaID(alias, "clip.mp4"), Name: "clip.mp4", SizeBytes: 1, MtimeNS: 1}, RootAlias: alias, RelativePath: "clip.mp4"}
+		if err := media.Sync(t.Context(), alias, []index.Record{record}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := media.ReconcileRoots(t.Context(), map[string]string{"retained": "/media/retained"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := media.Get(t.Context(), index.MediaID("retained", "clip.mp4")); err != nil {
+		t.Fatalf("retained root media disappeared: %v", err)
+	}
+	if _, err := media.Get(t.Context(), index.MediaID("removed", "clip.mp4")); err == nil {
+		t.Fatal("removed root media is still available")
+	}
+}
+
 func TestOpenDatabaseAppliesAllMigrations(t *testing.T) {
 	db, err := store.OpenDatabase(context.Background(), t.TempDir()+"/videocutlist.db")
 	if err != nil {
@@ -66,6 +93,115 @@ func TestOpenDatabaseAppliesAllMigrations(t *testing.T) {
 			t.Fatalf("missing %s: %v", table, err)
 		}
 		assertNoOwnerColumn(t, db, table)
+	}
+}
+
+func TestOpenDatabaseDoesNotRebuildExportProposalsOnRestart(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "proposals.db")
+	database, err := store.OpenDatabase(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const credential = "c_migration"
+	if _, err := database.ExecContext(t.Context(), `INSERT INTO mcp_credentials
+(id, token_identifier, token_verifier, name, permissions_json, media_scope_json, project_scope_json, created_at, updated_at)
+VALUES (?, 'migration', 'verifier', 'Migration', '[]', '{}', '{}', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`, credential); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(t.Context(), `INSERT INTO export_proposals
+(id, credential_id, project_id, project_revision, payload_json, findings_json, requires_reencoding, accuracy, destination_id, expires_at, created_at)
+VALUES ('ep_first', ?, NULL, 0, '{}', '[]', 0, 'frame_exact', 'download', '2027-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`, credential); err != nil {
+		t.Fatal(err)
+	}
+	// A consumer's SQLite trigger must survive restarting the application.
+	if _, err := database.ExecContext(t.Context(), `CREATE TABLE proposal_events (id TEXT NOT NULL);
+CREATE TRIGGER proposal_insert AFTER INSERT ON export_proposals
+BEGIN INSERT INTO proposal_events (id) VALUES (NEW.id); END;`); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	database, err = store.OpenDatabase(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	if _, err := database.ExecContext(t.Context(), `INSERT INTO export_proposals
+(id, credential_id, project_id, project_revision, payload_json, findings_json, requires_reencoding, accuracy, destination_id, expires_at, created_at)
+VALUES ('ep_second', ?, NULL, 0, '{}', '[]', 0, 'frame_exact', 'download', '2027-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`, credential); err != nil {
+		t.Fatal(err)
+	}
+	var original, observed int
+	if err := database.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM export_proposals WHERE id = 'ep_first'`).Scan(&original); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM proposal_events WHERE id = 'ep_second'`).Scan(&observed); err != nil {
+		t.Fatal(err)
+	}
+	if original != 1 || observed != 1 {
+		t.Fatalf("restart lost persisted proposal or its insert trigger: original=%d observed=%d", original, observed)
+	}
+}
+
+func TestExportProposalMigrationRollbackCanBeRetried(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "retry.db")
+	database, err := store.OpenDatabase(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(t.Context(), `INSERT INTO mcp_credentials
+(id, token_identifier, token_verifier, name, permissions_json, media_scope_json, project_scope_json, created_at, updated_at)
+VALUES ('c_retry', 'retry', 'verifier', 'Retry', '[]', '{}', '{}', '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+INSERT INTO export_proposals
+(id, credential_id, project_id, project_revision, payload_json, findings_json, requires_reencoding, accuracy, destination_id, expires_at, created_at)
+VALUES ('ep_retry', 'c_retry', NULL, 0, '{}', '[]', 0, 'frame_exact', 'download', '2027-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+PRAGMA user_version = 0;
+CREATE TABLE export_proposals_v2 AS SELECT * FROM export_proposals WHERE 0;
+CREATE TRIGGER fail_proposal_copy BEFORE INSERT ON export_proposals_v2
+BEGIN SELECT RAISE(ABORT, 'injected migration failure'); END;`); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if failed, err := store.OpenDatabase(t.Context(), path); err == nil {
+		_ = failed.Close()
+		t.Fatal("migration unexpectedly succeeded through the injected copy failure")
+	}
+	inspect, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var originals, version int
+	if err := inspect.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM export_proposals WHERE id = 'ep_retry'`).Scan(&originals); err != nil {
+		t.Fatal(err)
+	}
+	if err := inspect.QueryRowContext(t.Context(), `PRAGMA user_version`).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if originals != 1 || version != 0 {
+		t.Fatalf("failed migration changed live proposal or version: proposals=%d version=%d", originals, version)
+	}
+	if _, err := inspect.ExecContext(t.Context(), `DROP TABLE export_proposals_v2`); err != nil {
+		t.Fatal(err)
+	}
+	if err := inspect.Close(); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := store.OpenDatabase(t.Context(), path)
+	if err != nil {
+		t.Fatalf("migration retry failed: %v", err)
+	}
+	t.Cleanup(func() { _ = recovered.Close() })
+	if err := recovered.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM export_proposals WHERE id = 'ep_retry'`).Scan(&originals); err != nil {
+		t.Fatal(err)
+	}
+	if err := recovered.QueryRowContext(t.Context(), `PRAGMA user_version`).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if originals != 1 || version != 9 {
+		t.Fatalf("migration retry lost proposal or marker: proposals=%d version=%d", originals, version)
 	}
 }
 

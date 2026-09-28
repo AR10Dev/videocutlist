@@ -1278,7 +1278,7 @@ components:
               properties:
                 exportLimit: {type: integer}
                 cacheMaxBytes: {type: integer}
-                previewGlobalLimit: {type: integer}
+                previewGlobalLimit: {type: integer, minimum: 1, maximum: 64}
                 previewBeforeMs: {type: integer}
                 previewAfterMs: {type: integer}
                 previewMaxMs: {type: integer}
@@ -1325,6 +1325,11 @@ components:
             artifacts cannot be published.
         previewGlobalLimit:
           type: integer
+          minimum: 1
+          maximum: 64
+          description: >-
+            Limits concurrent media processes and MCP requests. 64 is a safety
+            ceiling, not recommended concurrency.
         previewBeforeMs:
           type: integer
         previewAfterMs:

@@ -455,7 +455,11 @@ export function createProjectsController(deps: ProjectsControllerDeps) {
       present: { playheadMs: 0, segments: [], zoom: 1 },
       future: [],
     });
-    localStorage.removeItem("videocutlist.active-project.v2");
+    try {
+      globalThis.localStorage?.removeItem("videocutlist.active-project.v2");
+    } catch {
+      // Remembered project is optional when browser storage is unavailable.
+    }
     deps.setStatus("New project ready.");
   };
   const recoverProject = () => {
@@ -488,7 +492,12 @@ export function createProjectsController(deps: ProjectsControllerDeps) {
     return requestSave("explicit");
   };
   const reloadRemoteProject = () => loadProject(deps.projectId(), undefined, true);
-  const rememberedProject = localStorage.getItem("videocutlist.active-project.v2");
+  let rememberedProject: string | null = null;
+  try {
+    rememberedProject = globalThis.localStorage?.getItem("videocutlist.active-project.v2") ?? null;
+  } catch {
+    // Browser storage may deny reads without affecting projects.
+  }
   if (!recovery() && validProjectId(rememberedProject))
     queueMicrotask(() => void loadProject(rememberedProject));
 

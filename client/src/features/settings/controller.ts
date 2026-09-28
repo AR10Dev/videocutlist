@@ -2,6 +2,7 @@ import { createSignal, type Setter } from "solid-js";
 import { readApiError, type ApiClient } from "../../api";
 import type { components } from "../../generated/api";
 import {
+  validFilenameTemplateLength,
   settingsKey,
   storedSettings,
   validRuntimeSettingsInput,
@@ -22,7 +23,7 @@ type MCPCredentialCreated = components["schemas"]["MCPCredentialCreated"];
 type ExportProposal = components["schemas"]["ExportProposal"];
 
 export function createSettingsController(api: ApiClient) {
-  const [settings, setSettings] = createSignal(storedSettings(localStorage));
+  const [settings, setSettings] = createSignal(storedSettings());
   const [appearance, setAppearance] = createSignal<Appearance>(settings().appearance);
   const [settingsOpen, setOpen] = createSignal(false);
   const [serverSettingsStatus, setServerSettingsStatus] = createSignal("");
@@ -52,10 +53,19 @@ export function createSettingsController(api: ApiClient) {
   };
 
   const saveSettings = (changes: Partial<AppSettings>) => {
+    if (
+      changes.filenameTemplate !== undefined &&
+      !validFilenameTemplateLength(changes.filenameTemplate)
+    )
+      return;
     const next = { ...settings(), ...changes };
     setSettings(next);
     setAppearance(next.appearance);
-    localStorage.setItem(settingsKey, JSON.stringify(next));
+    try {
+      globalThis.localStorage?.setItem(settingsKey, JSON.stringify(next));
+    } catch {
+      // Browser preferences remain usable for this session when storage is disabled.
+    }
   };
   const loadServerSettings = async () => {
     if (settingsPending()) return;

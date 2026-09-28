@@ -549,10 +549,9 @@ func jobResult(record jobqueue.Job) Job {
 			}
 		}
 	}
-	if request.Container == "" {
-		policy, _ := exportpolicy.For("")
-		request.Container = policy.Name
-	}
+	options := (model.ExportOptions{Mode: request.Mode, Selection: request.Selection, CutStrategy: request.CutStrategy, Container: request.Container}).WithExportDefaults()
+	request.Mode, request.Selection = options.Mode, options.Selection
+	request.CutStrategy, request.Container = options.CutStrategy, options.Container
 	job.Strategy, job.Mode, job.Selection, job.SelectedStreams, job.Container = request.CutStrategy, request.Mode, request.Selection, slices.Clone(request.StreamIndexes), request.Container
 	if record.State == jobqueue.JobFailed && record.ErrorCode.Valid {
 		value := record.ErrorCode.String

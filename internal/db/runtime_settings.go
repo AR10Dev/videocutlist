@@ -16,7 +16,12 @@ import (
 	"videocutlist/internal/jobs"
 )
 
-const runtimeSettingsSchemaVersion = 1
+const (
+	runtimeSettingsSchemaVersion = 1
+	// MaxPreviewGlobalLimit bounds concurrent FFmpeg work across previews,
+	// detection, timeline assets, and exports.
+	MaxPreviewGlobalLimit = 64
+)
 
 type RuntimeDestination struct {
 	ID          string `json:"id"`
@@ -226,6 +231,9 @@ func ValidateRuntimeSettings(settings RuntimeSettings) error {
 	}
 	if settings.CacheMaxBytes < 1 || settings.PreviewGlobalLimit < 1 || settings.PreviewBeforeMS < 1 || settings.PreviewAfterMS < 1 || settings.PreviewMaxMS < 1 || settings.PreviewGridMS < 1 || settings.MediaMaxFiles < 1 || settings.MediaMaxDepth < 1 {
 		return errors.New("runtime limits must be positive")
+	}
+	if settings.PreviewGlobalLimit > MaxPreviewGlobalLimit {
+		return fmt.Errorf("preview global limit must be 1..%d", MaxPreviewGlobalLimit)
 	}
 	if settings.PreviewBeforeMS+settings.PreviewAfterMS > settings.PreviewMaxMS {
 		return errors.New("preview max must cover the default preview window")

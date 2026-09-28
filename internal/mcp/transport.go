@@ -98,10 +98,10 @@ type rpcRequest struct {
 }
 
 type rpcResponse struct {
-	JSONRPC string    `json:"jsonrpc"`
-	ID      any       `json:"id"`
-	Result  any       `json:"result,omitempty"`
-	Error   *rpcError `json:"error,omitempty"`
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id"`
+	Result  any             `json:"result,omitempty"`
+	Error   *rpcError       `json:"error,omitempty"`
 }
 
 type rpcError struct {
@@ -216,7 +216,7 @@ func (t *transport) post(w http.ResponseWriter, r *http.Request, credential Cred
 		writeRPC(w, http.StatusBadRequest, rpcResponse{JSONRPC: "2.0", ID: nil, Error: &rpcError{Code: -32600, Message: "Invalid Request"}})
 		return
 	}
-	id := decodeID(request.ID)
+	id := request.ID
 	if request.Method == "initialize" {
 		t.initialize(w, request, id, credential)
 		return
@@ -253,7 +253,7 @@ func (t *transport) post(w http.ResponseWriter, r *http.Request, credential Cred
 	writeRPC(w, http.StatusOK, response)
 }
 
-func (t *transport) initialize(w http.ResponseWriter, request rpcRequest, id any, credential Credential) {
+func (t *transport) initialize(w http.ResponseWriter, request rpcRequest, id json.RawMessage, credential Credential) {
 	var params struct {
 		ProtocolVersion string          `json:"protocolVersion"`
 		Capabilities    json.RawMessage `json:"capabilities"`
@@ -596,17 +596,6 @@ func validRPCID(raw json.RawMessage) bool {
 	default:
 		return false
 	}
-}
-
-func decodeID(raw json.RawMessage) any {
-	if len(raw) == 0 {
-		return nil
-	}
-	var id any
-	if json.Unmarshal(raw, &id) != nil {
-		return nil
-	}
-	return id
 }
 
 func unauthorized(w http.ResponseWriter) {

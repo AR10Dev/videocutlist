@@ -81,14 +81,27 @@ unexpected startup/cache failures return `500`.
   Graceful shutdown also fails interrupted active work with this code rather
   than reporting a user cancellation. Already-published durable results still
   win shutdown; explicit user cancellation remains a terminal CAS.
-- MVP exports use MKV and `stream_copy_preferred`; no smart-boundary re-encode.
-  Non-keyframe accuracy limitations are explicit structured warnings. Publication
-  requires a descriptor-relative atomic no-replace rename: Linux uses
+- Exports support MKV, MP4, and MOV with `stream_copy_preferred` (fast,
+  non-frame-exact cuts), `precise_reencode` (experimental full re-encode), and
+  `hybrid_smart_cut` (experimental smart-boundary re-encode for compatible
+  H.264 CFR MKV sources and MKV output; segments without interior keyframes
+  fall back to stream copy). Preflight reports container/codec limitations,
+  and non-keyframe accuracy limitations are explicit structured warnings.
+  Publication requires a descriptor-relative atomic no-replace rename: Linux uses
   `renameat2(RENAME_NOREPLACE)` and macOS uses `renameatx_np(RENAME_EXCL)`.
   On other platforms, both `merge` and `separate` exports are blocked during
   preflight with `unsupported_publication_platform` before FFmpeg starts; the
   implementation does not fall back to a raceable check-then-rename or a
   hard-link publication.
+
+Scoped MCP export proposals accept selected ranges from long sources without
+processing the entire source. Each selected clip may contribute at most ten
+minutes; the combined selected duration across a proposal is at most thirty
+minutes. At most twenty project items and one hundred resolved ranges per item
+may be included. The same bounds are checked when an approved proposal is
+executed, including after the stored proposal is reloaded. Protected MCP
+downloads require the requesting credential's bearer token and current scope,
+and use the MCP request rate and concurrency limits while streaming.
 
 ## Editing workspace
 

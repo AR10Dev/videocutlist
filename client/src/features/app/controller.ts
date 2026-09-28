@@ -348,7 +348,7 @@ export function createWorkspaceController() {
     setSelected(item);
     setTimeline(createTimelineHistory({ playheadMs: 0, segments: [], zoom: 1 }));
     setPreviewCenterMs(0);
-    setMuted(false);
+    setMuted(settings().muted);
     setExportMode("separate");
     setExportSelection("segments");
     setStreamIndexes([]);
@@ -373,6 +373,7 @@ export function createWorkspaceController() {
     const added = {
       ...createProjectItem(item, lastDestinationId()),
       timeline: timeline(),
+      muted: muted(),
     };
     setProjectItems([...items, added]);
     setActiveItemId(added.id);
@@ -509,6 +510,7 @@ export function createWorkspaceController() {
     retryAssets,
     assetRange,
     setPreviewCenterMs,
+    settings,
     setSettings,
     appearance,
     setAppearance,

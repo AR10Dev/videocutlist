@@ -76,6 +76,9 @@ func run(ctx context.Context) (runErr error) {
 		return err
 	}
 	mediaStore, _ := store.NewMediaStore(db)
+	if err := mediaStore.ReconcileRoots(ctx, cfg.MediaRoots); err != nil {
+		return fmt.Errorf("reconcile configured media roots: %w", err)
+	}
 	roots := make([]index.Root, 0, len(cfg.MediaRoots))
 	aliases := slices.Sorted(maps.Keys(cfg.MediaRoots))
 	for _, alias := range aliases {
@@ -213,7 +216,11 @@ func run(ctx context.Context) (runErr error) {
 	mux.Handle("/api/", apiServer)
 	mux.Handle("/metrics", apiServer)
 	mux.Handle("/", httpapi.CORS(cfg.AllowedOrigins, webassets.DefaultHandler()))
-	proxied, err := httpapi.TrustedProxy(cfg.TrustedProxyCIDRs, mux)
+	handler := http.Handler(mux)
+	if cfg.AuthMode == "none" {
+		handler = httpapi.HostGuard(cfg.Port, cfg.PublicBaseURL, handler)
+	}
+	proxied, err := httpapi.TrustedProxy(cfg.TrustedProxyCIDRs, handler)
 	if err != nil {
 		return err
 	}

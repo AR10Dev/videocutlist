@@ -76,6 +76,10 @@ export type AppSettings = {
 };
 
 export const settingsKey = "videocutlist.settings.v1";
+export const maxFilenameTemplateLength = 160;
+// Go validates filename templates as UTF-8 bytes, not UTF-16 code units.
+export const validFilenameTemplateLength = (template: string) =>
+  new TextEncoder().encode(template).length <= maxFilenameTemplateLength;
 export const defaultSettings: AppSettings = {
   filenameTemplate: "{source}-{segment}.{ext}",
   cutStrategy: "stream_copy_preferred",
@@ -104,7 +108,8 @@ export function loadSettings(value: unknown): AppSettings {
   const settings = value as Partial<AppSettings>;
   return {
     filenameTemplate:
-      typeof settings.filenameTemplate === "string" && settings.filenameTemplate.length <= 240
+      typeof settings.filenameTemplate === "string" &&
+      validFilenameTemplateLength(settings.filenameTemplate)
         ? settings.filenameTemplate
         : defaultSettings.filenameTemplate,
     cutStrategy: strategies.has(settings.cutStrategy ?? defaultSettings.cutStrategy)
@@ -117,9 +122,9 @@ export function loadSettings(value: unknown): AppSettings {
   };
 }
 
-export function storedSettings(storage: Storage): AppSettings {
+export function storedSettings(): AppSettings {
   try {
-    return loadSettings(JSON.parse(storage.getItem(settingsKey) ?? "null"));
+    return loadSettings(JSON.parse(globalThis.localStorage?.getItem(settingsKey) ?? "null"));
   } catch {
     return defaultSettings;
   }

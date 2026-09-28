@@ -4,7 +4,7 @@ import { readApiError, type ApiClient } from "../../api";
 import type { components } from "../../generated/api";
 import type { EditableProjectItem, ExportContainer } from "../projects/model";
 import type { Segment } from "../preview/model";
-import type { AppSettings } from "../settings/model";
+import { validFilenameTemplateLength, type AppSettings } from "../settings/model";
 import { abortAndClear, cancellationIsCurrent } from "../queue/cancellation";
 import { exportFailureMessage } from "../queue/jobUi";
 import { jobPollInterval } from "../queue/jobPolling";
@@ -965,10 +965,12 @@ export function createExportController(deps: {
       deps.setDirty(true);
     },
     setTemplate: (value: string) => {
+      if (!validFilenameTemplateLength(value)) return false;
       setFilenameTemplate(value);
       deps.saveSettings({ filenameTemplate: value });
       deps.markDirty();
       deps.setDirty(true);
+      return true;
     },
     setStreams: (value: number[]) => {
       setStreamIndexes(value);

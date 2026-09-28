@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	store "videocutlist/internal/db"
 )
 
 func TestLoadDefaults(t *testing.T) {
@@ -193,8 +195,25 @@ func env(values map[string]string) func(string) (string, bool) {
 func TestLoadAllowsAnUnconfiguredMediaLibrary(t *testing.T) {
 	values := mergeEnv(baseEnv(), map[string]string{"VIDEOCUTLIST_MEDIA_ROOTS_JSON": ""})
 	config, err := load(env(values))
-	if err != nil || len(config.MediaRoots) != 0 {
+	if err != nil || config.MediaRoots == nil || len(config.MediaRoots) != 0 {
 		t.Fatalf("config=%#v err=%v", config.MediaRoots, err)
+	}
+	if err := store.ValidateRuntimeSettings(config.RuntimeSettings()); err != nil {
+		t.Fatalf("unconfigured defaults cannot be persisted: %v", err)
+	}
+}
+
+func TestLoadBoundsPreviewConcurrency(t *testing.T) {
+	for _, test := range []struct {
+		limit string
+		valid bool
+	}{
+		{"1", true}, {"64", true}, {"0", false}, {"65", false}, {strconv.Itoa(math.MaxInt), false},
+	} {
+		config, err := load(env(mergeEnv(baseEnv(), map[string]string{"VIDEOCUTLIST_PREVIEW_GLOBAL_LIMIT": test.limit})))
+		if (err == nil) != test.valid {
+			t.Fatalf("preview limit %s: config=%d error=%v, valid=%t", test.limit, config.PreviewGlobalLimit, err, test.valid)
+		}
 	}
 }
 

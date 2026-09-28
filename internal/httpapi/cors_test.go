@@ -11,6 +11,81 @@ import (
 	"testing"
 )
 
+func TestHostGuardRejectsReboundAuthorityWithoutOrigin(t *testing.T) {
+	called := 0
+	downstream := CORS([]string{"https://attacker.test"}, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called++
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	handler, err := TrustedProxy([]string{"127.0.0.0/8"}, HostGuard(8787, "https://video.example.test/app", downstream))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		host, forwarded, origin, remote string
+		status                          int
+	}{
+		{"rebound.attacker.test:8787", "", "", "127.0.0.1:1234", http.StatusForbidden},
+		{"rebound.attacker.test:8787", "", "http://rebound.attacker.test:8787", "127.0.0.1:1234", http.StatusForbidden},
+		{"attacker.test:8787", "", "https://attacker.test", "127.0.0.1:1234", http.StatusForbidden},
+		{"127.0.0.1:8787", "", "", "127.0.0.1:1234", http.StatusNoContent},
+		{"localhost:8787", "", "", "127.0.0.1:1234", http.StatusNoContent},
+		{"[::1]:8787", "", "", "127.0.0.1:1234", http.StatusNoContent},
+		{"video.example.test", "", "", "127.0.0.1:1234", http.StatusNoContent},
+		{"video.example.test:443", "", "", "127.0.0.1:1234", http.StatusForbidden},
+		{"127.0.0.1:8787", "video.example.test", "", "127.0.0.1:1234", http.StatusNoContent},
+		{"rebound.attacker.test:8787", "127.0.0.1:8787", "", "127.0.0.1:1234", http.StatusForbidden},
+		{"proxy.internal", "video.example.test", "", "127.0.0.1:1234", http.StatusForbidden},
+		{"127.0.0.1:8787", "video.example.test", "", "203.0.113.4:1234", http.StatusNoContent},
+		{"127.0.0.1:8787", "rebound.attacker.test", "", "127.0.0.1:1234", http.StatusForbidden},
+	} {
+		request := httptest.NewRequest(http.MethodGet, "http://"+test.host+"/api/v1/media", nil)
+		request.RemoteAddr = test.remote
+		if test.origin != "" {
+			request.Header.Set("Origin", test.origin)
+		}
+		if test.forwarded != "" {
+			request.Header.Set("X-Forwarded-Host", test.forwarded)
+		}
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != test.status {
+			t.Errorf("host=%q forwarded=%q remote=%q status=%d want=%d", test.host, test.forwarded, test.remote, response.Code, test.status)
+		}
+	}
+	if called != 6 {
+		t.Fatalf("dispatched %d requests, want 6", called)
+	}
+}
+
+func TestHostGuardUsesActualEphemeralListenerPort(t *testing.T) {
+	server := httptest.NewServer(HostGuard(0, "", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	})))
+	defer server.Close()
+	response, err := server.Client().Get(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusNoContent {
+		t.Fatalf("ephemeral listener status = %d", response.StatusCode)
+	}
+	request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, server.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Host = "rebound.attacker.test"
+	response, err = server.Client().Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusForbidden {
+		t.Fatalf("rebound authority status = %d", response.StatusCode)
+	}
+}
+
 func TestCORSPassesRequestsWithoutOrigin(t *testing.T) {
 	called := false
 	handler := CORS([]string{"https://editor.example.test"}, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

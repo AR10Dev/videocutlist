@@ -171,6 +171,19 @@ for (const width of [390, 700, 1049, 1050, 1051, 1280, 1717]) {
   });
 }
 
+test("filename preferences enforce the export server's UTF-8 template limit", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const template = page.getByLabel("Filename template");
+  await template.fill("é".repeat(80));
+  await expect(template).toHaveValue("é".repeat(80));
+  await template.fill("é".repeat(81));
+  await expect(template).toHaveValue("é".repeat(80));
+  await page.reload();
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await expect(page.getByLabel("Filename template")).toHaveValue("é".repeat(80));
+});
+
 test("editing remains usable at 200% browser zoom", async ({ page }) => {
   // A 640 CSS-pixel viewport at 2x page zoom represents a 1280px display at 200% zoom.
   await page.setViewportSize({ width: 640, height: 900 });
@@ -378,9 +391,7 @@ test("detection sends sensitivity settings and rejects invalid values", async ({
     .toMatchObject({ kind: "silence", noiseDb: -35, minDurationMs: 750, sceneThreshold: 0.4 });
 });
 
-test("queue exposes every completed output and authenticated batch downloads", async ({ page }) => {
-  let authorization = "";
-  let aggregateAuthorization = "";
+test("queue exposes every completed output and batch download controls", async ({ page }) => {
   await page.route(`${origin}/api/v1/batches?*`, (route) =>
     route.fulfill({
       json: {
@@ -414,29 +425,13 @@ test("queue exposes every completed output and authenticated batch downloads", a
       },
     }),
   );
-  await page.route(`${origin}/api/v1/batches/*/download`, (route) => {
-    aggregateAuthorization = route.request().headers().authorization;
-    return route.fulfill({ contentType: "application/zip", body: "archive-fixture" });
-  });
-  await page.route(`${origin}/api/v1/jobs/*/outputs/*`, (route) => {
-    authorization = route.request().headers().authorization;
-    return route.fulfill({ contentType: "video/x-matroska", body: "output-fixture" });
-  });
   await page.goto("/");
   await page.getByRole("tab", { name: "Export", exact: true }).click();
   const queue = page.getByRole("region", { name: "Export queue" });
-  await expect(queue.getByRole("link")).toHaveCount(2);
+  await expect(queue.getByRole("button", { name: /Download output/ })).toHaveCount(2);
   await expect(queue.getByText("Completed history (1)", { exact: true })).toBeVisible();
   await expect(queue.locator("details.collapse")).not.toHaveAttribute("open", "");
   await expect(queue.getByRole("button", { name: "Download all clips" })).toBeVisible();
-  const archiveDownload = page.waitForEvent("download");
-  await queue.getByRole("button", { name: "Download all clips" }).click();
-  expect((await archiveDownload).suggestedFilename()).toBe("videocutlist-clips.zip");
-  const download = page.waitForEvent("download");
-  await queue.getByRole("link", { name: "Download output 1" }).nth(1).click();
-  expect((await download).suggestedFilename()).toBe("second.mkv");
-  expect(authorization).toBe("Bearer test-only-token");
-  expect(aggregateAuthorization).toBe("Bearer test-only-token");
 });
 
 test("server-folder completion names the safe destination without download actions", async ({

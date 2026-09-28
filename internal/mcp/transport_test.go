@@ -112,6 +112,27 @@ func TestTransportInitializationNegotiationDiscoveryAndCall(t *testing.T) {
 	}
 }
 
+func TestTransportPreservesLargeNumericRequestIDs(t *testing.T) {
+	credentials, secret, _ := transportCredentials(t, time.Hour)
+	handler := newTransport(t, mcp.TransportConfig{Enabled: true, Credentials: credentials})
+	const id = `9007199254740993`
+	response := serve(handler, request(`{"jsonrpc":"2.0","id":`+id+`,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}`, secret))
+	if response.Code != http.StatusOK {
+		t.Fatalf("initialize status=%d body=%s", response.Code, response.Body.String())
+	}
+	var envelope struct {
+		ID json.RawMessage `json:"id"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil || string(envelope.ID) != id {
+		t.Fatalf("initialize ID=%s err=%v", envelope.ID, err)
+	}
+	session := response.Header().Get("Mcp-Session-Id")
+	response = serve(handler, sessionRequest(`{"jsonrpc":"2.0","id":`+id+`,"method":"ping"}`, secret, session))
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil || string(envelope.ID) != id {
+		t.Fatalf("ping ID=%s err=%v", envelope.ID, err)
+	}
+}
+
 func TestTransportRechecksRevocationAndExpiryForSessions(t *testing.T) {
 	t.Run("revoked", func(t *testing.T) {
 		credentials, secret, _ := transportCredentials(t, time.Hour)

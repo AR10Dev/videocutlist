@@ -85,6 +85,34 @@ func (s *MediaStore) RemoveRoots(ctx context.Context, aliases []string) (err err
 	return tx.Commit()
 }
 
+// ReconcileRoots hides indexed media whose root aliases are absent from the
+// effective deployment configuration, including when no roots are configured.
+func (s *MediaStore) ReconcileRoots(ctx context.Context, configured map[string]string) error {
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT root_alias FROM media WHERE available = 1`)
+	if err != nil {
+		return err
+	}
+	var removed []string
+	for rows.Next() {
+		var alias string
+		if err := rows.Scan(&alias); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		if _, ok := configured[alias]; !ok {
+			removed = append(removed, alias)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	return s.RemoveRoots(ctx, removed)
+}
+
 func (s *MediaStore) Get(ctx context.Context, id string) (index.Record, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT id, root_alias, relative_path, size_bytes, mtime_ns, metadata_json FROM media WHERE id = ? AND available = 1`, id)
 	record, err := scanMedia(row)

@@ -1,8 +1,10 @@
 package httpapi
 
 import (
+	"net"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 )
 
@@ -44,6 +46,55 @@ func CORS(allowedOrigins []string, next http.Handler) http.Handler {
 // protocol and session headers that are deliberately not accepted by REST.
 func MCPCORS(allowedOrigins []string, next http.Handler) http.Handler {
 	return cors(allowedOrigins, next, mcpCORSPolicy)
+}
+
+// HostGuard rejects DNS-rebound authorities even when the browser sends no
+// Origin header. Call it after TrustedProxy so the forwarded authority has
+// already been checked against the transport peer.
+func HostGuard(listenPort int, publicBaseURL string, next http.Handler) http.Handler {
+	allowed := map[string]struct{}{}
+	if listenPort > 0 {
+		for _, host := range []string{"localhost", "127.0.0.1", "::1"} {
+			allowed[net.JoinHostPort(host, strconv.Itoa(listenPort))] = struct{}{}
+		}
+	}
+	if publicBaseURL != "" {
+		if parsed, err := url.Parse(publicBaseURL); err == nil {
+			allowed[parsed.Host] = struct{}{}
+		}
+	}
+	permitted := func(host string, r *http.Request) bool {
+		for authority := range allowed {
+			if strings.EqualFold(authority, host) {
+				return true
+			}
+		}
+		if listenPort == 0 {
+			if address, ok := r.Context().Value(http.LocalAddrContextKey).(net.Addr); ok {
+				if _, port, err := net.SplitHostPort(address.String()); err == nil {
+					for _, local := range []string{"localhost", "127.0.0.1", "::1"} {
+						if strings.EqualFold(host, net.JoinHostPort(local, port)) {
+							return true
+						}
+					}
+				}
+			}
+		}
+		return false
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// A loopback client can forge forwarded headers under the default proxy
+		// trust setting; validating the raw Host as well prevents that bypass.
+		if !permitted(r.Host, r) {
+			rejectOrigin(w, r)
+			return
+		}
+		if forwarded := GetForwardedInfo(r.Context()); forwarded.Trusted && !permitted(forwarded.Host, r) {
+			rejectOrigin(w, r)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func cors(allowedOrigins []string, next http.Handler, policy corsPolicy) http.Handler {

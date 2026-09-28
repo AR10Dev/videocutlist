@@ -66,13 +66,16 @@ func validateOutput(output, source probe.Metadata, selected []int, expectedDurat
 		return fmt.Errorf("output duration is not positive")
 	}
 	if expectedDurationMS > 0 {
-		// Concatenated stream-copy timestamps can drift by several segment-sized
-		// amounts. Keep the bound proportional while rejecting implausibly long data.
-		tolerance := expectedDurationMS * 12 / 5
-		if tolerance < 1500 {
-			tolerance = 1500
-		}
-		if output.DurationMS < expectedDurationMS-tolerance || output.DurationMS > expectedDurationMS+tolerance {
+		// Stream-copy boundaries can move by a GOP, especially across concatenated
+		// segments. Allow a bounded shortfall, but never accept an artifact that
+		// contains less than half the requested duration.
+		shortfall := max(int64(1500), expectedDurationMS/5)
+		shortfall = min(shortfall, expectedDurationMS/2)
+		// Timestamp discontinuities can also make stream-copy output longer.
+		// Retain the existing permissive upper bound independently of the
+		// shortfall bound; tightening it would reject valid copied segments.
+		excess := max(int64(1500), expectedDurationMS*12/5)
+		if output.DurationMS < expectedDurationMS-shortfall || output.DurationMS > expectedDurationMS+excess {
 			return fmt.Errorf("output duration %dms is implausible for expected %dms", output.DurationMS, expectedDurationMS)
 		}
 	}

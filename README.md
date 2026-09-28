@@ -1,15 +1,16 @@
 # VideoCutlist
 
 VideoCutlist is a local-first video review tool. It indexes original media without
-copying it, creates short browser previews, and exports selected segments as MKV
-files. Original-media filesystem paths never leave the server.
+copying it, creates short browser previews, and exports selected segments as MKV,
+MP4, or MOV files. Original-media filesystem paths never leave the server.
 
 ## Features
 
 - Read-only media indexing below configured media roots
 - Ordered multi-media projects with independent edits per item
 - Browser previews for selecting segments
-- Stream-copy-preferred MKV batch exports
+- MKV, MP4, and MOV batch exports with fast stream copy, precise re-encode, or
+  experimental hybrid smart cut for compatible H.264 MKV sources
 - Durable SQLite job queue with cancellation and explicit retry
 - Loopback-only service by default
 - Bearer and trusted-proxy authentication options

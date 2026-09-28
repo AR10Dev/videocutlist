@@ -98,6 +98,24 @@ type ExportOptions struct {
 	FilenameTemplate string `json:"filenameTemplate,omitempty"`
 }
 
+// WithExportDefaults resolves optional saved fields before handing an item to
+// preflight or a worker. Keep this aligned with new project-item defaults.
+func (options ExportOptions) WithExportDefaults() ExportOptions {
+	if options.Mode == "" {
+		options.Mode = "separate"
+	}
+	if options.Selection == "" {
+		options.Selection = "segments"
+	}
+	if options.CutStrategy == "" {
+		options.CutStrategy = "stream_copy_preferred"
+	}
+	if options.Container == "" {
+		options.Container = "mkv"
+	}
+	return options
+}
+
 type ProjectItem struct {
 	ID            string        `json:"id"`
 	MediaID       string        `json:"mediaId"`

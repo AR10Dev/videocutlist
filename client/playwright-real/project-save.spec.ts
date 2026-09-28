@@ -48,9 +48,9 @@ async function createClips(page: Page, jobCount: number) {
   return batch;
 }
 
-async function downloadAndProbe(page: Page, link: Locator, testInfo: TestInfo, filename: string) {
+async function downloadAndProbe(page: Page, button: Locator, testInfo: TestInfo, filename: string) {
   const downloadPromise = page.waitForEvent("download");
-  await link.click();
+  await button.click();
   const download = await downloadPromise;
   const path = testInfo.outputPath(filename);
   await download.saveAs(path);
@@ -152,10 +152,10 @@ test("creates, downloads, and verifies every export option with real media", asy
   await expect(
     separateBatch.locator(".export-output-list code").filter({ hasText: "ui-" }),
   ).toHaveCount(2);
-  await expect(separateBatch.getByRole("link", { name: /Download output/ })).toHaveCount(4);
+  await expect(separateBatch.getByRole("button", { name: /Download output/ })).toHaveCount(4);
   await downloadAndProbe(
     page,
-    separateBatch.getByRole("link", { name: "Download output 1" }).first(),
+    separateBatch.getByRole("button", { name: "Download output 1" }).first(),
     testInfo,
     "separate-fast-copy.mp4",
   );
@@ -179,7 +179,7 @@ test("creates, downloads, and verifies every export option with real media", asy
   await expect(preciseBatch).toContainText("Precise re-encode");
   await downloadAndProbe(
     page,
-    preciseBatch.getByRole("link", { name: "Download output 1" }),
+    preciseBatch.getByRole("button", { name: "Download output 1" }),
     testInfo,
     "merged-gaps-precise.mov",
   );
@@ -195,7 +195,7 @@ test("creates, downloads, and verifies every export option with real media", asy
   await expect(hybridBatch).toContainText("MKV");
   await downloadAndProbe(
     page,
-    hybridBatch.getByRole("link", { name: "Download output 1" }),
+    hybridBatch.getByRole("button", { name: "Download output 1" }),
     testInfo,
     "hybrid-smart-cut.mkv",
   );

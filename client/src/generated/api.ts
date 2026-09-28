@@ -746,6 +746,7 @@ export interface components {
       exportLimit: number;
       /** @description Combined cache disk budget, partitioned between preview clips (three quarters) and timeline assets (one quarter), with at least one byte per partition. Completed entries are evicted on publication; oversized artifacts cannot be published. */
       cacheMaxBytes: number;
+      /** @description Limits concurrent media processes and MCP requests. 64 is a safety ceiling, not recommended concurrency. */
       previewGlobalLimit: number;
       previewBeforeMs: number;
       previewAfterMs: number;

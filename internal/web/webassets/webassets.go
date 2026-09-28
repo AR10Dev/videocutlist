@@ -3,6 +3,7 @@ package webassets
 
 import (
 	"bytes"
+	"io"
 	"io/fs"
 	"mime"
 	"net/http"
@@ -26,20 +27,22 @@ func HandlerFS(assets fs.FS) http.Handler {
 		if name == "." || name == "" {
 			name = "index.html"
 		}
-		file, info, data, ok := readAsset(assets, name)
+		file, asset, info, ok := openAsset(assets, name)
 		if !ok {
 			name = "index.html"
-			file, info, data, ok = readAsset(assets, name)
+			file, asset, info, ok = openAsset(assets, name)
 		}
 		if !ok {
 			http.NotFound(w, r)
 			return
 		}
+		defer func(original fs.File) { _ = original.Close() }(asset)
 		encoding := ""
 		for _, candidate := range []struct{ suffix, encoding string }{{".br", "br"}, {".gz", "gzip"}} {
 			if strings.Contains(r.Header.Get("Accept-Encoding"), candidate.encoding) {
-				if _, compressedInfo, compressedData, found := readAsset(assets, file+candidate.suffix); found {
-					info, data, encoding = compressedInfo, compressedData, candidate.encoding
+				if _, compressed, compressedInfo, found := openAsset(assets, file+candidate.suffix); found {
+					defer func() { _ = compressed.Close() }()
+					asset, info, encoding = compressed, compressedInfo, candidate.encoding
 					break
 				}
 			}
@@ -56,22 +59,34 @@ func HandlerFS(assets fs.FS) http.Handler {
 		if contentType := mime.TypeByExtension(path.Ext(name)); contentType != "" {
 			w.Header().Set("Content-Type", contentType)
 		}
+		if seeker, ok := asset.(io.ReadSeeker); ok {
+			http.ServeContent(w, r, name, info.ModTime(), seeker)
+			return
+		}
+		// Most filesystems (including os.DirFS and embed.FS) support seeking.
+		// Keep a fallback for other fs.FS implementations without reading twice.
+		data, err := io.ReadAll(asset)
+		if err != nil {
+			http.Error(w, "asset unavailable", http.StatusInternalServerError)
+			return
+		}
 		http.ServeContent(w, r, name, info.ModTime(), bytes.NewReader(data))
 	})
 }
 
-func readAsset(assets fs.FS, name string) (string, fs.FileInfo, []byte, bool) {
+func openAsset(assets fs.FS, name string) (string, fs.File, fs.FileInfo, bool) {
 	name = path.Clean(name)
 	if name == "." || strings.HasPrefix(name, "../") {
 		return "", nil, nil, false
 	}
-	info, err := fs.Stat(assets, name)
-	if err != nil || info.IsDir() {
-		return "", nil, nil, false
-	}
-	data, err := fs.ReadFile(assets, name)
+	file, err := assets.Open(name)
 	if err != nil {
 		return "", nil, nil, false
 	}
-	return name, info, data, true
+	info, err := file.Stat()
+	if err != nil || info.IsDir() {
+		_ = file.Close()
+		return "", nil, nil, false
+	}
+	return name, file, info, true
 }

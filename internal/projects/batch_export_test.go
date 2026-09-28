@@ -59,6 +59,17 @@ func TestSeparateExportResultRetainsAllAddressableOutputs(t *testing.T) {
 	}
 }
 
+func TestLegacyBatchJobDisplaysResolvedExportOptions(t *testing.T) {
+	snapshot, err := json.Marshal(ExportSnapshot{Item: model.ProjectItem{ID: "i_aaaaaaaaaaaaaaaaaaaaaaaa"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := jobResult(jobqueue.Job{ID: "j_aaaaaaaaaaaa", RequestJSON: string(snapshot)})
+	if job.Mode != "separate" || job.Selection != "segments" || job.Strategy != "stream_copy_preferred" || job.Container != "mkv" {
+		t.Fatalf("legacy job options do not match worker defaults: %+v", job)
+	}
+}
+
 func TestBatchExportSnapshotsItemsInProjectOrder(t *testing.T) {
 	db, err := store.OpenDatabase(context.Background(), t.TempDir()+"/jobs.db")
 	if err != nil {
@@ -94,6 +105,9 @@ func TestBatchExportSnapshotsItemsInProjectOrder(t *testing.T) {
 	}
 	if snapshot.Item.ID != items[0].ID || snapshot.ProjectRevision != 7 || snapshot.Source.ETag != "a" {
 		t.Fatalf("snapshot = %#v", snapshot)
+	}
+	if options := snapshot.Item.ExportOptions; options.Mode != "separate" || options.Selection != "segments" || options.CutStrategy != "stream_copy_preferred" || options.Container != "mkv" {
+		t.Fatalf("saved optional export settings did not reach worker snapshot: %+v", options)
 	}
 	items[0].Segments[0].EndMS = 999
 	var unchanged ExportSnapshot
@@ -222,9 +236,12 @@ func TestBatchExportRunnerPersistsSuccessfulResult(t *testing.T) {
 	uc := BatchExportUseCase{
 		Media: batchCatalog{media: map[string]Media{mediaID: {ID: mediaID, ETag: "v1", SizeBytes: 10, DurationMS: 100}}},
 		Jobs:  jobs,
-		RunSnapshot: func(_ context.Context, jobID string, _ ExportSnapshot) (string, error) {
+		RunSnapshot: func(_ context.Context, jobID string, snapshot ExportSnapshot) (string, error) {
 			if jobID != job.ID {
 				t.Fatalf("runner job ID = %q", jobID)
+			}
+			if options := snapshot.Item.ExportOptions; options.Mode != "separate" || options.Selection != "segments" || options.CutStrategy != "stream_copy_preferred" || options.Container != "mkv" {
+				t.Fatalf("worker received incomplete legacy export settings: %+v", options)
 			}
 			return `{"outputName":"clip.mkv","sizeBytes":10,"retainUntil":"2030-01-01T00:00:00Z"}`, nil
 		},
