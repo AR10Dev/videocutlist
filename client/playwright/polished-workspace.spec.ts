@@ -116,6 +116,7 @@ for (const width of [390, 700, 1049, 1050, 1051, 1280, 1717]) {
   test(`workbench geometry and settings stay usable at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 1005 });
     await chooseMedia(page);
+    await page.getByRole("button", { name: "Add to project" }).click();
     const editorHeader = await page.locator(".editor-heading").boundingBox();
     expect(editorHeader!.y).toBeLessThanOrEqual(20);
     expect(editorHeader!.height).toBeLessThan(100);
@@ -296,7 +297,8 @@ test("panel widths persist, desktop sidebars reopen, and narrow drawers stay exc
   await page.setViewportSize({ width: 390, height: 844 });
   await page.reload();
   const closeDrawer = page.getByRole("button", { name: "Close open panel", exact: true });
-  if (await closeDrawer.isVisible()) await closeDrawer.click({ position: { x: 2, y: 2 } });
+  await mediaToggle.press("Escape");
+  await expect(closeDrawer).toBeHidden();
   await mediaToggle.click();
   await expect(mediaToggle).toHaveAttribute("aria-expanded", "true");
   await expect(segmentsToggle).toHaveAttribute("aria-expanded", "false");

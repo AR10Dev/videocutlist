@@ -95,6 +95,12 @@ make smoke             # check plus browser tests
 make test-real-media   # opt-in production process and FFmpeg verification
 ```
 
+CI and release validation install the same `make check` prerequisites as the
+development shell: golangci-lint v2.13.1, shfmt v3.13.1, and ShellCheck.
+Both workflows run `make check`; the CI browser job separately runs `make e2e`.
+CI limits browser tests to two concurrent workers to keep the Vite development
+server responsive on the hosted runner.
+
 See [Contributing](CONTRIBUTING.md) before opening a pull request.
 
 ## Documentation
