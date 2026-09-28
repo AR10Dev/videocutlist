@@ -1328,8 +1328,9 @@ components:
           minimum: 1
           maximum: 64
           description: >-
-            Limits concurrent media processes and MCP requests. 64 is a safety
-            ceiling, not recommended concurrency.
+            Limits concurrent media processes immediately and MCP request capacity
+            on the next server startup. 64 is a safety ceiling, not recommended
+            concurrency.
         previewBeforeMs:
           type: integer
         previewAfterMs:
@@ -1685,7 +1686,10 @@ components:
           maxLength: 64
         filenameTemplate:
           type: string
-          maxLength: 160
+          x-maxUtf8Bytes: 160
+          description: >-
+            At most 160 UTF-8 bytes. Standard maxLength counts Unicode characters
+            rather than bytes, so the server enforces this bound.
     Segment:
       type: object
       additionalProperties: false
@@ -1850,8 +1854,11 @@ components:
             Opaque configured destination ID; never a filesystem path.
         filenameTemplate:
           type: string
-          maxLength: 160
-          description: Restricted template using documented variables only.
+          x-maxUtf8Bytes: 160
+          description: >-
+            Restricted template using documented variables only, at most 160
+            UTF-8 bytes. Standard maxLength counts Unicode characters rather
+            than bytes, so the server enforces this bound.
         itemIds:
           type: array
           uniqueItems: true

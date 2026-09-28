@@ -138,9 +138,13 @@ function streamDownload(record) {
   });
   // Do not echo the upstream disposition: its name can contain untrusted paths.
   const asciiName = name.replace(/[^\x20-\x7e]|["\\/;]/g, "_") || "download";
+  const encodedName = encodeURIComponent(name).replace(
+    /['()*]/g,
+    (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
   const headers = new Headers({
     "Content-Type": "application/octet-stream",
-    "Content-Disposition": `attachment; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(name)}`,
+    "Content-Disposition": `attachment; filename="${asciiName}"; filename*=UTF-8''${encodedName}`,
     "Cache-Control": "no-store",
     "X-Content-Type-Options": "nosniff",
   });

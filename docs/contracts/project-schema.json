@@ -59,7 +59,11 @@
               },
               "container": { "enum": ["mkv", "mp4", "mov"] },
               "destinationId": { "type": "string", "maxLength": 64 },
-              "filenameTemplate": { "type": "string", "maxLength": 160 }
+              "filenameTemplate": {
+                "type": "string",
+                "description": "At most 160 UTF-8 bytes; the server enforces this bound because JSON Schema maxLength counts Unicode characters.",
+                "x-maxUtf8Bytes": 160
+              }
             }
           }
         }

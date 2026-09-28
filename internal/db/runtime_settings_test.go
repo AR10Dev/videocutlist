@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"videocutlist/internal/db"
+	"videocutlist/internal/preview"
 )
 
 func validRuntimeSettings() store.RuntimeSettings {
@@ -205,7 +206,7 @@ func TestRuntimeSettingsRejectsUnsafePreviewConcurrency(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, limit := range []int{1, store.MaxPreviewGlobalLimit} {
+	for _, limit := range []int{1, preview.MaxGlobalProcesses} {
 		update := initial.Settings
 		update.PreviewGlobalLimit = limit
 		initial, err = settings.Update(t.Context(), initial.Revision, update)
@@ -213,14 +214,14 @@ func TestRuntimeSettingsRejectsUnsafePreviewConcurrency(t *testing.T) {
 			t.Fatalf("valid limit %d: %v", limit, err)
 		}
 	}
-	for _, limit := range []int{0, store.MaxPreviewGlobalLimit + 1, math.MaxInt} {
+	for _, limit := range []int{0, preview.MaxGlobalProcesses + 1, math.MaxInt} {
 		update := initial.Settings
 		update.PreviewGlobalLimit = limit
 		if _, err := settings.Update(t.Context(), initial.Revision, update); err == nil {
 			t.Fatalf("accepted unsafe preview concurrency %d", limit)
 		}
 	}
-	if _, err := database.ExecContext(t.Context(), `UPDATE runtime_settings SET document_json = json_set(document_json, '$.previewGlobalLimit', ?)`, store.MaxPreviewGlobalLimit+1); err != nil {
+	if _, err := database.ExecContext(t.Context(), `UPDATE runtime_settings SET document_json = json_set(document_json, '$.previewGlobalLimit', ?)`, preview.MaxGlobalProcesses+1); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := settings.Get(t.Context()); err == nil {

@@ -102,10 +102,35 @@ export function resolveBrowserConfiguration(browser: Window = window): ClientCon
   return configuration;
 }
 
+export interface ApiClient {
+  url(relativePath: string): string;
+  request(relativePath: string, init?: RequestInit): Promise<Response>;
+  assetRequest(
+    mediaId: string,
+    kind: "thumbnails" | "waveform",
+    params: Record<string, number>,
+    init?: RequestInit,
+  ): Promise<Response>;
+  interchangeRequest(
+    projectId: string,
+    format: "csv" | "chapters",
+    init?: RequestInit,
+    projectItemId?: string,
+  ): Promise<Response>;
+}
+
+export interface StreamingApiClient extends ApiClient {
+  reportUnauthorized(
+    status: number | undefined,
+    authentication: Authentication,
+    signal?: AbortSignal | null,
+  ): void;
+}
+
 export function createApiClient(
   configuration: ClientConfiguration,
   fetchImplementation: Fetch = fetch,
-) {
+): StreamingApiClient {
   const base = apiBase(configuration.serverBaseUrl);
   validateAuthentication(configuration.authentication);
 
@@ -134,6 +159,20 @@ export function createApiClient(
     return target.toString();
   };
 
+  const reportUnauthorized = (
+    status: number | undefined,
+    authentication: Authentication,
+    signal?: AbortSignal | null,
+  ) => {
+    if (
+      status === 401 &&
+      configuration.authentication === authentication &&
+      !signal?.aborted &&
+      typeof window !== "undefined"
+    )
+      window.dispatchEvent(new Event(authenticationRequiredEvent));
+  };
+
   const request = (relativePath: string, init: RequestInit = {}) => {
     const authentication = validateAuthentication(configuration.authentication);
     const headers = new Headers(init.headers);
@@ -146,13 +185,7 @@ export function createApiClient(
       credentials,
       headers,
     }).then((response) => {
-      if (
-        response.status === 401 &&
-        configuration.authentication === authentication &&
-        !init.signal?.aborted &&
-        typeof window !== "undefined"
-      )
-        window.dispatchEvent(new Event(authenticationRequiredEvent));
+      reportUnauthorized(response.status, authentication, init.signal);
       return response;
     });
   };
@@ -178,7 +211,5 @@ export function createApiClient(
       `projects/${encodeURIComponent(projectId)}/interchange/${format}${projectItemId ? `?itemId=${encodeURIComponent(projectItemId)}` : ""}`,
       init,
     );
-  return { url, request, assetRequest, interchangeRequest };
+  return { url, request, assetRequest, interchangeRequest, reportUnauthorized };
 }
-
-export type ApiClient = ReturnType<typeof createApiClient>;

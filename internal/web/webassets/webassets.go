@@ -41,7 +41,7 @@ func HandlerFS(assets fs.FS) http.Handler {
 		for _, candidate := range []struct{ suffix, encoding string }{{".br", "br"}, {".gz", "gzip"}} {
 			if strings.Contains(r.Header.Get("Accept-Encoding"), candidate.encoding) {
 				if _, compressed, compressedInfo, found := openAsset(assets, file+candidate.suffix); found {
-					defer func() { _ = compressed.Close() }()
+					defer func(file fs.File) { _ = file.Close() }(compressed)
 					asset, info, encoding = compressed, compressedInfo, candidate.encoding
 					break
 				}

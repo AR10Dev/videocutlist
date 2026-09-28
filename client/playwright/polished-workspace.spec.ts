@@ -500,6 +500,7 @@ test("server processing inputs are disabled during saves instead of dropping edi
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByText("Server processing", { exact: true }).click();
   const concurrency = page.getByLabel("Export concurrency", { exact: true });
+  await expect(page.getByLabel("Preview global concurrency")).toHaveAttribute("max", "64");
   await concurrency.fill("3");
   await concurrency.press("Tab");
   await expect(page.getByLabel("Preview global concurrency")).toBeDisabled();

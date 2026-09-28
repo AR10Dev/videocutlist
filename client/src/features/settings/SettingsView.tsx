@@ -228,6 +228,7 @@ export function SettingsView(props: { onClose?: () => void } = {}) {
                 class="input input-bordered input-sm mt-1 w-full"
                 type="number"
                 min="1"
+                max="64"
                 value={runtimeSettings()?.previewGlobalLimit ?? ""}
                 onChange={(event) =>
                   void saveRuntimeSettings(

@@ -10,6 +10,16 @@ import (
 	"testing"
 )
 
+func TestRenderTemplateUsesUTF8ByteLimit(t *testing.T) {
+	template := strings.Repeat("é", 80)
+	if _, err := RenderTemplate(template, nil); err != nil {
+		t.Fatalf("160-byte filename template rejected: %v", err)
+	}
+	if _, err := RenderTemplate(template+"é", nil); err == nil {
+		t.Fatal("162-byte filename template accepted")
+	}
+}
+
 func TestSourceAdjacentDestinationUsesResolvedSourceLocation(t *testing.T) {
 	mediaRoot := t.TempDir()
 	sourceDir := filepath.Join(mediaRoot, "camera", "day")

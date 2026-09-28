@@ -23,6 +23,7 @@ export function validRuntimeSettingsInput(
     ) &&
     typeof value.mcpEnabled === "boolean" &&
     value.exportLimit! <= 64 &&
+    value.previewGlobalLimit! <= 64 &&
     value.previewBeforeMs! + value.previewAfterMs! <= value.previewMaxMs!
   );
 }

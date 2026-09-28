@@ -12,9 +12,9 @@ import (
 	"time"
 	"unicode"
 
-	store "videocutlist/internal/db"
 	exporter "videocutlist/internal/export"
 	"videocutlist/internal/jobs"
+	"videocutlist/internal/preview"
 )
 
 const (
@@ -166,8 +166,8 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 	if c.PreviewGlobalLimit, err = positiveInt(lookup, "VIDEOCUTLIST_PREVIEW_GLOBAL_LIMIT", defaultPreviewGlobal); err != nil {
 		return Config{}, err
 	}
-	if c.PreviewGlobalLimit > store.MaxPreviewGlobalLimit {
-		return Config{}, fmt.Errorf("VIDEOCUTLIST_PREVIEW_GLOBAL_LIMIT must be 1..%d", store.MaxPreviewGlobalLimit)
+	if c.PreviewGlobalLimit > preview.MaxGlobalProcesses {
+		return Config{}, fmt.Errorf("VIDEOCUTLIST_PREVIEW_GLOBAL_LIMIT must be 1..%d", preview.MaxGlobalProcesses)
 	}
 	if c.ExportLimit, err = positiveInt(lookup, "VIDEOCUTLIST_EXPORT_LIMIT", defaultExportLimit); err != nil {
 		return Config{}, err

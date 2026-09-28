@@ -1,4 +1,4 @@
-import { authenticationRequiredEvent, type ApiClient, type Authentication } from "../../api";
+import type { Authentication, StreamingApiClient } from "../../api";
 
 const scope = "/download-stream/";
 let registration: Promise<ServiceWorkerRegistration> | undefined;
@@ -35,7 +35,7 @@ async function downloadWorker() {
 
 /** Stream an authenticated export through a same-origin download-only service worker. */
 export async function downloadExport(
-  api: ApiClient,
+  api: StreamingApiClient,
   path: string,
   name: string,
   authentication: Authentication,
@@ -87,8 +87,7 @@ export async function downloadExport(
       } else if (event.data?.type === "done") {
         finish();
       } else if (event.data?.type === "error") {
-        if (event.data.status === 401 && !signal?.aborted)
-          window.dispatchEvent(new Event(authenticationRequiredEvent));
+        api.reportUnauthorized(event.data.status, authentication, signal);
         finish(new Error(event.data.message ?? "Download failed. Try again."));
       } else if (event.data?.type === "progress") {
         watch();

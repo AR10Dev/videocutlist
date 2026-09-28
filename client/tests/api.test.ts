@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  authenticationRequiredEvent,
   createApiClient,
   MAX_INTERCHANGE_FILE_BYTES,
   readApiError,
@@ -158,6 +159,36 @@ describe("client API boundary", () => {
     const init = fetch.mock.calls[0][1] as RequestInit;
     expect(init.credentials).toBe("include");
     expect(new Headers(init.headers).has("authorization")).toBe(false);
+  });
+
+  it("ignores an old unauthorized response after authentication changes, but reports the current one", async () => {
+    const browser = new EventTarget();
+    let required = 0;
+    browser.addEventListener(authenticationRequiredEvent, () => required++);
+    vi.stubGlobal("window", browser);
+    try {
+      const configuration = {
+        serverBaseUrl: "https://video.example.com",
+        authentication: { type: "bearer" as const, token: "previous-token" },
+      };
+      let respond!: (response: Response) => void;
+      const fetch = vi.fn<typeof globalThis.fetch>(
+        () => new Promise<Response>((resolve) => (respond = resolve)),
+      );
+      const client = createApiClient(configuration, fetch);
+      const previous = client.request("media");
+      configuration.authentication = { type: "bearer", token: "current-token" };
+      respond(new Response(null, { status: 401 }));
+      await previous;
+      expect(required).toBe(0);
+
+      const current = client.request("media");
+      respond(new Response(null, { status: 401 }));
+      await current;
+      expect(required).toBe(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it.each(["", "\n", "a\tb"])("rejects an invalid bearer token", (token) => {

@@ -746,7 +746,7 @@ export interface components {
       exportLimit: number;
       /** @description Combined cache disk budget, partitioned between preview clips (three quarters) and timeline assets (one quarter), with at least one byte per partition. Completed entries are evicted on publication; oversized artifacts cannot be published. */
       cacheMaxBytes: number;
-      /** @description Limits concurrent media processes and MCP requests. 64 is a safety ceiling, not recommended concurrency. */
+      /** @description Limits concurrent media processes immediately and MCP request capacity on the next server startup. 64 is a safety ceiling, not recommended concurrency. */
       previewGlobalLimit: number;
       previewBeforeMs: number;
       previewAfterMs: number;
@@ -907,6 +907,7 @@ export interface components {
       /** @enum {string} */
       container?: "mkv" | "mp4" | "mov";
       destinationId?: string;
+      /** @description At most 160 UTF-8 bytes. Standard maxLength counts Unicode characters rather than bytes, so the server enforces this bound. */
       filenameTemplate?: string;
     };
     Segment: {
@@ -988,7 +989,7 @@ export interface components {
       container: "mkv" | "mp4" | "mov";
       /** @description Opaque configured destination ID; never a filesystem path. */
       destinationId?: string;
-      /** @description Restricted template using documented variables only. */
+      /** @description Restricted template using documented variables only, at most 160 UTF-8 bytes. Standard maxLength counts Unicode characters rather than bytes, so the server enforces this bound. */
       filenameTemplate?: string;
       /** @description Optional ordered project-item selection; omitted selects all. */
       itemIds?: string[];

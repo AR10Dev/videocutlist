@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { createApiClient } from "../src/api";
 import { createSettingsController } from "../src/features/settings/controller";
+import { validRuntimeSettingsInput } from "../src/features/settings/model";
 import type { components } from "../src/generated/api";
 
 const settings = {
@@ -46,6 +47,13 @@ function controller(fetch: typeof globalThis.fetch) {
   );
 }
 afterEach(() => vi.unstubAllGlobals());
+
+describe("preview concurrency settings", () => {
+  it("accepts the documented ceiling and rejects larger client updates", () => {
+    expect(validRuntimeSettingsInput({ ...settings, previewGlobalLimit: 64 })).toBe(true);
+    expect(validRuntimeSettingsInput({ ...settings, previewGlobalLimit: 65 })).toBe(false);
+  });
+});
 
 describe("settings controller", () => {
   it("requires complete mutable settings for GET and PUT", () => {
