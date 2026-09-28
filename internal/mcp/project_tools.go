@@ -47,7 +47,9 @@ func ProjectTools(projects ProjectToolService, media MediaReader, credentials *C
 			Resource: func(ctx Context, raw json.RawMessage) (Resource, error) {
 				return projectResource(ctx, projects, media, raw)
 			},
-			Call: func(ctx Context, raw json.RawMessage) (ToolResult, error) { return getProject(ctx, projects, raw) },
+			Call: func(ctx Context, raw json.RawMessage) (ToolResult, error) {
+				return getProject(ctx, projects, media, raw)
+			},
 		},
 		{
 			Name: "create_project", Description: "Create a project from authorized media.", Permission: PermissionProjectsWrite,
@@ -143,7 +145,7 @@ func projectResourceByID(ctx Context, service projects.ProjectService, media Med
 	return Resource{ProjectID: project.ID, ProjectMedia: resources}, nil
 }
 
-func getProject(ctx Context, service projects.ProjectService, raw json.RawMessage) (ToolResult, error) {
+func getProject(ctx Context, service projects.ProjectService, media MediaReader, raw json.RawMessage) (ToolResult, error) {
 	id, err := projectIDArgument(raw)
 	if err != nil {
 		return ToolResult{}, err
@@ -151,6 +153,13 @@ func getProject(ctx Context, service projects.ProjectService, raw json.RawMessag
 	project, err := service.Get(ctx.Request.Context(), id)
 	if err != nil {
 		return ToolResult{}, err
+	}
+	resources, err := projectMedia(ctx.Request.Context(), project, media)
+	if err != nil {
+		return ToolResult{}, err
+	}
+	if !ctx.Credential.Allows(PermissionProjectsRead, Resource{ProjectID: project.ID, ProjectMedia: resources}) {
+		return ToolResult{}, ErrResourceDenied
 	}
 	return ToolResult{Content: []ToolContent{{Type: "text", Text: "Project retrieved."}}, StructuredContent: projectResult(project)}, nil
 }

@@ -18,9 +18,13 @@ import (
 )
 
 const (
-	ProposalTTL         = 15 * time.Minute
-	proposalPageDefault = 25
-	proposalPageLimit   = 100
+	ProposalTTL          = 15 * time.Minute
+	proposalPageDefault  = 25
+	proposalPageLimit    = 100
+	proposalItemLimit    = 20
+	proposalRangeLimit   = 100
+	proposalClipLimitMS  = 10 * 60 * 1000
+	proposalTotalLimitMS = 30 * 60 * 1000
 )
 
 var (
@@ -103,6 +107,9 @@ func (s *ProposalService) prepareProject(ctx context.Context, request ProposalRe
 	if err != nil {
 		return ExportProposal{}, err
 	}
+	if len(items) > proposalItemLimit {
+		return ExportProposal{}, ErrInvalidInput
+	}
 	if _, err := s.Credentials.AuthorizeCredential(ctx, request.CredentialID, PermissionExportsPrepare, resource); err != nil {
 		return ExportProposal{}, err
 	}
@@ -115,6 +122,9 @@ func (s *ProposalService) prepareProject(ctx context.Context, request ProposalRe
 		proposal.Allowed = proposal.Allowed && checked.Allowed
 		proposal.Findings = append(proposal.Findings, checked.Findings...)
 		proposal.Snapshots = append(proposal.Snapshots, snapshot)
+	}
+	if !validProposalSnapshots(proposal.Snapshots) {
+		return ExportProposal{}, ErrInvalidInput
 	}
 	return s.savePrepared(ctx, proposal, request.Export.CutStrategy)
 }
@@ -152,6 +162,9 @@ func (s *ProposalService) prepareMedia(ctx context.Context, request ProposalRequ
 	proposal.Allowed = checked.Allowed
 	proposal.Findings = checked.Findings
 	proposal.Snapshots = []projects.ExportSnapshot{snapshot}
+	if !validProposalSnapshots(proposal.Snapshots) {
+		return ExportProposal{}, ErrInvalidInput
+	}
 	return s.savePrepared(ctx, proposal, request.Export.CutStrategy)
 }
 
@@ -361,6 +374,9 @@ func (s *ProposalService) Execute(ctx context.Context, id, credentialID string) 
 	if err != nil {
 		return "", nil, err
 	}
+	if !validProposalSnapshots(proposal.Snapshots) {
+		return "", nil, ErrProposalData
+	}
 	if credentialID != proposal.CredentialID {
 		return "", nil, ErrResourceDenied
 	}
@@ -531,8 +547,34 @@ func validProposalID(value string) bool {
 	return len(value) > 3 && value[:3] == "ep_" && validSafeIdentifier(value)
 }
 
+// validProposalSnapshots checks the frozen selection, not the raw cutlist: gaps
+// can produce more ranges (and a longer duration) than their source segments.
+func validProposalSnapshots(snapshots []projects.ExportSnapshot) bool {
+	if len(snapshots) == 0 || len(snapshots) > proposalItemLimit {
+		return false
+	}
+	var total int64
+	for _, snapshot := range snapshots {
+		segments := snapshot.Item.Segments
+		if len(segments) == 0 || len(segments) > proposalRangeLimit {
+			return false
+		}
+		for _, segment := range segments {
+			if segment.StartMS < 0 || segment.EndMS <= segment.StartMS || segment.EndMS > snapshot.Source.DurationMS {
+				return false
+			}
+			duration := segment.EndMS - segment.StartMS
+			if duration > proposalClipLimitMS || duration > proposalTotalLimitMS-total {
+				return false
+			}
+			total += duration
+		}
+	}
+	return true
+}
+
 func validRanges(ranges []model.Segment) bool {
-	if len(ranges) == 0 || len(ranges) > 100 {
+	if len(ranges) == 0 || len(ranges) > proposalRangeLimit {
 		return false
 	}
 	// ResolveRanges would drop every explicitly excluded segment, producing a

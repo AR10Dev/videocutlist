@@ -83,6 +83,23 @@ func (s *projectToolsService) List(_ context.Context, cursor string, limit int) 
 	return page, nil
 }
 
+// changingProjectService makes the authorization read and payload read observe
+// different project revisions during one tools/call request.
+type changingProjectService struct {
+	*projectToolsService
+	reads  int
+	first  projects.Project
+	second projects.Project
+}
+
+func (s *changingProjectService) Get(_ context.Context, _ string) (projects.Project, error) {
+	s.reads++
+	if s.reads == 1 {
+		return s.first, nil
+	}
+	return s.second, nil
+}
+
 func TestProjectToolsScopeCreationAndRevisionConflict(t *testing.T) {
 	allowedMediaID := "m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	privateMediaID := "m_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -149,6 +166,41 @@ func TestProjectToolsAllProjectScope(t *testing.T) {
 	response := serve(handler, sessionRequest(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_project","arguments":{"id":"p_allowed"}}}`, secret, session))
 	if response.Code != 200 || !contains(response.Body.String(), "Project retrieved.") || !contains(response.Body.String(), "p_allowed") {
 		t.Fatalf("all-scope project = %s", response.Body.String())
+	}
+}
+
+func TestGetProjectRejectsOutOfScopeSnapshotAfterAuthorization(t *testing.T) {
+	allowedMediaID := "m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	privateMediaID := "m_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	media := toolMedia{items: []projects.Media{
+		{ID: allowedMediaID, RootID: "camera", Name: "allowed.mp4", DurationMS: 10_000},
+		{ID: privateMediaID, RootID: "private", Name: "secret.mp4", DurationMS: 10_000},
+	}}
+	first := projects.Project{ID: "p_private", Revision: 1, Document: model.Document{
+		SchemaVersion: model.ProjectSchemaVersion, Name: "Allowed", Items: []model.ProjectItem{
+			{ID: "i_aaaaaaaaaaaaaaaaaaaaaaaa", MediaID: allowedMediaID},
+		},
+	}}
+	second := projects.Project{ID: "p_private", Revision: 2, Document: model.Document{
+		SchemaVersion: model.ProjectSchemaVersion, Name: "Changed", Items: []model.ProjectItem{
+			{ID: "i_aaaaaaaaaaaaaaaaaaaaaaaa", MediaID: allowedMediaID},
+			{ID: "i_bbbbbbbbbbbbbbbbbbbbbbbb", MediaID: privateMediaID, Segments: []model.Segment{
+				{StartMS: 1000, EndMS: 2000, Label: "secret-cutlist-marker", Included: true},
+			}},
+		},
+	}}
+	service := &changingProjectService{projectToolsService: &projectToolsService{}, first: first, second: second}
+	credentials, secret := projectToolsCredentials(t)
+	handler := newTransport(t, mcp.TransportConfig{Enabled: true, Credentials: credentials, Tools: mcp.ProjectTools(service, media, credentials)})
+	session := initialize(t, handler, secret)
+
+	response := serve(handler, sessionRequest(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"get_project","arguments":{"id":"p_private"}}}`, secret, session))
+	body := response.Body.String()
+	if service.reads != 2 {
+		t.Fatalf("project reads = %d, want authorization and changed payload reads", service.reads)
+	}
+	if response.Code != 200 || !contains(body, `"code":"access_denied"`) || contains(body, "secret-cutlist-marker") || contains(body, privateMediaID) || contains(body, `"revision":2`) {
+		t.Fatalf("changed project response = %s", body)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -335,4 +336,172 @@ func decodeSegment(t *testing.T, data string) model.Segment {
 		t.Fatal(err)
 	}
 	return segment
+}
+
+func proposalExportInput() projects.ExportInput {
+	return projects.ExportInput{Mode: "merge", Selection: "segments", CutStrategy: "stream_copy_preferred", Container: "mp4", DestinationID: "download"}
+}
+
+func TestProposalPrepareEnforcesResolvedSelectionBounds(t *testing.T) {
+	tests := []struct {
+		name   string
+		modify func(*proposalProjects, *proposalMedia, *ProposalRequest)
+		valid  bool
+	}{
+		{name: "101 short cuts", modify: func(project *proposalProjects, media *proposalMedia, _ *ProposalRequest) {
+			media.item.DurationMS = 101_000
+			project.project.Items[0].Segments = make([]model.Segment, 101)
+			for i := range project.project.Items[0].Segments {
+				project.project.Items[0].Segments[i] = model.Segment{StartMS: int64(i * 1000), EndMS: int64(i*1000 + 500)}
+			}
+		}},
+		{name: "101 resolved gaps", modify: func(project *proposalProjects, media *proposalMedia, request *ProposalRequest) {
+			media.item.DurationMS = 201_000
+			request.Export.Selection = "gaps"
+			project.project.Items[0].Segments = make([]model.Segment, 100)
+			for i := range project.project.Items[0].Segments {
+				project.project.Items[0].Segments[i] = model.Segment{StartMS: int64(i*2000 + 500), EndMS: int64(i*2000 + 1000)}
+			}
+		}},
+		{name: "clip over ten minutes", modify: func(project *proposalProjects, media *proposalMedia, _ *ProposalRequest) {
+			media.item.DurationMS = 600_001
+			project.project.Items[0].Segments = []model.Segment{{StartMS: 0, EndMS: 600_001}}
+		}},
+		{name: "combined over thirty minutes", modify: func(project *proposalProjects, media *proposalMedia, _ *ProposalRequest) {
+			media.item.DurationMS = 600_001
+			project.project.Items[0].Segments = []model.Segment{{StartMS: 0, EndMS: 600_000}, {StartMS: 0, EndMS: 600_000}, {StartMS: 0, EndMS: 600_000}, {StartMS: 0, EndMS: 1}}
+		}},
+		{name: "21 selected items", modify: func(project *proposalProjects, _ *proposalMedia, _ *ProposalRequest) {
+			for i := 1; i < 21; i++ {
+				item := project.project.Items[0]
+				item.ID = fmt.Sprintf("i_proposaltest%02d", i+1)
+				project.project.Items = append(project.project.Items, item)
+			}
+		}},
+		{name: "valid inclusive boundaries", valid: true, modify: func(project *proposalProjects, media *proposalMedia, _ *ProposalRequest) {
+			media.item.DurationMS = 600_000
+			project.project.Items[0].Segments = make([]model.Segment, 100)
+			for i := range project.project.Items[0].Segments {
+				project.project.Items[0].Segments[i] = model.Segment{StartMS: int64(i * 1000), EndMS: int64(i*1000 + 500)}
+			}
+			for i := 1; i < 20; i++ {
+				item := project.project.Items[0]
+				item.ID = fmt.Sprintf("i_proposaltest%02d", i+1)
+				item.Segments = []model.Segment{{StartMS: 0, EndMS: 60_000}}
+				project.project.Items = append(project.project.Items, item)
+			}
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			service, project, media, credentialID, _ := newProposalTestService(t, true)
+			request := ProposalRequest{CredentialID: credentialID, ProjectID: project.project.ID, ProjectRevision: project.project.Revision, Export: proposalExportInput()}
+			tt.modify(project, media, &request)
+			proposal, err := service.Prepare(t.Context(), request)
+			if !tt.valid {
+				if !errors.Is(err, ErrInvalidInput) {
+					t.Fatalf("prepare error = %v, want invalid input", err)
+				}
+				return
+			}
+			if err != nil || len(proposal.Snapshots) != 20 || len(proposal.Snapshots[0].Item.Segments) != 100 {
+				t.Fatalf("boundary prepare = %d snapshots, %v", len(proposal.Snapshots), err)
+			}
+		})
+	}
+}
+
+func TestProposalExecuteAcceptsDurationBoundaries(t *testing.T) {
+	service, project, media, credentialID, _ := newProposalTestService(t, true)
+	media.item.DurationMS = 600_000
+	project.project.Items[0].Segments = []model.Segment{{StartMS: 0, EndMS: 600_000}}
+	for i := 1; i < 3; i++ {
+		item := project.project.Items[0]
+		item.ID = fmt.Sprintf("i_proposaltest%02d", i+1)
+		project.project.Items = append(project.project.Items, item)
+	}
+	proposal, err := service.Prepare(t.Context(), ProposalRequest{
+		CredentialID: credentialID, ProjectID: project.project.ID, ProjectRevision: project.project.Revision, Export: proposalExportInput(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, jobs, err := service.Execute(t.Context(), proposal.ID, credentialID); err != nil || len(jobs) != 3 {
+		t.Fatalf("exactly 10 minutes per clip and 30 minutes total = %d jobs, %v", len(jobs), err)
+	}
+}
+
+func TestProposalMediaKeepsRangeAndDurationBounds(t *testing.T) {
+	service, _, media, credentialID, _ := newProposalTestService(t, true)
+	media.item.DurationMS = 700_000
+	request := ProposalRequest{CredentialID: credentialID, MediaID: media.item.ID, Export: proposalExportInput()}
+	request.Ranges = []model.Segment{{StartMS: 0, EndMS: 600_001}}
+	if _, err := service.Prepare(t.Context(), request); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("oversized media clip error = %v", err)
+	}
+	request.Ranges = make([]model.Segment, 101)
+	for i := range request.Ranges {
+		request.Ranges[i] = model.Segment{StartMS: int64(i * 1000), EndMS: int64(i*1000 + 500)}
+	}
+	if _, err := service.Prepare(t.Context(), request); !errors.Is(err, ErrInvalidInput) {
+		t.Fatalf("101 media ranges error = %v", err)
+	}
+}
+
+func TestProposalExecuteRejectsOversizedStoredSnapshots(t *testing.T) {
+	tests := []struct {
+		name   string
+		modify func(*proposalPayload)
+	}{
+		{name: "101 short cuts", modify: func(payload *proposalPayload) {
+			item := &payload.Snapshots[0].Item
+			item.Segments = make([]model.Segment, 101)
+			for i := range item.Segments {
+				item.Segments[i] = model.Segment{StartMS: int64(i * 1000), EndMS: int64(i*1000 + 500)}
+			}
+		}},
+		{name: "clip over ten minutes", modify: func(payload *proposalPayload) {
+			payload.Snapshots[0].Item.Segments = []model.Segment{{StartMS: 0, EndMS: 600_001}}
+		}},
+		{name: "combined over thirty minutes", modify: func(payload *proposalPayload) {
+			for i := 1; i < 4; i++ {
+				snapshot := payload.Snapshots[0]
+				snapshot.Item.ID = fmt.Sprintf("i_proposaltest%02d", i+1)
+				payload.Snapshots = append(payload.Snapshots, snapshot)
+			}
+			for i := range payload.Snapshots {
+				payload.Snapshots[i].Item.Segments = []model.Segment{{StartMS: 0, EndMS: 600_000}}
+			}
+		}},
+		{name: "21 items", modify: func(payload *proposalPayload) {
+			for i := 1; i < 21; i++ {
+				snapshot := payload.Snapshots[0]
+				snapshot.Item.ID = fmt.Sprintf("i_proposaltest%02d", i+1)
+				payload.Snapshots = append(payload.Snapshots, snapshot)
+			}
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			service, _, media, credentialID, _ := newProposalTestService(t, true)
+			media.item.DurationMS = 700_000
+			proposal := prepareProposal(t, service, credentialID)
+			payload := proposalPayload{Snapshots: proposal.Snapshots}
+			tt.modify(&payload)
+			raw, err := json.Marshal(payload)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := service.db.ExecContext(t.Context(), `UPDATE export_proposals SET payload_json=? WHERE id=?`, string(raw), proposal.ID); err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := service.Execute(t.Context(), proposal.ID, credentialID); !errors.Is(err, ErrProposalData) {
+				t.Fatalf("execute tampered snapshot error = %v, want invalid stored proposal", err)
+			}
+			var count int
+			if err := service.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM jobs WHERE proposal_id=?`, proposal.ID).Scan(&count); err != nil || count != 0 {
+				t.Fatalf("tampered snapshot created %d jobs: %v", count, err)
+			}
+		})
+	}
 }

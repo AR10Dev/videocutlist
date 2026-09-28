@@ -93,7 +93,42 @@ export function createExportController(deps: {
   const [exportMode, setExportMode] = createSignal<"merge" | "separate">("merge");
   const [exportSelection, setExportSelection] = createSignal<"segments" | "gaps">("segments");
   const [cutStrategy, setCutStrategy] = createSignal(deps.settings().cutStrategy);
-  const [exportContainer, setExportContainer] = createSignal<ExportContainer>("mkv");
+  const [exportContainer, setExportContainerState] = createSignal<ExportContainer>("mkv");
+  let containerChoiceExplicit = false;
+  const setExportContainer: Setter<ExportContainer> = (value) => {
+    containerChoiceExplicit = false;
+    return setExportContainerState(value);
+  };
+  const applyChosenContainer = (ids: readonly string[], value: ExportContainer) => {
+    if (!ids.length) return false;
+    const selectedIds = new Set(ids);
+    let changed = false;
+    deps.setProjectItems((items) => {
+      if (!items.some((item) => selectedIds.has(item.id) && item.exportOptions.container !== value))
+        return items;
+      changed = true;
+      return items.map((item) =>
+        selectedIds.has(item.id)
+          ? { ...item, exportOptions: { ...item.exportOptions, container: value } }
+          : item,
+      );
+    });
+    if (changed) {
+      deps.markDirty();
+      deps.setDirty(true);
+    }
+    return changed;
+  };
+  const chooseExportScope = (value: ExportScope) => {
+    setExportScope(value);
+    if (containerChoiceExplicit) applyChosenContainer(exportItemIDs(), exportContainer());
+  };
+  const chooseExportItems: Setter<string[]> = (value) => {
+    const ids = setSelectedExportItems(value);
+    if (exportScope() === "selected" && containerChoiceExplicit)
+      applyChosenContainer(ids, exportContainer());
+    return ids;
+  };
   const [streamIndexes, setStreamIndexes] = createSignal<number[]>([]);
   const [destinations, setDestinations] = createSignal<Destination[]>([]);
   const [destinationCapabilities, setDestinationCapabilities] = createSignal<
@@ -853,8 +888,9 @@ export function createExportController(deps: {
   return {
     selectedExportItems,
     setSelectedExportItems,
+    chooseExportItems,
+    chooseExportScope,
     exportScope,
-    setExportScope,
     exportItemIDs,
     batches,
     exportJob,
@@ -939,9 +975,12 @@ export function createExportController(deps: {
       deps.setDirty(true);
     },
     setContainer: (value: ExportContainer) => {
-      setExportContainer(value);
-      deps.markDirty();
-      deps.setDirty(true);
+      containerChoiceExplicit = true;
+      setExportContainerState(value);
+      if (!applyChosenContainer(exportItemIDs(), value)) {
+        deps.markDirty();
+        deps.setDirty(true);
+      }
     },
     setDestination: (value: string) => {
       setDestinationId(value);

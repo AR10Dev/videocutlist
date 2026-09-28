@@ -82,9 +82,9 @@ export function ExportView(props: ExportViewProps = {}) {
     projectItems,
     editableItems,
     selectedExportItems,
-    setSelectedExportItems,
+    chooseExportItems,
     exportScope,
-    setExportScope,
+    chooseExportScope,
     exportItemIDs,
     exportJob,
     batchJobs,
@@ -135,6 +135,15 @@ export function ExportView(props: ExportViewProps = {}) {
   const excludedCount = () => summary().reduce((total, item) => total + item.excludedSegments, 0);
   const requestedRanges = () => summary().reduce((total, item) => total + item.ranges.length, 0);
   const expectedOutputs = () => summary().reduce((total, item) => total + item.outputs, 0);
+  const plannedContainerLabel = () => {
+    const selectedIds = new Set(exportItemIDs());
+    const containers = new Set<ExportContainer>();
+    for (const item of editableItems())
+      if (selectedIds.has(item.id)) containers.add(item.exportOptions.container ?? "mkv");
+    return containers.size
+      ? [...containers].map(containerLabel).join(" + ")
+      : containerLabel(exportContainer());
+  };
   const availableDestinations = () =>
     destinations().filter(
       (destination) =>
@@ -247,7 +256,7 @@ export function ExportView(props: ExportViewProps = {}) {
             <dt>Output</dt>
             <dd>
               {expectedOutputs()} {expectedOutputs() === 1 ? "clip" : "clips"} ·{" "}
-              {containerLabel(exportContainer())} · {exportDestinationLabel()}
+              {plannedContainerLabel()} · {exportDestinationLabel()}
             </dd>
           </dl>
           <Show when={exportSelection() === "segments" && excludedCount() > 0}>
@@ -368,7 +377,7 @@ export function ExportView(props: ExportViewProps = {}) {
                   name="export-scope-mode"
                   value="active"
                   checked={exportScope() === "active"}
-                  onChange={() => setExportScope("active")}
+                  onChange={() => chooseExportScope("active")}
                 />
                 <span>
                   <strong>Active media item</strong>
@@ -382,7 +391,7 @@ export function ExportView(props: ExportViewProps = {}) {
                   name="export-scope-mode"
                   value="selected"
                   checked={exportScope() === "selected"}
-                  onChange={() => setExportScope("selected")}
+                  onChange={() => chooseExportScope("selected")}
                 />
                 <span>
                   <strong>Selected project items</strong>
@@ -401,7 +410,7 @@ export function ExportView(props: ExportViewProps = {}) {
                           type="checkbox"
                           checked={selectedExportItems().includes(item.id)}
                           onChange={(event) =>
-                            setSelectedExportItems((ids) =>
+                            chooseExportItems((ids) =>
                               event.currentTarget.checked
                                 ? [...new Set([...ids, item.id])]
                                 : ids.filter((id) => id !== item.id),
@@ -441,14 +450,14 @@ export function ExportView(props: ExportViewProps = {}) {
                 <button
                   class="btn btn-ghost btn-xs"
                   type="button"
-                  onClick={() => setSelectedExportItems(projectItems().map((item) => item.id))}
+                  onClick={() => chooseExportItems(projectItems().map((item) => item.id))}
                 >
                   Select all
                 </button>
                 <button
                   class="btn btn-ghost btn-xs"
                   type="button"
-                  onClick={() => setSelectedExportItems([])}
+                  onClick={() => chooseExportItems([])}
                 >
                   Select none
                 </button>
@@ -673,7 +682,7 @@ export function ExportView(props: ExportViewProps = {}) {
             <strong>{planReady() ? "Ready to queue" : "Resolve before queueing"}</strong>
             <span>
               {expectedOutputs()} expected output{expectedOutputs() === 1 ? "" : "s"} ·{" "}
-              {containerLabel(exportContainer())}
+              {plannedContainerLabel()}
             </span>
             <Show when={planBlocker()}>
               <p role="status">{planBlocker()}</p>

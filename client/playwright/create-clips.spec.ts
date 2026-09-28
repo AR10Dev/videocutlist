@@ -295,6 +295,79 @@ test("Create clips saves a dirty revision before fresh preflight and batch submi
   );
 });
 
+test("batch container choice saves MOV for every selected item and matches the output plan", async ({
+  page,
+}) => {
+  const savedBodies: unknown[] = [];
+  const preflightBodies: unknown[] = [];
+  page.on("request", (request) => {
+    const path = new URL(request.url()).pathname;
+    if (request.method() === "PUT" && /^\/api\/v1\/projects\/[^/]+$/.test(path))
+      savedBodies.push(request.postDataJSON());
+    if (path.endsWith("/exports/preflight")) preflightBodies.push(request.postDataJSON());
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Select camera.mp4" }).click();
+  await addToProject(page);
+  await addSegment(page);
+  await openMediaChooser(page);
+  await page.getByRole("button", { name: "Select second.mp4" }).click();
+  await addToProject(page);
+  await addSegment(page);
+  await openExport(page);
+  await page.getByLabel("Output container", { exact: true }).selectOption("mp4");
+  await expect(page.getByLabel("Output container", { exact: true })).toHaveValue("mp4");
+  await expect
+    .poll(() => savedBodies.at(-1))
+    .toEqual(
+      expect.objectContaining({
+        items: [
+          expect.objectContaining({
+            mediaId: media.id,
+            exportOptions: expect.objectContaining({ container: "mkv" }),
+          }),
+          expect.objectContaining({
+            mediaId: secondMedia.id,
+            exportOptions: expect.objectContaining({ container: "mp4" }),
+          }),
+        ],
+      }),
+    );
+  await page.getByLabel("Output container", { exact: true }).selectOption("mov");
+  await page.getByRole("radio", { name: "Selected project items" }).check();
+  await page.getByRole("button", { name: "Select all" }).click();
+
+  const plan = page.locator('[aria-label="Export plan"]');
+  await expect(plan).toContainText("2 clips · MOV");
+  await expect(plan.getByText("camera-Segment 001.mov")).toBeVisible();
+  await expect(plan.getByText("second-Segment 001.mov")).toBeVisible();
+  await page.getByRole("button", { name: "Create clips" }).click();
+  await expect(
+    page.getByRole("region", { name: "Current batch" }).getByText("succeeded", { exact: true }),
+  ).toBeVisible();
+
+  expect(savedBodies.at(-1)).toEqual(
+    expect.objectContaining({
+      items: [
+        expect.objectContaining({
+          mediaId: media.id,
+          exportOptions: expect.objectContaining({ container: "mov" }),
+        }),
+        expect.objectContaining({
+          mediaId: secondMedia.id,
+          exportOptions: expect.objectContaining({ container: "mov" }),
+        }),
+      ],
+    }),
+  );
+  const preflightBody = preflightBodies.at(-1);
+  if (!preflightBody || typeof preflightBody !== "object" || !("itemIds" in preflightBody))
+    throw new Error("Preflight request did not include selected project items.");
+  expect(preflightBody).toEqual(expect.objectContaining({ container: "mov" }));
+  expect(preflightBody.itemIds).toHaveLength(2);
+});
+
 test("multi-item preflight checks every selected item before submission", async ({ page }) => {
   const calls: string[] = [];
   const preflightItems: string[][] = [];
