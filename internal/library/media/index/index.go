@@ -175,7 +175,7 @@ func (s *Scanner) scanLocked(ctx context.Context, alias string) ([]Record, error
 		if len(records) >= s.limits.MaxFiles {
 			return ErrScanLimit
 		}
-		if entry.Type()&os.ModeSymlink != 0 {
+		if entry.Type() != 0 {
 			return nil
 		}
 		file, info, err := openMedia(root, path)
@@ -455,9 +455,10 @@ func (s *Scanner) OpenResolved(ctx context.Context, catalog Catalog, id string) 
 	return file, record.Media, SourceLocation{RootPath: rootPath, RelativePath: filepath.ToSlash(record.RelativePath)}, nil
 }
 
-// openMedia resolves a relative path beneath the root's persistent descriptor,
-// then stats that exact descriptor. os.Root rejects escapes even if a symlink
-// changes while it is being resolved.
+// openMedia resolves a relative path beneath the root's persistent descriptor.
+// After opening and statting the descriptor, verify the final directory entry
+// still names the same regular file. os.Root can follow an in-root final link;
+// Unix opens use nonblocking mode so even a FIFO substituted there cannot hang.
 func openMedia(root Root, relative string) (*os.File, fs.FileInfo, error) {
 	if root.handle == nil {
 		return nil, nil, ErrNotFound
@@ -466,7 +467,7 @@ func openMedia(root Root, relative string) (*os.File, fs.FileInfo, error) {
 	if name == "." || filepath.IsAbs(name) || name == ".." || strings.HasPrefix(name, ".."+string(filepath.Separator)) {
 		return nil, nil, ErrOutsideRoot
 	}
-	file, err := root.handle.Open(name)
+	file, err := openRootedMedia(root.handle, name)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -474,6 +475,15 @@ func openMedia(root Root, relative string) (*os.File, fs.FileInfo, error) {
 	if err != nil {
 		_ = file.Close()
 		return nil, nil, err
+	}
+	pathInfo, err := root.handle.Lstat(name)
+	if err != nil {
+		_ = file.Close()
+		return nil, nil, errors.Join(ErrSourceChanged, fmt.Errorf("recheck media entry: %w", err))
+	}
+	if !pathInfo.Mode().IsRegular() || !os.SameFile(info, pathInfo) {
+		_ = file.Close()
+		return nil, nil, ErrSourceChanged
 	}
 	return file, info, nil
 }

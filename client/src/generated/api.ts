@@ -11,7 +11,10 @@ export interface paths {
       path?: never;
       cookie?: never;
     };
-    /** Read service metrics */
+    /**
+     * Read service metrics (deployment authentication required except in loopback-only none mode)
+     * @description Requires the deployment access gate: bearer credentials in bearer mode, a trusted peer in trusted-proxy mode. The OpenAPI security scheme models bearer deployments; loopback-only none mode permits anonymous access.
+     */
     get: operations["metrics"];
     put?: never;
     post?: never;
@@ -1196,6 +1199,7 @@ export interface operations {
           "text/plain": string;
         };
       };
+      401: components["responses"]["Error"];
     };
   };
   health: {

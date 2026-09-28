@@ -27,6 +27,12 @@ non-loopback deployment must configure `bearer` or `trusted_proxy` access.
 - A source fingerprint is media ID, byte size, and nanosecond mtime.
 - The resolver evaluates symlinks and rejects any result outside its configured
   canonical root. API values never contain original paths.
+- Only regular source files are eligible. On Unix platforms, rooted opens use
+  nonblocking mode so a FIFO substituted at a media pathname cannot stall
+  scanning or source access. After opening, the resolver checks the descriptor
+  against the current final directory entry; an in-root symlink or a different
+  entry observed at that check is rejected. A regular replacement made before
+  opening with the same size and mtime still matches the stored fingerprint.
 
 ## Preview normalization
 
@@ -293,6 +299,11 @@ Structured JSON fields are: `request_id`, `media_id`,
 `preview_duration_ms`, `encoder_profile`, `ffmpeg_pid`, `queue_wait_ms`,
 `spawn_to_first_byte_ms`, `total_job_ms`, `bytes_streamed`, `cancel_reason`,
 and `error_code`.
+
+`/metrics` uses the deployment authentication gate (bearer or trusted proxy);
+it is unauthenticated only in the loopback-only `none` mode. Scrapers for
+authenticated deployments must supply the same credentials as application
+requests. `/api/v1/health` and `/api/v1/ready` remain unauthenticated.
 
 The `/metrics` handler exports real HTTP request counts, cumulative latency
 sum/count, preview cache hit/miss counts, preview stream read failures, and

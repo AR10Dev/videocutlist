@@ -23,9 +23,14 @@ security:
 paths:
   /metrics:
     get:
-      summary: Read service metrics
+      summary: Read service metrics (deployment authentication required except in loopback-only none mode)
       operationId: metrics
-      security: []
+      description: >-
+        Requires the deployment access gate: bearer credentials in bearer mode,
+        a trusted peer in trusted-proxy mode. The OpenAPI security scheme models
+        bearer deployments; loopback-only none mode permits anonymous access.
+      security:
+        - bearerAuth: []
       servers:
         - url: /
       responses:
@@ -35,6 +40,8 @@ paths:
             text/plain:
               schema:
                 type: string
+        "401":
+          $ref: "#/components/responses/Error"
   /health:
     get:
       summary: Check process health

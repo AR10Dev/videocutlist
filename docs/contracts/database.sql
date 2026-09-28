@@ -39,7 +39,7 @@ CREATE TABLE jobs (
 );
 
 CREATE INDEX jobs_batch_updated ON jobs (batch_id, updated_at);
-CREATE INDEX jobs_state_updated ON jobs (state, updated_at);
+CREATE INDEX jobs_state_created_id ON jobs (state, created_at, id);
 
 CREATE TABLE cache_entries (
   cache_key TEXT PRIMARY KEY,

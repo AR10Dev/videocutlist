@@ -208,20 +208,6 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 }
 
 func (s *Server) dispatch(writer http.ResponseWriter, request *http.Request, id string) (string, string) {
-	if request.URL.Path == "/metrics" && request.Method == http.MethodGet {
-		writer.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-		if err := s.metrics.WritePrometheus(writer); err != nil {
-			// The metrics response is committed by its first write, so record the
-			// cleanup failure instead of attempting to rewrite it as an HTTP error.
-			if observed, ok := writer.(*statusWriter); ok {
-				observed.errorCode = "metrics_write"
-			}
-			if s.config.Logger != nil {
-				s.config.Logger.Print(`{"error_category":"metrics_write"}`)
-			}
-		}
-		return "/metrics", ""
-	}
 	if request.URL.Path == "/api/v1/health" && request.Method == http.MethodGet {
 		writer.WriteHeader(http.StatusOK)
 		return "/api/v1/health", ""
@@ -237,6 +223,20 @@ func (s *Server) dispatch(writer http.ResponseWriter, request *http.Request, id 
 	if err := s.config.Authenticator.Authenticate(request); err != nil {
 		Error(writer, http.StatusUnauthorized, "unauthenticated", "Authentication is required.", id)
 		return routeFor(request.URL.Path), ""
+	}
+	if request.URL.Path == "/metrics" && request.Method == http.MethodGet {
+		writer.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+		if err := s.metrics.WritePrometheus(writer); err != nil {
+			// The metrics response is committed by its first write, so record the
+			// cleanup failure instead of attempting to rewrite it as an HTTP error.
+			if observed, ok := writer.(*statusWriter); ok {
+				observed.errorCode = "metrics_write"
+			}
+			if s.config.Logger != nil {
+				s.config.Logger.Print(`{"error_category":"metrics_write"}`)
+			}
+		}
+		return "/metrics", ""
 	}
 	r := parseRoute(request.Method, request.URL.EscapedPath())
 	switch r.kind {

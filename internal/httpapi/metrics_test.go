@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -44,5 +46,40 @@ func TestMetricsBoundsMethodsAndAggregatesLatency(t *testing.T) {
 	}
 	if strings.Contains(text, "CUSTOM") {
 		t.Fatalf("unbounded method labels in metrics:\n%s", text)
+	}
+}
+
+func TestMetricsRequiresDeploymentAuthentication(t *testing.T) {
+	auth, err := NewAuthenticator(AuthConfig{Mode: "bearer", BearerToken: "private-metrics-token"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := New(Config{Authenticator: auth, Media: &routeTestMedia{}, Preview: routeTestPreview{}, Projects: routeTestProjects{}, BatchExports: &routeTestBatchExports{}, Jobs: &routeTestJobs{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		token  string
+		status int
+	}{
+		{"", http.StatusUnauthorized},
+		{"wrong", http.StatusUnauthorized},
+		{"private-metrics-token", http.StatusOK},
+	} {
+		request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+		if test.token != "" {
+			request.Header.Set("Authorization", "Bearer "+test.token)
+		}
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, request)
+		if response.Code != test.status {
+			t.Errorf("token %q: status = %d, want %d", test.token, response.Code, test.status)
+		}
+		if test.status == http.StatusUnauthorized && strings.Contains(response.Body.String(), "http_requests_total") {
+			t.Error("metrics leaked to unauthenticated client")
+		}
+		if test.status == http.StatusOK && !strings.Contains(response.Body.String(), "http_requests_total") {
+			t.Error("authenticated metrics response missing counters")
+		}
 	}
 }
