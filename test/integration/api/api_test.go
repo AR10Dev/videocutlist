@@ -499,7 +499,7 @@ func TestPreviewCancellationUsesRequestContextAndFailureIsSafe(t *testing.T) {
 	}}, &exportStub{})
 	recorder = httptest.NewRecorder()
 	failing.ServeHTTP(recorder, localRequest(http.MethodGet, "/api/v1/media/"+validMedia+"/preview?centerMs=100", nil))
-	if recorder.Code != http.StatusTooManyRequests {
+	if recorder.Code != http.StatusInternalServerError {
 		t.Fatalf("unsafe failure: %d %s", recorder.Code, recorder.Body.String())
 	}
 	for _, forbidden := range []string{"stderr", "/originals", "/cache", "/exports", "provider", "tailnet"} {

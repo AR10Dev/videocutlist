@@ -31,7 +31,11 @@ func TestSoftwarePreviewStreamsAndValidates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer source.Close()
+	t.Cleanup(func() {
+		if err := source.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	var timings []ffmpegrunner.Timing
 	running, err := (ffmpegrunner.Runner{Path: ffmpeg, OnTiming: func(timing ffmpegrunner.Timing) { timings = append(timings, timing) }}).Start(context.Background(), source, model.PreviewSpec{StartMS: 0, DurationMS: 800, Width: 160, Height: 90, FPS: 30, Audio: true})
 	if err != nil {
@@ -68,7 +72,11 @@ func TestPreviewCancellationAfterFirstByte(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer source.Close()
+	t.Cleanup(func() {
+		if err := source.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	running, err := (ffmpegrunner.Runner{Path: filepath.Join(root, "test", "harness", "fake-ffmpeg.sh"), GracePeriod: 100 * time.Millisecond}).Start(ctx, source, model.PreviewSpec{DurationMS: 1, Width: 16, Height: 16, FPS: 1})

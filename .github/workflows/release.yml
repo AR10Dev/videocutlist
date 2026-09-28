@@ -42,6 +42,16 @@ jobs:
           node-version: "26.7.0"
           cache: pnpm
           cache-dependency-path: client/pnpm-lock.yaml
+      - name: Install check tools
+        env:
+          GOBIN: ${{ runner.temp }}/bin
+        run: |
+          mkdir -p "$GOBIN"
+          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.1
+          go install mvdan.cc/sh/v3/cmd/shfmt@v3.13.1
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+          echo "$GOBIN" >> "$GITHUB_PATH"
       - run: pnpm --dir client install --frozen-lockfile
       - name: Validate release tag
         shell: bash

@@ -1,9 +1,13 @@
 package config
 
 import (
+	"math"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
+
+	store "videocutlist/internal/db"
 )
 
 func TestLoadDefaults(t *testing.T) {
@@ -17,7 +21,7 @@ func TestLoadDefaults(t *testing.T) {
 	if c.ReadTimeout != 15*time.Second || c.WriteTimeout != 0 || c.IdleTimeout != time.Minute {
 		t.Fatalf("unexpected timeout defaults: %#v", c)
 	}
-	if c.AuthMode != "none" || c.PreviewGridMS != 500 {
+	if c.AuthMode != "none" || c.MCPEnabled || c.PreviewGridMS != 500 {
 		t.Fatalf("unexpected defaults: %#v", c)
 	}
 	if c.PublicBaseURL != "" || len(c.AllowedOrigins) != 0 {
@@ -28,6 +32,16 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if len(c.Destinations) != 2 || c.Destinations[1].ID != "server" || c.Destinations[1].Kind != "archive" {
 		t.Fatalf("destinations = %#v", c.Destinations)
+	}
+}
+
+func TestLoadMCPEnablement(t *testing.T) {
+	enabled, err := load(env(mergeEnv(baseEnv(), map[string]string{"VIDEOCUTLIST_MCP_ENABLED": "true"})))
+	if err != nil || !enabled.MCPEnabled || !enabled.RuntimeSettings().MCPEnabled {
+		t.Fatalf("enabled=%v runtime=%v err=%v", enabled.MCPEnabled, enabled.RuntimeSettings().MCPEnabled, err)
+	}
+	if _, err := load(env(mergeEnv(baseEnv(), map[string]string{"VIDEOCUTLIST_MCP_ENABLED": "sometimes"}))); err == nil {
+		t.Fatal("invalid MCP enablement was accepted")
 	}
 }
 
@@ -181,8 +195,25 @@ func env(values map[string]string) func(string) (string, bool) {
 func TestLoadAllowsAnUnconfiguredMediaLibrary(t *testing.T) {
 	values := mergeEnv(baseEnv(), map[string]string{"VIDEOCUTLIST_MEDIA_ROOTS_JSON": ""})
 	config, err := load(env(values))
-	if err != nil || len(config.MediaRoots) != 0 {
+	if err != nil || config.MediaRoots == nil || len(config.MediaRoots) != 0 {
 		t.Fatalf("config=%#v err=%v", config.MediaRoots, err)
+	}
+	if err := store.ValidateRuntimeSettings(config.RuntimeSettings()); err != nil {
+		t.Fatalf("unconfigured defaults cannot be persisted: %v", err)
+	}
+}
+
+func TestLoadBoundsPreviewConcurrency(t *testing.T) {
+	for _, test := range []struct {
+		limit string
+		valid bool
+	}{
+		{"1", true}, {"64", true}, {"0", false}, {"65", false}, {strconv.Itoa(math.MaxInt), false},
+	} {
+		config, err := load(env(mergeEnv(baseEnv(), map[string]string{"VIDEOCUTLIST_PREVIEW_GLOBAL_LIMIT": test.limit})))
+		if (err == nil) != test.valid {
+			t.Fatalf("preview limit %s: config=%d error=%v, valid=%t", test.limit, config.PreviewGlobalLimit, err, test.valid)
+		}
 	}
 }
 
@@ -235,4 +266,15 @@ func mergeEnv(base, changes map[string]string) map[string]string {
 		values[key] = value
 	}
 	return values
+}
+
+func TestExportLimitSafetyBoundary(t *testing.T) {
+	for _, limit := range []int{0, 1, 64, 65, math.MaxInt} {
+		t.Run(strconv.Itoa(limit), func(t *testing.T) {
+			_, err := load(env(mergeEnv(baseEnv(), map[string]string{"VIDEOCUTLIST_EXPORT_LIMIT": strconv.Itoa(limit)})))
+			if (err == nil) != (limit >= 1 && limit <= 64) {
+				t.Fatalf("export limit %d: %v", limit, err)
+			}
+		})
+	}
 }

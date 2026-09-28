@@ -12,11 +12,23 @@ cleanup() {
 trap cleanup INT TERM
 
 case ${VIDEOCUTLIST_FAKE_FFMPEG_FAIL:-} in
-  corrupt) printf '%s\n' 'invalid media data' >&2; exit 1 ;;
-  enospc) printf '%s\n' 'No space left on device' >&2; exit 1 ;;
-  permission) printf '%s\n' 'Permission denied' >&2; exit 1 ;;
-  '') ;;
-  *) echo "unknown VIDEOCUTLIST_FAKE_FFMPEG_FAIL" >&2; exit 2 ;;
+corrupt)
+  printf '%s\n' 'invalid media data' >&2
+  exit 1
+  ;;
+enospc)
+  printf '%s\n' 'No space left on device' >&2
+  exit 1
+  ;;
+permission)
+  printf '%s\n' 'Permission denied' >&2
+  exit 1
+  ;;
+'') ;;
+*)
+  echo "unknown VIDEOCUTLIST_FAKE_FFMPEG_FAIL" >&2
+  exit 2
+  ;;
 esac
 
 sleep 300 &

@@ -1,6 +1,12 @@
-import { createSignal, For, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, Show } from "solid-js";
 import { ArrowDown, ArrowUp, Play, Repeat2, Scissors, Trash2 } from "lucide-solid";
-import { formatTime, parseTimecode, segmentIncluded, type Segment } from "../preview/model";
+import {
+  formatTime,
+  parseTimecode,
+  segmentIncluded,
+  validateSegmentLabel,
+  type Segment,
+} from "../preview/model";
 import { useWorkspace } from "../app/WorkspaceContext";
 
 export function CutsView() {
@@ -9,14 +15,65 @@ export function CutsView() {
     Record<string, Partial<Record<"start" | "end", string>>>
   >({});
   const [boundaryErrors, setBoundaryErrors] = createSignal<Record<string, string>>({});
+  const [labelDrafts, setLabelDrafts] = createSignal<Record<string, string>>({});
+  const [labelErrors, setLabelErrors] = createSignal<Record<string, string>>({});
   let canceledBoundaryKey: string | undefined;
+  let previousEditorContext: string | undefined;
+  createEffect(() => {
+    const context = workspace.editorContext();
+    if (context === previousEditorContext) return;
+    previousEditorContext = context;
+    setBoundaryDrafts({});
+    setBoundaryErrors({});
+    setLabelDrafts({});
+    setLabelErrors({});
+    canceledBoundaryKey = undefined;
+  });
   const segmentKey = (id: string | undefined, index: number) => id ?? `index-${index}`;
+  const segmentById = createMemo(
+    () =>
+      new Map(
+        workspace
+          .present()
+          .segments.map(
+            (segment, index) => [segmentKey(segment.id, index), { segment, index }] as const,
+          ),
+      ),
+  );
   const boundaryValue = (segment: Segment, index: number, boundary: "start" | "end") => {
     const key = segmentKey(segment.id, index);
     return (
       boundaryDrafts()[key]?.[boundary] ??
       formatTime(boundary === "start" ? segment.startMs : segment.endMs, workspace.duration())
     );
+  };
+  const labelValue = (segment: Segment, index: number) =>
+    labelDrafts()[segmentKey(segment.id, index)] ?? segment.label ?? "";
+  const updateLabel = (index: number, segment: Segment, value: string) => {
+    const key = segmentKey(segment.id, index);
+    setLabelDrafts((current) => ({ ...current, [key]: value }));
+    const error = validateSegmentLabel(value);
+    if (error) {
+      setLabelErrors((current) => ({ ...current, [key]: error }));
+      workspace.setEditorStatus(error);
+      return;
+    }
+    setLabelErrors((current) => {
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+    workspace.updateSegmentLabel(index, value);
+  };
+  const commitLabel = (index: number, segment: Segment) => {
+    const key = segmentKey(segment.id, index);
+    const value = labelDrafts()[key];
+    if (value === undefined || validateSegmentLabel(value)) return;
+    setLabelDrafts((current) => {
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
   };
   const confirmBoundary = (
     index: number,
@@ -82,243 +139,272 @@ export function CutsView() {
         }
       >
         <ol class="cuts-list" aria-label="Selected cuts">
-          <For each={workspace.present().segments}>
-            {(segment, index) => (
-              <li
-                class="cut-row"
-                classList={{
-                  "is-active": workspace.activeSegmentIndex() === index(),
-                  "is-excluded": !segmentIncluded(segment),
-                }}
-                aria-label={`${segment.label || `Segment ${String(index() + 1).padStart(3, "0")}`}${segmentIncluded(segment) ? " included" : " excluded"}`}
-                data-segment-id={segment.id}
-              >
-                <button
-                  class="cut-select"
-                  type="button"
-                  aria-label={`Select cut ${index() + 1}`}
-                  aria-pressed={workspace.activeSegmentIndex() === index()}
-                  onClick={() => workspace.setActiveSegmentIndex(index())}
+          <For
+            each={workspace
+              .present()
+              .segments.map((segment, index) => segmentKey(segment.id, index))}
+          >
+            {(id) => {
+              const current = () => segmentById().get(id)!;
+              const segment = () => current().segment;
+              const index = () => current().index;
+              return (
+                <li
+                  class="cut-row"
+                  classList={{
+                    "is-active": workspace.activeSegmentIndex() === index(),
+                    "is-excluded": !segmentIncluded(segment()),
+                  }}
+                  aria-label={`${segment().label || `Segment ${String(index() + 1).padStart(3, "0")}`}${segmentIncluded(segment()) ? " included" : " excluded"}`}
+                  data-segment-id={id}
                 >
-                  <strong>
-                    {segment.label || `Segment ${String(index() + 1).padStart(3, "0")}`}
-                  </strong>
-                  <span class="text-xs">
-                    {formatTime(segment.startMs, workspace.duration())} –{" "}
-                    {formatTime(segment.endMs, workspace.duration())}
-                  </span>
-                  <small>{formatTime(segment.endMs - segment.startMs, workspace.duration())}</small>
-                </button>
-                <label class="cut-inclusion">
-                  <input
-                    class="checkbox checkbox-sm"
-                    type="checkbox"
-                    checked={segmentIncluded(segment)}
-                    aria-label={`Include cut ${index() + 1} in export`}
-                    onChange={(event) =>
-                      workspace.updateSegmentIncluded(index(), event.currentTarget.checked)
-                    }
-                  />
-                  Include in export
-                </label>
-                <label class="cut-label">
-                  Label
-                  <input
-                    class="input input-sm"
-                    aria-label={`Label cut ${index() + 1}`}
-                    value={segment.label ?? ""}
-                    placeholder="Custom name"
-                    onChange={(event) =>
-                      workspace.updateSegmentLabel(index(), event.currentTarget.value)
-                    }
-                  />
-                </label>
-                <div class="cut-boundaries" aria-label={`Bounds for cut ${index() + 1}`}>
-                  <label>
-                    In
+                  <button
+                    class="cut-select"
+                    type="button"
+                    aria-label={`Select cut ${index() + 1}`}
+                    aria-pressed={workspace.activeSegmentIndex() === index()}
+                    onClick={() => workspace.setActiveSegmentIndex(index())}
+                  >
+                    <strong>
+                      {segment().label || `Segment ${String(index() + 1).padStart(3, "0")}`}
+                    </strong>
+                    <span class="text-xs">
+                      {formatTime(segment().startMs, workspace.duration())} –{" "}
+                      {formatTime(segment().endMs, workspace.duration())}
+                    </span>
+                    <small>
+                      {formatTime(segment().endMs - segment().startMs, workspace.duration())}
+                    </small>
+                  </button>
+                  <label class="cut-inclusion">
                     <input
-                      class="input input-sm"
-                      aria-label={`Cut ${index() + 1} In`}
-                      aria-invalid={Boolean(boundaryErrors()[segmentKey(segment.id, index())])}
-                      value={boundaryValue(segment, index(), "start")}
+                      class="checkbox checkbox-sm"
+                      type="checkbox"
+                      checked={segmentIncluded(segment())}
+                      aria-label={`Include cut ${index() + 1} in export`}
+                      onChange={(event) =>
+                        workspace.updateSegmentIncluded(index(), event.currentTarget.checked)
+                      }
+                    />
+                    Include in export
+                  </label>
+                  <label class="cut-label">
+                    Label
+                    <input
+                      class="input input-sm validator"
+                      classList={{
+                        "input-error": Boolean(labelErrors()[id]),
+                      }}
+                      aria-label={`Label cut ${index() + 1}`}
+                      aria-invalid={Boolean(labelErrors()[id])}
+                      aria-describedby={labelErrors()[id] ? `label-error-${id}` : undefined}
+                      value={labelValue(segment(), index())}
+                      placeholder="Custom name"
                       onInput={(event) =>
-                        setBoundaryDrafts((current) => ({
-                          ...current,
-                          [segmentKey(segment.id, index())]: {
-                            ...current[segmentKey(segment.id, index())],
-                            start: event.currentTarget.value,
-                          },
-                        }))
+                        updateLabel(index(), segment(), event.currentTarget.value)
                       }
-                      onBlur={(event) =>
-                        confirmBoundary(index(), segment, "start", event.currentTarget)
-                      }
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter")
-                          confirmBoundary(index(), segment, "start", event.currentTarget);
-                        if (event.key === "Escape") {
-                          const key = segmentKey(segment.id, index());
-                          canceledBoundaryKey = key;
+                      onBlur={() => commitLabel(index(), segment())}
+                    />
+                    <Show when={labelErrors()[id]}>
+                      {(message) => (
+                        <small
+                          id={`label-error-${id}`}
+                          class="validator-hint control-help"
+                          role="alert"
+                        >
+                          {message()}
+                        </small>
+                      )}
+                    </Show>
+                  </label>
+                  <div class="cut-boundaries" aria-label={`Bounds for cut ${index() + 1}`}>
+                    <label>
+                      In
+                      <input
+                        class="input input-sm"
+                        aria-label={`Cut ${index() + 1} In`}
+                        aria-invalid={Boolean(boundaryErrors()[id])}
+                        value={boundaryValue(segment(), index(), "start")}
+                        onInput={(event) =>
                           setBoundaryDrafts((current) => ({
                             ...current,
-                            [key]: { ...current[key], start: undefined },
-                          }));
-                          setBoundaryErrors((current) => {
-                            const next = { ...current };
-                            delete next[key];
-                            return next;
-                          });
-                          event.currentTarget.blur();
+                            [id]: {
+                              ...current[id],
+                              start: event.currentTarget.value,
+                            },
+                          }))
                         }
-                      }}
-                    />
-                  </label>
-                  <label>
-                    Out
-                    <input
-                      class="input input-sm"
-                      aria-label={`Cut ${index() + 1} Out`}
-                      aria-invalid={Boolean(boundaryErrors()[segmentKey(segment.id, index())])}
-                      value={boundaryValue(segment, index(), "end")}
-                      onInput={(event) =>
-                        setBoundaryDrafts((current) => ({
-                          ...current,
-                          [segmentKey(segment.id, index())]: {
-                            ...current[segmentKey(segment.id, index())],
-                            end: event.currentTarget.value,
-                          },
-                        }))
-                      }
-                      onBlur={(event) =>
-                        confirmBoundary(index(), segment, "end", event.currentTarget)
-                      }
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter")
-                          confirmBoundary(index(), segment, "end", event.currentTarget);
-                        if (event.key === "Escape") {
-                          const key = segmentKey(segment.id, index());
-                          canceledBoundaryKey = key;
-                          setBoundaryDrafts((current) => ({
-                            ...current,
-                            [key]: { ...current[key], end: undefined },
-                          }));
-                          setBoundaryErrors((current) => {
-                            const next = { ...current };
-                            delete next[key];
-                            return next;
-                          });
-                          event.currentTarget.blur();
+                        onBlur={(event) =>
+                          confirmBoundary(index(), segment(), "start", event.currentTarget)
                         }
-                      }}
-                    />
-                  </label>
-                  <span>
-                    Duration {formatTime(segment.endMs - segment.startMs, workspace.duration())}
-                  </span>
-                  <Show when={boundaryErrors()[segmentKey(segment.id, index())]}>
-                    {(message) => (
-                      <small class="control-help" role="alert">
-                        {message()}
-                      </small>
-                    )}
-                  </Show>
-                </div>
-                <details class="cut-menu" open>
-                  <summary class="btn btn-ghost btn-sm">Actions</summary>
-                  <div class="cut-menu-panel">
-                    <div class="cut-actions">
-                      <button
-                        class="btn btn-ghost btn-sm btn-square"
-                        title="Move up"
-                        aria-label={`Move cut ${index() + 1} up`}
-                        disabled={index() === 0}
-                        onClick={() => workspace.moveSegment(index(), -1)}
-                      >
-                        <ArrowUp size={16} />
-                      </button>
-                      <button
-                        class="btn btn-ghost btn-sm btn-square"
-                        title="Move down"
-                        aria-label={`Move cut ${index() + 1} down`}
-                        disabled={index() === workspace.present().segments.length - 1}
-                        onClick={() => workspace.moveSegment(index(), 1)}
-                      >
-                        <ArrowDown size={16} />
-                      </button>
-                      <button
-                        class="btn btn-ghost btn-sm btn-square"
-                        title="Split at playhead"
-                        aria-label={`Split cut ${index() + 1} at playhead`}
-                        disabled={
-                          workspace.playheadMs() <= segment.startMs ||
-                          workspace.playheadMs() >= segment.endMs
-                        }
-                        onClick={() => {
-                          const playheadMs = workspace.playheadMs();
-                          if (workspace.activeSegmentIndex() !== index()) {
-                            workspace.setActiveSegmentIndex(index());
-                            workspace.updateTimeline({ playheadMs });
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter")
+                            confirmBoundary(index(), segment(), "start", event.currentTarget);
+                          if (event.key === "Escape") {
+                            const key = id;
+                            canceledBoundaryKey = key;
+                            setBoundaryDrafts((current) => ({
+                              ...current,
+                              [key]: { ...current[key], start: undefined },
+                            }));
+                            setBoundaryErrors((current) => {
+                              const next = { ...current };
+                              delete next[key];
+                              return next;
+                            });
+                            event.currentTarget.blur();
                           }
-                          workspace.splitActiveSegment();
                         }}
-                      >
-                        <Scissors size={16} />
-                      </button>
-                      <button
-                        class="btn btn-ghost btn-sm btn-square text-error"
-                        title="Remove cut"
-                        aria-label={`Remove cut ${index() + 1}`}
-                        onClick={() => workspace.removeSegment(index())}
-                      >
-                        <Trash2 size={16} />
-                      </button>
-                    </div>
-                    <div class="cut-actions">
-                      <button
-                        class="btn btn-ghost btn-xs"
-                        aria-label={`Play cut ${index() + 1}`}
-                        aria-keyshortcuts="P"
-                        onClick={() => {
-                          workspace.setActiveSegmentIndex(index());
-                          workspace.playActiveSegment(false);
+                      />
+                    </label>
+                    <label>
+                      Out
+                      <input
+                        class="input input-sm"
+                        aria-label={`Cut ${index() + 1} Out`}
+                        aria-invalid={Boolean(boundaryErrors()[id])}
+                        value={boundaryValue(segment(), index(), "end")}
+                        onInput={(event) =>
+                          setBoundaryDrafts((current) => ({
+                            ...current,
+                            [id]: {
+                              ...current[id],
+                              end: event.currentTarget.value,
+                            },
+                          }))
+                        }
+                        onBlur={(event) =>
+                          confirmBoundary(index(), segment(), "end", event.currentTarget)
+                        }
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter")
+                            confirmBoundary(index(), segment(), "end", event.currentTarget);
+                          if (event.key === "Escape") {
+                            const key = id;
+                            canceledBoundaryKey = key;
+                            setBoundaryDrafts((current) => ({
+                              ...current,
+                              [key]: { ...current[key], end: undefined },
+                            }));
+                            setBoundaryErrors((current) => {
+                              const next = { ...current };
+                              delete next[key];
+                              return next;
+                            });
+                            event.currentTarget.blur();
+                          }
                         }}
-                      >
-                        <Play size={14} aria-hidden="true" /> Play
-                      </button>
-                      <button
-                        class="btn btn-ghost btn-xs"
-                        aria-label={`Loop cut ${index() + 1}`}
-                        aria-keyshortcuts="L"
-                        onClick={() => {
-                          workspace.setActiveSegmentIndex(index());
-                          workspace.toggleLoopSelectedSegment();
-                        }}
-                      >
-                        <Repeat2 size={14} aria-hidden="true" /> Loop
-                      </button>
-                      <button
-                        class="btn btn-ghost btn-xs"
-                        onClick={() => {
-                          workspace.setActiveSegmentIndex(index());
-                          workspace.updateTimeline({ playheadMs: segment.startMs });
-                        }}
-                      >
-                        Jump to start
-                      </button>
-                      <button
-                        class="btn btn-ghost btn-xs"
-                        onClick={() => {
-                          workspace.setActiveSegmentIndex(index());
-                          workspace.updateTimeline({ playheadMs: segment.endMs });
-                        }}
-                      >
-                        Jump to end
-                      </button>
-                    </div>
+                      />
+                    </label>
+                    <span>
+                      Duration{" "}
+                      {formatTime(segment().endMs - segment().startMs, workspace.duration())}
+                    </span>
+                    <Show when={boundaryErrors()[id]}>
+                      {(message) => (
+                        <small class="control-help" role="alert">
+                          {message()}
+                        </small>
+                      )}
+                    </Show>
                   </div>
-                </details>
-              </li>
-            )}
+                  <details class="cut-menu" open>
+                    <summary class="btn btn-ghost btn-sm">Actions</summary>
+                    <div class="cut-menu-panel">
+                      <div class="cut-actions">
+                        <button
+                          class="btn btn-ghost btn-sm btn-square"
+                          title="Move up"
+                          aria-label={`Move cut ${index() + 1} up`}
+                          disabled={index() === 0}
+                          onClick={() => workspace.moveSegment(index(), -1)}
+                        >
+                          <ArrowUp size={16} />
+                        </button>
+                        <button
+                          class="btn btn-ghost btn-sm btn-square"
+                          title="Move down"
+                          aria-label={`Move cut ${index() + 1} down`}
+                          disabled={index() === workspace.present().segments.length - 1}
+                          onClick={() => workspace.moveSegment(index(), 1)}
+                        >
+                          <ArrowDown size={16} />
+                        </button>
+                        <button
+                          class="btn btn-ghost btn-sm btn-square"
+                          title="Split at playhead"
+                          aria-label={`Split cut ${index() + 1} at playhead`}
+                          disabled={
+                            workspace.playheadMs() <= segment().startMs ||
+                            workspace.playheadMs() >= segment().endMs
+                          }
+                          onClick={() => {
+                            const playheadMs = workspace.playheadMs();
+                            if (workspace.activeSegmentIndex() !== index()) {
+                              workspace.setActiveSegmentIndex(index());
+                              workspace.updateTimeline({ playheadMs });
+                            }
+                            workspace.splitActiveSegment();
+                          }}
+                        >
+                          <Scissors size={16} />
+                        </button>
+                        <button
+                          class="btn btn-ghost btn-sm btn-square text-error"
+                          title="Remove cut"
+                          aria-label={`Remove cut ${index() + 1}`}
+                          onClick={() => workspace.removeSegment(index())}
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                      <div class="cut-actions">
+                        <button
+                          class="btn btn-ghost btn-xs"
+                          aria-label={`Play cut ${index() + 1}`}
+                          aria-keyshortcuts="P"
+                          onClick={() => {
+                            workspace.setActiveSegmentIndex(index());
+                            workspace.playActiveSegment(false);
+                          }}
+                        >
+                          <Play size={14} aria-hidden="true" /> Play
+                        </button>
+                        <button
+                          class="btn btn-ghost btn-xs"
+                          aria-label={`Loop cut ${index() + 1}`}
+                          aria-keyshortcuts="L"
+                          onClick={() => {
+                            workspace.setActiveSegmentIndex(index());
+                            workspace.toggleLoopSelectedSegment();
+                          }}
+                        >
+                          <Repeat2 size={14} aria-hidden="true" /> Loop
+                        </button>
+                        <button
+                          class="btn btn-ghost btn-xs"
+                          onClick={() => {
+                            workspace.setActiveSegmentIndex(index());
+                            workspace.updateTimeline({ playheadMs: segment().startMs });
+                          }}
+                        >
+                          Jump to start
+                        </button>
+                        <button
+                          class="btn btn-ghost btn-xs"
+                          onClick={() => {
+                            workspace.setActiveSegmentIndex(index());
+                            workspace.updateTimeline({ playheadMs: segment().endMs });
+                          }}
+                        >
+                          Jump to end
+                        </button>
+                      </div>
+                    </div>
+                  </details>
+                </li>
+              );
+            }}
           </For>
         </ol>
       </Show>

@@ -57,9 +57,13 @@
               "cutStrategy": {
                 "enum": ["stream_copy_preferred", "precise_reencode", "hybrid_smart_cut"]
               },
-              "container": { "const": "mkv" },
+              "container": { "enum": ["mkv", "mp4", "mov"] },
               "destinationId": { "type": "string", "maxLength": 64 },
-              "filenameTemplate": { "type": "string", "maxLength": 160 }
+              "filenameTemplate": {
+                "type": "string",
+                "description": "At most 160 UTF-8 bytes; the server enforces this bound because JSON Schema maxLength counts Unicode characters.",
+                "x-maxUtf8Bytes": 160
+              }
             }
           }
         }

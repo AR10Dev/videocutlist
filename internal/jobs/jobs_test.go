@@ -15,7 +15,11 @@ func TestUnifiedJobsTransitionsAndDerivedBatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	jobs, err := store.NewJobsStore(db)
 	if err != nil {
 		t.Fatal(err)
@@ -55,7 +59,11 @@ func TestUnifiedJobsPersistPerRootScanResults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	jobs, err := store.NewJobsStore(db)
 	if err != nil {
 		t.Fatal(err)
@@ -83,7 +91,11 @@ func TestUnifiedJobsFailWithResultPersistsPartialScan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	jobs, err := store.NewJobsStore(db)
 	if err != nil {
 		t.Fatal(err)
@@ -108,7 +120,11 @@ func TestUnifiedJobsCreateValidatesOpaqueIDs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	jobs, err := store.NewJobsStore(db)
 	if err != nil {
 		t.Fatal(err)
@@ -132,7 +148,11 @@ func TestUnifiedJobsCancellationFailureAndRestartRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	jobs, err := store.NewJobsStore(db)
 	if err != nil {
 		t.Fatal(err)
@@ -177,7 +197,11 @@ func TestUnifiedJobsConcurrentTerminalTransitions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	jobs, _ := store.NewJobsStore(db)
 	ctx := t.Context()
 	if _, err := jobs.Create(ctx, store.Job{ID: "j_000000000008", BatchID: "b_000000000008", Kind: store.JobDetect, ProjectID: "p", ProjectItemID: "i", RequestJSON: `{"kind":"scene"}`}); err != nil {

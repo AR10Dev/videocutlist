@@ -94,7 +94,7 @@ func (m *PreviewManager) Preview(ctx context.Context, spec model.PreviewSpec) (i
 
 func streamPreview(ctx context.Context, cancel context.CancelFunc, running *RunningPreview, partial PreviewPartial, writer *io.PipeWriter, validator Validator, releaseProcess func()) {
 	defer releaseProcess()
-	defer running.Stdout.Close()
+	defer func() { _ = running.Stdout.Close() }()
 	defer cancel()
 	go func() {
 		<-ctx.Done()
@@ -114,8 +114,15 @@ func streamPreview(ctx context.Context, cancel context.CancelFunc, running *Runn
 			if !errors.Is(err, io.EOF) && streamErr == nil {
 				streamErr = err
 			}
+		}
+		if streamErr != nil || err != nil {
 			break
 		}
+	}
+	if streamErr != nil {
+		// Stop the process before waiting: stdout is no longer being drained.
+		_ = writer.CloseWithError(streamErr)
+		cancel()
 	}
 	waitErr := running.Wait()
 	if streamErr == nil && waitErr != nil {

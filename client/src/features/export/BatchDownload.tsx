@@ -1,8 +1,9 @@
 import { createSignal, Show } from "solid-js";
 import { createApiClient, resolveBrowserConfiguration } from "../../api";
+import { downloadExport } from "./download";
 
-const api = createApiClient(resolveBrowserConfiguration());
-
+const configuration = resolveBrowserConfiguration();
+const api = createApiClient(configuration);
 /** Prepare one authenticated archive without exposing server paths. */
 export function BatchDownload(props: { batchId: string; outputCount: number }) {
   const [pending, setPending] = createSignal(false);
@@ -16,18 +17,13 @@ export function BatchDownload(props: { batchId: string; outputCount: number }) {
     setPending(true);
     setError("");
     try {
-      const response = await api.request(path(), { signal: requestController.signal });
-      if (!response.ok) throw new Error(`Download failed (${response.status}). Try again.`);
-      const url = URL.createObjectURL(await response.blob());
-      if (requestController.signal.aborted) {
-        URL.revokeObjectURL(url);
-        return;
-      }
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = "videocutlist-clips.zip";
-      link.click();
-      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      await downloadExport(
+        api,
+        path(),
+        "videocutlist-clips.zip",
+        configuration.authentication,
+        requestController.signal,
+      );
     } catch (cause) {
       if (requestController.signal.aborted) setError("Download cancelled.");
       else setError(cause instanceof Error ? cause.message : "Download failed. Try again.");
@@ -45,7 +41,7 @@ export function BatchDownload(props: { batchId: string; outputCount: number }) {
         disabled={pending() || props.outputCount < 2}
         onClick={() => void download()}
       >
-        {pending() ? "Preparing all clips…" : "Download all clips"}
+        {pending() ? "Downloading all clips…" : "Download all clips"}
       </button>
       <Show when={pending()}>
         <button class="btn btn-ghost btn-sm" type="button" onClick={cancel}>

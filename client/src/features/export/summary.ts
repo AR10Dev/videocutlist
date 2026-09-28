@@ -32,12 +32,13 @@ const previewFilename = (
   segment: string,
   number: number,
   mode: string,
+  container: string,
 ) =>
   (template || "{source}-{segment}.{ext}")
     .replaceAll("{source}", source.replace(/\.[^.]+$/, ""))
     .replaceAll("{segment}", segment || String(number))
     .replaceAll("{mode}", mode)
-    .replaceAll("{ext}", "mkv");
+    .replaceAll("{ext}", container);
 
 export function summarizeExports(items: EditableProjectItem[]): ExportSummary[] {
   return items.map((item) => {
@@ -50,6 +51,7 @@ export function summarizeExports(items: EditableProjectItem[]): ExportSummary[] 
       item.media.durationMs,
     );
     const mode = options.mode ?? "merge";
+    const container = options.container ?? "mkv";
     const filenameTemplate = options.filenameTemplate || "{source}-{segment}.{ext}";
     const filenamePreviews = ranges.slice(0, 5).map((range, index) => {
       const sourceIndex = sourceSegments.indexOf(range);
@@ -58,7 +60,7 @@ export function summarizeExports(items: EditableProjectItem[]): ExportSummary[] 
           ? sourceSegments[sourceIndex].label?.trim() ||
             `Segment ${String(sourceIndex + 1).padStart(3, "0")}`
           : String(index + 1);
-      return previewFilename(filenameTemplate, item.media.name, label, index + 1, mode);
+      return previewFilename(filenameTemplate, item.media.name, label, index + 1, mode, container);
     });
     return {
       id: item.id,
@@ -68,7 +70,7 @@ export function summarizeExports(items: EditableProjectItem[]): ExportSummary[] 
       outputs: ranges.length ? (mode === "merge" ? 1 : ranges.length) : 0,
       includedSegments: included.length,
       excludedSegments: sourceSegments.length - included.length,
-      filename: previewFilename(filenameTemplate, item.media.name, "1", 1, mode),
+      filename: previewFilename(filenameTemplate, item.media.name, "1", 1, mode, container),
       filenamePreviews,
     };
   });

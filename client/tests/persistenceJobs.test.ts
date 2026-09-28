@@ -18,7 +18,6 @@ describe("Solid persistence and jobs contracts", () => {
       startMs: 100,
       endMs: 200,
       source: "silence" as const,
-      confidence: 0.9,
     };
     expect(acceptCandidate(candidate, project, 1000)?.segments).toHaveLength(1);
     expect(acceptCandidate({ ...candidate, projectRevision: 1 }, project, 1000)).toBeNull();

@@ -68,8 +68,24 @@ test.beforeEach(async ({ page }) => {
         json: {
           revision: 1,
           schemaVersion: 1,
+          updatedAt: "2026-01-01T00:00:00Z",
+          pathsConstrained: false,
           roots: { media: { state: "ready" } },
-          settings: { exportLimit: 1, previewGlobalLimit: 2 },
+          settings: {
+            destinations: [
+              { id: "download", label: "Browser download", kind: "download", retention: "24h" },
+            ],
+            exportLimit: 1,
+            cacheMaxBytes: 1_000_000,
+            previewGlobalLimit: 2,
+            previewBeforeMs: 1000,
+            previewAfterMs: 1000,
+            previewMaxMs: 5000,
+            previewGridMs: 1000,
+            mediaMaxFiles: 100,
+            mediaMaxDepth: 4,
+            mcpEnabled: false,
+          },
         },
       });
     if (path.endsWith("/batches")) return route.fulfill({ json: { items: [] } });
@@ -101,54 +117,50 @@ test("browsing stays out of the project until add, then activates without duplic
   });
   await page.goto("/");
   await page.getByRole("button", { name: "Select camera.mp4" }).click();
+  const selectedMedia = page.getByLabel("Selected media");
   await expect(page.getByRole("button", { name: "Add to project" })).toBeVisible();
-
-  await expect(page.getByRole("list", { name: "Project media items" })).toHaveCount(0);
+  await expect(selectedMedia).toContainText("camera.mp4");
 
   await page.getByRole("button", { name: "Add to project" }).click();
-  const projectItems = page.getByRole("list", { name: "Project media items" });
-  await expect(projectItems.getByRole("button", { name: /^camera\.mp4/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Add to project" })).toHaveCount(0);
+  await expect(selectedMedia).toContainText("camera.mp4");
   await addSegment(page);
 
   await openMediaChooser(page);
   await page.getByRole("button", { name: "Select second.mp4" }).click();
   await expect(page.getByRole("button", { name: "Add to project" })).toBeVisible();
-  await expect(projectItems).toHaveCount(1);
-  await expect(projectItems.getByRole("button", { name: /^second\.mp4/ })).toHaveCount(0);
+  await expect(selectedMedia).toContainText("second.mp4");
   await page.getByRole("tab", { name: "Export", exact: true }).click();
-  await expect(page.getByLabel("Export summary")).toContainText("0 · 00:00.000 requested");
+  const exportSummary = page.getByLabel("Export plan");
+  await expect(exportSummary).toContainText("0 · 00:00.000 requested");
   await expect(page.getByRole("button", { name: "Create clips" })).toBeDisabled();
 
   await page.getByRole("button", { name: "Add to project" }).click();
-  await expect(projectItems.getByRole("button", { name: /^camera\.mp4/ })).toBeVisible();
-  await expect(projectItems.getByRole("button", { name: /^second\.mp4/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Add to project" })).toHaveCount(0);
+  await expect(selectedMedia).toContainText("second.mp4");
 
   await openMediaChooser(page);
   await page.getByRole("button", { name: "Select camera.mp4" }).click();
   await expect(page.getByRole("button", { name: "Add to project" })).toHaveCount(0);
-  await expect(projectItems.getByRole("button", { name: /^camera\.mp4/ })).toHaveAttribute(
-    "aria-pressed",
-    "true",
-  );
-  await expect(projectItems.getByRole("button", { name: /^camera\.mp4/ })).toHaveCount(1);
+  await expect(selectedMedia).toContainText("camera.mp4");
 
   await page.getByRole("tab", { name: "Export", exact: true }).click();
   const exportPanel = page.getByRole("region", { name: "Export" });
   const activeScope = exportPanel.getByRole("radio", { name: "Active media item" });
   const selectedScope = exportPanel.getByRole("radio", { name: "Selected project items" });
   await expect(activeScope).toBeChecked();
-  await expect(page.getByLabel("Export summary")).toContainText("camera.mp4");
-  await expect(page.getByLabel("Export summary")).toContainText("1 · 00:00.600 requested");
-  await expect(exportPanel.getByRole("checkbox")).toHaveCount(0);
+  await expect(exportSummary).toContainText("camera.mp4");
+  await expect(exportSummary).toContainText("1 · 00:00.600 requested");
+  await expect(exportPanel.getByLabel("Project items to export")).toHaveCount(0);
 
   await selectedScope.check();
-  await expect(page.getByLabel("Export summary")).toContainText("2 project items");
+  await expect(exportSummary).toContainText("2 project items");
   await expect(exportPanel.getByRole("checkbox", { name: "camera.mp4" })).toBeChecked();
   await expect(exportPanel.getByRole("checkbox", { name: "second.mp4" })).toBeChecked();
 
   await activeScope.check();
-  await expect(page.getByLabel("Export summary")).toContainText("camera.mp4");
-  await expect(page.getByLabel("Export summary")).toContainText("1 · 00:00.600 requested");
+  await expect(exportSummary).toContainText("camera.mp4");
+  await expect(exportSummary).toContainText("1 · 00:00.600 requested");
   await page.getByRole("button", { name: "Create clips" }).click();
   await expect(page.getByText("Export queued.")).toBeVisible();
   expect(exportBody?.itemIds).toEqual([expect.any(String)]);

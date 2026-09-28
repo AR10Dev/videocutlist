@@ -1,6 +1,6 @@
 import { createEffect, createSignal, type Accessor } from "solid-js";
 import { createMutation, useQuery, type QueryClient } from "@tanstack/solid-query";
-import type { ApiClient } from "../../api";
+import { readApiError, type ApiClient } from "../../api";
 import type { components } from "../../generated/api";
 import { cancellationIsCurrent } from "../queue/cancellation";
 import { cancelJobLifecycle } from "../queue/queryLifecycle";
@@ -17,18 +17,35 @@ import type { Segment } from "../preview/model";
 type Media = components["schemas"]["Media"];
 type Project = components["schemas"]["Project"];
 type DetectionJob = components["schemas"]["DetectionJob"];
+type DetectionCancellation = {
+  jobId: string;
+  request: number;
+};
+
+type DetectionReview = {
+  jobId: string;
+  projectId: string;
+  mediaId: string;
+  activeItemId: string | undefined;
+  sourceFingerprint: string | undefined;
+  baselineRevision: number;
+  currentRevision: number;
+  editorVersion: number;
+  pendingLocalSave: boolean;
+  invalidated: boolean;
+};
 
 type DetectionDependencies = {
   selected: Accessor<Media | undefined>;
   activeItemId: Accessor<string | undefined>;
   projectId: Accessor<string>;
   revision: Accessor<number>;
+  editorVersion: Accessor<number>;
+  saveConflict: Accessor<boolean>;
   segments: Accessor<Segment[]>;
   saveProject: () => Promise<Project | undefined>;
   updateSegments: (segments: Segment[]) => void;
   markDirty: () => void;
-  setExportSelection?: (selection: "segments" | "gaps") => void;
-  onSegmentsAccepted?: () => void;
 };
 
 export function createDetectionController(
@@ -42,8 +59,80 @@ export function createDetectionController(
   let detectionRequest = 0;
   let detectionController: AbortController | undefined;
   let detectionCancellationController: AbortController | undefined;
+  let localCancellation: DetectionCancellation | undefined;
   const invalidatedTerminalJobs = new Set<string>();
   const reviewedCandidateIDs = new Set<string>();
+  let detectionReview: DetectionReview | undefined;
+  let failedCancellation: DetectionCancellation | undefined;
+  let applyingDetectionEdit = false;
+  const invalidateDetectionReview = () => {
+    if (detectionReview) {
+      detectionReview.invalidated = true;
+      detectionReview.pendingLocalSave = false;
+    }
+  };
+  const synchronizeDetectionReview = () => {
+    const review = detectionReview;
+    if (!review) return true;
+    if (review.invalidated) return false;
+    const selected = dependencies.selected();
+    if (
+      dependencies.projectId() !== review.projectId ||
+      dependencies.activeItemId() !== review.activeItemId ||
+      selected?.id !== review.mediaId ||
+      selected?.etag !== review.sourceFingerprint ||
+      dependencies.saveConflict() ||
+      dependencies.editorVersion() !== review.editorVersion
+    ) {
+      invalidateDetectionReview();
+      return false;
+    }
+    const revision = dependencies.revision();
+    if (revision === review.currentRevision) return true;
+    if (review.pendingLocalSave && revision === review.currentRevision + 1) {
+      review.currentRevision = revision;
+      review.pendingLocalSave = false;
+      return true;
+    }
+    invalidateDetectionReview();
+    return false;
+  };
+  const createDetectionReview = (job: DetectionJob) => {
+    if (detectionReview?.jobId === job.id) return;
+    const selected = dependencies.selected();
+    const currentRevision = dependencies.revision();
+    detectionReview = {
+      jobId: job.id,
+      projectId: dependencies.projectId(),
+      mediaId: job.mediaId,
+      activeItemId: dependencies.activeItemId(),
+      sourceFingerprint: selected?.etag,
+      baselineRevision: job.projectRevision,
+      currentRevision,
+      editorVersion: dependencies.editorVersion(),
+      pendingLocalSave: false,
+      invalidated:
+        !selected ||
+        selected.id !== job.mediaId ||
+        currentRevision !== job.projectRevision ||
+        dependencies.saveConflict(),
+    };
+  };
+  const staleAcceptance = (candidates: Candidate[]): CandidateAcceptance => ({
+    segments: dependencies.segments(),
+    accepted: [],
+    skipped: candidates.map((candidate) => ({ candidate, reason: "stale" })),
+  });
+  createEffect(() => {
+    dependencies.revision();
+    dependencies.editorVersion();
+    dependencies.saveConflict();
+    dependencies.projectId();
+    dependencies.activeItemId();
+    dependencies.selected();
+    if (applyingDetectionEdit) return;
+    synchronizeDetectionReview();
+  });
   const cancelJobMutation = createMutation(() => ({
     mutationFn: ({ id, signal }: { id: string; signal: AbortSignal }) =>
       api.request(`jobs/${encodeURIComponent(id)}`, { method: "DELETE", signal }),
@@ -59,9 +148,11 @@ export function createDetectionController(
       return (await response.json()) as DetectionJob;
     },
     refetchInterval: (query: { state: { data?: DetectionJob } }) =>
-      jobPollInterval(query.state.data, 500),
+      jobPollInterval(query.state.data ?? detectionJob(), 500),
   }));
   const setDetectionResult = (candidates: Candidate[]) => {
+    const job = detectionJob();
+    if (job?.state === "succeeded") createDetectionReview(job);
     setDetectionCandidates(
       candidates.filter((candidate) => !reviewedCandidateIDs.has(candidate.id)),
     );
@@ -69,8 +160,34 @@ export function createDetectionController(
       setDetectionStatus(`${candidates.length} candidates found. Review each before accepting.`);
   };
   createEffect(() => {
+    const error = detectionStatusQuery.error;
+    const current = detectionJob();
+    const cancellationFailure =
+      failedCancellation &&
+      failedCancellation.jobId === current?.id &&
+      failedCancellation.request === detectionRequest;
+    if (
+      error &&
+      current &&
+      (current.state === "queued" || current.state === "running") &&
+      !localCancellation &&
+      !cancellationFailure
+    ) {
+      setDetectionStatus(
+        error instanceof Error ? error.message : "Detection status could not be updated.",
+      );
+    }
+  });
+  createEffect(() => {
     const next = detectionStatusQuery.data;
+    const cancellation = localCancellation;
     if (!next || next.id !== detectionJob()?.id) return;
+    if (
+      (next.state === "queued" || next.state === "running") &&
+      cancellation?.jobId === next.id &&
+      cancellation.request === detectionRequest
+    )
+      return;
     setDetectionJob(next);
     if (next.state === "succeeded") {
       setDetectionResult(next.candidates ?? []);
@@ -99,6 +216,9 @@ export function createDetectionController(
     detectionController = undefined;
     detectionCancellationController?.abort();
     detectionCancellationController = undefined;
+    localCancellation = undefined;
+    failedCancellation = undefined;
+    detectionReview = undefined;
     detectionRequest++;
     setDetectionJob();
     reviewedCandidateIDs.clear();
@@ -112,11 +232,14 @@ export function createDetectionController(
       "noiseDb" | "minDurationMs" | "sceneThreshold"
     > = {},
   ) => {
-    if (kind === "silence") dependencies.setExportSelection?.("gaps");
-    else if (kind === "scene") dependencies.setExportSelection?.("segments");
     const request = ++detectionRequest;
     detectionController?.abort();
     detectionController = undefined;
+    detectionCancellationController?.abort();
+    detectionCancellationController = undefined;
+    localCancellation = undefined;
+    failedCancellation = undefined;
+    detectionReview = undefined;
     reviewedCandidateIDs.clear();
     setDetectionJob();
     setDetectionCandidates([]);
@@ -126,7 +249,7 @@ export function createDetectionController(
     const selected = dependencies.selected();
     if (!saved || !selected) {
       setDetectionStatus(
-        "Detection was not started. Save the project in Project and resolve any reported errors.",
+        "Detection was not started. Save from the project header and resolve any reported errors.",
       );
       return;
     }
@@ -143,16 +266,23 @@ export function createDetectionController(
           projectItemId: dependencies.activeItemId(),
           projectRevision: saved.revision,
           kind,
+          sourceFingerprint: selected.etag,
           ...options,
         }),
         signal: controller.signal,
       });
       if (controller.signal.aborted || request !== detectionRequest) return;
       if (!response.ok) {
+        const error = await readApiError(response);
+        if (controller.signal.aborted || request !== detectionRequest) return;
         setDetectionStatus(
-          response.status === 409
+          error.code === "stale_project"
             ? "Detection is stale; save or reload the project."
-            : "Detection could not be started.",
+            : error.code === "detection_busy"
+              ? "Detection capacity is busy. Try again shortly."
+              : error.code === "invalid_detection"
+                ? "Detection settings were rejected. Check the sensitivity values."
+                : "Detection could not be started.",
         );
         return;
       }
@@ -177,9 +307,12 @@ export function createDetectionController(
     if (!job || (job.state !== "queued" && job.state !== "running")) return;
     const request = ++detectionRequest;
     detectionController?.abort();
+    detectionController = undefined;
     detectionCancellationController?.abort();
     const controller = new AbortController();
     detectionCancellationController = controller;
+    localCancellation = { jobId: job.id, request };
+    failedCancellation = undefined;
     try {
       await cancelJobLifecycle({
         jobId: job.id,
@@ -191,24 +324,54 @@ export function createDetectionController(
         jobQueryKey: ["job", "detection", job.id],
         projectQueryKey: ["project", dependencies.projectId()],
       });
+      const currentJob = detectionJob();
       if (
-        request !== detectionRequest ||
+        !currentJob ||
+        currentJob.id !== job.id ||
+        (currentJob.state !== "queued" && currentJob.state !== "running") ||
         !cancellationIsCurrent(controller, detectionCancellationController)
       )
         return;
+      failedCancellation = undefined;
       setDetectionJob({ ...job, state: "cancelled" });
       setDetectionStatus("Detection cancelled.");
     } catch (error) {
-      if (request === detectionRequest && !controller.signal.aborted)
+      const currentJob = detectionJob();
+      if (
+        request === detectionRequest &&
+        currentJob?.id === job.id &&
+        !controller.signal.aborted &&
+        (currentJob.state === "queued" || currentJob.state === "running")
+      ) {
+        localCancellation = undefined;
+        failedCancellation = { jobId: job.id, request };
         setDetectionStatus(
           error instanceof Error ? error.message : "Detection could not be cancelled. Try again.",
         );
+      }
     } finally {
       if (detectionCancellationController === controller)
         detectionCancellationController = undefined;
     }
   };
+  const recordLocalDetectionEdit = () => {
+    const review = detectionReview;
+    if (!review || review.invalidated) return;
+    review.pendingLocalSave = true;
+    review.editorVersion = dependencies.editorVersion();
+  };
+  const applyAcceptedSegments = (segments: Segment[]) => {
+    applyingDetectionEdit = true;
+    try {
+      dependencies.updateSegments(segments);
+      dependencies.markDirty();
+      recordLocalDetectionEdit();
+    } finally {
+      applyingDetectionEdit = false;
+    }
+  };
   const acceptanceFor = (candidates: Candidate[]): CandidateAcceptance => {
+    if (detectionReview && !synchronizeDetectionReview()) return staleAcceptance(candidates);
     const selected = dependencies.selected();
     if (!selected) return { segments: dependencies.segments(), accepted: [], skipped: [] };
     return acceptCandidates(
@@ -216,7 +379,7 @@ export function createDetectionController(
       {
         id: dependencies.projectId(),
         mediaId: selected.id,
-        revision: dependencies.revision(),
+        revision: detectionReview?.baselineRevision ?? dependencies.revision(),
         segments: dependencies.segments(),
       },
       selected.durationMs,
@@ -225,13 +388,14 @@ export function createDetectionController(
   const acceptDetection = (candidate: Candidate): CandidateAcceptance => {
     const result = acceptanceFor([candidate]);
     if (!result.accepted.length) {
-      setDetectionStatus("Candidate is stale, invalid, or overlaps an existing segment.");
+      setDetectionStatus(
+        candidate.source === "scene"
+          ? "Scene changes are points; preview or dismiss them instead of adding a segment."
+          : "Candidate is stale, invalid, or overlaps an existing segment.",
+      );
       return result;
     }
-    if (candidate.source === "silence") dependencies.setExportSelection?.("gaps");
-    dependencies.updateSegments(result.segments);
-    dependencies.onSegmentsAccepted?.();
-    dependencies.markDirty();
+    applyAcceptedSegments(result.segments);
     reviewedCandidateIDs.add(candidate.id);
     setDetectionCandidates((items: Candidate[]) =>
       items.filter((item) => item.id !== candidate.id),
@@ -256,11 +420,7 @@ export function createDetectionController(
       );
       return result;
     }
-    if (result.accepted.some((candidate) => candidate.source === "silence"))
-      dependencies.setExportSelection?.("gaps");
-    dependencies.updateSegments(result.segments);
-    dependencies.onSegmentsAccepted?.();
-    dependencies.markDirty();
+    applyAcceptedSegments(result.segments);
     for (const candidate of result.accepted) reviewedCandidateIDs.add(candidate.id);
     const acceptedIDs = new Set(result.accepted.map((candidate) => candidate.id));
     setDetectionCandidates((items: Candidate[]) =>
@@ -282,6 +442,13 @@ export function createDetectionController(
     setDetectionStatus,
     detectionCandidates,
     setDetectionCandidates,
+    detectionLoading: () => Boolean(detectionJob()?.id) && detectionStatusQuery.isFetching,
+    detectionQueryError: () => {
+      const error = detectionStatusQuery.error;
+      const job = detectionJob();
+      if (!error || job?.state === "cancelled" || localCancellation?.jobId === job?.id) return "";
+      return error instanceof Error ? error.message : "Detection status could not be updated.";
+    },
     clearDetectionContext,
     startDetection,
     cancelDetection,

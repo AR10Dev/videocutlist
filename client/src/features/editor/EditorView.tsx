@@ -13,6 +13,8 @@ export function EditorView(props: {
   openTaskPanel: () => void;
 }) {
   const workspace = useWorkspace();
+  const mediaPanelAction = () => (props.mediaOpen ? "Hide media library" : "Show media library");
+  const tasksPanelAction = () => (props.tasksOpen ? "Hide editing tools" : "Show editing tools");
   return (
     <section class="editor-panel" aria-labelledby="timeline-heading">
       <div class="panel-heading editor-heading">
@@ -25,8 +27,8 @@ export function EditorView(props: {
           <button
             class="btn btn-ghost btn-sm btn-square"
             type="button"
-            title="Show media library"
-            aria-label="Show media library"
+            title={mediaPanelAction()}
+            aria-label={mediaPanelAction()}
             aria-expanded={props.mediaOpen}
             aria-controls="media-panel"
             onClick={props.openMediaPanel}
@@ -36,8 +38,8 @@ export function EditorView(props: {
           <button
             class="btn btn-ghost btn-sm btn-square"
             type="button"
-            title="Show editing tools"
-            aria-label="Show editing tools"
+            title={tasksPanelAction()}
+            aria-label={tasksPanelAction()}
             aria-expanded={props.tasksOpen}
             aria-controls="segments-panel"
             onClick={props.openTaskPanel}
@@ -64,6 +66,21 @@ export function EditorView(props: {
               <strong>{item().name}</strong>
               <span>{formatTime(item().durationMs, workspace.duration())}</span>
             </div>
+            <Show when={workspace.metadataError()}>
+              {(message) => (
+                <div class="alert alert-error mb-2" role="alert">
+                  <span>{message()}</span>
+                  <button
+                    class="btn btn-ghost btn-xs"
+                    type="button"
+                    disabled={workspace.metadataLoading()}
+                    onClick={workspace.retryMetadata}
+                  >
+                    {workspace.metadataLoading() ? "Retrying…" : "Retry metadata"}
+                  </button>
+                </div>
+              )}
+            </Show>
             <Show when={!workspace.activeItemId()}>
               <div class="preview-only-notice" role="status">
                 <p class="text-sm text-base-content/70">

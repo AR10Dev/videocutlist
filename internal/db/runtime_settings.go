@@ -7,10 +7,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
 	"time"
+
+	"videocutlist/internal/jobs"
+	"videocutlist/internal/preview"
 )
 
 const runtimeSettingsSchemaVersion = 1
@@ -39,6 +43,7 @@ type RuntimeSettings struct {
 	PreviewGridMS      int                  `json:"previewGridMs"`
 	MediaMaxFiles      int                  `json:"mediaMaxFiles"`
 	MediaMaxDepth      int                  `json:"mediaMaxDepth"`
+	MCPEnabled         bool                 `json:"mcpEnabled"`
 }
 
 type RuntimeSettingsRecord struct {
@@ -89,7 +94,7 @@ func NewRuntimeSettingsStore(db *sql.DB) (*RuntimeSettingsStore, error) {
 	return &RuntimeSettingsStore{db: db}, nil
 }
 
-// Seed stores defaults for a new database and adopts untouched new defaults.
+// Seed stores defaults for a new database and refreshes deployment-owned paths.
 func (s *RuntimeSettingsStore) Seed(ctx context.Context, defaults RuntimeSettings) (RuntimeSettingsRecord, error) {
 	if err := ValidateRuntimeSettings(defaults); err != nil {
 		return RuntimeSettingsRecord{}, err
@@ -108,15 +113,13 @@ func (s *RuntimeSettingsStore) Seed(ctx context.Context, defaults RuntimeSetting
 	if err != nil {
 		return RuntimeSettingsRecord{}, err
 	}
-	// Preserve saved settings, but adopt newly added defaults when the stored
-	// destination list is still an unchanged prefix of the defaults.
-	if len(record.Settings.Destinations) < len(defaults.Destinations) &&
-		slices.Equal(record.Settings.Destinations, defaults.Destinations[:len(record.Settings.Destinations)]) {
-		updated := record.Settings
-		updated.Destinations = slices.Clone(defaults.Destinations)
-		return s.Update(ctx, record.Revision, updated)
+	updated := record.Settings
+	updated.MediaRoots = maps.Clone(defaults.MediaRoots)
+	updated.Destinations = slices.Clone(defaults.Destinations)
+	if maps.Equal(record.Settings.MediaRoots, updated.MediaRoots) && slices.Equal(record.Settings.Destinations, updated.Destinations) {
+		return record, nil
 	}
-	return record, nil
+	return s.Update(ctx, record.Revision, updated)
 }
 
 func (s *RuntimeSettingsStore) Get(ctx context.Context) (RuntimeSettingsRecord, error) {
@@ -153,8 +156,8 @@ func (s *RuntimeSettingsStore) Update(ctx context.Context, expectedRevision int6
 	if err != nil {
 		return RuntimeSettingsRecord{}, err
 	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	result, err := s.db.ExecContext(ctx, `UPDATE runtime_settings SET revision = revision + 1, document_json = ?, updated_at = ? WHERE id = 1 AND revision = ?`, document, now, expectedRevision)
+	now := time.Now().UTC()
+	result, err := s.db.ExecContext(ctx, `UPDATE runtime_settings SET revision = revision + 1, document_json = ?, updated_at = ? WHERE id = 1 AND revision = ?`, document, now.Format(time.RFC3339Nano), expectedRevision)
 	if err != nil {
 		return RuntimeSettingsRecord{}, fmt.Errorf("update runtime settings: %w", err)
 	}
@@ -168,7 +171,9 @@ func (s *RuntimeSettingsStore) Update(ctx context.Context, expectedRevision int6
 		}
 		return RuntimeSettingsRecord{}, ErrRuntimeSettingsRevisionConflict
 	}
-	return s.Get(ctx)
+	// The write is committed. A subsequent cancellable read could falsely report
+	// failure and make the caller roll live settings back behind persisted state.
+	return RuntimeSettingsRecord{Settings: settings, SchemaVersion: runtimeSettingsSchemaVersion, Revision: expectedRevision + 1, UpdatedAt: now}, nil
 }
 
 func marshalRuntimeSettings(settings RuntimeSettings) (string, error) {
@@ -214,8 +219,17 @@ func ValidateRuntimeSettings(settings RuntimeSettings) error {
 			return errors.New("media roots contain an empty alias or path")
 		}
 	}
-	if settings.ExportLimit < 1 || settings.CacheMaxBytes < 1 || settings.PreviewGlobalLimit < 1 || settings.PreviewBeforeMS < 1 || settings.PreviewAfterMS < 1 || settings.PreviewMaxMS < 1 || settings.PreviewGridMS < 1 || settings.MediaMaxFiles < 1 || settings.MediaMaxDepth < 1 {
+	if settings.ExportLimit < 1 || settings.ExportLimit > jobs.MaxWorkerLimit {
+		return fmt.Errorf("export limit must be 1..%d", jobs.MaxWorkerLimit)
+	}
+	if settings.CacheMaxBytes < 2 {
+		return errors.New("cache limit must be at least 2 bytes")
+	}
+	if settings.CacheMaxBytes < 1 || settings.PreviewGlobalLimit < 1 || settings.PreviewBeforeMS < 1 || settings.PreviewAfterMS < 1 || settings.PreviewMaxMS < 1 || settings.PreviewGridMS < 1 || settings.MediaMaxFiles < 1 || settings.MediaMaxDepth < 1 {
 		return errors.New("runtime limits must be positive")
+	}
+	if settings.PreviewGlobalLimit > preview.MaxGlobalProcesses {
+		return fmt.Errorf("preview global limit must be 1..%d", preview.MaxGlobalProcesses)
 	}
 	if settings.PreviewBeforeMS+settings.PreviewAfterMS > settings.PreviewMaxMS {
 		return errors.New("preview max must cover the default preview window")

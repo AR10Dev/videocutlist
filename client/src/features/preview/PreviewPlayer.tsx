@@ -7,7 +7,6 @@ import {
   List,
   Pause,
   Play,
-  Repeat2,
   SkipBack,
   SkipForward,
   Volume2,
@@ -182,15 +181,6 @@ export function PreviewPlayer(props: { timeline: JSX.Element }) {
               <Play size={18} aria-hidden="true" />
             </IconButton>
             <IconButton
-              label="Loop selected segment"
-              keyshortcuts="L"
-              pressed={workspace.loopSelectedSegment()}
-              disabled={!workspace.activeSegment() || !canStreamPreview()}
-              onClick={workspace.toggleLoopSelectedSegment}
-            >
-              <Repeat2 size={18} aria-hidden="true" />
-            </IconButton>
-            <IconButton
               label="Preview selected segments"
               keyshortcuts="R"
               disabled={!workspace.present().segments.length || !canStreamPreview()}
@@ -198,7 +188,23 @@ export function PreviewPlayer(props: { timeline: JSX.Element }) {
             >
               <List size={18} aria-hidden="true" />
             </IconButton>
-            <div class="volume-control" aria-label="Preview audio">
+            <button
+              class="btn btn-sm"
+              type="button"
+              aria-keyshortcuts="I"
+              onClick={() => workspace.startSegmentAt(workspace.watchedPosition())}
+            >
+              Set in
+            </button>
+            <button
+              class="btn btn-sm"
+              type="button"
+              aria-keyshortcuts="O"
+              onClick={() => workspace.setMarker("outMs", workspace.watchedPosition())}
+            >
+              Set out
+            </button>
+            <div class="volume-control gap-1" aria-label="Preview audio">
               <IconButton
                 label={workspace.muted() ? "Unmute preview" : "Mute preview"}
                 pressed={workspace.muted()}
@@ -216,7 +222,7 @@ export function PreviewPlayer(props: { timeline: JSX.Element }) {
                 )}
               </IconButton>
               <input
-                class="range range-xs"
+                class="range range-xs w-18"
                 type="range"
                 aria-label="Preview volume"
                 title="Preview volume"

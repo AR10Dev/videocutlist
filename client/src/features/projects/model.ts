@@ -6,6 +6,7 @@ export type Media = components["schemas"]["Media"];
 export type Project = components["schemas"]["Project"];
 export type ProjectItem = components["schemas"]["ProjectItem"];
 export type ProjectExportOptions = components["schemas"]["ProjectExportOptions"];
+export type ExportContainer = NonNullable<ProjectExportOptions["container"]>;
 
 export type EditableProjectItem = {
   id: string;
@@ -55,8 +56,13 @@ export const serializeProjectItem = (item: EditableProjectItem): ProjectItem => 
   mediaId: item.media.id,
   segments: normalizeSegments(item.timeline.present.segments, item.id),
   editorState: {
-    playheadMs: item.timeline.present.playheadMs,
-    zoom: item.timeline.present.zoom,
+    playheadMs: Number.isFinite(item.timeline.present.playheadMs)
+      ? Math.max(0, Math.min(Math.round(item.timeline.present.playheadMs), item.media.durationMs))
+      : 0,
+    zoom:
+      Number.isFinite(item.timeline.present.zoom) && item.timeline.present.zoom > 0
+        ? item.timeline.present.zoom
+        : 1,
     muted: item.muted,
   },
   exportOptions: item.exportOptions,

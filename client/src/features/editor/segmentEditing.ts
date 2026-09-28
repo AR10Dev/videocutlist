@@ -12,25 +12,6 @@ export const moveSegment = (segments: Segment[], index: number, direction: -1 | 
   return next;
 };
 
-export const resizeSegment = (
-  segments: Segment[],
-  index: number,
-  boundary: "start" | "end",
-  valueMs: number,
-  durationMs: number,
-) => {
-  const segment = segments[index];
-  if (!segment) return segments;
-  const value = Math.max(0, Math.min(durationMs, Math.round(valueMs)));
-  const replacement = {
-    ...segment,
-    startMs: boundary === "start" ? Math.min(value, segment.endMs - 1) : segment.startMs,
-    endMs: boundary === "end" ? Math.max(value, segment.startMs + 1) : segment.endMs,
-  };
-  const next = segments.map((item, position) => (position === index ? replacement : item));
-  return validateSegments(next, durationMs) ? segments : next;
-};
-
 export const resizeSegmentInteractive = (
   segments: Segment[],
   index: number,

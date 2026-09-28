@@ -3,11 +3,13 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 )
 
@@ -19,11 +21,28 @@ var httpx boundary
 
 type boundary struct{}
 
+// closeResponseBody records cleanup failures after an HTTP response has been
+// committed; changing the response at that point would produce a misleading status.
+func closeResponseBody(logger *log.Logger, resource string, closer io.Closer) {
+	if err := closer.Close(); err != nil && logger != nil {
+		logger.Printf(`{"error_category":"response_cleanup","resource":%q}`, resource)
+	}
+}
+
 func (boundary) Error(w http.ResponseWriter, status int, code, message, requestID string) {
 	Error(w, status, code, message, requestID)
 }
 func (boundary) WriteJSON(w http.ResponseWriter, status int, value any) { WriteJSON(w, status, value) }
 func (boundary) ReadJSON(r *http.Request, destination any) error        { return ReadJSON(r, destination) }
+
+type requestIDKey struct{}
+
+// RequestIDFromContext returns the server-generated correlation ID, never a
+// client-supplied identifier or credential.
+func RequestIDFromContext(ctx context.Context) string {
+	id, _ := ctx.Value(requestIDKey{}).(string)
+	return id
+}
 
 func RequestID() string {
 	var value [16]byte
@@ -40,12 +59,19 @@ func WriteJSON(writer http.ResponseWriter, status int, value any) {
 }
 
 func Error(writer http.ResponseWriter, status int, code, message, requestID string) {
+	if observed, ok := writer.(*statusWriter); ok {
+		observed.errorCode = code
+	}
 	WriteJSON(writer, status, map[string]any{"error": map[string]string{"code": code, "message": message, "requestId": requestID}})
 }
 
 // ReadJSON rejects oversized, malformed, and trailing JSON values.
-func ReadJSON(request *http.Request, destination any) error {
-	defer request.Body.Close()
+func ReadJSON(request *http.Request, destination any) (err error) {
+	defer func() {
+		if closeErr := request.Body.Close(); closeErr != nil {
+			err = errors.Join(err, closeErr)
+		}
+	}()
 	if request.ContentLength > MaxJSONBody {
 		return errors.New("request body exceeds limit")
 	}

@@ -135,6 +135,52 @@ func TestProductionSettingsAndAutomationWorkflows(t *testing.T) {
 	}
 }
 
+func TestProductionMCPAdministrationUsesRealProcess(t *testing.T) {
+	p := startProcessWithEnv(t, t.TempDir(), map[string]string{"VIDEOCUTLIST_MCP_ENABLED": "true"})
+	settings := p.request(t, http.MethodGet, "/api/v1/settings/mcp")
+	var view struct {
+		Enabled             bool   `json:"enabled"`
+		Endpoint            string `json:"endpoint"`
+		ClientCompatibility string `json:"clientCompatibility"`
+	}
+	if settings.StatusCode != http.StatusOK || json.NewDecoder(settings.Body).Decode(&view) != nil || !view.Enabled || view.Endpoint != "/mcp" || !strings.Contains(view.ClientCompatibility, "2025-06-18") {
+		settings.Body.Close()
+		t.Fatalf("MCP settings status=%d value=%+v", settings.StatusCode, view)
+	}
+	settings.Body.Close()
+	expires := time.Now().UTC().Add(time.Hour).Format(time.RFC3339Nano)
+	created := p.requestBody(t, http.MethodPost, "/api/v1/settings/mcp/credentials", map[string]any{
+		"name": "real-media MCP", "permissions": []string{"media:read"},
+		"mediaScope": map[string]any{"kind": "all"}, "projectScope": map[string]any{"kind": "all"}, "expiresAt": expires,
+	})
+	var credential struct {
+		ID     string `json:"id"`
+		Secret string `json:"secret"`
+	}
+	if created.StatusCode != http.StatusCreated || json.NewDecoder(created.Body).Decode(&credential) != nil || credential.ID == "" || credential.Secret == "" {
+		created.Body.Close()
+		t.Fatalf("MCP credential status=%d credential=%+v", created.StatusCode, credential)
+	}
+	created.Body.Close()
+	revoked := p.request(t, http.MethodDelete, "/api/v1/settings/mcp/credentials/"+credential.ID)
+	if revoked.StatusCode != http.StatusOK {
+		revoked.Body.Close()
+		t.Fatalf("MCP revoke status=%d", revoked.StatusCode)
+	}
+	revoked.Body.Close()
+	for _, request := range []struct {
+		method string
+		path   string
+	}{{http.MethodGet, "/api/v1/export-proposals/ep_aaaaaaaaaaaa"}, {http.MethodPost, "/api/v1/export-proposals/ep_aaaaaaaaaaaa/approval"}} {
+		response := p.request(t, request.method, request.path)
+		if response.StatusCode != http.StatusNotFound {
+			response.Body.Close()
+			t.Fatalf("missing proposal %s status=%d", request.path, response.StatusCode)
+		}
+		response.Body.Close()
+	}
+}
+
 func TestProductionCORSAndTrustedProxy(t *testing.T) {
 	p := startProcessWithEnv(t, t.TempDir(), map[string]string{"VIDEOCUTLIST_ALLOWED_ORIGINS": "https://allowed.example", "VIDEOCUTLIST_TRUSTED_PROXY_CIDRS": "127.0.0.1/32"})
 	allowed := p.requestHeaders(t, http.MethodOptions, "/api/v1/media", nil, map[string]string{"Origin": "https://allowed.example", "Access-Control-Request-Method": "GET"})

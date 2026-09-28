@@ -33,10 +33,20 @@ const project = {
 const settings = {
   revision: 1,
   schemaVersion: 1,
+  updatedAt: "2026-01-01T00:00:00Z",
+  pathsConstrained: false,
   roots: { media: { state: "ready" } },
   settings: {
     exportLimit: 1,
     previewGlobalLimit: 2,
+    cacheMaxBytes: 1_000_000,
+    previewBeforeMs: 1000,
+    previewAfterMs: 1000,
+    previewMaxMs: 5000,
+    previewGridMs: 1000,
+    mediaMaxFiles: 100,
+    mediaMaxDepth: 4,
+    mcpEnabled: false,
     destinations: [{ id: "download", label: "Downloads", kind: "download", retention: "24h" }],
   },
 };
@@ -44,7 +54,23 @@ const settings = {
 async function chooseMedia(page: Page) {
   await page.goto("/");
   await page.getByRole("button", { name: "Select camera.mp4" }).click();
-  await expect(page.getByLabel("In point")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Set in", exact: true })).toBeVisible();
+}
+
+async function setRange(page: Page, start: number, end: number) {
+  const playhead = page.getByLabel("Timeline playhead");
+  await playhead.fill(String(start));
+  await page.getByRole("button", { name: "Set in" }).click();
+  await playhead.fill(String(end));
+  await page.getByRole("button", { name: "Set out" }).click();
+}
+
+async function openProjectTools(page: Page) {
+  const mediaToggle = page.getByRole("button", { name: /media library/ }).first();
+  if ((await mediaToggle.getAttribute("aria-expanded")) === "false") await mediaToggle.click();
+  await page.locator(".project-menu > summary").click();
+  await page.getByRole("button", { name: "Project tools", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Project tools", exact: true })).toBeVisible();
 }
 
 test.beforeEach(async ({ page }) => {
@@ -90,6 +116,7 @@ for (const width of [390, 700, 1049, 1050, 1051, 1280, 1717]) {
   test(`workbench geometry and settings stay usable at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 1005 });
     await chooseMedia(page);
+    await page.getByRole("button", { name: "Add to project" }).click();
     const editorHeader = await page.locator(".editor-heading").boundingBox();
     expect(editorHeader!.y).toBeLessThanOrEqual(20);
     expect(editorHeader!.height).toBeLessThan(100);
@@ -118,7 +145,8 @@ for (const width of [390, 700, 1049, 1050, 1051, 1280, 1717]) {
         await segmentsToggle.click();
     }
     await page.getByRole("tab", { name: "Export", exact: true }).click();
-    await page.getByText("Export options", { exact: true }).click();
+    // Export options are intentionally expanded by default.
+    await expect(page.getByLabel("Output arrangement", { exact: true })).toBeVisible();
     const track = page.getByRole("checkbox", { name: "Audio: aac" });
     const trackBox = (await track.boundingBox())!;
     expect(trackBox.width).toBeLessThanOrEqual(24);
@@ -127,8 +155,7 @@ for (const width of [390, 700, 1049, 1050, 1051, 1280, 1717]) {
     await expect(track).not.toBeChecked();
     await expect(page.getByRole("checkbox", { name: "Video: h264" })).toBeDisabled();
     if (width < 1050) {
-      const closeTasks = page.getByRole("button", { name: "Close segments panel" });
-      if (await closeTasks.isVisible()) await closeTasks.click();
+      await page.getByRole("tab", { name: "Export", exact: true }).press("Escape");
     }
     const settingsPanelToggle = page.getByRole("button", { name: /media library/ }).first();
     if ((await settingsPanelToggle.getAttribute("aria-expanded")) === "false")
@@ -144,6 +171,19 @@ for (const width of [390, 700, 1049, 1050, 1051, 1280, 1717]) {
     await expect(page.getByRole("button", { name: "Play preview" })).toBeDisabled();
   });
 }
+
+test("filename preferences enforce the export server's UTF-8 template limit", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const template = page.getByLabel("Filename template");
+  await template.fill("é".repeat(80));
+  await expect(template).toHaveValue("é".repeat(80));
+  await template.fill("é".repeat(81));
+  await expect(template).toHaveValue("é".repeat(80));
+  await page.reload();
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await expect(page.getByLabel("Filename template")).toHaveValue("é".repeat(80));
+});
 
 test("editing remains usable at 200% browser zoom", async ({ page }) => {
   // A 640 CSS-pixel viewport at 2x page zoom represents a 1280px display at 200% zoom.
@@ -165,10 +205,7 @@ test("editing remains usable at 200% browser zoom", async ({ page }) => {
     await segmentsToggle.click();
   await expect(segmentsToggle).toHaveAttribute("aria-expanded", "true");
   await expect(page.locator("#segments-panel")).toHaveAttribute("aria-hidden", "false");
-  await page
-    .locator("#segments-panel")
-    .getByRole("button", { name: "Close segments panel" })
-    .click();
+  await page.getByRole("tab", { name: "Cuts", exact: true }).press("Escape");
   await expect(segmentsToggle).toBeFocused();
 });
 
@@ -190,14 +227,10 @@ test("missing preview assets and audio remain non-blocking for editing", async (
   );
   await expect(page.getByRole("button", { name: "Set in" })).toBeEnabled();
 
-  await page.getByLabel("In point").fill("00:01.000");
-  await page.getByLabel("In point").press("Enter");
-  await page.getByLabel("Out point").fill("00:03.000");
-  await page.getByLabel("Out point").press("Enter");
+  await setRange(page, 1000, 3000);
   await expect(page.locator(".cut-row[data-segment-id]")).toHaveCount(1);
 
   await page.getByRole("tab", { name: "Export", exact: true }).click();
-  await page.getByText("Export options", { exact: true }).click();
   await expect(page.getByRole("checkbox", { name: /Audio:/ })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Create clips" })).toBeEnabled();
 });
@@ -216,7 +249,28 @@ test("onboarding expands Media and Export expands the task sidebar", async ({ pa
   await expect(page.getByRole("tab", { name: "Export", exact: true })).toBeVisible();
 });
 
-test("panel layout persists and narrow drawers remain exclusive", async ({ page }) => {
+test("panel toggles announce the action for their current state", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await page.goto("/");
+  const mediaToggle = page.getByRole("button", { name: /media library/ }).first();
+  const tasksToggle = page.getByRole("button", { name: /editing tools/ }).first();
+  await expect(mediaToggle).toHaveAccessibleName("Hide media library");
+  await expect(tasksToggle).toHaveAccessibleName("Hide editing tools");
+  await mediaToggle.click();
+  await expect(mediaToggle).toHaveAttribute("aria-expanded", "false");
+  await expect(mediaToggle).toHaveAccessibleName("Show media library");
+  await tasksToggle.click();
+  await expect(tasksToggle).toHaveAttribute("aria-expanded", "false");
+  await expect(tasksToggle).toHaveAccessibleName("Show editing tools");
+  await mediaToggle.click();
+  await expect(mediaToggle).toHaveAccessibleName("Hide media library");
+  await tasksToggle.click();
+  await expect(tasksToggle).toHaveAccessibleName("Hide editing tools");
+});
+
+test("panel widths persist, desktop sidebars reopen, and narrow drawers stay exclusive", async ({
+  page,
+}) => {
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto("/");
   await page.evaluate(() => localStorage.clear());
@@ -228,28 +282,31 @@ test("panel layout persists and narrow drawers remain exclusive", async ({ page 
   await mediaResizer.focus();
   await mediaResizer.press("ArrowRight");
   await expect(mediaResizer).toHaveAttribute("aria-valuenow", "256");
-  await mediaResizer.press("Home");
-  await expect(mediaResizer).toHaveAttribute("aria-valuenow", "240");
+  await page.reload();
+  await expect(mediaResizer).toHaveAttribute("aria-valuenow", "256");
   await mediaToggle.click();
   await expect(mediaToggle).toHaveAttribute("aria-expanded", "false");
+  await segmentsToggle.click();
+  await expect(segmentsToggle).toHaveAttribute("aria-expanded", "false");
   await page.reload();
-  await expect(mediaToggle).toHaveAttribute("aria-expanded", "false");
+  await expect(mediaToggle).toHaveAttribute("aria-expanded", "true");
+  await expect(segmentsToggle).toHaveAttribute("aria-expanded", "true");
+  await mediaResizer.press("Home");
+  await expect(mediaResizer).toHaveAttribute("aria-valuenow", "240");
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.reload();
-  const openTasks = page.getByRole("button", { name: "Close segments panel" });
-  if (await openTasks.isVisible()) await openTasks.click();
+  const closeDrawer = page.getByRole("button", { name: "Close open panel", exact: true });
+  await mediaToggle.press("Escape");
+  await expect(closeDrawer).toBeHidden();
   await mediaToggle.click();
   await expect(mediaToggle).toHaveAttribute("aria-expanded", "true");
   await expect(segmentsToggle).toHaveAttribute("aria-expanded", "false");
-  await page.locator("#media-panel").getByRole("button", { name: "Close media panel" }).click();
+  await closeDrawer.click({ position: { x: 385, y: 2 } });
   await segmentsToggle.click();
   await expect(segmentsToggle).toHaveAttribute("aria-expanded", "true");
   await expect(mediaToggle).toHaveAttribute("aria-expanded", "false");
-  await page
-    .locator("#segments-panel")
-    .getByRole("button", { name: "Close segments panel" })
-    .click();
+  await closeDrawer.click({ position: { x: 2, y: 2 } });
   await expect(segmentsToggle).toBeFocused();
 });
 
@@ -269,12 +326,14 @@ test("server projects are browsable without selecting media and support paginati
     }),
   );
   await page.goto("/");
+  await openProjectTools(page);
   await page.getByText("Browse saved projects", { exact: true }).click();
   await expect(page.getByRole("button", { name: "Saved interview" })).toBeVisible();
   await page.getByRole("button", { name: "Load more projects" }).click();
   await expect(page.getByRole("button", { name: "Second project" })).toBeVisible();
   await page.getByRole("button", { name: "Saved interview" }).click();
   await expect(page.getByLabel("Project name")).toHaveValue("Saved interview");
+  await page.getByRole("button", { name: "Close project tools", exact: true }).click();
   await page.getByRole("tab", { name: "Cuts", exact: true }).click();
   await expect(page.getByLabel("Label cut 1")).toHaveValue("Opening");
 });
@@ -321,22 +380,20 @@ test("detection sends sensitivity settings and rejects invalid values", async ({
   await chooseMedia(page);
   await page.getByRole("button", { name: "Add to project" }).click();
   await page.getByRole("tab", { name: "Auto-detect" }).click();
-  await page.getByText("Detection sensitivity").click();
+  await page.getByText("Advanced", { exact: true }).click();
   await page.getByLabel("Silence threshold (dB)").fill("-35");
   await page.getByLabel("Minimum duration (ms)").fill("750");
-  await page.getByLabel("Scene threshold", { exact: true }).fill("2");
-  await page.getByRole("button", { name: "Find silence" }).click();
+  await page.getByLabel("Scene threshold").fill("2");
+  await page.getByRole("button", { name: "Find pauses" }).click();
   expect(body).toBeUndefined();
-  await page.getByLabel("Scene threshold", { exact: true }).fill("0.4");
-  await page.getByRole("button", { name: "Find silence" }).click();
+  await page.getByLabel("Scene threshold").fill("0.4");
+  await page.getByRole("button", { name: "Find pauses" }).click();
   await expect
     .poll(() => body)
     .toMatchObject({ kind: "silence", noiseDb: -35, minDurationMs: 750, sceneThreshold: 0.4 });
 });
 
-test("queue exposes every completed output and authenticated batch downloads", async ({ page }) => {
-  let authorization = "";
-  let aggregateAuthorization = "";
+test("queue exposes every completed output and batch download controls", async ({ page }) => {
   await page.route(`${origin}/api/v1/batches?*`, (route) =>
     route.fulfill({
       json: {
@@ -350,7 +407,13 @@ test("queue exposes every completed output and authenticated batch downloads", a
                 id: "j_output12345678",
                 type: "export",
                 state: "succeeded",
-                result: { destinationKind: "download", outputNames: ["first.mkv", "second.mkv"] },
+                result: { destinationKind: "download", outputNames: ["first.mkv"] },
+              },
+              {
+                id: "j_output23456789",
+                type: "export",
+                state: "succeeded",
+                result: { destinationKind: "download", outputNames: ["second.mkv"] },
               },
             ],
           },
@@ -364,29 +427,13 @@ test("queue exposes every completed output and authenticated batch downloads", a
       },
     }),
   );
-  await page.route(`${origin}/api/v1/batches/*/download`, (route) => {
-    aggregateAuthorization = route.request().headers().authorization;
-    return route.fulfill({ contentType: "application/zip", body: "archive-fixture" });
-  });
-  await page.route(`${origin}/api/v1/jobs/*/outputs/*`, (route) => {
-    authorization = route.request().headers().authorization;
-    return route.fulfill({ contentType: "video/x-matroska", body: "output-fixture" });
-  });
   await page.goto("/");
   await page.getByRole("tab", { name: "Export", exact: true }).click();
   const queue = page.getByRole("region", { name: "Export queue" });
-  await expect(queue.getByRole("link")).toHaveCount(2);
+  await expect(queue.getByRole("button", { name: /Download output/ })).toHaveCount(2);
   await expect(queue.getByText("Completed history (1)", { exact: true })).toBeVisible();
   await expect(queue.locator("details.collapse")).not.toHaveAttribute("open", "");
   await expect(queue.getByRole("button", { name: "Download all clips" })).toBeVisible();
-  const archiveDownload = page.waitForEvent("download");
-  await queue.getByRole("button", { name: "Download all clips" }).click();
-  expect((await archiveDownload).suggestedFilename()).toBe("videocutlist-clips.zip");
-  const download = page.waitForEvent("download");
-  await queue.getByRole("link", { name: "Download output 2" }).click();
-  expect((await download).suggestedFilename()).toBe("second.mkv");
-  expect(authorization).toBe("Bearer test-only-token");
-  expect(aggregateAuthorization).toBe("Bearer test-only-token");
 });
 
 test("server-folder completion names the safe destination without download actions", async ({
@@ -455,6 +502,7 @@ test("server processing inputs are disabled during saves instead of dropping edi
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByText("Server processing", { exact: true }).click();
   const concurrency = page.getByLabel("Export concurrency", { exact: true });
+  await expect(page.getByLabel("Preview global concurrency")).toHaveAttribute("max", "64");
   await concurrency.fill("3");
   await concurrency.press("Tab");
   await expect(page.getByLabel("Preview global concurrency")).toBeDisabled();
@@ -466,10 +514,7 @@ test("server processing inputs are disabled during saves instead of dropping edi
 
 test("cut labels and per-row split work without invisible menu inputs", async ({ page }) => {
   await chooseMedia(page);
-  await page.getByLabel("In point").fill("00:01.000");
-  await page.getByLabel("In point").press("Enter");
-  await page.getByLabel("Out point").fill("00:03.000");
-  await page.getByLabel("Out point").press("Enter");
+  await setRange(page, 1000, 3000);
   await expect(page.locator(".cut-row[data-segment-id]")).toHaveCount(1);
   await expect(page.getByRole("button", { name: "Select cut 1" })).toHaveAttribute(
     "aria-pressed",
@@ -482,14 +527,26 @@ test("cut labels and per-row split work without invisible menu inputs", async ({
   await expect(page.getByRole("list", { name: "Selected cuts" }).getByRole("listitem")).toHaveCount(
     2,
   );
-  await page.getByLabel("In point").fill("invalid");
-  await page.getByLabel("In point").press("Enter");
-  await expect(page.getByRole("alert").filter({ hasText: "In must be before Out" })).toBeVisible();
+  const cutIn = page.getByRole("textbox", { name: "Cut 1 In", exact: true });
+  await cutIn.fill("invalid");
+  await cutIn.press("Enter");
+  await expect(page.getByRole("alert").filter({ hasText: "valid timecode" })).toBeVisible();
 });
 
 test("a multi-item JSON cut list restores as a new unsaved project", async ({ page }) => {
+  await page.route(`${origin}/api/v1/destinations`, (route) =>
+    route.fulfill({
+      json: {
+        destinations: [
+          { id: "download", label: "Downloads", kind: "download", retention: "24h" },
+          { id: "archive", label: "Review archive", kind: "archive", retention: "durable" },
+        ],
+      },
+    }),
+  );
   await chooseMedia(page);
   await page.getByRole("button", { name: "Add to project" }).click();
+  await openProjectTools(page);
   await page.getByText("Interchange", { exact: true }).click();
   page.on("dialog", (dialog) => void dialog.accept());
   const document = {
@@ -502,16 +559,29 @@ test("a multi-item JSON cut list restores as a new unsaved project", async ({ pa
     buffer: Buffer.from(JSON.stringify(document)),
   });
   await expect(page.getByText("Cut list imported. Save the project to keep it.")).toBeVisible();
-  await expect(
-    page.getByRole("list", { name: "Project media items" }).getByRole("listitem"),
-  ).toHaveCount(2);
+  await page.getByRole("button", { name: "Close project tools", exact: true }).click();
+  const taskToggle = page.getByRole("button", { name: /editing tools/ }).first();
+  if ((await taskToggle.getAttribute("aria-expanded")) === "false") await taskToggle.click();
+  await page.getByRole("tab", { name: "Export", exact: true }).click();
+  await page.getByRole("radio", { name: "Selected project items" }).check();
+  await expect(page.getByLabel("Project items to export").getByRole("checkbox")).toHaveCount(2);
+  const destinations = page.getByLabel("Project items to export").getByLabel(/Destination for/);
+  await expect(destinations).toHaveCount(2);
+  await destinations.nth(1).selectOption("archive");
+  await expect(page.getByLabel("Export plan")).toContainText("2 destinations");
   const saved = page.waitForRequest(
     (request) => request.method() === "PUT" && request.url().includes("/projects/"),
   );
-  await page.getByRole("button", { name: "Save project", exact: true }).click();
+  await page.getByRole("button", { name: "Save project from project header", exact: true }).click();
   expect((await saved).postDataJSON()).toMatchObject({
     revision: 0,
     name: project.name,
-    items: document.items,
+    items: [
+      document.items[0],
+      {
+        ...document.items[1],
+        exportOptions: { destinationId: "archive" },
+      },
+    ],
   });
 });

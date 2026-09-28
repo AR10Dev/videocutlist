@@ -8,9 +8,9 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"reflect"
 
 	store "videocutlist/internal/db"
+	settings "videocutlist/internal/settings"
 )
 
 type settingsUpdateRequest struct {
@@ -63,8 +63,8 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, id string) 
 		httpx.Error(w, http.StatusNotFound, "settings_unavailable", "Settings are not available.", id)
 		return
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
-	if err != nil {
+	body, err := io.ReadAll(io.LimitReader(r.Body, MaxJSONBody+1))
+	if err != nil || len(body) > MaxJSONBody {
 		httpx.Error(w, http.StatusUnprocessableEntity, "invalid_settings", "Settings must be a complete valid document.", id)
 		return
 	}
@@ -80,85 +80,37 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, id string) 
 		httpx.Error(w, http.StatusUnprocessableEntity, "invalid_settings", "Settings must be a complete valid document.", id)
 		return
 	}
-	s.settingsMu.Lock()
-	defer s.settingsMu.Unlock()
-	previous, err := s.config.Settings.Get(r.Context())
-	if err != nil {
-		httpx.Error(w, http.StatusInternalServerError, "settings_unavailable", "Settings are temporarily unavailable.", id)
-		return
-	}
-	if previous.Revision != input.Revision {
-		httpx.Error(w, http.StatusConflict, "settings_revision_conflict", "Settings changed; reload before updating.", id)
-		return
-	}
-	// Deployment paths and destinations are server-owned. Browser responses omit
-	// them, so preserve those values while rejecting attempts to change them.
-	var document struct {
+	var complete struct {
 		Settings struct {
-			MediaRoots   json.RawMessage `json:"mediaRoots"`
-			Destinations json.RawMessage `json:"destinations"`
+			MCPEnabled *bool `json:"mcpEnabled"`
 		} `json:"settings"`
 	}
-	if err := json.Unmarshal(body, &document); err != nil || len(document.Settings.MediaRoots) > 0 && !jsonEqual(document.Settings.MediaRoots, previous.Settings.MediaRoots) || len(document.Settings.Destinations) > 0 && !destinationsMatch(document.Settings.Destinations, previous.Settings.Destinations) {
-		httpx.Error(w, http.StatusUnprocessableEntity, "deployment_settings_read_only", "Deployment paths and destinations are server-managed.", id)
-		return
-	}
-	input.Settings.MediaRoots = previous.Settings.MediaRoots
-	input.Settings.Destinations = previous.Settings.Destinations
-	if s.config.ApplyRuntimeSettings != nil {
-		if err := s.config.ApplyRuntimeSettings(input.Settings); err != nil {
-			httpx.Error(w, http.StatusUnprocessableEntity, "invalid_settings", "Settings could not be applied safely.", id)
-			return
-		}
-	}
-	record, err := s.config.Settings.Update(r.Context(), input.Revision, input.Settings)
-	if err != nil {
-		if s.config.ApplyRuntimeSettings != nil {
-			if rollbackErr := s.config.ApplyRuntimeSettings(previous.Settings); rollbackErr != nil {
-				httpx.Error(w, http.StatusInternalServerError, "settings_unavailable", "Settings could not be restored safely.", id)
-				return
-			}
-		}
-		if errors.Is(err, store.ErrRuntimeSettingsRevisionConflict) {
-			httpx.Error(w, http.StatusConflict, "settings_revision_conflict", "Settings changed; reload before updating.", id)
-			return
-		}
+	if err := json.Unmarshal(body, &complete); err != nil || complete.Settings.MCPEnabled == nil {
 		httpx.Error(w, http.StatusUnprocessableEntity, "invalid_settings", "Settings must be a complete valid document.", id)
 		return
 	}
-	if s.config.RuntimeSettings != nil {
-		s.config.RuntimeSettings.Replace(record.Settings)
+	var document struct {
+		Settings settings.DeploymentDocument `json:"settings"`
+	}
+	if err := json.Unmarshal(body, &document); err != nil {
+		httpx.Error(w, http.StatusUnprocessableEntity, "invalid_settings", "Settings must be a complete valid document.", id)
+		return
+	}
+	record, err := s.config.Settings.Update(r.Context(), input.Revision, input.Settings, document.Settings)
+	if err != nil {
+		switch {
+		case errors.Is(err, store.ErrRuntimeSettingsRevisionConflict):
+			httpx.Error(w, http.StatusConflict, "settings_revision_conflict", "Settings changed; reload before updating.", id)
+		case errors.Is(err, settings.ErrDeploymentSettingsReadOnly):
+			httpx.Error(w, http.StatusUnprocessableEntity, "deployment_settings_read_only", "Deployment paths and destinations are server-managed.", id)
+		case errors.Is(err, settings.ErrInvalidSettings):
+			httpx.Error(w, http.StatusUnprocessableEntity, "invalid_settings", "Settings could not be applied safely.", id)
+		default:
+			httpx.Error(w, http.StatusInternalServerError, "settings_unavailable", "Settings are temporarily unavailable.", id)
+		}
+		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, map[string]any{"settings": browserSettings(record.Settings), "revision": record.Revision, "schemaVersion": record.SchemaVersion, "updatedAt": record.UpdatedAt})
-}
-
-func jsonEqual(raw json.RawMessage, value any) bool {
-	var got, want any
-	encoded, err := json.Marshal(value)
-	if err != nil || json.Unmarshal(raw, &got) != nil || json.Unmarshal(encoded, &want) != nil {
-		return false
-	}
-	return reflect.DeepEqual(got, want)
-}
-
-func destinationsMatch(raw json.RawMessage, previous []store.RuntimeDestination) bool {
-	var got []map[string]json.RawMessage
-	if json.Unmarshal(raw, &got) != nil || len(got) != len(previous) {
-		return false
-	}
-	for i, destination := range previous {
-		var metadata DestinationMetadata
-		encoded, err := json.Marshal(got[i])
-		if err != nil || json.Unmarshal(encoded, &metadata) != nil || metadata != (DestinationMetadata{ID: destination.ID, Label: destination.Label, Description: destination.Description, Kind: destination.Kind, Retention: destination.Retention}) {
-			return false
-		}
-		for name, value := range map[string]string{"root": destination.Root, "mediaRoot": destination.MediaRoot} {
-			if supplied, ok := got[i][name]; ok && !jsonEqual(supplied, value) {
-				return false
-			}
-		}
-	}
-	return true
 }
 
 func (s *Server) refreshSettings(w http.ResponseWriter, r *http.Request, id string) {

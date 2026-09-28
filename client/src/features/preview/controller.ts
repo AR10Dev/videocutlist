@@ -1,7 +1,13 @@
 import { createEffect, createSignal, onCleanup, type Accessor } from "solid-js";
 import type { ApiClient } from "../../api";
 import type { components } from "../../generated/api";
-import { normalizePeaks, visibleAssetRanges, type AssetRange, type AssetViewport } from "./assets";
+import {
+  normalizePeaks,
+  normalizedAssetViewport,
+  visibleAssetRanges,
+  type AssetRange,
+  type AssetViewport,
+} from "./assets";
 import {
   canStreamPreview,
   clampMediaPosition,
@@ -33,12 +39,10 @@ const initialLoopPreference = () => {
   }
 };
 
-type AssetRequestResult = {
+type ThumbnailRequestResult = {
   range: AssetRange;
   thumbnailURL?: string;
-  waveform: number[];
   thumbnailFailed: boolean;
-  waveformFailed: boolean;
 };
 
 function loadThumbnail(url: string, signal: AbortSignal): Promise<HTMLImageElement | undefined> {
@@ -58,22 +62,28 @@ function loadThumbnail(url: string, signal: AbortSignal): Promise<HTMLImageEleme
 }
 
 async function composeThumbnailStrip(
-  urls: (string | undefined)[],
+  results: ThumbnailRequestResult[],
   signal: AbortSignal,
+  viewport: AssetRange,
 ): Promise<string | undefined> {
   const images = await Promise.all(
-    urls.map((url) => (url ? loadThumbnail(url, signal) : Promise.resolve(undefined))),
+    results.map(({ thumbnailURL }) =>
+      thumbnailURL ? loadThumbnail(thumbnailURL, signal) : Promise.resolve(undefined),
+    ),
   );
   if (signal.aborted || !images.some(Boolean)) return undefined;
   const tileWidth = 320;
   const tileHeight = Math.max(1, ...images.map((image) => image?.naturalHeight || 180));
   const canvas = document.createElement("canvas");
-  canvas.width = Math.max(1, tileWidth * urls.length);
+  canvas.width = Math.max(1, tileWidth * results.length);
   canvas.height = tileHeight;
   const context = canvas.getContext("2d");
   if (!context) return undefined;
   images.forEach((image, index) => {
-    if (image) context.drawImage(image, index * tileWidth, 0, tileWidth, tileHeight);
+    const range = results[index].range;
+    const left = ((range.startMs - viewport.startMs) / viewport.durationMs) * canvas.width;
+    const width = (range.durationMs / viewport.durationMs) * canvas.width;
+    if (image) context.drawImage(image, left, 0, width, tileHeight);
   });
   const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
   if (!blob || signal.aborted) return undefined;
@@ -91,7 +101,15 @@ export function createPreviewController(
     updatePlaybackPosition: (positionMs: number) => void;
   },
 ) {
-  const [assetStatus, setAssetStatus] = createSignal("");
+  const [thumbnailFailed, setThumbnailFailed] = createSignal(false);
+  const [waveformFailed, setWaveformFailed] = createSignal(false);
+  const assetStatus = () => {
+    if (thumbnailFailed() && waveformFailed())
+      return "Thumbnails unavailable; Waveform unavailable; editing remains available.";
+    if (thumbnailFailed()) return "Thumbnails unavailable; editing remains available.";
+    if (waveformFailed()) return "Waveform unavailable; editing remains available.";
+    return "";
+  };
   const [previewStatus, setPreviewStatus] = createSignal("");
   const [waveformVisible, setWaveformVisible] = createSignal(initialWaveformVisibility());
   const [assetReload, setAssetReload] = createSignal(0);
@@ -101,8 +119,9 @@ export function createPreviewController(
   const [previewCenterMs, setPreviewCenterMs] = createSignal(0);
   const [previewReload, setPreviewReload] = createSignal(0);
   const [diagnostics, setDiagnostics] = createSignal<PreviewDiagnostics>();
-  // Settings unmounts the player; a new element must trigger preview attachment.
   const [video, setVideo] = createSignal<HTMLVideoElement>();
+  // Settings unmounts the player; a new element must trigger preview attachment.
+  let waveformRequest: AbortController | undefined;
   let assetRequest: AbortController | undefined;
   let previewRequest: AbortController | undefined;
   let cleanupPreview: (() => void) | undefined;
@@ -142,18 +161,15 @@ export function createPreviewController(
     if (thumbnailObjectURL) URL.revokeObjectURL(thumbnailObjectURL);
     thumbnailObjectURL = undefined;
     setThumbnailURL();
-    setWaveform([]);
     setAssetRange();
-    setAssetStatus("");
+    setThumbnailFailed(false);
     const generation = ++assetGeneration;
     if (!item) return;
     const ranges = visibleAssetRanges(viewport, item.durationMs);
     const controller = new AbortController();
     assetRequest = controller;
     const current = () => !controller.signal.aborted && generation === assetGeneration;
-    const requests = ranges.map(async (range): Promise<AssetRequestResult> => {
-      let thumbnailURL: string | undefined;
-      let thumbnailFailed = false;
+    const requests = ranges.map(async (range): Promise<ThumbnailRequestResult> => {
       try {
         const response = await api.assetRequest(
           item.id,
@@ -162,26 +178,14 @@ export function createPreviewController(
           { signal: controller.signal },
         );
         if (!response.ok) throw new Error();
-        thumbnailURL = URL.createObjectURL(await response.blob());
+        return {
+          range,
+          thumbnailURL: URL.createObjectURL(await response.blob()),
+          thumbnailFailed: false,
+        };
       } catch {
-        thumbnailFailed = true;
+        return { range, thumbnailFailed: true };
       }
-      let waveform: number[] = [];
-      let waveformFailed = false;
-      try {
-        const response = await api.assetRequest(
-          item.id,
-          "waveform",
-          { startMs: range.startMs, durationMs: range.durationMs, samples: 256 },
-          { signal: controller.signal },
-        );
-        if (!response.ok) throw new Error();
-        const value = (await response.json()) as { peaks?: unknown };
-        waveform = normalizePeaks(value.peaks);
-      } catch {
-        waveformFailed = true;
-      }
-      return { range, thumbnailURL, waveform, thumbnailFailed, waveformFailed };
     });
     void Promise.all(requests).then(async (results) => {
       if (!current()) {
@@ -191,17 +195,8 @@ export function createPreviewController(
         return;
       }
       const thumbnailURLs = results.map((result) => result.thumbnailURL);
-      const combinedThumbnail =
-        ranges.length === 1 && thumbnailURLs.filter(Boolean).length === 1
-          ? thumbnailURLs.find(Boolean)
-          : await composeThumbnailStrip(thumbnailURLs, controller.signal);
-      const fullRange = {
-        startMs: ranges[0].startMs,
-        durationMs:
-          ranges[ranges.length - 1].startMs +
-          ranges[ranges.length - 1].durationMs -
-          ranges[0].startMs,
-      };
+      const fullRange = normalizedAssetViewport(viewport, item.durationMs);
+      const combinedThumbnail = await composeThumbnailStrip(results, controller.signal, fullRange);
       if (!current()) {
         thumbnailURLs.forEach((url) => url && URL.revokeObjectURL(url));
         if (combinedThumbnail && combinedThumbnail !== thumbnailURLs.find(Boolean))
@@ -214,15 +209,64 @@ export function createPreviewController(
           ? combinedThumbnail
           : undefined;
       setThumbnailURL(combinedThumbnail);
-      setWaveform(results.flatMap((result) => result.waveform));
       setAssetRange(fullRange);
-      const unavailable: string[] = [];
-      if (results.some((result) => result.thumbnailFailed))
-        unavailable.push("Thumbnails unavailable");
-      if (results.some((result) => result.waveformFailed)) unavailable.push("Waveform unavailable");
-      setAssetStatus(
-        unavailable.length ? `${unavailable.join("; ")}; editing remains available.` : "",
-      );
+      setThumbnailFailed(results.some((result) => result.thumbnailFailed));
+    });
+    onCleanup(() => controller.abort());
+  });
+  createEffect(() => {
+    const item = dependencies.selected();
+    const viewport = dependencies.visibleRange();
+    const visible = waveformVisible();
+    assetReload();
+    waveformRequest?.abort();
+    setWaveform([]);
+    setWaveformFailed(false);
+    if (!item || !visible) return;
+    const ranges = visibleAssetRanges(viewport, item.durationMs);
+    const fullRange = normalizedAssetViewport(viewport, item.durationMs);
+    const controller = new AbortController();
+    waveformRequest = controller;
+    void Promise.all(
+      ranges.map(async (range) => {
+        try {
+          const response = await api.assetRequest(
+            item.id,
+            "waveform",
+            { startMs: range.startMs, durationMs: range.durationMs, samples: 256 },
+            { signal: controller.signal },
+          );
+          if (!response.ok) throw new Error();
+          const value = (await response.json()) as { peaks?: unknown };
+          return { range, peaks: normalizePeaks(value.peaks), failed: false };
+        } catch {
+          return { range, peaks: [] as number[], failed: true };
+        }
+      }),
+    ).then((results) => {
+      if (controller.signal.aborted) return;
+      const peaks = new Array<number>(2048).fill(0);
+      for (const result of results) {
+        const first = Math.ceil(
+          ((result.range.startMs - fullRange.startMs) / fullRange.durationMs) * peaks.length,
+        );
+        const last = Math.min(
+          peaks.length,
+          Math.floor(
+            ((result.range.startMs + result.range.durationMs - fullRange.startMs) /
+              fullRange.durationMs) *
+              peaks.length,
+          ),
+        );
+        for (let position = first; position < last; position++) {
+          const sample = Math.floor(
+            ((position - first) / Math.max(1, last - first)) * result.peaks.length,
+          );
+          peaks[position] = result.peaks[sample] ?? 0;
+        }
+      }
+      setWaveform(peaks);
+      setWaveformFailed(results.some((result) => result.failed));
     });
     onCleanup(() => controller.abort());
   });
@@ -279,7 +323,7 @@ export function createPreviewController(
   onCleanup(() => {
     setPlaybackIntent(false);
     assetGeneration += 1;
-    assetRequest?.abort();
+    waveformRequest?.abort();
     previewRequest?.abort();
     cleanupPreview?.();
     thumbnailTileURLs.forEach((url) => URL.revokeObjectURL(url));
@@ -417,6 +461,42 @@ export function createPreviewController(
     }
     startPlayback(loop ? "active-segment-loop" : "active-segment", segment.startMs, segment);
   };
+  const playDetectionPoint = (pointMs: number) => {
+    const item = dependencies.selected();
+    if (!canStreamPreview()) {
+      setPreviewStatus(
+        "Preview is unavailable in this browser. Use the timeline to seek to this point instead.",
+      );
+      return;
+    }
+    if (!item || !Number.isInteger(pointMs) || pointMs < 0 || pointMs > item.durationMs) {
+      setPreviewStatus("That scene point has invalid playback bounds.");
+      return;
+    }
+    const segment = {
+      startMs: Math.max(0, pointMs - 2_000),
+      endMs: Math.min(item.durationMs, pointMs + 2_000),
+      label: "scene change",
+      included: true,
+    };
+    if (segment.startMs >= segment.endMs) {
+      setPreviewStatus("That scene point has invalid playback bounds.");
+      return;
+    }
+    startPlayback("active-segment", pointMs, segment);
+  };
+  const seekDetectionPoint = (pointMs: number) => {
+    const item = dependencies.selected();
+    if (!item || !Number.isInteger(pointMs) || pointMs < 0 || pointMs > item.durationMs) {
+      setPreviewStatus("That scene point has invalid playback bounds.");
+      return;
+    }
+    setPlaybackIntent(false);
+    setPlaybackMode("whole-media");
+    setBoundedSegment();
+    dependencies.updatePlaybackPosition(pointMs);
+    restartPreview(pointMs);
+  };
   const setLoopSelectedSegment = (enabled: boolean) => {
     setLoopSelectedSegmentState(enabled);
     try {
@@ -523,5 +603,7 @@ export function createPreviewController(
     playActiveSegment,
     playOrderedSegments,
     playSegment,
+    playDetectionPoint,
+    seekDetectionPoint,
   };
 }

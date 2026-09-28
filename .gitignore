@@ -1,3 +1,4 @@
+/.claude/
 .worktrees/
 .scratch/
 .cache/
@@ -14,7 +15,12 @@ devenv.local.nix
 devenv.local.yaml
 .direnv/
 
-/scripts/deploy-podman-local.sh
-
 # Opt-in natural-media fixture (downloaded, never committed)
 test/fixtures/real-media/
+
+# Local Compose credentials, persistent state, outputs, and mounted originals
+/deployments/containers/videocutlist.env
+/deployments/containers/data/
+/deployments/containers/cache/
+/deployments/containers/exports/
+/deployments/containers/media/

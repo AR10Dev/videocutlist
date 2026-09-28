@@ -53,6 +53,11 @@ var productionRoutes = []struct {
 	{http.MethodGet, "/api/v1/settings", "settings"},
 	{http.MethodPut, "/api/v1/settings", "settings"},
 	{http.MethodPost, "/api/v1/settings/media/refresh", "settings"},
+	{http.MethodGet, "/api/v1/settings/mcp", "mcp"},
+	{http.MethodPost, "/api/v1/settings/mcp/credentials", "mcp"},
+	{http.MethodDelete, "/api/v1/settings/mcp/credentials/c_aaaaaaaaaaaa", "mcp"},
+	{http.MethodGet, "/api/v1/export-proposals/ep_aaaaaaaaaaaa", "exports"},
+	{http.MethodPost, "/api/v1/export-proposals/ep_aaaaaaaaaaaa/approval", "exports"},
 }
 
 func routePathMatches(template, actual string) bool {
@@ -67,7 +72,7 @@ func routePathMatches(template, actual string) bool {
 		}
 		if len(part) > 2 && strings.HasSuffix(part, "aaaaaaaaaaaa") {
 			prefix := part[:2]
-			if (prefix == "m_" || prefix == "p_" || prefix == "j_" || prefix == "b_") && strings.HasPrefix(actualParts[i], prefix) {
+			if (prefix == "m_" || prefix == "p_" || prefix == "j_" || prefix == "b_" || prefix == "c_") && strings.HasPrefix(actualParts[i], prefix) {
 				continue
 			}
 		}

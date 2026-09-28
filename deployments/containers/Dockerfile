@@ -25,6 +25,7 @@ RUN chown -R videocutlist:videocutlist /var/lib/videocutlist /var/cache/videocut
 USER videocutlist
 WORKDIR /opt/videocutlist
 ENV VIDEOCUTLIST_LISTEN_ADDRESS=0.0.0.0 \
+    VIDEOCUTLIST_AUTH_MODE=bearer \
     VIDEOCUTLIST_PORT=8787 \
     VIDEOCUTLIST_DATABASE_PATH=/var/lib/videocutlist/data/videocutlist.db \
     VIDEOCUTLIST_CACHE_DIR=/var/cache/videocutlist/previews \

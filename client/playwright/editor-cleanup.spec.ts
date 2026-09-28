@@ -138,6 +138,9 @@ test("current media metadata failures remain visible", async ({ page }) => {
     timeout: 10_000,
   });
   await expect(page.getByText("Metadata request failed (503).", { exact: true })).toHaveCount(1);
+  await page.route(`${origin}/api/v1/media/${media.id}`, (route) => route.fulfill({ json: media }));
+  await page.getByRole("button", { name: "Retry metadata" }).click();
+  await expect(page.getByText("Metadata request failed (503).", { exact: true })).toHaveCount(0);
 });
 
 test("pressing Start again creates a second segment without overwriting the first", async ({
@@ -152,7 +155,7 @@ test("pressing Start again creates a second segment without overwriting the firs
   await page.getByRole("button", { name: "Set out" }).click();
   await playhead.fill("500");
   await page.getByRole("button", { name: "Set in" }).click();
-  await expect(page.getByLabel("In point")).toHaveValue("00:00.500");
+  await expect(page.locator("#timeline-description")).toContainText("In marker 00:00.500");
   await expect(page.locator(".cut-row[data-segment-id]")).toHaveCount(1);
   await playhead.fill("700");
   await page.getByRole("button", { name: "Set out" }).click();

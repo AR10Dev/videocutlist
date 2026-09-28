@@ -470,8 +470,10 @@ func TestOpenRejectsChangedSource(t *testing.T) {
 			t.Fatal(err)
 		}
 		file, _, err := scanner.Open(context.Background(), catalog, record.ID)
-		if file != nil {
-			file.Close()
+		if file != nil && !errors.Is(err, ErrSourceChanged) {
+			if closeErr := file.Close(); closeErr != nil {
+				t.Error(closeErr)
+			}
 		}
 		if !errors.Is(err, ErrSourceChanged) {
 			t.Fatalf("got %v, want source changed", err)

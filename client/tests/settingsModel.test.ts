@@ -4,6 +4,7 @@ import {
   defaultSettings,
   loadSettings,
   resolveAppearance,
+  validFilenameTemplateLength,
 } from "../src/features/settings/model";
 
 describe("appearance settings", () => {
@@ -23,6 +24,23 @@ describe("appearance settings", () => {
       }),
     ).toMatchObject({ appearance: "system", filenameTemplate: "clip-{segment}", muted: true });
     expect(loadSettings({ ...defaultSettings, appearance: null }).appearance).toBe("system");
+  });
+
+  it("rejects persisted filename templates that exceed the export limit", () => {
+    expect(loadSettings({ filenameTemplate: "x".repeat(160) }).filenameTemplate).toBe(
+      "x".repeat(160),
+    );
+    expect(loadSettings({ filenameTemplate: "x".repeat(161) }).filenameTemplate).toBe(
+      defaultSettings.filenameTemplate,
+    );
+  });
+
+  it("matches the export server's UTF-8 byte limit for non-ASCII templates", () => {
+    expect(validFilenameTemplateLength("é".repeat(80))).toBe(true);
+    expect(validFilenameTemplateLength("é".repeat(81))).toBe(false);
+    expect(loadSettings({ filenameTemplate: "é".repeat(81) }).filenameTemplate).toBe(
+      defaultSettings.filenameTemplate,
+    );
   });
 
   it("resolves System to the operating-system preference", () => {

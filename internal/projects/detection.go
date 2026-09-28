@@ -17,6 +17,7 @@ type DetectionRequest struct {
 	ProjectRevision   int64               `json:"projectRevision"`
 	Kind              model.DetectionKind `json:"kind"`
 	SourceFingerprint string              `json:"sourceFingerprint"`
+	CredentialID      string              `json:"-"`
 	NoiseDB           float64             `json:"noiseDb,omitempty"`
 	MinDurationMS     int64               `json:"minDurationMs,omitempty"`
 	SceneThreshold    float64             `json:"sceneThreshold,omitempty"`
@@ -92,7 +93,7 @@ func (e *DetectionUseCase) Create(ctx context.Context, projectID string, request
 		if err != nil {
 			return DetectionJob{}, err
 		}
-		jobs, err := e.Scheduler.Submit(ctx, []jobqueue.Job{{ID: id, BatchID: batchID, Kind: jobqueue.JobDetect, ProjectID: projectID, ProjectItemID: request.ProjectItemID, RequestJSON: string(data)}})
+		jobs, err := e.Scheduler.Submit(ctx, []jobqueue.Job{{ID: id, BatchID: batchID, Kind: jobqueue.JobDetect, ProjectID: projectID, ProjectItemID: request.ProjectItemID, CredentialID: request.CredentialID, RequestJSON: string(data)}})
 		if err != nil {
 			return DetectionJob{}, err
 		}

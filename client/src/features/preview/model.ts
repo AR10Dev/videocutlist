@@ -38,6 +38,15 @@ export const hybridSmartCutKnownIneligible = (media?: Media) => {
 
 export type Segment = components["schemas"]["Segment"];
 
+export const MAX_SEGMENT_LABEL_CODEPOINTS = 200;
+
+export const segmentLabelCodePointCount = (label: string) => Array.from(label).length;
+
+export const validateSegmentLabel = (label: string): string | undefined =>
+  segmentLabelCodePointCount(label) > MAX_SEGMENT_LABEL_CODEPOINTS
+    ? `Segment labels must be ${MAX_SEGMENT_LABEL_CODEPOINTS} Unicode characters or fewer.`
+    : undefined;
+
 export const segmentIncluded = (segment: Segment) => segment.included !== false;
 
 export const newSegmentId = () => {
@@ -131,7 +140,7 @@ export const previewRange = (
     : { startMs: 0, endMs: durationMs };
 };
 
-export const previewMime = 'video/mp4; codecs="avc1.42E01E, mp4a.40.2"';
+export const previewMime = 'video/mp4; codecs="avc1.42C01F, mp4a.40.2"';
 
 export const clampMediaPosition = (positionMs: number, durationMs: number) =>
   Math.max(0, Math.min(durationMs, Math.round(Number.isFinite(positionMs) ? positionMs : 0)));
@@ -166,6 +175,10 @@ export function validateSegments(segments: Segment[], durationMs: number): strin
   const ordered = [...segments].sort((a, b) => a.startMs - b.startMs);
   for (let index = 0; index < ordered.length; index += 1) {
     const segment = ordered[index];
+    if (typeof segment.label === "string") {
+      const labelError = validateSegmentLabel(segment.label);
+      if (labelError) return labelError;
+    }
     if (!Number.isInteger(segment.startMs) || !Number.isInteger(segment.endMs))
       return "Markers use whole milliseconds.";
     if (segment.startMs < 0 || segment.endMs > durationMs || segment.startMs >= segment.endMs)

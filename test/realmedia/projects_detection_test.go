@@ -34,9 +34,14 @@ type realProject struct {
 type realJob struct {
 	ID, State, Kind string
 	Candidates      []struct {
-		ID, MediaID, ProjectID, Source  string
-		ProjectRevision, StartMS, EndMS int64
-		Confidence                      float64
+		ID              string `json:"id"`
+		MediaID         string `json:"mediaId"`
+		ProjectID       string `json:"projectId"`
+		ProjectRevision int64  `json:"projectRevision"`
+		StartMS         int64  `json:"startMs"`
+		EndMS           int64  `json:"endMs"`
+		PointMS         *int64 `json:"pointMs"`
+		Source          string `json:"source"`
 	} `json:"candidates"`
 }
 
@@ -93,8 +98,15 @@ func TestProjectsInterchangeAndDetectionUseProductionProcess(t *testing.T) {
 			return job.State == "succeeded"
 		})
 		for _, candidate := range job.Candidates {
-			if candidate.MediaID != m.ID || candidate.ProjectID != projectID || candidate.Source != kind || candidate.ProjectRevision != project.Revision || candidate.StartMS < 0 || candidate.EndMS > m.DurationMS || candidate.StartMS >= candidate.EndMS || candidate.Confidence < 0 || candidate.Confidence > 1 {
-				t.Fatalf("invalid %s candidate: %+v", kind, candidate)
+			if candidate.MediaID != m.ID || candidate.ProjectID != projectID || candidate.Source != kind || candidate.ProjectRevision != project.Revision {
+				t.Fatalf("invalid %s candidate identity: %+v", kind, candidate)
+			}
+			if kind == "scene" {
+				if candidate.PointMS == nil || *candidate.PointMS < 0 || *candidate.PointMS > m.DurationMS {
+					t.Fatalf("invalid scene point: %+v", candidate)
+				}
+			} else if candidate.StartMS < 0 || candidate.EndMS > m.DurationMS || candidate.StartMS >= candidate.EndMS || candidate.PointMS != nil {
+				t.Fatalf("invalid %s range: %+v", kind, candidate)
 			}
 		}
 	}

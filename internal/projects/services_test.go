@@ -82,27 +82,6 @@ func TestMediaRefreshIsSynchronous(t *testing.T) {
 	}
 }
 
-type cancellableCatalog struct {
-	started chan struct{}
-	items   []Media
-}
-
-func (c *cancellableCatalog) List(context.Context, string, int) (MediaPage, error) {
-	return MediaPage{Items: c.items}, nil
-}
-func (c *cancellableCatalog) Browse(context.Context, string, string, int) (FolderPage, error) {
-	return FolderPage{}, nil
-}
-func (c *cancellableCatalog) Get(context.Context, string) (Media, error) { return Media{}, nil }
-func (c *cancellableCatalog) Refresh(ctx context.Context) error {
-	close(c.started)
-	<-ctx.Done()
-	return ctx.Err()
-}
-func (c *cancellableCatalog) Preview(context.Context, PreviewSpec) (model.PreviewSpec, error) {
-	return model.PreviewSpec{}, nil
-}
-
 type boundedRecoveryCatalog struct {
 	recoveryStarted chan struct{}
 	releaseRecovery chan struct{}
@@ -249,7 +228,7 @@ type projectCatalogStub struct{ media map[string]Media }
 func (c *projectCatalogStub) Get(_ context.Context, id string) (Media, error) {
 	media, ok := c.media[id]
 	if !ok {
-		return Media{}, errors.New("media unavailable")
+		return Media{}, store.ErrMediaNotFound
 	}
 	return media, nil
 }
@@ -269,7 +248,11 @@ func TestJobUseCaseCancelsThroughUnifiedStore(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	jobs, err := jobqueue.NewJobsStore(db)
 	if err != nil {
 		t.Fatal(err)
@@ -326,5 +309,3 @@ func TestExportJobMalformedResultFailsClosed(t *testing.T) {
 		t.Fatalf("warnings = %#v", job.Warnings)
 	}
 }
-
-func stringPtr(value string) *string { return &value }

@@ -1,7 +1,32 @@
 import { describe, expect, it, vi } from "vitest";
-import { createApiClient, MAX_INTERCHANGE_FILE_BYTES, validInterchangeFileSize } from "../src/api";
+import {
+  authenticationRequiredEvent,
+  createApiClient,
+  MAX_INTERCHANGE_FILE_BYTES,
+  readApiError,
+  validInterchangeFileSize,
+} from "../src/api";
 
 describe("client API boundary", () => {
+  it("preserves error codes, public messages, and request IDs, with safe malformed-response fallbacks", async () => {
+    const error = {
+      code: "origin_forbidden",
+      message: "Request origin is not allowed.",
+      requestId: "r-1",
+    };
+    expect(await readApiError(Response.json({ error }, { status: 403 }))).toEqual(error);
+    for (const body of [
+      "<html>proxy failure</html>",
+      JSON.stringify({ error: { code: 409, message: "internal path", requestId: null } }),
+    ]) {
+      expect(
+        await readApiError(
+          new Response(body, { status: 500, headers: { "X-Request-ID": "r-2" } }),
+          "Try again.",
+        ),
+      ).toEqual({ code: "http_error", message: "Try again.", requestId: "r-2" });
+    }
+  });
   it("bounds interchange files before reading them", () => {
     expect(validInterchangeFileSize(MAX_INTERCHANGE_FILE_BYTES)).toBe(true);
     expect(validInterchangeFileSize(MAX_INTERCHANGE_FILE_BYTES + 1)).toBe(false);
@@ -134,6 +159,36 @@ describe("client API boundary", () => {
     const init = fetch.mock.calls[0][1] as RequestInit;
     expect(init.credentials).toBe("include");
     expect(new Headers(init.headers).has("authorization")).toBe(false);
+  });
+
+  it("ignores an old unauthorized response after authentication changes, but reports the current one", async () => {
+    const browser = new EventTarget();
+    let required = 0;
+    browser.addEventListener(authenticationRequiredEvent, () => required++);
+    vi.stubGlobal("window", browser);
+    try {
+      const configuration = {
+        serverBaseUrl: "https://video.example.com",
+        authentication: { type: "bearer" as const, token: "previous-token" },
+      };
+      let respond!: (response: Response) => void;
+      const fetch = vi.fn<typeof globalThis.fetch>(
+        () => new Promise<Response>((resolve) => (respond = resolve)),
+      );
+      const client = createApiClient(configuration, fetch);
+      const previous = client.request("media");
+      configuration.authentication = { type: "bearer", token: "current-token" };
+      respond(new Response(null, { status: 401 }));
+      await previous;
+      expect(required).toBe(0);
+
+      const current = client.request("media");
+      respond(new Response(null, { status: 401 }));
+      await current;
+      expect(required).toBe(1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it.each(["", "\n", "a\tb"])("rejects an invalid bearer token", (token) => {

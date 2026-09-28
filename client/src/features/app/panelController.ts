@@ -22,7 +22,8 @@ export function createWorkspacePanelController(deps: {
     const defaults = defaultPanelPreferences();
     try {
       const parsed = parsePanelPreferences(window.localStorage.getItem(PANEL_PREFERENCES_KEY));
-      return window.innerWidth < 1050 ? parsed : clampPanelPreferences(parsed, window.innerWidth);
+      const initial = { ...parsed, mediaCollapsed: false, segmentsCollapsed: false };
+      return window.innerWidth < 1050 ? initial : clampPanelPreferences(initial, window.innerWidth);
     } catch {
       return defaults;
     }
@@ -183,7 +184,7 @@ export function createWorkspacePanelController(deps: {
         workspaceTaskTabs[
           (start + direction * offset + workspaceTaskTabs.length) % workspaceTaskTabs.length
         ];
-      if (candidate !== "detection" || deps.selected()) {
+      if (candidate !== "detection" || (deps.selected() && deps.activeItem())) {
         nextTask = candidate;
         break;
       }

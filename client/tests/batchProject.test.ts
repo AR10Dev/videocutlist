@@ -41,6 +41,20 @@ describe("batch project items", () => {
     expect(restored.exportOptions.selection).toBe("gaps");
   });
 
+  it("repairs invalid recovered editor state before saving", () => {
+    const item = createProjectItem(media("m_first", "first.mp4"));
+    item.timeline.present.playheadMs = Number.NaN;
+    item.timeline.present.zoom = 0;
+    expect(serializeProjectItem(item).editorState).toEqual({
+      playheadMs: 0,
+      zoom: 1,
+      muted: false,
+    });
+
+    item.timeline.present.playheadMs = 20_000;
+    expect(serializeProjectItem(item).editorState?.playheadMs).toBe(10_000);
+  });
+
   it("reorders without changing item identity", () => {
     const first = createProjectItem(media("m_first", "first.mp4"));
     const second = createProjectItem(media("m_second", "second.mp4"));

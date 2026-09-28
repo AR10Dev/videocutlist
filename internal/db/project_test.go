@@ -15,7 +15,11 @@ func TestProjectStoreRevisionConflictPreservesDocument(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	projects, err := store.NewProjectStore(db)
 	if err != nil {
 		t.Fatal(err)
@@ -43,7 +47,11 @@ func TestProjectStoreListReturnsOpaqueSummariesAndCursor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	})
 	projects, err := store.NewProjectStore(db)
 	if err != nil {
 		t.Fatal(err)

@@ -4,9 +4,7 @@ package httpapi
 import (
 	"errors"
 	"net/http"
-	"strconv"
 
-	store "videocutlist/internal/db"
 	jobqueue "videocutlist/internal/jobs"
 	"videocutlist/internal/projects"
 )
@@ -22,14 +20,10 @@ func (s *Server) listProjects(writer http.ResponseWriter, request *http.Request,
 		httpx.Error(writer, http.StatusBadRequest, "invalid_query", "Invalid query.", id)
 		return
 	}
-	limit := 50
-	var err error
-	if value := query.Get("limit"); value != "" {
-		limit, err = strconv.Atoi(value)
-		if err != nil || limit < 1 || limit > 100 {
-			httpx.Error(writer, http.StatusBadRequest, "invalid_query", "Invalid query.", id)
-			return
-		}
+	limit, err := parseLimit(query.Get("limit"))
+	if err != nil {
+		httpx.Error(writer, http.StatusBadRequest, "invalid_query", "Invalid query.", id)
+		return
 	}
 	page, err := service.List(request.Context(), query.Get("cursor"), limit)
 	if err != nil {
@@ -42,7 +36,7 @@ func (s *Server) listProjects(writer http.ResponseWriter, request *http.Request,
 func (s *Server) getProject(writer http.ResponseWriter, request *http.Request, project string, id string) {
 	value, err := s.config.Projects.Get(request.Context(), project)
 	if err != nil {
-		notFound(writer, id)
+		resourceError(writer, id, err)
 		return
 	}
 	httpx.WriteJSON(writer, 200, value)
@@ -50,16 +44,12 @@ func (s *Server) getProject(writer http.ResponseWriter, request *http.Request, p
 func (s *Server) putProject(writer http.ResponseWriter, request *http.Request, project string, id string) {
 	var input ProjectInput
 	if httpx.ReadJSON(request, &input) != nil {
-		httpx.Error(writer, 422, "invalid_project", "Project is invalid.", id)
+		httpx.Error(writer, 422, "invalid_project", "Project data could not be read. Reload the page and try again.", id)
 		return
 	}
 	saved, err := s.config.Projects.Save(request.Context(), project, input.input())
 	if err != nil {
-		if errors.Is(err, store.ErrRevisionConflict) {
-			httpx.Error(writer, http.StatusConflict, "revision_conflict", "Project revision conflicts.", id)
-		} else {
-			httpx.Error(writer, http.StatusUnprocessableEntity, "invalid_project", "Project is invalid.", id)
-		}
+		projectError(writer, id, err)
 		return
 	}
 	httpx.WriteJSON(writer, 200, saved)
@@ -69,14 +59,10 @@ func (s *Server) listBatches(writer http.ResponseWriter, request *http.Request, 
 		internalError(writer, id)
 		return
 	}
-	limit := 50
-	if value := request.URL.Query().Get("limit"); value != "" {
-		var err error
-		limit, err = strconv.Atoi(value)
-		if err != nil || limit < 1 || limit > 100 {
-			httpx.Error(writer, http.StatusBadRequest, "invalid_query", "Invalid query.", id)
-			return
-		}
+	limit, err := parseLimit(request.URL.Query().Get("limit"))
+	if err != nil {
+		httpx.Error(writer, http.StatusBadRequest, "invalid_query", "Invalid query.", id)
+		return
 	}
 	page, err := s.config.BatchExports.List(request.Context(), limit)
 	if err != nil {
@@ -93,7 +79,7 @@ func (s *Server) getBatch(writer http.ResponseWriter, request *http.Request, bat
 	}
 	batch, err := s.config.BatchExports.Get(request.Context(), batchID)
 	if err != nil {
-		notFound(writer, id)
+		resourceError(writer, id, err)
 		return
 	}
 	httpx.WriteJSON(writer, http.StatusOK, batch)
@@ -109,7 +95,7 @@ func (s *Server) retryJob(writer http.ResponseWriter, request *http.Request, job
 		if errors.Is(err, jobqueue.ErrJobState) {
 			httpx.Error(writer, http.StatusConflict, "job_not_retryable", "Only failed export jobs can be retried.", id)
 		} else {
-			notFound(writer, id)
+			resourceError(writer, id, err)
 		}
 		return
 	}
@@ -118,13 +104,11 @@ func (s *Server) retryJob(writer http.ResponseWriter, request *http.Request, job
 
 func (s *Server) cancelBatch(writer http.ResponseWriter, request *http.Request, batchID string, id string) {
 	if s.config.BatchExports == nil {
-		if s.config.BatchExports == nil {
-			internalError(writer, id)
-		}
+		internalError(writer, id)
 		return
 	}
 	if err := s.config.BatchExports.Cancel(request.Context(), batchID); err != nil {
-		notFound(writer, id)
+		resourceError(writer, id, err)
 		return
 	}
 	writer.WriteHeader(http.StatusNoContent)
@@ -132,14 +116,12 @@ func (s *Server) cancelBatch(writer http.ResponseWriter, request *http.Request, 
 
 func (s *Server) preflightExport(writer http.ResponseWriter, request *http.Request, project string, id string) {
 	if s.config.Preflight == nil {
-		if s.config.Preflight == nil {
-			internalError(writer, id)
-		}
+		internalError(writer, id)
 		return
 	}
 	owned, err := s.config.Projects.Get(request.Context(), project)
 	if err != nil {
-		notFound(writer, id)
+		resourceError(writer, id, err)
 		return
 	}
 	var input ExportInput
@@ -155,17 +137,24 @@ func (s *Server) preflightExport(writer http.ResponseWriter, request *http.Reque
 	httpx.WriteJSON(writer, 200, result)
 }
 func (s *Server) createExport(writer http.ResponseWriter, request *http.Request, project string, id string) {
-	var input ExportInput
+	if s.config.BatchExports == nil {
+		internalError(writer, id)
+		return
+	}
+	var input ExportSubmissionInput
 	if httpx.ReadJSON(request, &input) != nil {
 		httpx.Error(writer, http.StatusUnprocessableEntity, "invalid_export", "Export is invalid.", id)
 		return
 	}
 	batchID, submitted, err := s.config.BatchExports.Submit(request.Context(), projects.BatchExportRequest{ProjectID: project, ItemIDs: input.ItemIDs})
 	if err != nil {
-		if errors.Is(err, jobqueue.ErrQueueFull) {
+		switch {
+		case errors.Is(err, jobqueue.ErrQueueFull):
 			httpx.Error(writer, http.StatusTooManyRequests, "export_busy", "Export capacity is full.", id)
-		} else {
+		case errors.Is(err, projects.ErrInvalidProject):
 			httpx.Error(writer, http.StatusUnprocessableEntity, "invalid_export", "Export is invalid.", id)
+		default:
+			resourceError(writer, id, err)
 		}
 		return
 	}
@@ -179,11 +168,15 @@ func (s *Server) createDetection(writer http.ResponseWriter, request *http.Reque
 	}
 	owned, err := s.config.Projects.Get(request.Context(), project)
 	if err != nil {
-		notFound(writer, id)
+		resourceError(writer, id, err)
 		return
 	}
 	var input DetectionRequest
-	if httpx.ReadJSON(request, &input) != nil || input.ProjectRevision != owned.Revision || !input.Kind.Valid() {
+	if httpx.ReadJSON(request, &input) != nil || !input.Kind.Valid() {
+		httpx.Error(writer, http.StatusUnprocessableEntity, "invalid_detection", "Detection request is invalid.", id)
+		return
+	}
+	if input.ProjectRevision != owned.Revision {
 		httpx.Error(writer, http.StatusConflict, "stale_project", "Detection request is stale.", id)
 		return
 	}

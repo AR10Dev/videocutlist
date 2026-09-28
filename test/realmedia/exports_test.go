@@ -27,20 +27,43 @@ func assertNoTemporaryArtifacts(t *testing.T, root string) {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	t.Fatal("temporary export/cache artifact remains")
+	var remaining []string
+	for _, dir := range []string{filepath.Join(root, "exports"), filepath.Join(root, "cache")} {
+		_ = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+			if err == nil && info != nil && isTemporaryArtifact(info) {
+				remaining = append(remaining, strings.TrimPrefix(path, root))
+			}
+			return nil
+		})
+	}
+	t.Fatalf("temporary export/cache artifacts remain: %v", remaining)
 }
 
 func temporaryArtifactsPresent(root string) bool {
 	present := false
 	for _, dir := range []string{filepath.Join(root, "exports"), filepath.Join(root, "cache")} {
 		_ = filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-			if err == nil && info != nil && !info.IsDir() && (strings.HasSuffix(info.Name(), ".partial") || strings.HasPrefix(info.Name(), ".videocutlist-")) {
+			if err == nil && info != nil && isTemporaryArtifact(info) {
 				present = true
 			}
 			return nil
 		})
 	}
 	return present
+}
+
+func isTemporaryArtifact(info os.FileInfo) bool {
+	if info.IsDir() {
+		return false
+	}
+	name := info.Name()
+	if name == ".videocutlist-batches.lock" {
+		// The shared flock inode persists so all publishers lock the same file.
+		return false
+	}
+	return strings.HasSuffix(name, ".partial") ||
+		strings.HasPrefix(name, ".videocutlist-") &&
+			!(strings.HasPrefix(name, ".videocutlist-export-") && strings.HasSuffix(name, ".json"))
 }
 
 func TestProductionExportsJobsAndOutputs(t *testing.T) {
@@ -123,7 +146,7 @@ func TestProductionExportsJobsAndOutputs(t *testing.T) {
 			t.Fatalf("preflight selection=%v allowed=%v", checked.Selection, checked.Allowed)
 		}
 		preflight.Body.Close()
-		response := p.requestBody(t, "POST", "/api/v1/projects/"+projectID+"/exports", payload)
+		response := p.requestBody(t, "POST", "/api/v1/projects/"+projectID+"/exports", map[string]any{"itemIds": payload["itemIds"]})
 		var submitted struct {
 			BatchID string `json:"batchId"`
 			Jobs    []struct {

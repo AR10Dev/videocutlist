@@ -56,6 +56,7 @@ test-real-media:
 	rm -rf internal/web/webassets/dist
 	cp -a client/dist internal/web/webassets/dist
 	$(GO) test -tags realmedia -count=1 -v ./test/realmedia
+	$(PNPM) --dir client exec playwright test --config playwright.real.config.ts
 
 client-install:
 	$(PNPM) install --frozen-lockfile

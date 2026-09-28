@@ -2,6 +2,7 @@ package model
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -18,6 +19,17 @@ func TestValidateProjectAllowsIndependentOrderedItems(t *testing.T) {
 	document.Items[1].ID = document.Items[0].ID
 	if err := ValidateProject(document); err == nil {
 		t.Fatal("duplicate item IDs accepted")
+	}
+}
+
+func TestValidateProjectItemTemplateUsesUTF8Bytes(t *testing.T) {
+	item := ProjectItem{ExportOptions: ExportOptions{FilenameTemplate: strings.Repeat("é", 80)}}
+	if err := ValidateProjectItem(item, -1); err != nil {
+		t.Fatalf("160-byte filename template rejected: %v", err)
+	}
+	item.ExportOptions.FilenameTemplate += "é"
+	if err := ValidateProjectItem(item, -1); err == nil {
+		t.Fatal("162-byte filename template accepted")
 	}
 }
 

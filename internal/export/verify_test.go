@@ -68,6 +68,25 @@ func TestVerifyOutputAcceptsSelectedStreamCombinations(t *testing.T) {
 	}
 }
 
+func TestVerifyOutputAcceptsMP4MOVFormatAliases(t *testing.T) {
+	source := sourceStreams()
+	for _, test := range []struct {
+		container string
+		format    string
+	}{
+		{"mp4", "mov,mp4,m4a,3gp,3g2,mj2"},
+		{"mov", "mov,mp4,m4a,3gp,3g2,mj2"},
+		{"mp4", "mp4"},
+		{"mov", "mov"},
+	} {
+		t.Run(test.container+"/"+test.format, func(t *testing.T) {
+			if err := validateOutput(probe.Metadata{Container: test.format, DurationMS: 1000, Streams: []probe.Stream{source.Streams[0]}}, source, []int{0}, 1000, test.container); err != nil {
+				t.Fatalf("format alias rejected: %v", err)
+			}
+		})
+	}
+}
+
 func TestVerifyOutputRejectsInvalidArtifacts(t *testing.T) {
 	source := sourceStreams()
 	tests := []struct {
@@ -126,5 +145,31 @@ func TestVerifyOutputRejectsProbeCorruptionAndInvalidContainer(t *testing.T) {
 	ffprobe, output := fakeFFprobe(t, probe.Metadata{Container: "mp4", DurationMS: 2000, Streams: []probe.Stream{sourceStreams().Streams[0]}})
 	if err := verifyOutput(context.Background(), ffprobe, output, sourceStreams(), []int{0}, 2000); err == nil || !strings.Contains(err.Error(), "container") {
 		t.Fatalf("error = %v, want container rejection", err)
+	}
+}
+
+func TestVerifyOutputRejectsTruncatedDurationWithoutRejectingStreamCopyDrift(t *testing.T) {
+	source := sourceStreams()
+	for _, test := range []struct {
+		name       string
+		durationMS int64
+		wantError  bool
+	}{
+		{name: "truncated-long-clip", durationMS: 22_000, wantError: true},
+		{name: "truncated-short-clip", durationMS: 100, wantError: true},
+		{name: "short-copy-drift", durationMS: 1100},
+		{name: "long-copy-drift", durationMS: 25_000},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			expected := int64(30_000)
+			if strings.Contains(test.name, "short") {
+				expected = 2000
+			}
+			ffprobe, output := fakeFFprobe(t, probe.Metadata{Container: "matroska", DurationMS: test.durationMS, Streams: []probe.Stream{source.Streams[0]}})
+			err := verifyOutput(t.Context(), ffprobe, output, source, []int{0}, expected)
+			if (err != nil) != test.wantError {
+				t.Fatalf("duration %dms for expected %dms: error = %v", test.durationMS, expected, err)
+			}
+		})
 	}
 }

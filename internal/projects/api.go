@@ -15,6 +15,7 @@ var ErrNoAudio = errors.New("no_audio")
 
 type Media struct {
 	ID         string         `json:"id"`
+	RootID     string         `json:"-"`
 	Name       string         `json:"name"`
 	DurationMS int64          `json:"durationMs"`
 	SizeBytes  int64          `json:"sizeBytes"`
@@ -116,6 +117,7 @@ type Job struct {
 	Warnings        []string                     `json:"warnings,omitempty"`
 	WarningDetails  []ExportFinding              `json:"warningDetails,omitempty"`
 	Strategy        string                       `json:"strategy,omitempty"`
+	Container       string                       `json:"container,omitempty"`
 	AppliedStrategy string                       `json:"appliedStrategy,omitempty"`
 	Mode            string                       `json:"mode,omitempty"`
 	Selection       string                       `json:"selection,omitempty"`
@@ -157,6 +159,7 @@ type OutputFailure struct {
 }
 
 type JobResult struct {
+	Container         string            `json:"container,omitempty"`
 	OutputName        string            `json:"outputName,omitempty"`
 	OutputNames       []string          `json:"outputNames,omitempty"`
 	OutputFailures    []OutputFailure   `json:"outputFailures,omitempty"`
@@ -205,6 +208,7 @@ type PreviewService interface {
 	Cached(context.Context, PreviewSpec) (bool, error)
 }
 type AssetService interface {
+	ValidateSource(context.Context, string) error
 	Thumbnails(context.Context, AssetSpec) (AssetResult, error)
 	Waveform(context.Context, AssetSpec) (AssetResult, error)
 }

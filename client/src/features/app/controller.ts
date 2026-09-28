@@ -50,11 +50,20 @@ export function createWorkspaceController() {
     runtimeSettings,
     settingsPending,
     rescanPending,
+    mcpSettings,
+    mcpStatus,
+    mcpLoadError,
+    mcpLoading,
+    loadMCPSettings,
+    mcpPending,
+    revealedMCPSecret,
     saveSettings,
     openSettings,
     saveRuntimeSettings,
-    updateDestination,
-    saveDestinations,
+    setMCPEnabled,
+    createMCPCredential,
+    approveExportProposal,
+    revokeMCPCredential,
     rescanLibrary,
   } = settingsFeature;
   const [muted, setMuted] = createSignal(settings().muted);
@@ -64,6 +73,9 @@ export function createWorkspaceController() {
   const [dirty, setDirty] = createSignal(false);
   const [projectItems, setProjectItems] = createSignal<EditableProjectItem[]>([]);
   const [activeItemId, setActiveItemId] = createSignal<string>();
+  const [editorContextRevision, setEditorContextRevision] = createSignal(0);
+  const advanceEditorContext = () => setEditorContextRevision((value) => value + 1);
+  const editorContext = () => `${projectId()}::${selected()?.id ?? ""}::${editorContextRevision()}`;
   const [recent, setRecent] = createSignal<RecentProject[]>(
     (() => {
       try {
@@ -85,6 +97,8 @@ export function createWorkspaceController() {
   const exportRef: { current?: ReturnType<typeof createExportController> } = {};
   const editorFeature = createEditorController({
     selected,
+    contextKey: editorContext,
+    segmentIdentityScope: activeItemId,
     setStatus,
     markDirty,
     setPreviewCenterMs: (ms) => previewRef.current?.setPreviewCenterMs(ms),
@@ -146,6 +160,8 @@ export function createWorkspaceController() {
     editorVersion: () => editorVersion,
     status,
     projectItems,
+    setProjectItems,
+    activeItemId,
     editableItems: () => editableItems(),
     segments: () => timeline().present.segments,
     tracks: () => tracks(),
@@ -157,8 +173,9 @@ export function createWorkspaceController() {
   const {
     selectedExportItems,
     setSelectedExportItems,
+    chooseExportItems,
     exportScope,
-    setExportScope,
+    chooseExportScope,
     exportItemIDs,
     batches,
     exportJob,
@@ -172,6 +189,8 @@ export function createWorkspaceController() {
     setExportSelection,
     cutStrategy,
     setCutStrategy,
+    exportContainer,
+    setExportContainer,
     streamIndexes,
     setStreamIndexes,
     destinations,
@@ -181,12 +200,25 @@ export function createWorkspaceController() {
     setFilenameTemplate,
     preflight,
     preflightPending,
+    preflightError,
     exportPending,
+    destinationsLoading,
+    destinationsError,
+    retryDestinations,
+    batchesLoading,
+    batchesRefreshing,
+    batchesError,
+    refreshBatches,
+    batchLoading,
+    batchError,
+    exportJobLoading,
+    exportJobError,
     destinationStatus,
     exportProject,
     cancelExport,
     cancelBatch,
     cancelChildJob,
+    childJobPending,
     retryChildJob,
     destinationCapabilities,
   } = exportFeature;
@@ -207,7 +239,7 @@ export function createWorkspaceController() {
               selection: exportSelection(),
               streamIndexes: streamIndexes(),
               cutStrategy: cutStrategy(),
-              container: "mkv" as const,
+              container: exportContainer(),
               destinationId: destinationId(),
               filenameTemplate: filenameTemplate(),
             },
@@ -215,7 +247,8 @@ export function createWorkspaceController() {
         : item,
     );
   const activateItem = (item: EditableProjectItem) => {
-    if (item.media.id !== selected()?.id) editorFeature.prepareMediaSwitch();
+    editorFeature.prepareMediaSwitch();
+    advanceEditorContext();
     setProjectItems(editableItems());
     setActiveItemId(item.id);
     setSelected(item.media);
@@ -226,6 +259,7 @@ export function createWorkspaceController() {
     setExportSelection(item.exportOptions.selection ?? "segments");
     setStreamIndexes(item.exportOptions.streamIndexes ?? []);
     setCutStrategy(item.exportOptions.cutStrategy ?? settings().cutStrategy);
+    setExportContainer(item.exportOptions.container ?? "mkv");
     setDestinationId(item.exportOptions.destinationId ?? "download");
     setFilenameTemplate(item.exportOptions.filenameTemplate ?? settings().filenameTemplate);
     setDiagnostics();
@@ -265,12 +299,6 @@ export function createWorkspaceController() {
   createEffect(() => {
     const item = selectedMediaQuery.data;
     if (item && item.id === selected()?.id) setSelected(item);
-    if (selectedMediaQuery.error && selected()?.id)
-      setStatus(
-        selectedMediaQuery.error instanceof Error
-          ? selectedMediaQuery.error.message
-          : "Metadata request failed.",
-      );
   });
   const initializedPreviewFeature = createPreviewController(api, {
     selected,
@@ -306,6 +334,7 @@ export function createWorkspaceController() {
   exportRef.current = exportFeature;
   const chooseMedia = (item: Media) => {
     editorFeature.prepareMediaSwitch();
+    advanceEditorContext();
     clearDetectionContext();
     const items = editableItems();
     const existing = items.find((entry) => entry.media.id === item.id);
@@ -320,11 +349,12 @@ export function createWorkspaceController() {
     setSelected(item);
     setTimeline(createTimelineHistory({ playheadMs: 0, segments: [], zoom: 1 }));
     setPreviewCenterMs(0);
-    setMuted(false);
+    setMuted(settings().muted);
     setExportMode("separate");
     setExportSelection("segments");
     setStreamIndexes([]);
     setCutStrategy(settings().cutStrategy);
+    setExportContainer("mkv");
     setDestinationId(lastDestinationId() ?? "download");
     setFilenameTemplate(settings().filenameTemplate);
     setDiagnostics();
@@ -335,6 +365,7 @@ export function createWorkspaceController() {
     if (!item) return;
     const items = editableItems();
     const existing = items.find((entry) => entry.media.id === item.id);
+    if (existing && existing.id === activeItemId()) return;
     if (existing) {
       activateItem(existing);
       setStatus(`Activated ${item.name} in the project.`);
@@ -343,9 +374,10 @@ export function createWorkspaceController() {
     const added = {
       ...createProjectItem(item, lastDestinationId()),
       timeline: timeline(),
+      muted: muted(),
     };
     setProjectItems([...items, added]);
-    activateItem(added);
+    setActiveItemId(added.id);
     setSelectedExportItems((ids) => (ids.includes(added.id) ? ids : [...ids, added.id]));
     markDirty();
     setStatus(`Added ${item.name} to the project.`);
@@ -388,14 +420,12 @@ export function createWorkspaceController() {
     activeItemId,
     projectId,
     revision,
+    editorVersion: () => editorVersion,
+    saveConflict: () => projectsRef.current?.saveConflict() ?? false,
     segments: () => present().segments,
     saveProject: () => projectsFeature.saveProject(),
     updateSegments: (segments) => updateTimeline({ segments }),
     markDirty,
-    setExportSelection: (selection) => {
-      if (exportSelection() !== selection) exportFeature.setSelection(selection);
-    },
-    onSegmentsAccepted: () => selectActiveExportItem.current?.(),
   });
   const {
     detectionJob,
@@ -403,6 +433,8 @@ export function createWorkspaceController() {
     setDetectionStatus,
     detectionCandidates,
     setDetectionCandidates,
+    detectionLoading,
+    detectionQueryError,
     clearDetectionContext,
     startDetection,
     cancelDetection,
@@ -437,10 +469,12 @@ export function createWorkspaceController() {
     setExportSelection,
     setStreamIndexes,
     setCutStrategy,
+    setExportContainer,
     setDestinationId,
     setFilenameTemplate,
     editableItems,
     editorVersion: () => editorVersion,
+    resetEditorContext: advanceEditorContext,
     clearDetectionContext,
     setDiagnostics,
     setStatus,
@@ -459,6 +493,11 @@ export function createWorkspaceController() {
     refreshing,
     status,
     setStatus,
+    metadataError: () => selectedMediaQuery.error?.message,
+    metadataLoading: () => selectedMediaQuery.isFetching,
+    retryMetadata: () => void selectedMediaQuery.refetch(),
+    serverSettingsLoading: settingsFeature.serverSettingsLoading,
+    loadServerSettings: settingsFeature.loadServerSettings,
     assetStatus,
     previewStatus,
     segmentLabel,
@@ -472,6 +511,7 @@ export function createWorkspaceController() {
     retryAssets,
     assetRange,
     setPreviewCenterMs,
+    settings,
     setSettings,
     appearance,
     setAppearance,
@@ -483,6 +523,13 @@ export function createWorkspaceController() {
     runtimeSettings,
     settingsPending,
     rescanPending,
+    mcpSettings,
+    mcpStatus,
+    mcpLoadError,
+    mcpLoading,
+    loadMCPSettings,
+    mcpPending,
+    revealedMCPSecret,
     muted,
     setMuted,
     diagnostics,
@@ -501,10 +548,12 @@ export function createWorkspaceController() {
     setDirty,
     projectItems,
     activeItemId,
+    editorContext,
     selectedExportItems,
     setSelectedExportItems,
+    chooseExportItems,
     exportScope,
-    setExportScope,
+    chooseExportScope,
     exportItemIDs,
     batches,
     recent,
@@ -519,6 +568,8 @@ export function createWorkspaceController() {
     setExportSelection,
     cutStrategy,
     setCutStrategy,
+    exportContainer,
+    setExportContainer,
     streamIndexes,
     setStreamIndexes,
     destinations,
@@ -529,13 +580,28 @@ export function createWorkspaceController() {
     setFilenameTemplate,
     preflight,
     preflightPending,
+    preflightError,
     exportPending,
+    childJobPending,
+    destinationsLoading,
+    destinationsError,
+    retryDestinations,
+    batchesLoading,
+    batchesRefreshing,
+    batchesError,
+    refreshBatches,
+    batchLoading,
+    batchError,
+    exportJobLoading,
+    exportJobError,
     destinationStatus,
     detectionJob,
     detectionStatus,
     setDetectionStatus,
     detectionCandidates,
     setDetectionCandidates,
+    detectionLoading,
+    detectionQueryError,
     timeline,
     setTimeline,
     visibleTimelineRange,
@@ -556,8 +622,10 @@ export function createWorkspaceController() {
     saveSettings,
     openSettings,
     saveRuntimeSettings,
-    updateDestination,
-    saveDestinations,
+    setMCPEnabled,
+    createMCPCredential,
+    approveExportProposal,
+    revokeMCPCredential,
     rescanLibrary,
     updateTimeline,
     loadFolder,
@@ -604,6 +672,8 @@ export function createWorkspaceController() {
     playActiveSegment: initializedPreviewFeature.playActiveSegment,
     playOrderedSegments: initializedPreviewFeature.playOrderedSegments,
     playDetectionCandidate: playSegment,
+    playDetectionPoint: initializedPreviewFeature.playDetectionPoint,
+    seekDetectionPoint: initializedPreviewFeature.seekDetectionPoint,
     undo: editorFeature.undo,
     redo: editorFeature.redo,
   };

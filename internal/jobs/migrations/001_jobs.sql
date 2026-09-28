@@ -4,6 +4,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     kind TEXT NOT NULL CHECK (kind IN ('export', 'detection', 'library_scan')),
     project_id TEXT,
     project_item_id TEXT,
+    proposal_id TEXT,
+    credential_id TEXT,
     state TEXT NOT NULL CHECK (state IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')),
     request_json TEXT NOT NULL,
     result_json TEXT,
@@ -14,3 +16,4 @@ CREATE TABLE IF NOT EXISTS jobs (
 );
 CREATE INDEX IF NOT EXISTS jobs_batch_updated ON jobs (batch_id, updated_at);
 CREATE INDEX IF NOT EXISTS jobs_state_updated ON jobs (state, updated_at);
+CREATE UNIQUE INDEX IF NOT EXISTS jobs_proposal_item ON jobs (proposal_id, project_item_id) WHERE proposal_id IS NOT NULL;

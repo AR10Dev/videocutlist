@@ -19,7 +19,7 @@ const MaxInputBytes = 1 << 20
 var errInvalid = errors.New("invalid interchange document")
 
 func ParseCSV(data []byte, durationMS int64) ([]model.Segment, error) {
-	if len(data) > MaxInputBytes || bytes.ContainsAny(data, "\\") {
+	if len(data) > MaxInputBytes {
 		return nil, errInvalid
 	}
 	r := csv.NewReader(bytes.NewReader(data))
@@ -37,7 +37,7 @@ func ParseCSV(data []byte, durationMS int64) ([]model.Segment, error) {
 		if e != nil || len(out) >= 10000 {
 			return nil, errInvalid
 		}
-		if strings.ContainsAny(row[2], "/\\") || utf8.RuneCountInString(row[2]) > 200 {
+		if utf8.RuneCountInString(row[2]) > 200 {
 			return nil, errInvalid
 		}
 		start, e1 := ParseTimestamp(row[0])
@@ -65,7 +65,7 @@ func ExportCSV(segments []model.Segment) ([]byte, error) {
 }
 
 func ParseChapters(data []byte, durationMS int64) ([]model.Segment, error) {
-	if len(data) > MaxInputBytes || bytes.ContainsAny(data, "\\") || durationMS <= 0 {
+	if len(data) > MaxInputBytes || durationMS <= 0 {
 		return nil, errInvalid
 	}
 	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
@@ -97,7 +97,7 @@ func ParseChapters(data []byte, durationMS int64) ([]model.Segment, error) {
 			titleOffset += len(fields[2])
 		}
 		title := strings.TrimSpace(line[titleOffset:])
-		if title == "" || strings.ContainsAny(title, "/\\") || utf8.RuneCountInString(title) > 200 {
+		if title == "" || utf8.RuneCountInString(title) > 200 {
 			return nil, errInvalid
 		}
 		starts = append(starts, model.Segment{StartMS: start, EndMS: end, Label: title, Included: true})
@@ -244,7 +244,7 @@ func validate(segments []model.Segment, durationMS int64) ([]model.Segment, erro
 	}
 	var prevStart, prevEnd int64 = -1, -1
 	for _, s := range segments {
-		if s.StartMS < 0 || s.EndMS <= s.StartMS || durationMS > 0 && s.EndMS > durationMS || s.StartMS <= prevStart || s.StartMS < prevEnd || strings.ContainsAny(s.Label, "/\\") {
+		if s.StartMS < 0 || s.EndMS <= s.StartMS || durationMS > 0 && s.EndMS > durationMS || s.StartMS <= prevStart || s.StartMS < prevEnd || utf8.RuneCountInString(s.Label) > 200 {
 			return nil, errInvalid
 		}
 		prevStart, prevEnd = s.StartMS, s.EndMS

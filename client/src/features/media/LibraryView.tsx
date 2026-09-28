@@ -4,6 +4,7 @@ import type { components } from "../../generated/api";
 import { createApiClient, resolveBrowserConfiguration } from "../../api";
 import { useWorkspace } from "../app/WorkspaceContext";
 import { formatLibraryDuration, mediaSummary } from "./model";
+import { createThumbnailObjectURL } from "./thumbnail";
 
 type Media = components["schemas"]["Media"];
 const api = createApiClient(resolveBrowserConfiguration());
@@ -27,9 +28,10 @@ function MediaThumbnail(props: { item: Media }) {
         { signal: controller.signal },
       )
       .then(async (response) => {
-        if (!response.ok || controller.signal.aborted) return;
-        objectURL = URL.createObjectURL(await response.blob());
-        if (!controller.signal.aborted) setSource(objectURL);
+        const url = await createThumbnailObjectURL(response, controller.signal);
+        if (!url) return;
+        objectURL = url;
+        setSource(url);
       })
       .catch(() => undefined);
     onCleanup(() => {

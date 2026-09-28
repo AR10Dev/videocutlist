@@ -59,10 +59,6 @@ func (s *Store) SetMaxBytes(maxBytes int64) error {
 	return nil
 }
 
-// Key is the frozen v1 compact JSON identity. Do not add implementation
-// details: the runtime contract intentionally keys only the encoder profile.
-func Key(spec model.PreviewSpec) string { return model.PreviewKey(spec) }
-
 func RelativePath(key string) (string, error) {
 	if len(key) != 64 || strings.ToLower(key) != key {
 		return "", errors.New("invalid cache key")
@@ -309,7 +305,7 @@ func (p *Partial) Commit(ctx context.Context, validator Validator) error {
 func (s *Store) CleanupPartials() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return filepath.WalkDir(filepath.Join(s.root, "previews"), func(path string, entry fs.DirEntry, err error) error {
+	return filepath.WalkDir(s.root, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil || entry.IsDir() || !strings.HasSuffix(entry.Name(), ".partial") {
 			return err
 		}

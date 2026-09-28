@@ -1,11 +1,7 @@
 import { createMutation, QueryClient, QueryClientProvider } from "@tanstack/solid-query";
 import { createComponent, createRoot } from "solid-js";
 import { describe, expect, it } from "vitest";
-import {
-  abortAndClear,
-  abortCancellationControllers,
-  cancellationIsCurrent,
-} from "../src/features/queue/cancellation";
+import { abortAndClear, cancellationIsCurrent } from "../src/features/queue/cancellation";
 import { jobPollInterval } from "../src/features/queue/jobPolling";
 import { cancelJobLifecycle } from "../src/features/queue/queryLifecycle";
 
@@ -131,17 +127,6 @@ describe("Solid Query lifecycle contracts", () => {
     expect(receivedSignal?.aborted).toBe(true);
     if (cancellationIsCurrent(controller, controller)) stateWrites++;
     expect(stateWrites).toBe(0);
-  });
-
-  it("aborts both cancellation controllers during application cleanup", () => {
-    const exportController = new AbortController();
-    const detectionController = new AbortController();
-    expect(abortCancellationControllers(exportController, detectionController)).toEqual([
-      undefined,
-      undefined,
-    ]);
-    expect(exportController.signal.aborted).toBe(true);
-    expect(detectionController.signal.aborted).toBe(true);
   });
 
   it("rejects completion from a discarded cancellation context", () => {

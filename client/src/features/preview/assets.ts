@@ -1,10 +1,12 @@
-export type AssetViewport = { startMs: number; endMs: number };
+export type AssetViewport = { startMs: number; endMs: number; widthPx?: number };
 export type AssetRange = { startMs: number; durationMs: number };
-export type WaveformAsset = AssetRange & { peaks: number[] };
 
 export const maxAssetDurationMs = 120_000;
 
-function normalizedViewport(viewport: AssetViewport, mediaDurationMs: number): AssetRange {
+export function normalizedAssetViewport(
+  viewport: AssetViewport,
+  mediaDurationMs: number,
+): AssetRange {
   const duration = Math.max(1, Math.round(Number.isFinite(mediaDurationMs) ? mediaDurationMs : 1));
   const start = Math.max(
     0,
@@ -17,23 +19,25 @@ function normalizedViewport(viewport: AssetViewport, mediaDurationMs: number): A
   return { startMs: start, durationMs: end - start };
 }
 
-/** Returns the complete visible interval; requests may need to be tiled. */
-export function visibleAssetRange(viewport: AssetViewport, mediaDurationMs: number): AssetRange {
-  return normalizedViewport(viewport, mediaDurationMs);
-}
-
-/** Splits a visible interval into request-sized ranges without losing coverage. */
+/** Samples the visible interval within a render-width-derived, fixed work budget. */
 export function visibleAssetRanges(viewport: AssetViewport, mediaDurationMs: number): AssetRange[] {
-  const visible = normalizedViewport(viewport, mediaDurationMs);
-  const ranges: AssetRange[] = [];
-  let startMs = visible.startMs;
-  const endMs = visible.startMs + visible.durationMs;
-  while (startMs < endMs) {
-    const durationMs = Math.min(maxAssetDurationMs, endMs - startMs);
-    ranges.push({ startMs, durationMs });
-    startMs += durationMs;
+  const visible = normalizedAssetViewport(viewport, mediaDurationMs);
+  const width = Number.isFinite(viewport.widthPx) ? Math.max(1, viewport.widthPx ?? 1) : 960;
+  const budget = Math.max(1, Math.min(8, Math.ceil(width / 320)));
+  const count = Math.min(budget, Math.ceil(visible.durationMs / maxAssetDurationMs));
+  if (visible.durationMs <= count * maxAssetDurationMs) {
+    return Array.from({ length: count }, (_, index) => ({
+      startMs: visible.startMs + index * maxAssetDurationMs,
+      durationMs: Math.min(maxAssetDurationMs, visible.durationMs - index * maxAssetDurationMs),
+    }));
   }
-  return ranges;
+  const sampleDuration = Math.min(maxAssetDurationMs, visible.durationMs);
+  if (count === 1) return [{ startMs: visible.startMs, durationMs: sampleDuration }];
+  const lastStart = visible.startMs + visible.durationMs - sampleDuration;
+  return Array.from({ length: count }, (_, index) => ({
+    startMs: Math.round(visible.startMs + ((lastStart - visible.startMs) * index) / (count - 1)),
+    durationMs: sampleDuration,
+  }));
 }
 
 export function normalizePeaks(value: unknown): number[] {

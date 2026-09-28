@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"strings"
 
+	"videocutlist/internal/exportpolicy"
 	"videocutlist/internal/library/media/probe"
 )
 
@@ -15,37 +15,67 @@ func VerifyOutput(ctx context.Context, ffprobePath, filename string, source prob
 	return verifyOutput(ctx, ffprobePath, filename, source, selected, 0)
 }
 
-func verifyOutput(ctx context.Context, ffprobePath, filename string, source probe.Metadata, selected []int, expectedDurationMS int64) error {
+func verifyOutput(ctx context.Context, ffprobePath, filename string, source probe.Metadata, selected []int, expectedDurationMS int64, containers ...string) error {
+	policy, ok := verificationPolicy(filename, containers...)
+	if !ok {
+		return fmt.Errorf("unexpected output container")
+	}
 	output, err := (probe.Client{Path: ffprobePath}).Probe(ctx, filename)
 	if err != nil {
 		return err
 	}
-	return validateOutput(output, source, selected, expectedDurationMS)
+	return validateOutput(output, source, selected, expectedDurationMS, policy.Name)
 }
 
-func verifyOutputFile(ctx context.Context, ffprobePath string, file *os.File, source probe.Metadata, selected []int, expectedDurationMS int64) error {
+func verifyOutputFile(ctx context.Context, ffprobePath string, file *os.File, source probe.Metadata, selected []int, expectedDurationMS int64, containers ...string) error {
+	if file == nil {
+		return fmt.Errorf("output file is required")
+	}
+	policy, ok := verificationPolicy(file.Name(), containers...)
+	if !ok {
+		return fmt.Errorf("unexpected output container")
+	}
 	output, err := (probe.Client{Path: ffprobePath}).ProbeFile(ctx, file)
 	if err != nil {
 		return err
 	}
-	return validateOutput(output, source, selected, expectedDurationMS)
+	return validateOutput(output, source, selected, expectedDurationMS, policy.Name)
 }
 
-func validateOutput(output, source probe.Metadata, selected []int, expectedDurationMS int64) error {
-	if !strings.Contains(output.Container, "matroska") {
+func verificationPolicy(filename string, containers ...string) (exportpolicy.Policy, bool) {
+	if len(containers) > 1 {
+		return exportpolicy.Policy{}, false
+	}
+	if len(containers) == 1 && containers[0] != "" {
+		return exportpolicy.For(containers[0])
+	}
+	if filename != "" {
+		if policy, ok := exportpolicy.ForFilename(filename); ok {
+			return policy, true
+		}
+	}
+	return exportpolicy.For("mkv")
+}
+
+func validateOutput(output, source probe.Metadata, selected []int, expectedDurationMS int64, containers ...string) error {
+	policy, ok := verificationPolicy("", containers...)
+	if !ok || !policy.MatchesFormat(output.Container) {
 		return fmt.Errorf("unexpected output container")
 	}
 	if output.DurationMS <= 0 {
 		return fmt.Errorf("output duration is not positive")
 	}
 	if expectedDurationMS > 0 {
-		// Concatenated stream-copy timestamps can drift by several segment-sized
-		// amounts. Keep the bound proportional while rejecting implausibly long data.
-		tolerance := expectedDurationMS * 12 / 5
-		if tolerance < 1500 {
-			tolerance = 1500
-		}
-		if output.DurationMS < expectedDurationMS-tolerance || output.DurationMS > expectedDurationMS+tolerance {
+		// Stream-copy boundaries can move by a GOP, especially across concatenated
+		// segments. Allow a bounded shortfall, but never accept an artifact that
+		// contains less than half the requested duration.
+		shortfall := max(int64(1500), expectedDurationMS/5)
+		shortfall = min(shortfall, expectedDurationMS/2)
+		// Timestamp discontinuities can also make stream-copy output longer.
+		// Retain the existing permissive upper bound independently of the
+		// shortfall bound; tightening it would reject valid copied segments.
+		excess := max(int64(1500), expectedDurationMS*12/5)
+		if output.DurationMS < expectedDurationMS-shortfall || output.DurationMS > expectedDurationMS+excess {
 			return fmt.Errorf("output duration %dms is implausible for expected %dms", output.DurationMS, expectedDurationMS)
 		}
 	}

@@ -12,6 +12,8 @@ import (
 	"slices"
 	"strings"
 	"unicode/utf8"
+
+	"videocutlist/internal/exportpolicy"
 )
 
 var (
@@ -96,6 +98,24 @@ type ExportOptions struct {
 	FilenameTemplate string `json:"filenameTemplate,omitempty"`
 }
 
+// WithExportDefaults resolves optional saved fields before handing an item to
+// preflight or a worker. Keep this aligned with new project-item defaults.
+func (options ExportOptions) WithExportDefaults() ExportOptions {
+	if options.Mode == "" {
+		options.Mode = "separate"
+	}
+	if options.Selection == "" {
+		options.Selection = "segments"
+	}
+	if options.CutStrategy == "" {
+		options.CutStrategy = "stream_copy_preferred"
+	}
+	if options.Container == "" {
+		options.Container = "mkv"
+	}
+	return options
+}
+
 type ProjectItem struct {
 	ID            string        `json:"id"`
 	MediaID       string        `json:"mediaId"`
@@ -168,7 +188,7 @@ func validateExportOptions(options ExportOptions) error {
 	if options.CutStrategy != "" && options.CutStrategy != "stream_copy_preferred" && options.CutStrategy != "precise_reencode" && options.CutStrategy != "hybrid_smart_cut" {
 		return errors.New("invalid export cut strategy")
 	}
-	if options.Container != "" && options.Container != "mkv" {
+	if _, ok := exportpolicy.For(options.Container); !ok {
 		return errors.New("invalid export container")
 	}
 	if len(options.DestinationID) > 64 || len(options.FilenameTemplate) > 160 || strings.ContainsAny(options.DestinationID, "/\\") || strings.Contains(options.FilenameTemplate, "\x00") || strings.IndexFunc(options.DestinationID, func(r rune) bool { return r < 32 || r == 127 }) >= 0 {

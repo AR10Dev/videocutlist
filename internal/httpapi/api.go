@@ -12,14 +12,15 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"videocutlist/internal/db"
-	jobqueue "videocutlist/internal/jobs"
+	"videocutlist/internal/exportpolicy"
+	"videocutlist/internal/mcp"
 	"videocutlist/internal/projects"
 	"videocutlist/internal/projects/interchange"
 	"videocutlist/internal/projects/model"
+	settings "videocutlist/internal/settings"
 )
 
 const (
@@ -80,6 +81,9 @@ func (p ProjectInput) input() projects.ProjectInput {
 
 type Project = projects.Project
 type ExportInput = projects.ExportInput
+type ExportSubmissionInput struct {
+	ItemIDs []string `json:"itemIds,omitempty"`
+}
 
 type Job = projects.Job
 type PreviewSpec = projects.PreviewSpec
@@ -115,7 +119,6 @@ type DestinationCapabilities struct {
 }
 type BatchExportService interface {
 	Submit(context.Context, projects.BatchExportRequest) (string, []projects.Job, error)
-	Progress(context.Context, string) (jobqueue.JobState, float64, error)
 	Get(context.Context, string) (projects.Batch, error)
 	List(context.Context, int) (projects.BatchPage, error)
 	Retry(context.Context, string) (projects.Batch, error)
@@ -126,38 +129,39 @@ type BatchDownloadService interface {
 }
 
 type Config struct {
-	Authenticator        Authenticator
-	Media                MediaService
-	MediaImport          projects.MediaImportService
-	Preview              PreviewService
-	Assets               AssetService
-	Projects             ProjectService
-	BatchExports         BatchExportService
-	Preflight            ExportPreflightService
-	Jobs                 JobService
-	Detection            DetectionService
-	Download             projects.ExportDownloadService
-	Settings             *store.RuntimeSettingsStore
-	RuntimeSettings      *store.RuntimeSettingsState
-	ApplyRuntimeSettings func(store.RuntimeSettings) error
-	SettingsAllowlist    []string
-	Destinations         []DestinationMetadata
-	Ready                func(context.Context) error
-	Logger               *log.Logger
-	Metrics              *Metrics
-	BeforeMS             int64
-	AfterMS              int64
-	MaxPreviewMS         int64
-	GridMS               int64
+	Authenticator     Authenticator
+	Media             MediaService
+	MediaImport       projects.MediaImportService
+	Preview           PreviewService
+	Assets            AssetService
+	Projects          ProjectService
+	BatchExports      BatchExportService
+	Preflight         ExportPreflightService
+	Jobs              JobService
+	Detection         DetectionService
+	Download          projects.ExportDownloadService
+	Settings          *settings.RuntimeService
+	RuntimeSettings   *store.RuntimeSettingsState
+	MCPCredentials    *mcp.CredentialStore
+	ExportProposals   *mcp.ProposalService
+	SettingsAllowlist []string
+	Destinations      []DestinationMetadata
+	Ready             func(context.Context) error
+	Logger            *log.Logger
+	Metrics           *Metrics
+	BeforeMS          int64
+	AfterMS           int64
+	MaxPreviewMS      int64
+	GridMS            int64
 	// ListenerAddress gates the local-only automation command surface.
 	ListenerAddress       string
+	AllowedOrigins        []string
 	RequireAutomationAuth bool
 }
 
 type Server struct {
-	config     Config
-	metrics    *Metrics
-	settingsMu sync.Mutex
+	config  Config
+	metrics *Metrics
 }
 
 func New(config Config) (*Server, error) {
@@ -189,11 +193,16 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	started := time.Now()
 	id := RequestID()
 	writer.Header().Set("X-Request-ID", id)
+	request = request.WithContext(context.WithValue(request.Context(), requestIDKey{}, id))
 	status := &statusWriter{ResponseWriter: writer, status: http.StatusOK}
-	route, _ := s.dispatch(status, request, id)
-	s.metrics.HTTP(route, request.Method, strconv.Itoa(status.status/100)+"xx", time.Since(started).Seconds())
+	route := routeFor(request.URL.Path)
+	CORS(s.config.AllowedOrigins, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		route, _ = s.dispatch(w, r, id)
+	})).ServeHTTP(status, request)
+	elapsed := time.Since(started)
+	s.metrics.HTTP(route, request.Method, strconv.Itoa(status.status/100)+"xx", elapsed.Seconds())
 	if s.config.Logger != nil {
-		data, _ := json.Marshal(map[string]any{"request_id": id, "method": request.Method, "route": route, "status": status.status})
+		data, _ := json.Marshal(map[string]any{"request_id": id, "method": request.Method, "route": route, "status": status.status, "duration_ms": float64(elapsed) / float64(time.Millisecond), "error_category": status.errorCode})
 		s.config.Logger.Print(string(data))
 	}
 }
@@ -201,7 +210,16 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 func (s *Server) dispatch(writer http.ResponseWriter, request *http.Request, id string) (string, string) {
 	if request.URL.Path == "/metrics" && request.Method == http.MethodGet {
 		writer.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-		s.metrics.WritePrometheus(writer)
+		if err := s.metrics.WritePrometheus(writer); err != nil {
+			// The metrics response is committed by its first write, so record the
+			// cleanup failure instead of attempting to rewrite it as an HTTP error.
+			if observed, ok := writer.(*statusWriter); ok {
+				observed.errorCode = "metrics_write"
+			}
+			if s.config.Logger != nil {
+				s.config.Logger.Print(`{"error_category":"metrics_write"}`)
+			}
+		}
 		return "/metrics", ""
 	}
 	if request.URL.Path == "/api/v1/health" && request.Method == http.MethodGet {
@@ -241,6 +259,21 @@ func (s *Server) dispatch(writer http.ResponseWriter, request *http.Request, id 
 	case routeRefreshSettings:
 		s.refreshSettings(writer, request, id)
 		return "/api/v1/settings/media/refresh", ""
+	case routeGetMCPSettings:
+		s.getMCPSettings(writer, request, id)
+		return "/api/v1/settings/mcp", ""
+	case routeCreateMCPCredential:
+		s.createMCPCredential(writer, request, id)
+		return "/api/v1/settings/mcp/credentials", ""
+	case routeRevokeMCPCredential:
+		s.revokeMCPCredential(writer, request, r.id, id)
+		return "/api/v1/settings/mcp/credentials/{credentialId}", ""
+	case routeGetExportProposal:
+		s.getExportProposal(writer, request, r.id, id)
+		return "/api/v1/export-proposals/{proposalId}", ""
+	case routeApproveExportProposal:
+		s.approveExportProposal(writer, request, r.id, id)
+		return "/api/v1/export-proposals/{proposalId}/approval", ""
 	case routeListMedia:
 		s.listMedia(writer, request, id)
 		return "/api/v1/media", ""
@@ -264,14 +297,14 @@ func (s *Server) dispatch(writer http.ResponseWriter, request *http.Request, id 
 	case routeGetMediaImport:
 		job, err := s.config.MediaImport.ImportStatus(request.Context(), r.id)
 		if err != nil {
-			notFound(writer, id)
+			resourceError(writer, id, err)
 			return "/api/v1/media/import/{jobId}", ""
 		}
 		httpx.WriteJSON(writer, http.StatusOK, job)
 		return "/api/v1/media/import/{jobId}", ""
 	case routeCancelMediaImport:
 		if err := s.config.MediaImport.CancelImport(request.Context(), r.id); err != nil {
-			notFound(writer, id)
+			resourceError(writer, id, err)
 			return "/api/v1/media/import/{jobId}", ""
 		}
 		writer.WriteHeader(http.StatusNoContent)
@@ -371,6 +404,16 @@ func optionalInt(value string, fallback int64) (int64, error) {
 	}
 	return strconv.ParseInt(value, 10, 64)
 }
+func parseLimit(value string) (int, error) {
+	if value == "" {
+		return 50, nil
+	}
+	limit, err := strconv.Atoi(value)
+	if err != nil || limit < 1 || limit > 100 {
+		return 0, errors.New("invalid limit")
+	}
+	return limit, nil
+}
 func assetNotModified(w http.ResponseWriter, r *http.Request, item Media, kind string) bool {
 	sum := sha256.Sum256([]byte(kind + "\x00" + item.ETag + "\x00" + r.URL.RawQuery))
 	etag := `"` + hex.EncodeToString(sum[:]) + `"`
@@ -390,7 +433,10 @@ func previewHeaders(writer http.ResponseWriter, spec PreviewSpec, cache string) 
 	writer.Header().Set("X-Preview-Cache", cache)
 }
 func validExport(input ExportInput) bool {
-	if (input.Mode != "merge" && input.Mode != "separate") || (input.Selection != "" && input.Selection != "segments" && input.Selection != "gaps") || (input.CutStrategy != "stream_copy_preferred" && input.CutStrategy != "precise_reencode" && input.CutStrategy != "hybrid_smart_cut") || input.Container != "mkv" {
+	if (input.Mode != "merge" && input.Mode != "separate") || (input.Selection != "" && input.Selection != "segments" && input.Selection != "gaps") || (input.CutStrategy != "stream_copy_preferred" && input.CutStrategy != "precise_reencode" && input.CutStrategy != "hybrid_smart_cut") {
+		return false
+	}
+	if _, ok := exportpolicy.For(input.Container); !ok {
 		return false
 	}
 	if len(input.DestinationID) > 64 || len(input.FilenameTemplate) > 160 || strings.ContainsAny(input.DestinationID, "/\\") || strings.ContainsAny(input.FilenameTemplate, "\x00") || strings.IndexFunc(input.DestinationID, func(r rune) bool { return r < 32 || r == 127 }) >= 0 {
@@ -412,16 +458,21 @@ func internalError(writer http.ResponseWriter, id string) {
 	httpx.Error(writer, 500, "internal_error", "Request could not be completed.", id)
 }
 func routeFor(path string) string {
-	if strings.HasPrefix(path, "/api/v1/") {
+	switch {
+	case path == "/metrics":
+		return "/metrics"
+	case path == "/api" || strings.HasPrefix(path, "/api/"):
 		return "/api/v1/unknown"
+	default:
+		return "/unknown"
 	}
-	return path
 }
 
 type statusWriter struct {
 	http.ResponseWriter
-	status int
-	wrote  bool
+	status    int
+	wrote     bool
+	errorCode string
 }
 
 func (w *statusWriter) WriteHeader(status int) {
