@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"videocutlist/internal/db"
@@ -28,7 +29,7 @@ func TestMediaSyncRollbackPreservesPreviousCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	original := index.Record{Media: index.Media{ID: "m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Name: "old.mp4", SizeBytes: 1, MtimeNS: 1}, RootAlias: "library", RelativePath: "old.mp4"}
+	original := index.Record{Media: index.Media{ID: "m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Name: "old.mp4", SizeBytes: 1, MtimeNS: 1}, RootAlias: "library", RelativePath: "nested/old.mp4"}
 	if err := media.Sync(context.Background(), "library", []index.Record{original}); err != nil {
 		t.Fatal(err)
 	}
@@ -42,6 +43,13 @@ func TestMediaSyncRollbackPreservesPreviousCatalog(t *testing.T) {
 	got, err := media.Get(context.Background(), original.ID)
 	if err != nil || got.ID != original.ID {
 		t.Fatalf("original catalog lost: %#v, %v", got, err)
+	}
+	folders, _, _, err := media.Browse(t.Context(), "", "", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(folders) != 1 || folders[0].ID != index.FolderID("library", "nested") {
+		t.Fatalf("failed sync changed available folders: %#v", folders)
 	}
 }
 
@@ -87,7 +95,7 @@ func TestOpenDatabaseAppliesAllMigrations(t *testing.T) {
 	} else if err := reopened.Close(); err != nil {
 		t.Error(err)
 	}
-	for _, table := range []string{"media", "projects", "export_jobs", "detection_jobs", "jobs", "cache_entries", "runtime_settings", "mcp_credentials", "mcp_audit_entries"} {
+	for _, table := range []string{"media", "media_folders", "projects", "export_jobs", "detection_jobs", "jobs", "cache_entries", "runtime_settings", "mcp_credentials", "mcp_audit_entries"} {
 		var name string
 		if err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&name); err != nil {
 			t.Fatalf("missing %s: %v", table, err)
@@ -156,6 +164,10 @@ VALUES ('c_retry', 'retry', 'verifier', 'Retry', '[]', '{}', '{}', '2026-01-01T0
 INSERT INTO export_proposals
 (id, credential_id, project_id, project_revision, payload_json, findings_json, requires_reencoding, accuracy, destination_id, expires_at, created_at)
 VALUES ('ep_retry', 'c_retry', NULL, 0, '{}', '[]', 0, 'frame_exact', 'download', '2027-01-01T00:00:00Z', '2026-01-01T00:00:00Z');
+-- Recreate the pre-010 media schema alongside the unversioned proposal fixture.
+DROP INDEX media_available_parent_id;
+DROP TABLE media_folders;
+ALTER TABLE media DROP COLUMN parent_folder_id;
 PRAGMA user_version = 0;
 CREATE TABLE export_proposals_v2 AS SELECT * FROM export_proposals WHERE 0;
 CREATE TRIGGER fail_proposal_copy BEFORE INSERT ON export_proposals_v2
@@ -200,7 +212,7 @@ BEGIN SELECT RAISE(ABORT, 'injected migration failure'); END;`); err != nil {
 	if err := recovered.QueryRowContext(t.Context(), `PRAGMA user_version`).Scan(&version); err != nil {
 		t.Fatal(err)
 	}
-	if originals != 1 || version != 9 {
+	if originals != 1 || version != 10 {
 		t.Fatalf("migration retry lost proposal or marker: proposals=%d version=%d", originals, version)
 	}
 }
@@ -301,6 +313,194 @@ func TestOpenDatabaseMigratesLegacyIdentityColumns(t *testing.T) {
 	}
 	if gotMedia != mediaID || gotDocument != document {
 		t.Fatalf("migration lost data: media=%q document=%q", gotMedia, gotDocument)
+	}
+}
+
+// createVersion9MediaDatabase recreates the pre-folder-index schema with a
+// version-9 marker, rather than seeding records through the new Sync path.
+func createVersion9MediaDatabase(t *testing.T, path string) *sql.DB {
+	t.Helper()
+	legacy, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := legacy.ExecContext(t.Context(), `
+CREATE TABLE media (
+  id TEXT PRIMARY KEY,
+  root_alias TEXT NOT NULL,
+  relative_path TEXT NOT NULL,
+  size_bytes INTEGER NOT NULL,
+  mtime_ns INTEGER NOT NULL,
+  metadata_json TEXT NOT NULL,
+  available INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  UNIQUE (root_alias, relative_path)
+);
+CREATE TABLE export_proposals (
+  id TEXT PRIMARY KEY,
+  credential_id TEXT NOT NULL,
+  project_id TEXT,
+  project_revision INTEGER NOT NULL CHECK (project_revision >= 0),
+  payload_json TEXT NOT NULL,
+  findings_json TEXT NOT NULL,
+  requires_reencoding INTEGER NOT NULL CHECK (requires_reencoding IN (0, 1)),
+  accuracy TEXT NOT NULL CHECK (accuracy IN ('frame_exact', 'keyframe_limited', 'mixed')),
+  destination_id TEXT NOT NULL CHECK (destination_id = 'download'),
+  expires_at TEXT NOT NULL,
+  approved_at TEXT,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (credential_id) REFERENCES mcp_credentials (id),
+  FOREIGN KEY (project_id) REFERENCES projects (id)
+);
+PRAGMA user_version = 9;
+`); err != nil {
+		_ = legacy.Close()
+		t.Fatal(err)
+	}
+	for _, record := range []struct {
+		alias, relative string
+		available       int
+	}{
+		{"library", "nested/deep/first.mp4", 1},
+		{"library", "nested/deep/second.mp4", 1},
+		{"library", "nested/hidden/removed.mp4", 0},
+		{"other", "nested/deep/third.mp4", 1},
+		{"library", "top.mp4", 1},
+	} {
+		if _, err := legacy.ExecContext(t.Context(), `INSERT INTO media
+(id, root_alias, relative_path, size_bytes, mtime_ns, metadata_json, available, created_at, updated_at)
+VALUES (?, ?, ?, 7, 13, '{}', ?, '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z')`,
+			index.MediaID(record.alias, record.relative), record.alias, record.relative, record.available); err != nil {
+			_ = legacy.Close()
+			t.Fatal(err)
+		}
+	}
+	return legacy
+}
+
+func TestOpenDatabaseUpgradesVersion9MediaFolders(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "version9.db")
+	legacy := createVersion9MediaDatabase(t, path)
+	if err := legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+	database, err := store.OpenDatabase(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	database, err = store.OpenDatabase(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	media, err := store.NewMediaStore(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	library := index.FolderID("library", "nested")
+	folders, items, next, err := media.Browse(t.Context(), "", "", 10)
+	if err != nil || len(items) != 1 || items[0].ID != index.MediaID("library", "top.mp4") ||
+		next != "" || len(folders) != 2 || !containsFolder(folders, library) ||
+		!containsFolder(folders, index.FolderID("other", "nested")) {
+		t.Fatalf("upgraded root browse: folders=%#v items=%#v next=%q err=%v", folders, items, next, err)
+	}
+	folders, items, next, err = media.Browse(t.Context(), library, "", 10)
+	if err != nil || len(folders) != 1 || folders[0].ID != index.FolderID("library", "nested/deep") ||
+		folders[0].Label != "deep" || len(items) != 0 || next != "" {
+		t.Fatalf("upgraded nested browse: folders=%#v items=%#v next=%q err=%v", folders, items, next, err)
+	}
+	deep := index.FolderID("library", "nested/deep")
+	_, items, _, err = media.Browse(t.Context(), deep, "", 10)
+	if err != nil || len(items) != 2 {
+		t.Fatalf("upgraded deep browse: items=%#v err=%v", items, err)
+	}
+	for _, relative := range []string{"nested/deep/first.mp4", "nested/deep/second.mp4"} {
+		id := index.MediaID("library", relative)
+		record, err := media.Get(t.Context(), id)
+		if err != nil || record.RelativePath != relative || record.SizeBytes != 7 {
+			t.Fatalf("upgraded Get(%s): %#v, %v", id, record, err)
+		}
+		if !slices.ContainsFunc(items, func(item index.Media) bool { return item.ID == id && item.Name == filepath.Base(relative) }) {
+			t.Fatalf("upgraded Browse missing %s: %#v", id, items)
+		}
+	}
+	hidden := index.MediaID("library", "nested/hidden/removed.mp4")
+	if _, err := media.Get(t.Context(), hidden); err == nil {
+		t.Fatal("unavailable media became available")
+	}
+	var parent string
+	var available, marker, hiddenFolders int
+	if err := database.QueryRowContext(t.Context(), `SELECT parent_folder_id, available FROM media WHERE id = ?`, hidden).Scan(&parent, &available); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM media_folders WHERE id = ?`, index.FolderID("library", "nested/hidden")).Scan(&hiddenFolders); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.QueryRowContext(t.Context(), `PRAGMA user_version`).Scan(&marker); err != nil {
+		t.Fatal(err)
+	}
+	if parent != index.FolderID("library", "nested/hidden") || available != 0 || hiddenFolders != 0 || marker != 10 {
+		t.Fatalf("unavailable media or migration marker changed: parent=%q available=%d hiddenFolders=%d version=%d", parent, available, hiddenFolders, marker)
+	}
+}
+
+func TestMediaFolderMigrationRollsBackAndRetries(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "retry-media.db")
+	legacy := createVersion9MediaDatabase(t, path)
+	if _, err := legacy.ExecContext(t.Context(), `CREATE TRIGGER fail_media_parent BEFORE UPDATE OF parent_folder_id ON media
+BEGIN SELECT RAISE(ABORT, 'injected media migration failure'); END;`); err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if failed, err := store.OpenDatabase(t.Context(), path); err == nil {
+		_ = failed.Close()
+		t.Fatal("media migration unexpectedly succeeded")
+	}
+	inspect, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var marker, addedColumn, folderTable, rows int
+	if err := inspect.QueryRowContext(t.Context(), `PRAGMA user_version`).Scan(&marker); err != nil {
+		t.Fatal(err)
+	}
+	if err := inspect.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM pragma_table_info('media') WHERE name = 'parent_folder_id'`).Scan(&addedColumn); err != nil {
+		t.Fatal(err)
+	}
+	if err := inspect.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'media_folders'`).Scan(&folderTable); err != nil {
+		t.Fatal(err)
+	}
+	if err := inspect.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM media`).Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if marker != 9 || addedColumn != 0 || folderTable != 0 || rows != 5 {
+		t.Fatalf("failed upgrade changed old media schema or rows: version=%d column=%d table=%d rows=%d", marker, addedColumn, folderTable, rows)
+	}
+	if _, err := inspect.ExecContext(t.Context(), `DROP TRIGGER fail_media_parent`); err != nil {
+		t.Fatal(err)
+	}
+	if err := inspect.Close(); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := store.OpenDatabase(t.Context(), path)
+	if err != nil {
+		t.Fatalf("retry media migration: %v", err)
+	}
+	t.Cleanup(func() { _ = recovered.Close() })
+	if err := recovered.QueryRowContext(t.Context(), `PRAGMA user_version`).Scan(&marker); err != nil {
+		t.Fatal(err)
+	}
+	if err := recovered.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM media_folders WHERE available = 1`).Scan(&folderTable); err != nil {
+		t.Fatal(err)
+	}
+	if marker != 10 || folderTable != 4 {
+		t.Fatalf("retry media migration: version=%d folders=%d", marker, folderTable)
 	}
 }
 
@@ -409,6 +609,89 @@ func TestMediaBrowsePaginatesNestedFoldersAcrossRoots(t *testing.T) {
 	if len(items) != 0 || next != "" || len(folders) != 2 {
 		t.Fatalf("nested folder page = folders %#v, items %#v, next %q", folders, items, next)
 	}
+}
+
+func TestMediaBrowseReconcilesFoldersOnSyncAndRootRemoval(t *testing.T) {
+	ctx := t.Context()
+	database, err := store.OpenDatabase(ctx, filepath.Join(t.TempDir(), "media.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	media, err := store.NewMediaStore(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := func(alias, relative string) index.Record {
+		return index.Record{
+			Media:        index.Media{ID: index.MediaID(alias, relative), SizeBytes: 1, MtimeNS: 1},
+			RootAlias:    alias,
+			RelativePath: relative,
+		}
+	}
+	keep := record("root-a", "nested/deep/keep.mp4")
+	if err := media.Sync(ctx, "root-a", []index.Record{keep, record("root-a", "old/removed.mp4")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := media.Sync(ctx, "root-b", []index.Record{record("root-b", "nested/other.mp4")}); err != nil {
+		t.Fatal(err)
+	}
+	if err := media.Sync(ctx, "root-a", []index.Record{keep}); err != nil {
+		t.Fatal(err)
+	}
+	folders, _, _, err := media.Browse(ctx, "", "", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(folders) != 2 || !containsFolder(folders, index.FolderID("root-a", "nested")) ||
+		!containsFolder(folders, index.FolderID("root-b", "nested")) {
+		t.Fatalf("rescan did not remove stale root-a folder: %#v", folders)
+	}
+	folders, items, _, err := media.Browse(ctx, index.FolderID("root-a", "nested"), "", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(folders) != 1 || folders[0].ID != index.FolderID("root-a", "nested/deep") || len(items) != 0 {
+		t.Fatalf("nested children changed after rescan: folders %#v, items %#v", folders, items)
+	}
+	if err := media.Sync(ctx, "root-a", nil); err != nil {
+		t.Fatal(err)
+	}
+	folders, _, _, err = media.Browse(ctx, "", "", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(folders) != 1 || folders[0].ID != index.FolderID("root-b", "nested") {
+		t.Fatalf("empty scan hid another root or retained removed folder: %#v", folders)
+	}
+	if err := media.ReconcileRoots(ctx, map[string]string{}); err != nil {
+		t.Fatal(err)
+	}
+	folders, _, _, err = media.Browse(ctx, "", "", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(folders) != 0 {
+		t.Fatalf("removed root still has browsable folders: %#v", folders)
+	}
+	if err := media.Sync(ctx, "root-a", []index.Record{keep}); err != nil {
+		t.Fatal(err)
+	}
+	folders, _, _, err = media.Browse(ctx, "", "", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(folders) != 1 || folders[0].ID != index.FolderID("root-a", "nested") {
+		t.Fatalf("rescan did not restore opaque folder ID: %#v", folders)
+	}
+	_, items, _, err = media.Browse(ctx, index.FolderID("root-a", "nested/deep"), "", 10)
+	if err != nil || len(items) != 1 || items[0].ID != keep.ID {
+		t.Fatalf("restored folder items: %#v, %v", items, err)
+	}
+}
+
+func containsFolder(folders []index.Folder, id string) bool {
+	return slices.ContainsFunc(folders, func(folder index.Folder) bool { return folder.ID == id })
 }
 
 func assertNoOwnerColumn(t *testing.T, db *sql.DB, table string) {

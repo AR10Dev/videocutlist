@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 
 	"videocutlist/internal/jobs"
+	"videocutlist/internal/library/media/index"
 	"videocutlist/internal/projects/model"
 
 	_ "modernc.org/sqlite"
@@ -42,7 +43,13 @@ var exportProposalsMigration string
 //go:embed migrations/009_export_proposals_media_source.sql
 var exportProposalsMediaSourceMigration string
 
-const exportProposalMediaSourceVersion = 9
+//go:embed migrations/010_media_folders.sql
+var mediaFoldersMigration string
+
+const (
+	exportProposalMediaSourceVersion = 9
+	mediaFoldersVersion              = 10
+)
 
 // OpenDatabase opens the single-host SQLite store and applies ordered,
 // idempotent migrations.
@@ -96,6 +103,10 @@ func OpenDatabase(ctx context.Context, path string) (*sql.DB, error) {
 		_ = db.Close()
 		return nil, fmt.Errorf("migrate unified jobs: %w", err)
 	}
+	if err := migrateMediaFolders(ctx, db); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("migrate media folders: %w", err)
+	}
 	return db, nil
 }
 
@@ -123,6 +134,85 @@ func migrateExportProposalsMediaSource(ctx context.Context, db *sql.DB) (err err
 		return err
 	}
 	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`PRAGMA user_version = %d`, exportProposalMediaSourceVersion)); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// Migration 010 adds the indexed folder catalog. Schema, backfill, and marker
+// commit together so a failed upgrade can safely be retried.
+func migrateMediaFolders(ctx context.Context, db *sql.DB) (err error) {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
+			err = errors.Join(err, fmt.Errorf("rollback media folders migration: %w", rollbackErr))
+		}
+	}()
+	var version int
+	if err := tx.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil {
+		return err
+	}
+	if version >= mediaFoldersVersion {
+		return tx.Commit()
+	}
+	if _, err := tx.ExecContext(ctx, mediaFoldersMigration); err != nil {
+		return err
+	}
+	type parentUpdate struct{ id, parent string }
+	type folderRow struct{ alias, parent, label string }
+	var updates []parentUpdate
+	folders := make(map[string]folderRow)
+	rows, err := tx.QueryContext(ctx, `SELECT id, root_alias, relative_path, available FROM media`)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var id, alias, relative string
+		var available bool
+		if err := rows.Scan(&id, &alias, &relative, &available); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		relative = filepath.ToSlash(relative)
+		parent := ""
+		start := 0
+		for i := range len(relative) {
+			if relative[i] != '/' {
+				continue
+			}
+			folderID := index.FolderID(alias, relative[:i])
+			if available {
+				folders[folderID] = folderRow{alias: alias, parent: parent, label: relative[start:i]}
+			}
+			parent = folderID
+			start = i + 1
+		}
+		if parent != "" {
+			updates = append(updates, parentUpdate{id: id, parent: parent})
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, update := range updates {
+		if _, err := tx.ExecContext(ctx, `UPDATE media SET parent_folder_id = ? WHERE id = ?`, update.parent, update.id); err != nil {
+			return err
+		}
+	}
+	for id, folder := range folders {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO media_folders (id, root_alias, parent_folder_id, label) VALUES (?, ?, ?, ?)`,
+			id, folder.alias, folder.parent, folder.label); err != nil {
+			return err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf(`PRAGMA user_version = %d`, mediaFoldersVersion)); err != nil {
 		return err
 	}
 	return tx.Commit()

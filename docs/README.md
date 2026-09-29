@@ -5,6 +5,7 @@
 - [Container deployment](runbooks/containers.md)
 - [Operations](runbooks/operations.md)
 - [Connectivity examples](../deployments/connectivity-examples/README.md)
+- [Backend benchmarks](runbooks/backend-benchmarks.md)
 
 ## Contracts
 

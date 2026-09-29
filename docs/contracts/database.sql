@@ -1,8 +1,9 @@
--- Contract only. Agents convert these definitions into numbered migrations.
+-- Current SQLite schema contract.
 CREATE TABLE media (
   id TEXT PRIMARY KEY,
   root_alias TEXT NOT NULL,
   relative_path TEXT NOT NULL,
+  parent_folder_id TEXT NOT NULL DEFAULT '',
   size_bytes INTEGER NOT NULL,
   mtime_ns INTEGER NOT NULL,
   metadata_json TEXT NOT NULL,
@@ -11,6 +12,19 @@ CREATE TABLE media (
   updated_at TEXT NOT NULL,
   UNIQUE (root_alias, relative_path)
 );
+CREATE INDEX media_available_id ON media (available, id);
+CREATE INDEX media_available_parent_id ON media (available, parent_folder_id, id);
+
+CREATE TABLE media_folders (
+  id TEXT PRIMARY KEY,
+  root_alias TEXT NOT NULL,
+  parent_folder_id TEXT NOT NULL,
+  label TEXT NOT NULL,
+  available INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE INDEX media_folders_available_parent_id ON media_folders (available, parent_folder_id, id);
+CREATE INDEX media_folders_root_alias ON media_folders (root_alias);
 
 CREATE TABLE projects (
   id TEXT PRIMARY KEY,
@@ -26,6 +40,8 @@ CREATE TABLE jobs (
   kind TEXT NOT NULL CHECK (kind IN ('export', 'detection', 'library_scan')),
   project_id TEXT,
   project_item_id TEXT,
+  proposal_id TEXT,
+  credential_id TEXT,
   state TEXT NOT NULL CHECK (state IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')),
   request_json TEXT NOT NULL,
   result_json TEXT,
@@ -40,6 +56,7 @@ CREATE TABLE jobs (
 
 CREATE INDEX jobs_batch_updated ON jobs (batch_id, updated_at);
 CREATE INDEX jobs_state_created_id ON jobs (state, created_at, id);
+CREATE UNIQUE INDEX jobs_proposal_item ON jobs (proposal_id, project_item_id) WHERE proposal_id IS NOT NULL;
 
 CREATE TABLE cache_entries (
   cache_key TEXT PRIMARY KEY,
@@ -88,3 +105,22 @@ CREATE INDEX mcp_credentials_created_at ON mcp_credentials (created_at DESC, id)
 CREATE INDEX mcp_credentials_active ON mcp_credentials (revoked_at, expires_at);
 CREATE INDEX mcp_audit_credential_id ON mcp_audit_entries (credential_id, id DESC);
 
+CREATE TABLE export_proposals (
+  id TEXT PRIMARY KEY,
+  credential_id TEXT NOT NULL,
+  project_id TEXT,
+  project_revision INTEGER NOT NULL CHECK (project_revision >= 0),
+  payload_json TEXT NOT NULL,
+  findings_json TEXT NOT NULL,
+  requires_reencoding INTEGER NOT NULL CHECK (requires_reencoding IN (0, 1)),
+  accuracy TEXT NOT NULL CHECK (accuracy IN ('frame_exact', 'keyframe_limited', 'mixed')),
+  destination_id TEXT NOT NULL CHECK (destination_id = 'download'),
+  expires_at TEXT NOT NULL,
+  approved_at TEXT,
+  created_at TEXT NOT NULL,
+  FOREIGN KEY (credential_id) REFERENCES mcp_credentials (id),
+  FOREIGN KEY (project_id) REFERENCES projects (id)
+);
+
+CREATE INDEX export_proposals_credential_created ON export_proposals (credential_id, created_at DESC);
+CREATE INDEX export_proposals_expiry ON export_proposals (expires_at);

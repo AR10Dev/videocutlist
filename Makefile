@@ -7,7 +7,7 @@ GO_TEST_PACKAGES := $(GO_PACKAGES) ./test/...
 SHELL_FILES := $(shell find scripts deployments test -type f -name '*.sh')
 DATA_DIR ?= .cache/videocutlist
 
-.PHONY: build check client-install e2e format lint run smoke test test-podman test-real-media
+.PHONY: benchmark-backend build check client-install e2e format lint run smoke test test-podman test-real-media
 
 build:
 	$(PNPM) --dir client run build
@@ -57,6 +57,9 @@ test-real-media:
 	cp -a client/dist internal/web/webassets/dist
 	$(GO) test -tags realmedia -count=1 -v ./test/realmedia
 	$(PNPM) --dir client exec playwright test --config playwright.real.config.ts
+
+benchmark-backend:
+	./test/performance/run-backend.sh
 
 client-install:
 	$(PNPM) install --frozen-lockfile
