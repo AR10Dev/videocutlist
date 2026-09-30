@@ -8,9 +8,9 @@ import (
 	store "videocutlist/internal/db"
 	"videocutlist/internal/jobs"
 	"videocutlist/internal/library/media/index"
+	"videocutlist/internal/preview/assets"
 	"videocutlist/internal/preview/cache"
 	"videocutlist/internal/projects"
-	"videocutlist/internal/web/assets"
 )
 
 // RuntimeSettingsApplier updates the actual consumers; State remains the last

@@ -17,10 +17,10 @@ import (
 	"videocutlist/internal/db"
 	"videocutlist/internal/jobs"
 	"videocutlist/internal/library/media/index"
+	"videocutlist/internal/preview/assets"
 	"videocutlist/internal/preview/cache"
 	"videocutlist/internal/projects"
 	settingsdomain "videocutlist/internal/settings"
-	"videocutlist/internal/web/assets"
 )
 
 func TestApplyRuntimeSettingsTransactionalRestoresAfterScannerFailure(t *testing.T) {

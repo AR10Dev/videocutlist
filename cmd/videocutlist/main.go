@@ -22,12 +22,12 @@ import (
 	"videocutlist/internal/library/media/index"
 	"videocutlist/internal/library/media/probe"
 	"videocutlist/internal/mcp"
+	"videocutlist/internal/preview/assets"
 	"videocutlist/internal/preview/cache"
 	"videocutlist/internal/preview/ffmpeg"
 	"videocutlist/internal/projects"
 	"videocutlist/internal/runtime"
 	"videocutlist/internal/settings"
-	"videocutlist/internal/web/assets"
 	"videocutlist/internal/web/webassets"
 )
 
