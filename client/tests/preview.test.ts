@@ -242,7 +242,10 @@ describe("preview streaming", () => {
 
     const readErrors = vi.fn();
     const badBody = {
-      getReader: () => ({ read: () => Promise.reject(new Error("read")), cancel: vi.fn() }),
+      getReader: () => ({
+        read: () => Promise.reject(new Error("read")),
+        cancel: () => Promise.resolve(),
+      }),
     } as unknown as ReadableStream<Uint8Array>;
     streamPreview(
       video,
@@ -288,7 +291,81 @@ describe("preview streaming", () => {
     instances[3].dispatchEvent(new Event("sourceopen"));
     await Promise.resolve();
     expect(cancelled).not.toHaveBeenCalled();
+
+    // Aborting fetch errors the body before the component cancels its reader.
+    let bodyController!: ReadableStreamDefaultController<Uint8Array>;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        bodyController = controller;
+      },
+    });
+    const diagnostics = vi.fn();
+    const abortErrors = vi.fn();
+    const stopAborted = streamPreview(
+      video,
+      () => Promise.resolve(new Response(body)),
+      diagnostics,
+      abortErrors,
+    );
+    instances[4].dispatchEvent(new Event("sourceopen"));
+    await vi.waitFor(() => expect(diagnostics).toHaveBeenCalledOnce());
+    bodyController.error(new DOMException("Fetch aborted", "AbortError"));
+    stopAborted();
+    await Promise.resolve();
+    expect(abortErrors).not.toHaveBeenCalled();
   });
+
+  it.each(["before response", "from diagnostics", "failed response"])(
+    "releases response bodies when teardown happens %s",
+    async (scenario) => {
+      const sources: EventTarget[] = [];
+      class FakeMediaSource extends EventTarget {
+        readyState = "open";
+        constructor() {
+          super();
+          sources.push(this);
+        }
+        addSourceBuffer() {
+          return new EventTarget() as SourceBuffer;
+        }
+        endOfStream() {}
+      }
+      vi.stubGlobal("MediaSource", FakeMediaSource);
+      vi.stubGlobal("URL", {
+        createObjectURL: vi.fn(() => "blob:preview"),
+        revokeObjectURL: vi.fn(),
+      });
+      const video = { load: vi.fn(), removeAttribute: vi.fn() } as unknown as HTMLVideoElement;
+      const cancel = vi.fn();
+      const body = new ReadableStream<Uint8Array>({ cancel });
+      const response = Promise.resolve(
+        new Response(body, { status: scenario === "failed response" ? 500 : 200 }),
+      );
+      const errors = vi.fn();
+      const diagnostics = vi.fn(() => {
+        if (scenario === "from diagnostics") stop();
+      });
+      const stop = streamPreview(video, () => response, diagnostics, errors);
+      sources[0].dispatchEvent(new Event("sourceopen"));
+      if (scenario === "before response") stop();
+      // Even a fulfilled request yields before its continuation reads the body.
+      await response;
+      await Promise.resolve();
+
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(diagnostics).toHaveBeenCalledTimes(scenario === "from diagnostics" ? 1 : 0);
+      if (scenario === "failed response") {
+        expect(errors).toHaveBeenCalledWith(
+          expect.objectContaining({
+            message:
+              "Preview request failed. Try again. Timeline markers remain available for editing.",
+          }),
+        );
+      } else {
+        expect(errors).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("reports missing bodies and MSE setup failures", async () => {
     const instances: EventTarget[] = [];

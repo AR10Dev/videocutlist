@@ -1,11 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
-  canRedoTimeline,
-  canUndoTimeline,
   createTimelineHistory,
   editTimeline,
   redoTimeline,
-  resetTimelineHistory,
   updateTimelineDraft,
   updateTimelinePlayback,
   updateTimelineView,
@@ -39,10 +36,8 @@ describe("timeline history", () => {
       segments: [],
       zoom: 2,
     });
-    expect(canUndoTimeline(changed)).toBe(true);
     const undone = undoTimeline(changed);
     expect(undone.present).toEqual(initial);
-    expect(canRedoTimeline(undone)).toBe(true);
     expect(redoTimeline(undone).present).toEqual(changed.present);
   });
 
@@ -70,16 +65,13 @@ describe("timeline history", () => {
     const history = editTimeline(createTimelineHistory(initial), { zoom: 2 });
     const undone = undoTimeline(history);
     const edited = editTimeline(undone, { playheadMs: 10 });
-    expect(canRedoTimeline(edited)).toBe(false);
+    expect(edited.future).toEqual([]);
     expect(edited.present.playheadMs).toBe(10);
   });
 
-  it("does not create history for a no-op and reset starts clean", () => {
+  it("does not create history for a no-op", () => {
     const history = createTimelineHistory(initial);
     expect(editTimeline(history, initial)).toBe(history);
-    const reset = resetTimelineHistory({ ...initial, segments: [], zoom: 3 });
-    expect(canUndoTimeline(reset)).toBe(false);
-    expect(canRedoTimeline(reset)).toBe(false);
   });
 
   it("maps a scrolled viewport to its visible time window", () => {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"sync"
 
 	"videocutlist/internal/projects/model"
@@ -18,7 +19,7 @@ const (
 
 var ErrCacheMiss = model.ErrCacheMiss
 
-type Validator = func(context.Context, string) error
+type Validator = func(context.Context, *os.File) error
 
 type PreviewPartial interface {
 	io.Writer

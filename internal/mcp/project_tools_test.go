@@ -156,6 +156,56 @@ func TestProjectToolsScopeCreationAndRevisionConflict(t *testing.T) {
 	}
 }
 
+func TestProjectToolsInvalidArgumentsReturnInvalidInput(t *testing.T) {
+	credentials, secret := projectToolsCredentials(t)
+	service := &projectToolsService{projects: map[string]projects.Project{
+		"p_existing": {ID: "p_existing", Revision: 1},
+	}}
+	handler := newTransport(t, mcp.TransportConfig{Enabled: true, Credentials: credentials, Tools: mcp.ProjectTools(service, toolMedia{}, credentials)})
+	session := initialize(t, handler, secret)
+	for _, test := range []struct {
+		name, args string
+	}{
+		{"get_project", `{"projectId":"p_existing"}`},
+		{"get_project", `{"id":null}`},
+		{"create_project", `{"name":"new","mediaIds":[""]}`},
+		{"create_project", `{"name":"new","mediaIds":null}`},
+		{"update_cutlist", `{"projectId":"p_existing","expectedRevision":1,"operations":null}`},
+		{"update_cutlist", `{"projectId":"p_existing","expectedRevision":null,"operations":[{"type":"remove","itemId":"i_valid","segmentId":"s_valid"}]}`},
+		{"list_projects", `{"limit":51}`},
+		{"list_projects", `{"limit":0}`},
+		{"list_projects", `{"limit":null}`},
+		{"list_projects", `{"cursor":null}`},
+	} {
+		t.Run(test.name+"/"+test.args, func(t *testing.T) {
+			response := serve(handler, sessionRequest(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"`+test.name+`","arguments":`+test.args+`}}`, secret, session))
+			if response.Code != 200 || !contains(response.Body.String(), `"code":"invalid_input"`) {
+				t.Fatalf("invalid arguments response = %s", response.Body.String())
+			}
+		})
+	}
+	if len(service.projects) != 1 || service.lastCreated != "" || service.projects["p_existing"].Revision != 1 {
+		t.Fatalf("invalid input mutated projects: %#v", service.projects)
+	}
+}
+
+func TestCutlistInvalidTargetReportsInvalidInputWithoutSaving(t *testing.T) {
+	credentials, secret := projectToolsCredentials(t)
+	mediaID := "m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	service := &projectToolsService{projects: map[string]projects.Project{
+		"p_private": {ID: "p_private", Revision: 1, Document: model.Document{Items: []model.ProjectItem{{ID: "i_existing", MediaID: mediaID}}}},
+	}}
+	handler := newTransport(t, mcp.TransportConfig{Enabled: true, Credentials: credentials, Tools: mcp.ProjectTools(service, toolMedia{items: []projects.Media{{ID: mediaID, RootID: "camera"}}}, credentials)})
+	session := initialize(t, handler, secret)
+	response := serve(handler, sessionRequest(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"update_cutlist","arguments":{"projectId":"p_private","expectedRevision":1,"operations":[{"type":"add","itemId":"i_missing","position":0,"segment":{"startMs":100,"endMs":200,"included":true}}]}}}`, secret, session))
+	if response.Code != 200 || !contains(response.Body.String(), `"code":"invalid_input"`) {
+		t.Fatalf("invalid cutlist target = %s", response.Body.String())
+	}
+	if service.projects["p_private"].Revision != 1 {
+		t.Fatalf("invalid cutlist target changed revision: %#v", service.projects["p_private"])
+	}
+}
+
 func TestProjectToolsAllProjectScope(t *testing.T) {
 	mediaID := "m_ccccccccccccccccccccccccccccccccccccccccccc"
 	media := toolMedia{items: []projects.Media{{ID: mediaID, RootID: "camera", Name: "clip.mp4", DurationMS: 10_000}}}

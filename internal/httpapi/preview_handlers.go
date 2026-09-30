@@ -237,7 +237,7 @@ func (s *Server) previewSpec(request *http.Request, item Media) (PreviewSpec, er
 		return PreviewSpec{}, errors.New("before")
 	}
 	after, err := optionalInt(query.Get("afterMs"), afterDefault)
-	if err != nil || after < 0 || before+after > maxPreview {
+	if err != nil || after < 0 || before > maxPreview-after || before == 0 && after == 0 {
 		return PreviewSpec{}, errors.New("after")
 	}
 	mute := false

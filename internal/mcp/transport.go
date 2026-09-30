@@ -212,7 +212,12 @@ func (t *transport) post(w http.ResponseWriter, r *http.Request, credential Cred
 		return
 	}
 	var extra any
-	if decoder.Decode(&extra) != io.EOF || request.JSONRPC != "2.0" || request.Method == "" || len(request.ID) > 128 || !validRPCID(request.ID) {
+	extraErr := decoder.Decode(&extra)
+	if _, ok := errors.AsType[*http.MaxBytesError](extraErr); ok {
+		writeRPC(w, http.StatusRequestEntityTooLarge, rpcResponse{JSONRPC: "2.0", ID: nil, Error: &rpcError{Code: -32600, Message: "Request too large"}})
+		return
+	}
+	if extraErr != io.EOF || request.JSONRPC != "2.0" || request.Method == "" || len(request.ID) > 128 || !validRPCID(request.ID) {
 		writeRPC(w, http.StatusBadRequest, rpcResponse{JSONRPC: "2.0", ID: nil, Error: &rpcError{Code: -32600, Message: "Invalid Request"}})
 		return
 	}

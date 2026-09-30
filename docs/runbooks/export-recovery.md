@@ -8,6 +8,9 @@ sudo journalctl -u videocutlist -n 200 --no-pager
 sudo find /var/lib/videocutlist/exports -maxdepth 1 -type f -printf '%f %s bytes\n'
 ```
 
+Retention cleanup preserves active downloads. Back up completed exports you
+want to keep before changing retention settings.
+
 An incomplete export must not be published as success. Preserve it for diagnosis, then move only the identified file to a quarantine directory outside the export directory before retrying through the UI/API:
 
 ```bash

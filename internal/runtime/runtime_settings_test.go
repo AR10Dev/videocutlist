@@ -191,7 +191,7 @@ func TestRuntimeSettingsApplierUpdatesSchedulerAndBothCaches(t *testing.T) {
 		if _, err := partial.Write([]byte("preview")); err != nil {
 			t.Fatal(err)
 		}
-		err = partial.Commit(t.Context(), func(context.Context, string) error { return nil })
+		err = partial.Commit(t.Context(), func(context.Context, *os.File) error { return nil })
 		if (err == nil) != allowed {
 			t.Fatalf("preview publication = %v, allowed=%v", err, allowed)
 		}

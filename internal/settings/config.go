@@ -199,7 +199,7 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 	if c.PreviewGridMS, err = positiveInt(lookup, "VIDEOCUTLIST_PREVIEW_GRID_MS", defaultPreviewGridMS); err != nil {
 		return Config{}, err
 	}
-	if c.PreviewBeforeMS+c.PreviewAfterMS > c.PreviewMaxMS {
+	if c.PreviewBeforeMS > c.PreviewMaxMS-c.PreviewAfterMS {
 		return Config{}, fmt.Errorf("VIDEOCUTLIST_PREVIEW_MAX_MS must cover the default preview window")
 	}
 	return c, nil

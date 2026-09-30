@@ -13,6 +13,11 @@ func atomicNoReplacePublicationSupported() bool {
 	return platformAtomicNoReplacePublicationSupported()
 }
 
-func publishOpenedNoReplace(sourceDirectory, destinationDirectory *os.File, tempName, outputName string, destinationRoot *os.Root, sourceRootName string) error {
-	return platformPublishOpenedNoReplace(sourceDirectory, destinationDirectory, tempName, outputName, destinationRoot, sourceRootName)
+// PublishOpenedNoReplace atomically renames a validated temporary file between
+// opened directories without replacing an existing destination entry.
+func PublishOpenedNoReplace(sourceDirectory, destinationDirectory *os.File, tempName, outputName string) error {
+	if sourceDirectory == nil || destinationDirectory == nil {
+		return errors.New("publication directories are not open")
+	}
+	return platformPublishOpenedNoReplace(sourceDirectory, destinationDirectory, tempName, outputName)
 }

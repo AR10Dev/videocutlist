@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path"
+	"strconv"
 	"strings"
 )
 
@@ -38,18 +39,29 @@ func HandlerFS(assets fs.FS) http.Handler {
 		}
 		defer func(original fs.File) { _ = original.Close() }(asset)
 		encoding := ""
-		for _, candidate := range []struct{ suffix, encoding string }{{".br", "br"}, {".gz", "gzip"}} {
-			if strings.Contains(r.Header.Get("Accept-Encoding"), candidate.encoding) {
-				if _, compressed, compressedInfo, found := openAsset(assets, file+candidate.suffix); found {
-					defer func(file fs.File) { _ = file.Close() }(compressed)
-					asset, info, encoding = compressed, compressedInfo, candidate.encoding
-					break
-				}
+		qualities, explicitIdentity := acceptedEncodings(r.Header.Get("Accept-Encoding"))
+		candidates := [2]struct{ suffix, encoding string }{{".br", "br"}, {".gz", "gzip"}}
+		order := [2]int{0, 1}
+		if qualities[1] > qualities[0] {
+			order = [2]int{1, 0}
+		}
+		for _, index := range order {
+			candidate := candidates[index]
+			if qualities[index] <= 0 || explicitIdentity && qualities[2] > qualities[index] {
+				continue
+			}
+			if _, compressed, compressedInfo, found := openAsset(assets, file+candidate.suffix); found {
+				defer func(file fs.File) { _ = file.Close() }(compressed)
+				asset, info, encoding = compressed, compressedInfo, candidate.encoding
+				break
 			}
 		}
+		w.Header().Add("Vary", "Accept-Encoding")
 		if encoding != "" {
 			w.Header().Set("Content-Encoding", encoding)
-			w.Header().Set("Vary", "Accept-Encoding")
+		} else if qualities[2] == 0 {
+			http.Error(w, "no acceptable asset encoding", http.StatusNotAcceptable)
+			return
 		}
 		if name == "index.html" {
 			w.Header().Set("Cache-Control", "no-cache")
@@ -72,6 +84,51 @@ func HandlerFS(assets fs.FS) http.Handler {
 		}
 		http.ServeContent(w, r, name, info.ModTime(), bytes.NewReader(data))
 	})
+}
+
+// Parse once for the two precompressed representations and identity. Explicit
+// exclusions override wildcards; omitted identity remains an acceptable fallback.
+func acceptedEncodings(header string) (qualities [3]float64, explicitIdentity bool) {
+	qualities[2] = 1
+	var specified [3]bool
+	wildcard := -1.0
+	for entry := range strings.SplitSeq(header, ",") {
+		coding, parameters, _ := strings.Cut(entry, ";")
+		quality := 1.0
+		for parameter := range strings.SplitSeq(parameters, ";") {
+			name, value, found := strings.Cut(strings.TrimSpace(parameter), "=")
+			if found && strings.EqualFold(name, "q") {
+				parsed, err := strconv.ParseFloat(strings.TrimSpace(value), 64)
+				if err != nil || !(parsed >= 0 && parsed <= 1) {
+					quality = 0
+				} else {
+					quality = parsed
+				}
+				break
+			}
+		}
+		switch strings.ToLower(strings.TrimSpace(coding)) {
+		case "br":
+			qualities[0], specified[0] = quality, true
+		case "gzip":
+			qualities[1], specified[1] = quality, true
+		case "identity":
+			qualities[2], specified[2] = quality, true
+		case "*":
+			wildcard = quality
+		}
+	}
+	if wildcard >= 0 {
+		for index := range 2 {
+			if !specified[index] {
+				qualities[index] = wildcard
+			}
+		}
+		if wildcard == 0 && !specified[2] {
+			qualities[2] = 0
+		}
+	}
+	return qualities, specified[2]
 }
 
 func openAsset(assets fs.FS, name string) (string, fs.File, fs.FileInfo, bool) {

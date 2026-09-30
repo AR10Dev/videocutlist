@@ -81,7 +81,15 @@ func TestReconcileRootsHidesOnlyRemovedAliases(t *testing.T) {
 }
 
 func TestOpenDatabaseAppliesAllMigrations(t *testing.T) {
-	db, err := store.OpenDatabase(context.Background(), t.TempDir()+"/videocutlist.db")
+	path := t.TempDir() + "/videocutlist.db"
+	db, err := store.OpenDatabase(context.Background(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err = store.OpenDatabase(t.Context(), path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,11 +98,6 @@ func TestOpenDatabaseAppliesAllMigrations(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	if reopened, err := store.OpenDatabase(context.Background(), t.TempDir()+"/videocutlist.db"); err != nil {
-		t.Fatal(err)
-	} else if err := reopened.Close(); err != nil {
-		t.Error(err)
-	}
 	for _, table := range []string{"media", "media_folders", "projects", "export_jobs", "detection_jobs", "jobs", "cache_entries", "runtime_settings", "mcp_credentials", "mcp_audit_entries"} {
 		var name string
 		if err := db.QueryRow(`SELECT name FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&name); err != nil {

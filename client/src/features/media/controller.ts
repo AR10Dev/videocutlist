@@ -129,6 +129,7 @@ export function createLibraryController(
   };
 
   const refreshMedia = async () => {
+    if (refreshing() || scanActive()) return;
     folderRequestVersion++;
     setRefreshing(true);
     setActiveFolder(undefined);
@@ -138,7 +139,6 @@ export function createLibraryController(
       await queryClient.invalidateQueries({ queryKey: ["media"] });
       const response = await api.request("media/refresh", {
         method: "POST",
-        signal: new AbortController().signal,
       });
       if (response.status === 403) setStatus("You are not allowed to refresh media.");
       else if (response.status === 429)

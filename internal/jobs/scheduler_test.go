@@ -63,6 +63,35 @@ func TestSchedulerPreservesRunnerResult(t *testing.T) {
 	t.Fatal("scheduled job did not complete")
 }
 
+func TestCancelBatchDistinguishesUnknownFromCompleted(t *testing.T) {
+	database, err := db.OpenDatabase(t.Context(), t.TempDir()+"/jobs.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	jobs, err := store.NewJobsStore(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scheduler, err := store.NewScheduler(jobs, store.SchedulerConfig{QueueCapacity: 1, WorkerLimit: 1}, func(context.Context, store.Job) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := scheduler.CancelBatch(t.Context(), "b_000000000001"); !errors.Is(err, store.ErrJobNotFound) {
+		t.Fatalf("cancel unknown batch = %v, want ErrJobNotFound", err)
+	}
+	job := schedulerJob("01")
+	if _, err := jobs.Create(t.Context(), job); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := jobs.Cancel(t.Context(), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := scheduler.CancelBatch(t.Context(), job.BatchID); err != nil {
+		t.Fatalf("cancel completed batch = %v, want idempotent success", err)
+	}
+}
+
 func TestSchedulerAdmissionIsAtomicAndBounded(t *testing.T) {
 	db, err := db.OpenDatabase(context.Background(), t.TempDir()+"/jobs.db")
 	if err != nil {

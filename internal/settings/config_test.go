@@ -278,3 +278,18 @@ func TestExportLimitSafetyBoundary(t *testing.T) {
 		})
 	}
 }
+
+func TestLoadRejectsOverflowingPreviewWindow(t *testing.T) {
+	values := mergeEnv(baseEnv(), map[string]string{
+		"VIDEOCUTLIST_PREVIEW_BEFORE_MS": strconv.Itoa(math.MaxInt),
+		"VIDEOCUTLIST_PREVIEW_AFTER_MS":  "1",
+		"VIDEOCUTLIST_PREVIEW_MAX_MS":    strconv.Itoa(math.MaxInt),
+	})
+	if _, err := load(env(values)); err == nil {
+		t.Fatal("accepted a default preview window larger than the maximum")
+	}
+	values["VIDEOCUTLIST_PREVIEW_BEFORE_MS"] = strconv.Itoa(math.MaxInt - 1)
+	if _, err := load(env(values)); err != nil {
+		t.Fatalf("rejected a window exactly at the maximum: %v", err)
+	}
+}

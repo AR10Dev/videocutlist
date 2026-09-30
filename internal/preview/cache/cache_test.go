@@ -6,19 +6,20 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"videocutlist/internal/projects/model"
 )
 
-var accept = ValidatorFunc(func(_ context.Context, path string) error {
-	info, err := os.Stat(path)
+var accept = func(_ context.Context, file *os.File) error {
+	info, err := file.Stat()
 	if err != nil || info.Size() == 0 {
 		return errors.New("invalid preview")
 	}
 	return nil
-})
+}
 
 func TestCommitDoesNotPublishWhenCancelledAfterValidation(t *testing.T) {
 	store, err := New(t.TempDir(), 1<<20)
@@ -34,7 +35,7 @@ func TestCommitDoesNotPublishWhenCancelledAfterValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	validator := func(context.Context, string) error {
+	validator := func(context.Context, *os.File) error {
 		cancel()
 		return nil
 	}
@@ -46,6 +47,57 @@ func TestCommitDoesNotPublishWhenCancelledAfterValidation(t *testing.T) {
 			_ = hit.Close()
 		}
 		t.Fatalf("cancelled cache = %v, want miss", err)
+	}
+}
+
+func TestCommitRejectsReplacedPartialAfterValidation(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		symlink bool
+	}{{"regular", false}, {"symlink", true}} {
+		t.Run(test.name, func(t *testing.T) {
+			store, err := New(t.TempDir(), 1024)
+			if err != nil {
+				t.Fatal(err)
+			}
+			key := stringsOf('f')
+			partial, err := store.Begin(key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := partial.Write([]byte("validated")); err != nil {
+				t.Fatal(err)
+			}
+			external := filepath.Join(t.TempDir(), "unvalidated.mp4")
+			if err := os.WriteFile(external, []byte("unvalidated"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			err = partial.Commit(t.Context(), func(_ context.Context, file *os.File) error {
+				if err := os.Rename(file.Name(), file.Name()+".retained"); err != nil {
+					return err
+				}
+				if test.symlink {
+					return os.Symlink(external, file.Name())
+				}
+				return os.WriteFile(file.Name(), []byte("unvalidated"), 0o600)
+			})
+			if err == nil {
+				t.Fatal("replacement published without descriptor validation")
+			}
+			final, err := store.path(key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.Lstat(final); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("unvalidated final exists: %v", err)
+			}
+			if body, err := os.ReadFile(partial.Path()); err != nil || string(body) != "unvalidated" {
+				t.Fatalf("replacement path was removed or changed: %q, %v", body, err)
+			}
+			if body, err := os.ReadFile(external); err != nil || string(body) != "unvalidated" {
+				t.Fatalf("external content changed: %q, %v", body, err)
+			}
+		})
 	}
 }
 
@@ -145,7 +197,7 @@ func TestOpenDoesNotLockDuringValidation(t *testing.T) {
 	release := make(chan struct{})
 	firstOpened := make(chan error, 1)
 	go func() {
-		reader, err := store.Open(context.Background(), key1, func(context.Context, string) error {
+		reader, err := store.Open(context.Background(), key1, func(context.Context, *os.File) error {
 			close(started)
 			<-release
 			return nil
@@ -178,6 +230,103 @@ func TestOpenDoesNotLockDuringValidation(t *testing.T) {
 	}
 }
 
+func TestOpenInvalidEntryCanBeRegenerated(t *testing.T) {
+	for _, body := range []string{"", "corrupt"} {
+		t.Run(body, func(t *testing.T) {
+			store, err := New(t.TempDir(), 1024)
+			if err != nil {
+				t.Fatal(err)
+			}
+			key := stringsOf('d')
+			path, err := store.path(key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			validate := func(_ context.Context, file *os.File) error {
+				content, err := io.ReadAll(file)
+				if err != nil {
+					return err
+				}
+				if string(content) != "regenerated" {
+					return errors.New("invalid preview")
+				}
+				return nil
+			}
+			if reader, err := store.Open(t.Context(), key, validate); !errors.Is(err, ErrMiss) {
+				if reader != nil {
+					_ = reader.Close()
+				}
+				t.Fatalf("invalid entry error = %v, want miss", err)
+			}
+			writePartial(t, store, key, "regenerated")
+			reader, err := store.Open(t.Context(), key, validate)
+			if err != nil {
+				t.Fatalf("regenerated entry error = %v, want cache hit", err)
+			}
+			defer func() { _ = reader.Close() }()
+			content, err := io.ReadAll(reader)
+			if err != nil || string(content) != "regenerated" {
+				t.Fatalf("regenerated preview = %q, %v", content, err)
+			}
+		})
+	}
+}
+
+func TestOpenRejectedEntryPreservesReplacement(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		symlink bool
+	}{{"regular", false}, {"symlink", true}} {
+		t.Run(test.name, func(t *testing.T) {
+			store, err := New(t.TempDir(), 1024)
+			if err != nil {
+				t.Fatal(err)
+			}
+			key := stringsOf('d')
+			writePartial(t, store, key, "corrupt")
+			path, err := store.path(key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			replacement := filepath.Join(t.TempDir(), "replacement.mp4")
+			if err := os.WriteFile(replacement, []byte("replacement"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			reader, err := store.Open(t.Context(), key, func(_ context.Context, file *os.File) error {
+				if err := os.Rename(file.Name(), file.Name()+".rejected"); err != nil {
+					t.Fatal(err)
+				}
+				var replacementErr error
+				if test.symlink {
+					replacementErr = os.Symlink(replacement, path)
+				} else {
+					replacementErr = os.Rename(replacement, path)
+				}
+				if replacementErr != nil {
+					t.Fatal(replacementErr)
+				}
+				return errors.New("invalid preview")
+			})
+			if reader != nil {
+				_ = reader.Close()
+				t.Fatal("rejected preview was leased")
+			}
+			if !errors.Is(err, ErrMiss) {
+				t.Fatalf("rejected entry error = %v, want miss", err)
+			}
+			if content, err := os.ReadFile(path); err != nil || string(content) != "replacement" {
+				t.Fatalf("replacement changed or removed: %q, %v", content, err)
+			}
+		})
+	}
+}
+
 func TestOpenCancellationPreservesEntry(t *testing.T) {
 	store, err := New(t.TempDir(), 1024)
 	if err != nil {
@@ -187,13 +336,224 @@ func TestOpenCancellationPreservesEntry(t *testing.T) {
 	writePartial(t, store, key, "valid")
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err = store.Open(ctx, key, func(context.Context, string) error { return context.Canceled })
+	_, err = store.Open(ctx, key, func(context.Context, *os.File) error { return context.Canceled })
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("Open error = %v, want cancellation", err)
 	}
 	path, _ := store.path(key)
 	if _, err := os.Stat(path); err != nil {
 		t.Fatalf("cancelled validation removed valid entry: %v", err)
+	}
+}
+
+func TestOpenRejectsSymlinkBeforeValidation(t *testing.T) {
+	store, err := New(t.TempDir(), 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := stringsOf('a')
+	path, err := store.path(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	external := filepath.Join(t.TempDir(), "external.mp4")
+	if err := os.WriteFile(external, []byte("external"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(external, path); err != nil {
+		t.Fatal(err)
+	}
+	validated := false
+	reader, err := store.Open(context.Background(), key, func(context.Context, *os.File) error {
+		validated = true
+		return nil
+	})
+	if reader != nil {
+		_ = reader.Close()
+		t.Fatal("symlink was leased")
+	}
+	if !errors.Is(err, ErrMiss) || validated {
+		t.Fatalf("symlink error = %v, validated = %v; want miss before validation", err, validated)
+	}
+	if info, err := os.Lstat(path); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("symlink replaced or removed: %v, %v", info, err)
+	}
+	if body, err := os.ReadFile(external); err != nil || string(body) != "external" {
+		t.Fatalf("external file = %q, %v", body, err)
+	}
+}
+
+func TestOpenRewindsValidatedDescriptor(t *testing.T) {
+	store, err := New(t.TempDir(), 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := stringsOf('e')
+	writePartial(t, store, key, "complete preview")
+	reader, err := store.Open(t.Context(), key, func(_ context.Context, file *os.File) error {
+		body, err := io.ReadAll(file)
+		if err != nil || string(body) != "complete preview" {
+			t.Fatalf("validator read = %q, %v", body, err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := reader.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	body, err := io.ReadAll(reader)
+	if err != nil || string(body) != "complete preview" {
+		t.Fatalf("leased preview = %q, %v; want complete content after validation", body, err)
+	}
+}
+
+func TestOpenMissesWhenValidatorSwapsEntryForExternalSymlink(t *testing.T) {
+	store, err := New(t.TempDir(), 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := stringsOf('b')
+	writePartial(t, store, key, "original")
+	path, err := store.path(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	external := filepath.Join(t.TempDir(), "external.mp4")
+	if err := os.WriteFile(external, []byte("external"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	original := path + ".original"
+	reader, err := store.Open(context.Background(), key, func(ctx context.Context, file *os.File) error {
+		if err := accept(ctx, file); err != nil {
+			return err
+		}
+		if err := os.Rename(file.Name(), original); err != nil {
+			return err
+		}
+		if err := os.Symlink(external, file.Name()); err != nil {
+			return err
+		}
+		body, err := io.ReadAll(file)
+		if err != nil || string(body) != "original" {
+			t.Fatalf("validated descriptor = %q, %v; want original", body, err)
+		}
+		return nil
+	})
+	if reader != nil {
+		_ = reader.Close()
+		t.Fatal("replacement was leased")
+	}
+	if !errors.Is(err, ErrMiss) {
+		t.Fatalf("replacement error = %v, want miss", err)
+	}
+	if info, err := os.Lstat(path); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("replacement symlink removed: %v, %v", info, err)
+	}
+	if body, err := os.ReadFile(external); err != nil || string(body) != "external" {
+		t.Fatalf("external file = %q, %v", body, err)
+	}
+	if len(store.open) != 0 {
+		t.Fatalf("miss retained lease: %v", store.open)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(original, path); err != nil {
+		t.Fatal(err)
+	}
+	reader, err = store.Open(context.Background(), key, accept)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body, err := io.ReadAll(reader); err != nil || string(body) != "original" {
+		t.Fatalf("restored entry = %q, %v", body, err)
+	}
+	if store.open[path] != 1 {
+		t.Fatalf("hit lease count = %d, want 1", store.open[path])
+	}
+	if err := reader.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.open) != 0 {
+		t.Fatalf("closed entry retained lease: %v", store.open)
+	}
+}
+
+func TestOpenMissesWhenValidatorSwapsRegularEntry(t *testing.T) {
+	store, err := New(t.TempDir(), 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := stringsOf('c')
+	writePartial(t, store, key, "original")
+	path, err := store.path(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := path + ".original"
+	reader, err := store.Open(context.Background(), key, func(ctx context.Context, file *os.File) error {
+		if err := accept(ctx, file); err != nil {
+			return err
+		}
+		if err := os.Rename(file.Name(), original); err != nil {
+			return err
+		}
+		return os.WriteFile(file.Name(), []byte("replaced"), 0o600)
+	})
+	if reader != nil {
+		_ = reader.Close()
+		t.Fatal("unvalidated replacement was leased")
+	}
+	if !errors.Is(err, ErrMiss) {
+		t.Fatalf("regular replacement error = %v, want miss", err)
+	}
+	if body, err := os.ReadFile(path); err != nil || string(body) != "replaced" {
+		t.Fatalf("replacement removed: %q, %v", body, err)
+	}
+	if len(store.open) != 0 {
+		t.Fatalf("miss retained lease: %v", store.open)
+	}
+}
+
+func TestOpenValidationFailurePreservesReplacement(t *testing.T) {
+	store, err := New(t.TempDir(), 1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := stringsOf('d')
+	writePartial(t, store, key, "original")
+	path, err := store.path(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, err := store.Open(context.Background(), key, func(context.Context, *os.File) error {
+		if err := os.Remove(path); err != nil {
+			return err
+		}
+		if err := os.WriteFile(path, []byte("replacement"), 0o600); err != nil {
+			return err
+		}
+		return errors.New("validation failed")
+	})
+	if reader != nil {
+		_ = reader.Close()
+		t.Fatal("invalidated entry was leased")
+	}
+	if !errors.Is(err, ErrMiss) {
+		t.Fatalf("validation failure = %v, want miss", err)
+	}
+	if body, err := os.ReadFile(path); err != nil || string(body) != "replacement" {
+		t.Fatalf("unrelated replacement removed: %q, %v", body, err)
+	}
+	if len(store.open) != 0 {
+		t.Fatalf("miss retained lease: %v", store.open)
 	}
 }
 
@@ -209,7 +569,7 @@ func TestOpenCoordinatesReplacementAfterValidation(t *testing.T) {
 	opened := make(chan []byte, 1)
 	openErr := make(chan error, 1)
 	go func() {
-		reader, err := store.Open(context.Background(), key, func(context.Context, string) error {
+		reader, err := store.Open(context.Background(), key, func(context.Context, *os.File) error {
 			close(started)
 			<-release
 			return nil
@@ -277,16 +637,16 @@ func TestPartialPublishesOnlyAfterValidationAndRename(t *testing.T) {
 		t.Fatal(err)
 	}
 	validated := false
-	validator := ValidatorFunc(func(ctx context.Context, path string) error {
-		if path != partial.Path() {
-			t.Fatalf("validated %q, want partial %q", path, partial.Path())
+	validator := func(ctx context.Context, file *os.File) error {
+		if file.Name() != partial.Path() {
+			t.Fatalf("validated %q, want partial %q", file.Name(), partial.Path())
 		}
 		if _, err := os.Stat(final); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("final existed before validation: %v", err)
 		}
 		validated = true
-		return accept(ctx, path)
-	})
+		return accept(ctx, file)
+	}
 	if err := partial.Commit(context.Background(), validator); err != nil {
 		t.Fatal(err)
 	}
@@ -322,8 +682,6 @@ func TestCleanupPartialsAndDiskLimit(t *testing.T) {
 	if err := partial.Commit(context.Background(), accept); !errors.Is(err, ErrDiskLimit) {
 		t.Fatalf("Commit error = %v, want disk limit", err)
 	}
-	path := filepath.Join(t.TempDir(), "unused.partial")
-	_ = path
 	// Simulate an abandoned prior-process partial directly beneath the cache.
 	orphan := filepath.Join(store.root, "previews", "aa", "bb", "orphan.partial")
 	if err := os.MkdirAll(filepath.Dir(orphan), 0o750); err != nil {
@@ -371,13 +729,5 @@ func writePartial(t *testing.T, store *Store, key, body string) {
 }
 
 func stringsOf(c byte) string {
-	return string(make([]byte, 64))[:0] + repeat(c, 64)
-}
-
-func repeat(c byte, n int) string {
-	b := make([]byte, n)
-	for i := range b {
-		b[i] = c
-	}
-	return string(b)
+	return strings.Repeat(string(c), 64)
 }

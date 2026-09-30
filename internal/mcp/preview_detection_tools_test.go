@@ -70,6 +70,10 @@ func TestPreviewDetectionToolsUseBoundedOpaqueInputs(t *testing.T) {
 	if err != nil || result.StructuredContent["data"] == "" {
 		t.Fatalf("preview = %#v, %v", result, err)
 	}
+	result, err = preview.Call(ctx, []byte(`{"mediaId":"`+mediaID+`","centerMs":0,"beforeMs":0,"afterMs":500,"mute":false}`))
+	if err != nil || result.StructuredContent["data"] == "" {
+		t.Fatalf("explicit zero/false preview = %#v, %v", result, err)
+	}
 	if _, err := preview.Call(ctx, []byte(`{"mediaId":"/tmp/clip","centerMs":0,"beforeMs":1,"afterMs":1,"mute":true}`)); err == nil {
 		t.Fatal("path-like media ID accepted")
 	}
@@ -84,6 +88,42 @@ func TestPreviewDetectionToolsUseBoundedOpaqueInputs(t *testing.T) {
 	}
 	if start.Permission != PermissionDetectionRun {
 		t.Fatalf("detection permission = %q", start.Permission)
+	}
+}
+
+func TestPreviewDetectionToolsRejectInvalidInput(t *testing.T) {
+	mediaID := "m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	media := previewToolMedia{item: projects.Media{ID: mediaID, RootID: "root", DurationMS: 10_000}}
+	project := previewToolProjects{project: projects.Project{ID: "p_test", Revision: 1}}
+	tools := PreviewDetectionTools(media, previewToolPreview{}, &previewToolDetection{}, project)
+	ctx := Context{Request: testRequest()}
+	for _, test := range []struct {
+		name, arguments string
+	}{
+		{"create_preview", `{"centerMs":0,"beforeMs":1,"afterMs":1,"mute":false}`},
+		{"create_preview", `{"mediaId":"/tmp/private","centerMs":0,"beforeMs":1,"afterMs":1,"mute":false}`},
+		{"create_preview", `{"mediaId":"` + mediaID + `","beforeMs":1,"afterMs":1,"mute":false}`},
+		{"create_preview", `{"mediaId":"` + mediaID + `","centerMs":0,"afterMs":1,"mute":false}`},
+		{"create_preview", `{"mediaId":"` + mediaID + `","centerMs":0,"beforeMs":1,"mute":false}`},
+		{"create_preview", `{"mediaId":"` + mediaID + `","centerMs":0,"beforeMs":1,"afterMs":1}`},
+		{"create_preview", `{"mediaId":"` + mediaID + `","centerMs":null,"beforeMs":1,"afterMs":1,"mute":false}`},
+		{"create_preview", `{"mediaId":"` + mediaID + `","centerMs":0,"beforeMs":1,"afterMs":1,"mute":null}`},
+		{"create_preview", `{"mediaId":"` + mediaID + `","centerMs":0,"beforeMs":9223372036854775807,"afterMs":1,"mute":false}`},
+		{"start_detection", `{"projectItemId":"i_aaaaaaaaaaaaaaaaaaaaaaaa","mediaId":"` + mediaID + `","projectRevision":1,"kind":"scene"}`},
+		{"start_detection", `{"projectId":"p_test","projectItemId":"i_aaaaaaaaaaaaaaaaaaaaaaaa","projectRevision":1,"kind":"scene"}`},
+		{"start_detection", `{"projectId":"p_test","projectItemId":"i_aaaaaaaaaaaaaaaaaaaaaaaa","mediaId":"` + mediaID + `","projectRevision":1,"kind":"unknown"}`},
+		{"start_detection", `{"projectId":"p_test","projectItemId":"i_aaaaaaaaaaaaaaaaaaaaaaaa","mediaId":"` + mediaID + `","projectRevision":1}`},
+		{"start_detection", `{"projectId":"p_test","projectItemId":"i_aaaaaaaaaaaaaaaaaaaaaaaa","mediaId":"` + mediaID + `","projectRevision":null,"kind":"scene"}`},
+	} {
+		t.Run(test.name+"/"+test.arguments, func(t *testing.T) {
+			tool := toolNamed(t, tools, test.name)
+			if _, err := tool.Resource(ctx, []byte(test.arguments)); !errors.Is(err, ErrInvalidInput) || toolErrorCode(err) != "invalid_input" {
+				t.Fatalf("invalid resource arguments = %v, code=%q", err, toolErrorCode(err))
+			}
+			if _, err := tool.Call(ctx, []byte(test.arguments)); !errors.Is(err, ErrInvalidInput) || toolErrorCode(err) != "invalid_input" {
+				t.Fatalf("invalid call arguments = %v, code=%q", err, toolErrorCode(err))
+			}
+		})
 	}
 }
 
@@ -124,5 +164,17 @@ func TestDetectionTransportAuthorizesSelectedMedia(t *testing.T) {
 	toolResult, ok := result.(ToolResult)
 	if !ok || toolResult.IsError || toolResult.StructuredContent["id"] != "j_aaaaaaaaaaaa" {
 		t.Fatalf("detection did not return queued job: %#v", result)
+	}
+	result, rpcErr = transport.callTool(testRequest(), []byte(`{"name":"start_detection","arguments":{"projectItemId":"i_aaaaaaaaaaaaaaaaaaaaaaaa","mediaId":"`+mediaID+`","projectRevision":1,"kind":"scene"}}`), credential)
+	if rpcErr != nil {
+		t.Fatalf("invalid tool arguments returned RPC error: %#v", rpcErr)
+	}
+	toolResult, ok = result.(ToolResult)
+	if !ok || !toolResult.IsError {
+		t.Fatalf("missing project ID did not return a tool error: %#v", result)
+	}
+	publicError, ok := toolResult.StructuredContent["error"].(map[string]any)
+	if !ok || publicError["code"] != "invalid_input" {
+		t.Fatalf("invalid tool arguments error envelope = %#v", toolResult.StructuredContent)
 	}
 }

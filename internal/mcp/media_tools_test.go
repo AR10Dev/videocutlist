@@ -97,6 +97,33 @@ func TestMediaToolsRetainsUnconsumedFinalPageRows(t *testing.T) {
 	}
 }
 
+func TestMediaToolsInvalidArgumentsReturnInvalidInput(t *testing.T) {
+	credentials, secret := scopedTransportCredentials(t)
+	handler := newTransport(t, mcp.TransportConfig{Enabled: true, Credentials: credentials, Tools: mcp.MediaTools(toolMedia{})})
+	session := initialize(t, handler, secret)
+	for _, test := range []struct {
+		name, args string
+	}{
+		{"get_media", `{}`},
+		{"get_media", `{"id":null}`},
+		{"get_media", `{"id":"/tmp/clip"}`},
+		{"list_media", `{"limit":51}`},
+		{"list_media", `{"limit":0}`},
+		{"list_media", `{"limit":null}`},
+		{"list_media", `{"cursor":null}`},
+		{"list_media", `{"query":null}`},
+		{"list_media", `{"limit":9223372036854775808}`},
+		{"list_media", `null`},
+	} {
+		t.Run(test.name+"/"+test.args, func(t *testing.T) {
+			response := serve(handler, sessionRequest(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"`+test.name+`","arguments":`+test.args+`}}`, secret, session))
+			if response.Code != 200 || !contains(response.Body.String(), `"code":"invalid_input"`) {
+				t.Fatalf("invalid arguments response = %s", response.Body.String())
+			}
+		})
+	}
+}
+
 func scopedTransportCredentials(t *testing.T) (*mcp.CredentialStore, string) {
 	t.Helper()
 	database, err := store.OpenDatabase(t.Context(), t.TempDir()+"/mcp.db")

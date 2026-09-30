@@ -97,7 +97,6 @@ it("preserves a local detection cancellation over stale cached status", async ()
                 segments: () => [],
                 saveProject: () => Promise.resolve(undefined),
                 updateSegments: () => undefined,
-                markDirty: () => undefined,
               });
               runCancellation = async () => {
                 current.setDetectionJob(queuedDetectionJob);
@@ -177,8 +176,10 @@ it("accepts successive detection candidates across its own saved revisions but r
                   id: queuedDetectionJob.projectId,
                   revision: 1,
                 } as components["schemas"]["Project"]),
-              updateSegments: setSegments,
-              markDirty: () => setEditorVersion((value) => value + 1),
+              updateSegments: (value) => {
+                setSegments(value);
+                setEditorVersion((version) => version + 1);
+              },
             });
             start = current.startDetection;
             accept = current.acceptDetection;
@@ -190,8 +191,10 @@ it("accepts successive detection candidates across its own saved revisions but r
         void start("silence").then(() => {
           try {
             expect(accept(candidates[0]).accepted).toHaveLength(1);
+            expect(editorVersion()).toBe(1);
             setRevision(2);
             expect(accept(candidates[1]).accepted).toHaveLength(1);
+            expect(editorVersion()).toBe(2);
             setRevision(3);
             expect(accept(candidates[2]).accepted).toHaveLength(1);
             setRevision(5);
@@ -249,6 +252,8 @@ describe("candidate acceptance", () => {
     } as unknown as Candidate;
     expect(candidatePointMs(legacy)).toBe(50);
     expect(candidateSkipReason(legacy, project, 100)).toBe("point");
+    expect(candidateSkipReason({ ...point, pointMs: -1 }, project, 100)).toBe("invalid");
+    expect(candidateSkipReason({ ...point, pointMs: 101 }, project, 100)).toBe("invalid");
   });
 
   it("publishes a bulk result as one undoable timeline edit", () => {

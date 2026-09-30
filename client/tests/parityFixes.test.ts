@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  acceptsMediaMetadata,
   parseTimecode,
   watchedMediaPosition,
   hybridSmartCutKnownIneligible,
@@ -8,8 +7,6 @@ import {
 import { validInterchangeFileSize } from "../src/api";
 import { normalizePeaks, viewportScale } from "../src/features/preview/assets";
 import { moveSegment, removeSegment } from "../src/features/editor/segmentEditing";
-import { exportFailureMessage } from "../src/features/queue/jobUi";
-import { saveIsCurrent } from "../src/features/projects/saveGuards";
 import { frameDuration } from "../src/features/editor/frame";
 
 describe("Solid parity editing helpers", () => {
@@ -17,13 +14,6 @@ describe("Solid parity editing helpers", () => {
     expect(parseTimecode("1:02.345")).toBe(62345);
     expect(parseTimecode("1:60.000")).toBeUndefined();
     expect(parseTimecode("bad")).toBeUndefined();
-  });
-
-  it("accepts only current, selected media metadata", () => {
-    expect(acceptsMediaMetadata(false, 2, 2, "media-1", "media-1")).toBe(true);
-    expect(acceptsMediaMetadata(false, 1, 2, "media-1", "media-1")).toBe(false);
-    expect(acceptsMediaMetadata(true, 2, 2, "media-1", "media-1")).toBe(false);
-    expect(acceptsMediaMetadata(false, 2, 2, "media-2", "media-1")).toBe(false);
   });
 
   it("uses watched preview time for marker placement", () => {
@@ -46,23 +36,6 @@ describe("Solid parity editing helpers", () => {
     expect(validInterchangeFileSize(1 << 20)).toBe(true);
     expect(validInterchangeFileSize((1 << 20) + 1)).toBe(false);
     expect(hybridSmartCutKnownIneligible(undefined)).toBe(false);
-  });
-
-  it("does not clear dirty state after an edit during save", () => {
-    expect(saveIsCurrent(false, 1, 1, 4, 3, "p", "p", "m", "m")).toBe(false);
-    expect(saveIsCurrent(false, 1, 1, 3, 3, "p", "p", "m", "m")).toBe(true);
-  });
-
-  it("rejects save responses after the project or media context changes", () => {
-    expect(saveIsCurrent(false, 1, 1, 3, 3, "old", "new", "m", "m")).toBe(false);
-    expect(saveIsCurrent(false, 1, 1, 3, 3, "p", "p", "old-media", "new-media")).toBe(false);
-    expect(saveIsCurrent(false, 1, 2, 3, 3, "p", "p", "m", "m")).toBe(false);
-  });
-
-  it("maps unsupported hybrid exports to actionable guidance", () => {
-    expect(exportFailureMessage("hybrid_smart_cut_unsupported_media")).toContain(
-      "H.264 constant-frame-rate video in MKV",
-    );
   });
 
   it("reorders and removes labelled segments without mutating input", () => {

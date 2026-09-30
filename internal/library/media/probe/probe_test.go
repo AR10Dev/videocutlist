@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+
+	"videocutlist/internal/fdinput"
 )
 
 func init() {
@@ -33,7 +35,7 @@ func init() {
 		return
 	}
 	if os.Getenv("VIDEOCUTLIST_TEST_FFPROBE_FD") == "1" {
-		data, err := os.ReadFile("/proc/self/fd/3")
+		data, err := os.ReadFile(fdinput.Path(3))
 		if err != nil || string(data) != "opened-media" {
 			os.Exit(2)
 		}

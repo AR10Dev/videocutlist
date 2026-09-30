@@ -275,3 +275,17 @@ func TestRuntimeSettingsSeedRefreshesDeploymentOwnedPaths(t *testing.T) {
 		t.Fatalf("seed overwrote mutable export limit: %d", refreshed.Settings.ExportLimit)
 	}
 }
+
+func TestRuntimeSettingsRejectsOverflowingPreviewWindow(t *testing.T) {
+	settings := validRuntimeSettings()
+	settings.PreviewBeforeMS = math.MaxInt
+	settings.PreviewAfterMS = 1
+	settings.PreviewMaxMS = math.MaxInt
+	if err := store.ValidateRuntimeSettings(settings); err == nil {
+		t.Fatal("accepted a default preview window larger than the maximum")
+	}
+	settings.PreviewBeforeMS = math.MaxInt - 1
+	if err := store.ValidateRuntimeSettings(settings); err != nil {
+		t.Fatalf("rejected a window exactly at the maximum: %v", err)
+	}
+}

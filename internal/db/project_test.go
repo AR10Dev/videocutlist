@@ -35,6 +35,9 @@ func TestProjectStoreRevisionConflictPreservesDocument(t *testing.T) {
 	if _, err := projects.Save(ctx, "p_batch", created.Revision, `{"name":"stale"}`); !errors.Is(err, store.ErrRevisionConflict) {
 		t.Fatalf("stale save = %v", err)
 	}
+	if _, err := projects.Save(ctx, "p_batch", 0, `{"name":"duplicate"}`); !errors.Is(err, store.ErrRevisionConflict) {
+		t.Fatalf("duplicate create = %v", err)
+	}
 	stored, err := projects.Get(ctx, "p_batch")
 	if err != nil || stored.Revision != 2 || stored.DocumentJSON != `{"name":"second"}` {
 		t.Fatalf("stored = %#v, %v", stored, err)

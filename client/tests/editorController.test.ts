@@ -128,6 +128,25 @@ describe("automatic segment editing", () => {
     dispose();
   });
 
+  it("does not mark an unchanged cut list dirty or lose redo history", () => {
+    const { controller, dirty, dispose } = setup();
+    controller.setMarker("inMs", 100);
+    controller.setMarker("outMs", 300);
+    controller.undo();
+    const dirtyBefore = dirty();
+    const futureBefore = controller.timeline().future;
+
+    controller.updateTimeline({ segments: controller.present().segments });
+    controller.moveSegment(0, 1);
+    controller.removeSegment(0);
+
+    expect(dirty()).toBe(dirtyBefore);
+    expect(controller.timeline().future).toEqual(futureBefore);
+    controller.redo();
+    expect(controller.present().segments).toHaveLength(1);
+    dispose();
+  });
+
   it("discards an incomplete draft before switching media", async () => {
     const { controller, setSelected, dispose } = setup();
     controller.setMarker("inMs", 100);

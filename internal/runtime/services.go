@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -107,7 +108,7 @@ func preview(item index.Media, request projects.PreviewSpec) model.PreviewSpec {
 type PreviewCache struct{ Store *cache.Store }
 
 func (p PreviewCache) Open(ctx context.Context, key string, validator projects.Validator) (io.ReadCloser, error) {
-	return p.Store.Open(ctx, key, cache.Validator(validator))
+	return p.Store.Open(ctx, key, validator)
 }
 func (p PreviewCache) Begin(key string) (projects.PreviewPartial, error) {
 	return p.Store.Begin(key)
@@ -237,7 +238,7 @@ func (e ExportExecutor) Preflight(ctx context.Context, _ string, project project
 			result.Allowed = false
 		}
 		for _, stream := range preflight.Selection {
-			if !containsStreamIndex(result.Selection, stream) {
+			if !slices.Contains(result.Selection, stream) {
 				result.Selection = append(result.Selection, stream)
 			}
 		}
@@ -294,15 +295,6 @@ func preflightRequest(item model.ProjectItem, input projects.ExportInput, useInp
 		CutStrategy: options.CutStrategy, Container: options.Container,
 		DestinationID: options.DestinationID, FilenameTemplate: options.FilenameTemplate,
 	}
-}
-
-func containsStreamIndex(indexes []int, target int) bool {
-	for _, index := range indexes {
-		if index == target {
-			return true
-		}
-	}
-	return false
 }
 
 func (e ExportExecutor) Download(ctx context.Context, jobID string, position int) (io.ReadCloser, string, error) {
@@ -489,9 +481,11 @@ func (e ExportExecutor) prepareBatchArchive(ctx context.Context, batchID, archiv
 	temporaryPath := temporary.Name()
 	published := false
 	defer func() {
-		// After linking, the temporary name is only a cleanup alias; a failure to
-		// remove it must not turn a published archive into a failed download.
-		if removeErr := os.Remove(temporaryPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) && !published {
+		// Atomic rename removes the temporary name after publication.
+		if published {
+			return
+		}
+		if removeErr := os.Remove(temporaryPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
 			err = errors.Join(err, fmt.Errorf("remove temporary batch archive: %w", removeErr))
 		}
 	}()
@@ -638,7 +632,17 @@ func validateBatchArchive(ctx context.Context, path string, count int, expectedB
 	return nil
 }
 
-func publishBatchArchiveWithManifest(temporaryPath, archiveRoot, batchID string, beforeLink func(name, path string) (func(), error)) (string, string, error) {
+func publishBatchArchiveWithManifest(temporaryPath, archiveRoot, batchID string, beforePublish func(name, path string) (func(), error)) (string, string, error) {
+	root, err := os.OpenRoot(archiveRoot)
+	if err != nil {
+		return "", "", exporter.ErrOutputUnavailable
+	}
+	defer func() { _ = root.Close() }()
+	directory, err := root.Open(".")
+	if err != nil {
+		return "", "", exporter.ErrOutputUnavailable
+	}
+	defer func() { _ = directory.Close() }()
 	token := "batch"
 	if validBatchArchiveToken(batchID) {
 		token = batchID
@@ -649,20 +653,20 @@ func publishBatchArchiveWithManifest(temporaryPath, archiveRoot, batchID string,
 			name = fmt.Sprintf("videocutlist-clips-%s-%d.zip", token, attempt)
 		}
 		path := filepath.Join(archiveRoot, name)
-		if _, err := os.Lstat(path); err == nil {
+		if _, err := root.Lstat(name); err == nil {
 			continue
 		} else if !errors.Is(err, os.ErrNotExist) {
 			return "", "", exporter.ErrOutputUnavailable
 		}
 		var cleanup func()
-		if beforeLink != nil {
+		if beforePublish != nil {
 			var err error
-			cleanup, err = beforeLink(name, path)
+			cleanup, err = beforePublish(name, path)
 			if err != nil {
 				return "", "", err
 			}
 		}
-		if err := os.Link(temporaryPath, path); err == nil {
+		if err := exporter.PublishOpenedNoReplace(directory, directory, filepath.Base(temporaryPath), name); err == nil {
 			return name, path, nil
 		} else if !errors.Is(err, os.ErrExist) {
 			if cleanup != nil {

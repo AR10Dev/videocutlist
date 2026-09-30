@@ -356,19 +356,12 @@ export function ExportView(props: ExportViewProps = {}) {
           </section>
         </Show>
 
-        <fieldset
-          class="export-items"
-          classList={{ hidden: projectItems().length <= 1 }}
-          aria-label="Export scope"
-        >
-          <legend>Export scope</legend>
-          <div class="export-section-heading">
-            <h3>Clips to export</h3>
-          </div>
-          <Show
-            when={projectItems().length > 1}
-            fallback={<p class="export-muted-note">Active media item: {scopeLabel()}</p>}
-          >
+        <Show when={projectItems().length > 1}>
+          <fieldset class="export-items" aria-label="Export scope">
+            <legend>Export scope</legend>
+            <div class="export-section-heading">
+              <h3>Clips to export</h3>
+            </div>
             <div class="export-scope-modes" role="radiogroup" aria-label="Export scope mode">
               <label>
                 <input
@@ -463,8 +456,8 @@ export function ExportView(props: ExportViewProps = {}) {
                 </button>
               </div>
             </Show>
-          </Show>
-        </fieldset>
+          </fieldset>
+        </Show>
 
         <details class="export-options" open>
           <summary>

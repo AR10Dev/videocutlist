@@ -4,17 +4,34 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"os"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
+
+	"videocutlist/internal/fdinput"
 )
 
 // ValidateFile accepts only the software-preview fMP4 profile before cache publication.
-func ValidateFile(ctx context.Context, ffprobePath, filename string) error {
+func ValidateFile(ctx context.Context, ffprobePath string, file *os.File) error {
 	if ffprobePath == "" {
 		ffprobePath = "ffprobe"
 	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("seek preview for validation: %w", err)
+	}
+	filename := fdinput.Path(3)
+	if runtime.GOOS == "windows" {
+		filename = "pipe:0"
+	}
 	cmd := exec.CommandContext(ctx, ffprobePath, "-v", "error", "-show_entries", "format=format_name:stream=codec_type,codec_name,width,height,pix_fmt,avg_frame_rate,channels,sample_rate", "-of", "json", filename)
+	if runtime.GOOS == "windows" {
+		cmd.Stdin = file
+	} else {
+		cmd.ExtraFiles = []*os.File{file}
+	}
 	var stdout, stderr boundedBuffer
 	stdout.limit, stderr.limit = defaultStderr, defaultStderr
 	cmd.Stdout, cmd.Stderr = &stdout, &stderr

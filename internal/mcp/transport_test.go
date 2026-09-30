@@ -209,6 +209,15 @@ func TestTransportBoundsAndSafeErrors(t *testing.T) {
 	}
 }
 
+func TestTransportRejectsOversizedTrailingJSON(t *testing.T) {
+	credentials, secret, _ := transportCredentials(t, time.Hour)
+	handler := newTransport(t, mcp.TransportConfig{Enabled: true, Credentials: credentials})
+	response := serve(handler, request(`{"jsonrpc":"2.0","id":1,"method":"initialize"}`+strings.Repeat(" ", 2<<20), secret))
+	if response.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("oversized trailing JSON status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
 func TestTransportRejectsUntrustedOriginAndInsecureRemoteAccess(t *testing.T) {
 	credentials, secret, _ := transportCredentials(t, time.Hour)
 	info := mcp.RequestInfo{ClientIP: net.ParseIP("203.0.113.7"), Host: "video.test", Proto: "http"}

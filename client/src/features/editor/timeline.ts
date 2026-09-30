@@ -115,9 +115,3 @@ export const redoTimeline = (history: TimelineHistory): TimelineHistory => {
     future: history.future.slice(1),
   };
 };
-
-export const resetTimelineHistory = (snapshot: TimelineSnapshot): TimelineHistory =>
-  createTimelineHistory(snapshot);
-
-export const canUndoTimeline = (history: TimelineHistory) => history.past.length > 0;
-export const canRedoTimeline = (history: TimelineHistory) => history.future.length > 0;

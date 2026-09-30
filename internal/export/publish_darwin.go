@@ -10,7 +10,7 @@ import (
 
 func platformAtomicNoReplacePublicationSupported() bool { return true }
 
-func platformPublishOpenedNoReplace(sourceDirectory, destinationDirectory *os.File, tempName, outputName string, _ *os.Root, _ string) error {
+func platformPublishOpenedNoReplace(sourceDirectory, destinationDirectory *os.File, tempName, outputName string) error {
 	return unix.RenameatxNp(
 		int(sourceDirectory.Fd()),
 		tempName,

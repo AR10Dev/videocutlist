@@ -86,28 +86,6 @@ func (rejectingLimiter) AcquireProcess() (func(), error) {
 	return nil, errors.New("capacity exhausted")
 }
 
-func TestPublishNoReplacePreservesExistingOutput(t *testing.T) {
-	dir := t.TempDir()
-	source := filepath.Join(dir, "temporary.mkv")
-	destination := filepath.Join(dir, "published.mkv")
-	if err := os.WriteFile(source, []byte("new"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(destination, []byte("existing"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := publishNoReplace(source, destination); !errors.Is(err, os.ErrExist) {
-		t.Fatalf("publish error = %v", err)
-	}
-	data, err := os.ReadFile(destination)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(data) != "existing" {
-		t.Fatalf("destination = %q", data)
-	}
-}
-
 func TestExportHonorsSharedFFmpegCapacity(t *testing.T) {
 	file, err := os.CreateTemp(t.TempDir(), "source")
 	if err != nil {
@@ -125,7 +103,7 @@ func TestExportHonorsSharedFFmpegCapacity(t *testing.T) {
 }
 
 func TestSelectedSegmentsReturnsTimelineGaps(t *testing.T) {
-	got := selectedSegments([]model.Segment{{StartMS: 600, EndMS: 800}, {StartMS: 100, EndMS: 300}}, "gaps", 1_000)
+	got := ResolveRanges([]model.Segment{{StartMS: 600, EndMS: 800}, {StartMS: 100, EndMS: 300}}, "gaps", 1_000)
 	want := []model.Segment{{StartMS: 0, EndMS: 100}, {StartMS: 300, EndMS: 600}, {StartMS: 800, EndMS: 1_000}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("gaps = %#v, want %#v", got, want)

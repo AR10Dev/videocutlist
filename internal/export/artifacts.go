@@ -839,13 +839,38 @@ func (s *ArtifactStore) Cleanup(now time.Time) {
 		if s.active[job] > 0 {
 			continue
 		}
+		var owners map[string]manifestOutput
+		if path := s.manifests[job]; path != "" {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				continue
+			}
+			var manifest artifactManifest
+			if json.Unmarshal(data, &manifest) != nil || manifest.JobID != job || !validManifestEntries(manifest) {
+				continue
+			}
+			owners = make(map[string]manifestOutput, len(manifest.OutputNames))
+			for _, owner := range manifestEntries(manifest) {
+				owners[owner.Name] = owner
+			}
+		}
 		kept := values[:0]
 		for _, v := range values {
 			if v.Kind == KindArchive || v.Expires.After(now) {
 				kept = append(kept, v)
 				continue
 			}
-			if err := removeArtifactPath(v.Path); err != nil {
+			var err error
+			if owners != nil {
+				if owner, ok := owners[v.Name]; ok && v.Path == filepath.Join(filepath.Dir(s.manifests[job]), owner.Name) {
+					err = removeManifestOutputs(s.manifests[job], []manifestOutput{owner})
+				} else {
+					err = ErrOutputUnavailable
+				}
+			} else {
+				err = removeArtifactPath(v.Path)
+			}
+			if err != nil {
 				kept = append(kept, v)
 			}
 		}

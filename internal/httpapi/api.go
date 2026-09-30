@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -287,7 +288,7 @@ func (s *Server) dispatch(writer http.ResponseWriter, request *http.Request, id 
 		s.refreshMedia(writer, request, id)
 		return "/api/v1/media/refresh", ""
 	case routeStartMediaImport:
-		job, err := s.config.MediaImport.StartImport(request.Context())
+		job, err := s.startMediaScan(request.Context())
 		if err != nil {
 			httpx.Error(writer, http.StatusConflict, "import_unavailable", "Import could not be started.", id)
 			return "/api/v1/media/import", ""
@@ -295,6 +296,10 @@ func (s *Server) dispatch(writer http.ResponseWriter, request *http.Request, id 
 		httpx.WriteJSON(writer, http.StatusAccepted, job)
 		return "/api/v1/media/import", ""
 	case routeGetMediaImport:
+		if s.config.MediaImport == nil {
+			notFound(writer, id)
+			return "/api/v1/media/import/{jobId}", ""
+		}
 		job, err := s.config.MediaImport.ImportStatus(request.Context(), r.id)
 		if err != nil {
 			resourceError(writer, id, err)
@@ -303,6 +308,10 @@ func (s *Server) dispatch(writer http.ResponseWriter, request *http.Request, id 
 		httpx.WriteJSON(writer, http.StatusOK, job)
 		return "/api/v1/media/import/{jobId}", ""
 	case routeCancelMediaImport:
+		if s.config.MediaImport == nil {
+			notFound(writer, id)
+			return "/api/v1/media/import/{jobId}", ""
+		}
 		if err := s.config.MediaImport.CancelImport(request.Context(), r.id); err != nil {
 			resourceError(writer, id, err)
 			return "/api/v1/media/import/{jobId}", ""
@@ -381,11 +390,15 @@ func queryKeys(request *http.Request, allowed ...string) bool {
 	if len(request.URL.RawQuery) > maxQueryBytes {
 		return false
 	}
+	parsed, err := url.ParseQuery(request.URL.RawQuery)
+	if err != nil {
+		return false
+	}
 	allowedSet := map[string]bool{}
 	for _, key := range allowed {
 		allowedSet[key] = true
 	}
-	for key, values := range request.URL.Query() {
+	for key, values := range parsed {
 		if !allowedSet[key] || len(values) != 1 {
 			return false
 		}

@@ -9,7 +9,7 @@ import { defaultSettings } from "../src/features/settings/model";
 import type { components } from "../src/generated/api";
 
 const media: components["schemas"]["Media"] = {
-  id: "m_loaded",
+  id: "m_" + "a".repeat(43),
   name: "loaded.mp4",
   durationMs: 10_000,
   sizeBytes: 1,
@@ -33,116 +33,127 @@ function memoryStorage(): Storage {
 }
 
 describe("projects controller", () => {
-  it("does not apply a delayed load after the editor changes", async () => {
-    Object.defineProperty(globalThis, "localStorage", {
-      configurable: true,
-      value: memoryStorage(),
-    });
-    let resolveProject!: (response: Response) => void;
-    const projectResponse = new Promise<Response>((resolve) => {
-      resolveProject = resolve;
-    });
-    const request: ApiClient["request"] = (path) =>
-      path.startsWith("projects/") ? projectResponse : Promise.resolve(Response.json(media));
-    const api: ApiClient = {
-      url: (path) => path,
-      request,
-      assetRequest: () => Promise.resolve(Response.json({})),
-      interchangeRequest: () => Promise.resolve(Response.json({})),
-    };
-    const [selected, setSelected] = createSignal<components["schemas"]["Media"]>();
-    const [projectId, setProjectId] = createSignal("p_current");
-    const [projectName, setProjectName] = createSignal("Editing");
-    const [revision, setRevision] = createSignal(0);
-    const [dirty, setDirty] = createSignal(false);
-    const [projectItems, setProjectItems] = createSignal<EditableProjectItem[]>([]);
-    const [, setSelectedExportItems] = createSignal<string[]>([]);
-    const [, setActiveItemId] = createSignal<string>();
-    const [timeline, setTimeline] = createSignal(
-      createTimelineHistory({ playheadMs: 0, inMs: 0, outMs: 0, segments: [], zoom: 1 }),
-    );
-    const [knownMedia, setMedia] = createSignal<components["schemas"]["Media"][]>([]);
-    const [, setRecent] = createSignal<{ id: string; label: string; lastOpened: number }[]>([]);
-    const [, setMuted] = createSignal(false);
-    const [, setExportMode] = createSignal<"merge" | "separate">("merge");
-    const [, setExportSelection] = createSignal<"segments" | "gaps">("segments");
-    const [, setStreamIndexes] = createSignal<number[]>([]);
-    const [, setCutStrategy] = createSignal(defaultSettings.cutStrategy);
-    const [, setExportContainer] = createSignal<"mkv" | "mp4" | "mov">("mkv");
-    const [, setDestinationId] = createSignal("download");
-    const [, setFilenameTemplate] = createSignal(defaultSettings.filenameTemplate);
-    let editorVersion = 0;
-    const controller = createProjectsController({
-      api,
-      queryClient: new QueryClient(),
-      selected,
-      projectId,
-      setProjectId,
-      projectName,
-      setProjectName,
-      revision,
-      setRevision,
-      dirty,
-      setDirty,
-      editorVersion: () => editorVersion,
-      projectItems,
-      setProjectItems,
-      setSelectedExportItems,
-      setActiveItemId,
-      setSelected,
-      setTimeline,
-      setPreviewCenterMs: () => undefined,
-      setMedia,
-      setRecent,
-      settings: () => defaultSettings,
-      setMuted,
-      setExportMode,
-      setExportSelection,
-      setStreamIndexes,
-      setCutStrategy,
-      setExportContainer,
-      setDestinationId,
-      setFilenameTemplate,
-      editableItems: projectItems,
-      clearDetectionContext: () => undefined,
-      setDiagnostics: () => undefined,
-      setStatus: () => "",
-    });
+  it.each(["an edit", "a media switch"])(
+    "does not apply a delayed load after %s",
+    async (change) => {
+      Object.defineProperty(globalThis, "localStorage", {
+        configurable: true,
+        value: memoryStorage(),
+      });
+      let resolveProject!: (response: Response) => void;
+      const projectResponse = new Promise<Response>((resolve) => {
+        resolveProject = resolve;
+      });
+      const request: ApiClient["request"] = (path) =>
+        path.startsWith("projects/") ? projectResponse : Promise.resolve(Response.json(media));
+      const api: ApiClient = {
+        url: (path) => path,
+        request,
+        assetRequest: () => Promise.resolve(Response.json({})),
+        interchangeRequest: () => Promise.resolve(Response.json({})),
+      };
+      const [selected, setSelected] = createSignal<components["schemas"]["Media"]>();
+      const [projectId, setProjectId] = createSignal("p_currentproject");
+      const [projectName, setProjectName] = createSignal("Editing");
+      const [revision, setRevision] = createSignal(0);
+      const [dirty, setDirty] = createSignal(false);
+      const [projectItems, setProjectItems] = createSignal<EditableProjectItem[]>([]);
+      const [, setSelectedExportItems] = createSignal<string[]>([]);
+      const [, setActiveItemId] = createSignal<string>();
+      const [timeline, setTimeline] = createSignal(
+        createTimelineHistory({ playheadMs: 0, inMs: 0, outMs: 0, segments: [], zoom: 1 }),
+      );
+      const [knownMedia, setMedia] = createSignal<components["schemas"]["Media"][]>([]);
+      const [, setRecent] = createSignal<{ id: string; label: string; lastOpened: number }[]>([]);
+      const [, setMuted] = createSignal(false);
+      const [, setExportMode] = createSignal<"merge" | "separate">("merge");
+      const [, setExportSelection] = createSignal<"segments" | "gaps">("segments");
+      const [, setStreamIndexes] = createSignal<number[]>([]);
+      const [, setCutStrategy] = createSignal(defaultSettings.cutStrategy);
+      const [, setExportContainer] = createSignal<"mkv" | "mp4" | "mov">("mkv");
+      const [, setDestinationId] = createSignal("download");
+      const [, setFilenameTemplate] = createSignal(defaultSettings.filenameTemplate);
+      let editorVersion = 0;
+      let editorContext = 0;
+      const controller = createProjectsController({
+        api,
+        queryClient: new QueryClient(),
+        selected,
+        projectId,
+        setProjectId,
+        projectName,
+        setProjectName,
+        revision,
+        setRevision,
+        dirty,
+        setDirty,
+        editorVersion: () => editorVersion,
+        contextKey: () => String(editorContext),
+        projectItems,
+        setProjectItems,
+        setSelectedExportItems,
+        setActiveItemId,
+        setSelected,
+        setTimeline,
+        setPreviewCenterMs: () => undefined,
+        setMedia,
+        setRecent,
+        settings: () => defaultSettings,
+        setMuted,
+        setExportMode,
+        setExportSelection,
+        setStreamIndexes,
+        setCutStrategy,
+        setExportContainer,
+        setDestinationId,
+        setFilenameTemplate,
+        editableItems: projectItems,
+        clearDetectionContext: () => undefined,
+        setDiagnostics: () => undefined,
+        setStatus: () => "",
+      });
 
-    const loading = controller.loadProject("p_loaded");
-    editorVersion++;
-    setProjectName("Unsaved edit");
-    resolveProject(
-      Response.json({
-        id: "p_loaded",
-        revision: 1,
-        updatedAt: "2026-01-01T00:00:00Z",
-        schemaVersion: 2,
-        name: "Loaded project",
-        items: [
-          {
-            id: "i_loaded",
-            mediaId: media.id,
-            segments: [],
-            editorState: { playheadMs: 0, zoom: 1, muted: false },
-            exportOptions: {
-              mode: "merge",
-              selection: "segments",
-              cutStrategy: "stream_copy_preferred",
-              container: "mkv",
+      const loading = controller.loadProject("p_loadedproject");
+      if (change === "an edit") {
+        editorVersion++;
+        setProjectName("Unsaved edit");
+      } else {
+        editorContext++;
+        setSelected({ ...media, id: "m_" + "b".repeat(43), name: "new.mp4" });
+      }
+      resolveProject(
+        Response.json({
+          id: "p_loadedproject",
+          revision: 1,
+          updatedAt: "2026-01-01T00:00:00Z",
+          schemaVersion: 2,
+          name: "Loaded project",
+          items: [
+            {
+              id: "i_loadedproject",
+              mediaId: media.id,
+              segments: [],
+              editorState: { playheadMs: 0, zoom: 1, muted: false },
+              exportOptions: {
+                mode: "merge",
+                selection: "segments",
+                cutStrategy: "stream_copy_preferred",
+                container: "mkv",
+              },
             },
-          },
-        ],
-      }),
-    );
-    await loading;
+          ],
+        }),
+      );
+      await loading;
 
-    expect(projectId()).toBe("p_current");
-    expect(projectName()).toBe("Unsaved edit");
-    expect(knownMedia()).toEqual([]);
-    expect(timeline().present.segments).toEqual([]);
-    controller.dispose();
-  });
+      expect(projectId()).toBe("p_currentproject");
+      expect(projectName()).toBe(change === "an edit" ? "Unsaved edit" : "Editing");
+      if (change === "a media switch") expect(selected()?.id).toBe("m_" + "b".repeat(43));
+      expect(knownMedia()).toEqual([]);
+      expect(timeline().present.segments).toEqual([]);
+      controller.dispose();
+    },
+  );
 
   it("keeps conflict choices after a failed remote reload", async () => {
     Object.defineProperty(globalThis, "localStorage", {
@@ -239,6 +250,7 @@ describe("projects controller", () => {
       dirty,
       setDirty,
       editorVersion: () => 1,
+      contextKey: () => `${projectId()}::${selected()?.id ?? ""}`,
       projectItems,
       setProjectItems,
       setSelectedExportItems,
@@ -354,6 +366,7 @@ describe("projects controller", () => {
       dirty,
       setDirty,
       editorVersion: () => editorVersion,
+      contextKey: () => `${projectId()}::${selected()?.id ?? ""}`,
       projectItems,
       setProjectItems,
       setSelectedExportItems,

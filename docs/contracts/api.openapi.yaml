@@ -67,6 +67,7 @@ paths:
   /media:
     get:
       summary: List indexed media
+      description: Rejects malformed percent encoding, unknown parameters, and duplicate query keys with 422 invalid_query.
       operationId: listMedia
       parameters:
         - name: limit
@@ -90,6 +91,8 @@ paths:
         "401":
           $ref: "#/components/responses/Error"
         "403":
+          $ref: "#/components/responses/Error"
+        "422":
           $ref: "#/components/responses/Error"
         "500":
           $ref: "#/components/responses/Error"
@@ -189,11 +192,13 @@ paths:
           minimum: 0
       - name: beforeMs
         in: query
+        description: Non-negative milliseconds before the center; combined with afterMs, the span must be positive and within the configured preview maximum.
         schema:
           type: integer
           minimum: 0
       - name: afterMs
         in: query
+        description: Non-negative milliseconds after the center; combined with beforeMs, the span must be positive and within the configured preview maximum.
         schema:
           type: integer
           minimum: 0
@@ -211,6 +216,7 @@ paths:
         404 not_found. Only process-capacity rejection returns 429 preview_busy
         with Retry-After: 1. Deadline expiry returns 504 preview_timeout; unexpected
         startup/cache failures return 500 internal_error.
+        Empty or overflowing preview spans return 422 invalid_preview.
       responses:
         "200":
           description: Fragmented MP4 preview

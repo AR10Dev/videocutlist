@@ -13,7 +13,6 @@ import (
 	"slices"
 	"strings"
 	"sync"
-	"time"
 
 	"videocutlist/internal/projects/model"
 )
@@ -25,8 +24,7 @@ var (
 
 // Validator is normally backed by FFprobe. It is deliberately supplied by the
 // preview pipeline so cache ownership does not duplicate subprocess code.
-type Validator = func(context.Context, string) error
-type ValidatorFunc = Validator
+type Validator = func(context.Context, *os.File) error
 
 type Store struct {
 	root string
@@ -82,54 +80,91 @@ func (s *Store) Open(ctx context.Context, key string, validator Validator) (io.R
 	if validator == nil {
 		return nil, errors.New("cache validator is required")
 	}
-	path, err := s.path(key)
+	rel, err := RelativePath(key)
 	if err != nil {
 		return nil, err
 	}
+	path := filepath.Join(s.root, rel)
 	pathMu := s.pathMutex(path)
 	pathMu.Lock()
 	defer pathMu.Unlock()
-	info, err := os.Stat(path)
-	if errors.Is(err, fs.ErrNotExist) || err == nil && (!info.Mode().IsRegular() || info.Size() == 0) {
-		if err == nil {
-			_ = os.Remove(path)
-		}
+	info, err := os.Lstat(path)
+	if errors.Is(err, fs.ErrNotExist) {
 		return nil, ErrMiss
 	}
 	if err != nil {
 		return nil, err
 	}
-	if err := validator(ctx, path); err != nil {
+	if !info.Mode().IsRegular() {
+		return nil, ErrMiss
+	}
+	if info.Size() == 0 {
+		RemoveFileIfOwned(path, info)
+		return nil, ErrMiss
+	}
+	f, err := os.OpenInRoot(s.root, rel)
+	if err != nil {
+		// An escaping symlink swapped into place is a miss, not a preview error.
+		after, statErr := os.Lstat(path)
+		if errors.Is(err, fs.ErrNotExist) || errors.Is(statErr, fs.ErrNotExist) ||
+			statErr == nil && (!after.Mode().IsRegular() || !os.SameFile(info, after)) {
+			return nil, ErrMiss
+		}
+		return nil, err
+	}
+	opened, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	if !opened.Mode().IsRegular() || opened.Size() == 0 || !os.SameFile(info, opened) {
+		_ = f.Close()
+		return nil, ErrMiss
+	}
+	if err := validator(ctx, f); err != nil {
+		_ = f.Close()
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return nil, err
 		}
-		_ = os.Remove(path)
+		// Remove only the rejected inode; a validator may have replaced the path.
+		RemoveFileIfOwned(path, opened)
 		return nil, ErrMiss
 	}
 	if err := ctx.Err(); err != nil {
+		_ = f.Close()
 		return nil, err
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	info, err = os.Stat(path)
-	if errors.Is(err, fs.ErrNotExist) || err == nil && (!info.Mode().IsRegular() || info.Size() == 0) {
-		if err == nil {
-			_ = os.Remove(path)
-		}
+	current, err := os.Lstat(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		_ = f.Close()
 		return nil, ErrMiss
 	}
 	if err != nil {
-		return nil, err
-	}
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	if err := os.Chtimes(path, time.Now(), time.Now()); err != nil {
 		_ = f.Close()
-		return nil, fmt.Errorf("update cache access: %w", err)
+		return nil, err
 	}
+	if !current.Mode().IsRegular() || current.Size() == 0 || !os.SameFile(info, current) {
+		_ = f.Close()
+		return nil, ErrMiss
+	}
+	opened, err = f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	if !opened.Mode().IsRegular() || opened.Size() == 0 || !os.SameFile(info, opened) {
+		_ = f.Close()
+		return nil, ErrMiss
+	}
+	if _, err := f.Seek(0, io.SeekStart); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	// Recency is best-effort metadata; a read-only cache can still serve a hit.
+	_ = TouchFile(f)
 	s.open[path]++
 	return &leasedFile{File: f, done: func() { s.release(path) }}, nil
 }
@@ -211,41 +246,49 @@ func (p *Partial) Discard() error {
 	return err
 }
 
-// Commit validates before its atomic rename. A full cache never returns a
-// success that exceeds its configured bound; the just-created entry is removed.
+// Commit publishes only the validated partial inode, without replacing another
+// writer's complete entry. Failed publication removes only files it still owns.
 func (p *Partial) Commit(ctx context.Context, validator Validator) error {
 	if validator == nil {
 		return errors.New("cache validator is required")
 	}
 	var result error
 	p.once.Do(func() {
+		owner, err := p.file.Stat()
+		if err != nil {
+			result = err
+			_ = p.file.Close()
+			return
+		}
+		defer RemoveFileIfOwned(p.path, owner)
 		if err := p.file.Sync(); err != nil {
 			result = err
 			_ = p.file.Close()
-			_ = os.Remove(p.path)
+			return
+		}
+		if _, err := p.file.Seek(0, io.SeekStart); err != nil {
+			result = err
+			_ = p.file.Close()
+			return
+		}
+		if err := validator(ctx, p.file); err != nil {
+			result = fmt.Errorf("validate preview cache: %w", err)
+			_ = p.file.Close()
 			return
 		}
 		if err := p.file.Close(); err != nil {
 			result = err
-			_ = os.Remove(p.path)
-			return
-		}
-		if err := validator(ctx, p.path); err != nil {
-			result = fmt.Errorf("validate preview cache: %w", err)
-			_ = os.Remove(p.path)
 			return
 		}
 		// Validators may not observe cancellation (for example, a completed
 		// ffprobe); never publish after the request has been cancelled.
 		if err := ctx.Err(); err != nil {
 			result = err
-			_ = os.Remove(p.path)
 			return
 		}
 		final, err := p.store.path(p.key)
 		if err != nil {
 			result = err
-			_ = os.Remove(p.path)
 			return
 		}
 		pathMu := p.store.pathMutex(final)
@@ -257,40 +300,33 @@ func (p *Partial) Commit(ctx context.Context, validator Validator) error {
 		// during lock acquisition must not turn into a cache hit.
 		if err := ctx.Err(); err != nil {
 			result = err
-			_ = os.Remove(p.path)
 			return
 		}
-		// Never rename over another writer's complete entry. Linking first
-		// makes publication atomic without allowing a late writer to replace it.
-		if _, err := os.Stat(final); err == nil {
-			_ = os.Remove(p.path)
-			return
-		} else if !errors.Is(err, fs.ErrNotExist) {
-			result = err
-			_ = os.Remove(p.path)
+		current, err := os.Lstat(p.path)
+		if err != nil || !current.Mode().IsRegular() || !os.SameFile(owner, current) {
+			result = errors.New("preview partial changed before publication")
 			return
 		}
-		if err := os.Link(p.path, final); err != nil {
-			if errors.Is(err, fs.ErrExist) {
-				_ = os.Remove(p.path)
-				return
-			}
-			result = err
-			_ = os.Remove(p.path)
-			return
-		}
-		_ = os.Remove(p.path)
-		if info, err := os.Stat(final); err != nil || info.Size() > p.store.max {
-			_ = os.Remove(final)
-			if err != nil {
+		// Atomic rename publishes only after validation and preserves a winner.
+		if err := renameCachePartial(p.path, final); err != nil {
+			if !errors.Is(err, fs.ErrExist) {
 				result = err
-			} else {
-				result = ErrDiskLimit
 			}
+			return
+		}
+		published, err := os.Lstat(final)
+		if err != nil || !published.Mode().IsRegular() || !os.SameFile(owner, published) {
+			RemoveFileIfOwned(final, owner)
+			result = errors.New("preview partial changed during publication")
+			return
+		}
+		if published.Size() > p.store.max {
+			RemoveFileIfOwned(final, owner)
+			result = ErrDiskLimit
 			return
 		}
 		if err := p.store.evictLocked(); err != nil {
-			_ = os.Remove(final)
+			RemoveFileIfOwned(final, owner)
 			result = err
 		}
 	})
@@ -298,6 +334,15 @@ func (p *Partial) Commit(ctx context.Context, validator Validator) error {
 	delete(p.store.partial, p.path)
 	p.store.mu.Unlock()
 	return result
+}
+
+// RemoveFileIfOwned checks a cache entry's identity before best-effort removal.
+// Callers must serialize their own cache writes.
+func RemoveFileIfOwned(path string, owner fs.FileInfo) {
+	current, err := os.Lstat(path)
+	if err == nil && os.SameFile(owner, current) {
+		_ = os.Remove(path)
+	}
 }
 
 // CleanupPartials removes incomplete files left by a prior process. Active

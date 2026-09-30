@@ -16,6 +16,10 @@ client uses the current page origin. For a separately hosted client, configure
 `VIDEOCUTLIST_ALLOWED_ORIGINS` and its `window.VIDEOCUTLIST_CONFIG` as described
 in the [container deployment guide](containers.md).
 
+Health and readiness endpoints do not require authentication. Prometheus scrapers
+can use `/metrics`, but must supply the deployment bearer credential or pass
+through the trusted proxy unless the service uses loopback-only `none` mode.
+
 ## Upgrade and rollback
 
 Pull the desired published image, then recreate the container. Pin a release

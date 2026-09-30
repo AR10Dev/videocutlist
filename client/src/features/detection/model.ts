@@ -66,18 +66,19 @@ export function candidateSkipReason(
     candidate.projectRevision !== project.revision
   )
     return "stale";
-  if (!candidate.id || !validSources.has(candidate.source)) return "invalid";
-  if (candidate.source === "scene")
-    return candidatePointMs(candidate) === undefined ? "invalid" : "point";
-  const range = candidateRange(candidate);
   if (
-    !range ||
-    range.startMs < 0 ||
-    range.startMs >= range.endMs ||
+    !candidate.id ||
+    !validSources.has(candidate.source) ||
     !Number.isFinite(durationMs) ||
-    durationMs < 0 ||
-    range.endMs > durationMs
+    durationMs < 0
   )
+    return "invalid";
+  if (candidate.source === "scene") {
+    const point = candidatePointMs(candidate);
+    return point === undefined || point < 0 || point > durationMs ? "invalid" : "point";
+  }
+  const range = candidateRange(candidate);
+  if (!range || range.startMs < 0 || range.startMs >= range.endMs || range.endMs > durationMs)
     return "invalid";
   return undefined;
 }

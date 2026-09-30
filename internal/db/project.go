@@ -147,11 +147,6 @@ func (s *ProjectStore) SaveTx(ctx context.Context, tx *sql.Tx, id string, expect
 			} else if !errors.Is(existingErr, ErrProjectNotFound) {
 				return ProjectRecord{}, existingErr
 			}
-			if exists, existsErr := s.idExistsTx(tx, id); existsErr != nil {
-				return ProjectRecord{}, existsErr
-			} else if exists {
-				return ProjectRecord{}, ErrProjectNotFound
-			}
 			return ProjectRecord{}, fmt.Errorf("create project: %w", err)
 		}
 	} else {
@@ -183,15 +178,6 @@ func (s *ProjectStore) getTx(tx *sql.Tx, id string) (ProjectRecord, error) {
 		return ProjectRecord{}, ErrProjectNotFound
 	}
 	return record, err
-}
-
-func (s *ProjectStore) idExistsTx(tx *sql.Tx, id string) (bool, error) {
-	var one int
-	err := tx.QueryRow(`SELECT 1 FROM projects WHERE id = ?`, id).Scan(&one)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	return err == nil, err
 }
 
 type projectScanner interface{ Scan(...any) error }

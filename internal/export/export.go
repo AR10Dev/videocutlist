@@ -384,7 +384,7 @@ func (s Service) Run(ctx context.Context, source *os.File, document model.Docume
 					}
 					s.Artifacts.RegisterManifest(request.JobID, manifestPath)
 				}
-				err = prepared.publishFrom(workDirectory, filepath.Join(workDirName, segmentFile), segmentFile, name)
+				err = prepared.publishFrom(workDirectory, segmentFile, name)
 				if err == nil {
 					break
 				}
@@ -857,12 +857,6 @@ func ResolveRanges(segments []model.Segment, selection string, duration int64) [
 	return gaps
 }
 
-// selectedSegments remains for existing package callers; new consumers use
-// ResolveRanges to make the frozen export selection explicit.
-func selectedSegments(segments []model.Segment, selection string, duration int64) []model.Segment {
-	return ResolveRanges(segments, selection, duration)
-}
-
 func segmentStrategies(requested string, segments []model.Segment, keyframes []int64) []AppliedStrategy {
 	strategies := make([]AppliedStrategy, len(segments))
 	for i, segment := range segments {
@@ -982,10 +976,6 @@ func safeFailureMessage(err error) string {
 		return "output could not be created"
 	}
 	return b.String()
-}
-
-func publishNoReplace(source, destination string) error {
-	return os.Link(source, destination)
 }
 
 func copyOpenFileToOpen(source, destination *os.File) error {

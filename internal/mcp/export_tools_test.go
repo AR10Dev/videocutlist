@@ -91,6 +91,60 @@ func TestExportToolsKeepJobsOwnedAndDownloadsRevocable(t *testing.T) {
 	}
 }
 
+func TestExportToolsRejectMalformedArgumentsBeforeAccessingJobs(t *testing.T) {
+	service, _, _, _, _ := newProposalTestService(t, false)
+	tools := ExportTools(service, service.Scheduler, exportToolDownload{})
+	ctx := Context{Request: httptest.NewRequest("POST", "/mcp", nil)}
+	for _, test := range []struct {
+		name, args string
+	}{
+		{"propose_export", `{}`},
+		{"propose_export", `{"export":null}`},
+		{"start_export", `{"proposalId":null}`},
+		{"get_job", `{"jobId":null}`},
+		{"cancel_job", `{"jobId":null}`},
+		{"get_export_download", `{"jobId":"j_valid"}`},
+		{"get_export_download", `{"jobId":"j_valid","position":null}`},
+		{"get_export_download", `{"jobId":"j_valid","position":100}`},
+		{"get_export_download", `{"jobId":"j_valid","position":9223372036854775808}`},
+	} {
+		t.Run(test.name+"/"+test.args, func(t *testing.T) {
+			tool := toolNamed(t, tools, test.name)
+			if _, err := tool.Resource(ctx, []byte(test.args)); !errors.Is(err, ErrInvalidInput) || toolErrorCode(err) != "invalid_input" {
+				t.Fatalf("resource invalid arguments = %v, code=%q", err, toolErrorCode(err))
+			}
+			if _, err := tool.Call(ctx, []byte(test.args)); !errors.Is(err, ErrInvalidInput) || toolErrorCode(err) != "invalid_input" {
+				t.Fatalf("call invalid arguments = %v, code=%q", err, toolErrorCode(err))
+			}
+		})
+	}
+}
+
+type failingExportJobs struct{ err error }
+
+func (f failingExportJobs) Get(context.Context, string) (jobqueue.Job, error) {
+	return jobqueue.Job{}, f.err
+}
+func (f failingExportJobs) Cancel(context.Context, string) (jobqueue.Job, error) {
+	return jobqueue.Job{}, f.err
+}
+
+func TestExportJobLookupDoesNotClassifyStorageFailuresAsInvalidInput(t *testing.T) {
+	service, _, _, _, _ := newProposalTestService(t, false)
+	failure := errors.New("storage unavailable")
+	tool := toolNamed(t, ExportTools(service, failingExportJobs{err: failure}, exportToolDownload{}), "get_job")
+	ctx := Context{Request: httptest.NewRequest("POST", "/mcp", nil)}
+	for _, call := range []func(Context, []byte) error{
+		func(ctx Context, args []byte) error { _, err := tool.Resource(ctx, args); return err },
+		func(ctx Context, args []byte) error { _, err := tool.Call(ctx, args); return err },
+	} {
+		err := call(ctx, []byte(`{"jobId":"j_valid"}`))
+		if !errors.Is(err, failure) || toolErrorCode(err) != "internal_error" {
+			t.Fatalf("job storage failure = %v, code=%q", err, toolErrorCode(err))
+		}
+	}
+}
+
 type rejectedCancellationJobs struct{ *jobqueue.Scheduler }
 
 func (rejectedCancellationJobs) Cancel(context.Context, string) (jobqueue.Job, error) {

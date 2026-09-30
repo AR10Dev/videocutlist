@@ -35,7 +35,7 @@ func Normalize(centerMS, mediaDurationMS int64, cfg WindowConfig) (Window, error
 	if mediaDurationMS < 0 {
 		return Window{}, fmt.Errorf("media duration must be non-negative")
 	}
-	if cfg.BeforeMS < 0 || cfg.AfterMS < 0 || cfg.MaxMS < 1 || cfg.GridMS < 1 || cfg.BeforeMS+cfg.AfterMS > cfg.MaxMS {
+	if cfg.BeforeMS < 0 || cfg.AfterMS < 0 || cfg.MaxMS < 1 || cfg.GridMS < 1 || cfg.BeforeMS > cfg.MaxMS-cfg.AfterMS || cfg.BeforeMS == 0 && cfg.AfterMS == 0 {
 		return Window{}, fmt.Errorf("invalid preview window configuration")
 	}
 	if mediaDurationMS == 0 {
@@ -48,9 +48,6 @@ func Normalize(centerMS, mediaDurationMS int64, cfg WindowConfig) (Window, error
 		centerMS = mediaDurationMS
 	}
 	gridCenter := (centerMS / cfg.GridMS) * cfg.GridMS
-	if gridCenter > mediaDurationMS {
-		gridCenter = mediaDurationMS
-	}
 	duration := cfg.BeforeMS + cfg.AfterMS
 	if duration > mediaDurationMS {
 		duration = mediaDurationMS
@@ -59,7 +56,7 @@ func Normalize(centerMS, mediaDurationMS int64, cfg WindowConfig) (Window, error
 	if start < 0 {
 		start = 0
 	}
-	if end := start + duration; end > mediaDurationMS {
+	if start > mediaDurationMS-duration {
 		start = mediaDurationMS - duration
 	}
 	// The exact click is retained even when its cache bucket starts earlier.

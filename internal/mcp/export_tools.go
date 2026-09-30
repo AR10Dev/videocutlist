@@ -120,8 +120,8 @@ func proposalArguments(raw json.RawMessage) (exportProposalArguments, error) {
 	if err := decodeToolArguments(raw, &args); err != nil || !validMCPExport(args.Export) {
 		return exportProposalArguments{}, ErrInvalidInput
 	}
-	projectSource := args.ProjectID != "" && validSafeIdentifier(args.ProjectID) && args.ProjectRevision >= 1 && args.MediaID == "" && len(args.Ranges) == 0
-	mediaSource := args.ProjectID == "" && args.ProjectRevision == 0 && validSafeIdentifier(args.MediaID) && validRanges(args.Ranges) && args.Export.Selection != "gaps" && len(args.Export.ItemIDs) == 0
+	projectSource := args.ProjectID != "" && validProjectID(args.ProjectID) && args.ProjectRevision >= 1 && args.MediaID == "" && len(args.Ranges) == 0
+	mediaSource := args.ProjectID == "" && args.ProjectRevision == 0 && args.MediaID != "" && validMediaCursor(args.MediaID) && validRanges(args.Ranges) && args.Export.Selection != "gaps" && len(args.Export.ItemIDs) == 0
 	if projectSource == mediaSource {
 		return exportProposalArguments{}, ErrInvalidInput
 	}
@@ -171,12 +171,12 @@ func proposalIDArgument(raw json.RawMessage) (string, error) {
 func downloadPosition(raw json.RawMessage) (int, error) {
 	var args struct {
 		JobID    string `json:"jobId"`
-		Position int    `json:"position"`
+		Position *int   `json:"position"`
 	}
-	if err := decodeToolArguments(raw, &args); err != nil || !strings.HasPrefix(args.JobID, "j_") || !validSafeIdentifier(args.JobID) || args.Position < 0 || args.Position > 99 {
+	if err := decodeToolArguments(raw, &args); err != nil || !strings.HasPrefix(args.JobID, "j_") || !validSafeIdentifier(args.JobID) || args.Position == nil || *args.Position < 0 || *args.Position > 99 {
 		return 0, ErrInvalidInput
 	}
-	return args.Position, nil
+	return *args.Position, nil
 }
 
 func ownedJobResource(proposals *ProposalService, jobs interface {
@@ -228,7 +228,13 @@ func ownedMCPJob(ctx context.Context, jobs interface {
 		return jobqueue.Job{}, ErrInvalidInput
 	}
 	job, err := jobs.Get(ctx, args.JobID)
-	if err != nil || job.CredentialID != credentialID || job.ProjectID == "" {
+	if errors.Is(err, jobqueue.ErrJobNotFound) {
+		return jobqueue.Job{}, ErrResourceDenied
+	}
+	if err != nil {
+		return jobqueue.Job{}, err
+	}
+	if job.CredentialID != credentialID || job.ProjectID == "" {
 		return jobqueue.Job{}, ErrResourceDenied
 	}
 	if job.Kind != jobqueue.JobExport && job.Kind != jobqueue.JobDetect || download && job.Kind != jobqueue.JobExport {

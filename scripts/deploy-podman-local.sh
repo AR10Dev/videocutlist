@@ -9,10 +9,12 @@ command -v podman >/dev/null || {
   echo "podman is unavailable; install or enable Podman before running this script." >&2
   exit 1
 }
+umask 077
 
 mkdir -p "$app_dir" "$media_dir" "$app_dir/data" "$app_dir/cache" "$app_dir/exports"
 cp -n "$repo/deployments/containers/compose.yaml" "$app_dir/compose.yaml"
 cp -n "$repo/deployments/containers/videocutlist.env.example" "$app_dir/videocutlist.env"
+chmod 600 -- "$app_dir/videocutlist.env"
 if [ "$(podman info --format '{{.Host.Security.Rootless}}')" = "true" ]; then
   sudo chown -R "$(id -u):$(id -g)" "$app_dir/data" "$app_dir/cache" "$app_dir/exports"
   podman unshare chown -R 10001:10001 "$app_dir/data" "$app_dir/cache" "$app_dir/exports"

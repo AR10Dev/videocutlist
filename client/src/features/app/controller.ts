@@ -425,7 +425,6 @@ export function createWorkspaceController() {
     segments: () => present().segments,
     saveProject: () => projectsFeature.saveProject(),
     updateSegments: (segments) => updateTimeline({ segments }),
-    markDirty,
   });
   const {
     detectionJob,
@@ -474,6 +473,7 @@ export function createWorkspaceController() {
     setFilenameTemplate,
     editableItems,
     editorVersion: () => editorVersion,
+    contextKey: editorContext,
     resetEditorContext: advanceEditorContext,
     clearDetectionContext,
     setDiagnostics,

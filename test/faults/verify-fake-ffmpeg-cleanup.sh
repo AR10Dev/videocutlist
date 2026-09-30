@@ -4,7 +4,14 @@ set -euo pipefail
 
 root=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 pid_file=$(mktemp)
-trap 'rm -f "$pid_file"' EXIT
+cleanup() {
+  if test -n "${parent:-}"; then
+    kill -TERM "$parent" 2>/dev/null || true
+    wait "$parent" 2>/dev/null || true
+  fi
+  rm -f "$pid_file"
+}
+trap cleanup EXIT
 VIDEOCUTLIST_TEST_PID_FILE=$pid_file "$root/test/harness/fake-ffmpeg.sh" >/dev/null 2>&1 &
 parent=$!
 for _ in $(seq 1 50); do

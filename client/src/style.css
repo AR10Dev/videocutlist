@@ -113,87 +113,9 @@
     min-width: 0;
     min-height: 0;
   }
-  .workspace-action-row {
-    grid-area: header;
-    min-height: 52px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-    padding: 6px 10px;
-    border: 1px solid var(--panel-border);
-    border-radius: 8px;
-    background: var(--surface-raised);
-  }
-  .workspace-actions-start,
-  .workspace-actions-center,
-  .workspace-actions-end {
-    display: flex;
-    align-items: center;
-    min-width: 0;
-    gap: 6px;
-  }
-  .workspace-actions-start {
-    flex: 1 1 auto;
-  }
-  .workspace-actions-center {
-    flex: 0 0 auto;
-  }
-  .workspace-actions-end {
-    flex: 0 0 auto;
-    justify-content: flex-end;
-  }
-  .workspace-menu {
-    flex: none;
-    margin: 0;
-    border: 0;
-    padding: 0;
-  }
-  .workspace-menu > summary {
-    list-style: none;
-  }
-  .workspace-menu > summary::-webkit-details-marker {
-    display: none;
-  }
-  .workspace-menu .dropdown-content {
-    max-height: min(70dvh, 560px);
-    overflow-y: auto;
-  }
   .panel-menu-title {
     color: var(--text-muted);
     font-size: 0.7rem;
-  }
-  .workspace-brand {
-    flex: none;
-    margin: 0;
-    font-size: 0.9rem;
-    font-weight: 700;
-  }
-  .project-status {
-    display: grid;
-    min-width: 0;
-    color: var(--text-muted);
-    font-size: 0.75rem;
-    line-height: 1.4;
-  }
-  .project-status strong {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .export-count,
-  .job-count {
-    min-width: 1.35rem;
-    padding-inline: 4px;
-    color: var(--color-primary-content);
-    background: var(--color-primary);
-    border-radius: 999px;
-    font-size: 0.7rem;
-    line-height: 1.35;
-    text-align: center;
-  }
-  .job-count:empty {
-    display: none;
   }
   .left-sidebar,
   .task-panel {
@@ -354,7 +276,6 @@
   .media-panel .panel-heading {
     justify-content: flex-end;
   }
-  .current-video,
   .change-video {
     display: none;
   }
@@ -805,28 +726,6 @@
   .cut-handle-end {
     right: 0;
   }
-  .timeline-toolbar {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 6px;
-    padding: 8px 0;
-  }
-  .timeline-toolbar label {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-  }
-  .timeline-toolbar span {
-    min-width: 3rem;
-    text-align: center;
-  }
-  #playhead {
-    display: block;
-    width: 100%;
-    accent-color: var(--color-primary);
-    margin: 8px 0 14px;
-  }
 
   .task-tabs {
     display: grid;
@@ -885,8 +784,7 @@
     background: color-mix(in srgb, var(--surface-raised) 94%, transparent);
     border-top: 1px solid var(--panel-border);
   }
-  .export-muted-note,
-  .queue-description {
+  .export-muted-note {
     color: var(--text-muted);
     font-size: 0.75rem;
   }
@@ -923,9 +821,6 @@
   }
   .queue-heading-row {
     align-items: center;
-  }
-  .queue-heading-row .queue-description {
-    margin: 3px 0 0;
   }
   .project-panel p,
   .export-panel p,
@@ -1004,9 +899,6 @@
   .export-scope-modes {
     display: grid;
     gap: 8px;
-  }
-  .export-state {
-    margin: 0;
   }
   .export-actions {
     padding-block: 8px;
@@ -1170,8 +1062,6 @@
     flex-wrap: wrap;
     gap: 4px;
   }
-  .segment-range,
-  .segment-duration,
   .timeline-timecode {
     font-variant-numeric: tabular-nums;
   }
@@ -1460,28 +1350,24 @@
   }
   .detection-section-label,
   .export-section-heading,
-  .export-plan-heading,
   .detection-review-heading {
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
     gap: 8px;
   }
-  .detection-section-label > svg,
-  .export-plan-heading > svg {
+  .detection-section-label > svg {
     flex: none;
     color: var(--color-primary);
   }
   .detection-section-label h3,
   .export-section-heading h3,
-  .export-plan-heading h3,
   .detection-review-heading h3 {
     margin: 0;
     font-size: 0.88rem;
   }
   .detection-section-label p,
   .export-section-heading p,
-  .export-plan-heading p,
   .detection-review-heading p {
     margin: 3px 0 0;
     color: var(--text-muted);
@@ -1732,9 +1618,6 @@
   .detection-candidate-actions .btn {
     flex: 1 1 auto;
   }
-  .detection-status:empty {
-    display: none;
-  }
   .export-plan,
   .export-preflight,
   .export-activity,
@@ -1745,10 +1628,6 @@
     border: 0;
     border-bottom: 1px solid var(--panel-border);
     background: transparent;
-  }
-  .export-plan.hidden,
-  .export-items.hidden {
-    display: none;
   }
   .export-plan dl {
     margin: 0;
@@ -2083,9 +1962,6 @@
   }
   .queue-heading-row h2 {
     margin: 0;
-  }
-  .queue-heading-row .section-kicker {
-    margin-bottom: 1px;
   }
   .queue-batch-list,
   .queue-job-list {

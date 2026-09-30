@@ -13,7 +13,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"testing"
+	"time"
 
 	store "videocutlist/internal/db"
 	"videocutlist/internal/library/media/index"
@@ -227,13 +229,114 @@ func TestThumbnailsRejectsInvalidSuccessfulOutput(t *testing.T) {
 	}
 }
 
+func TestCachedRejectsSymlinkOutsideAssetCache(t *testing.T) {
+	dir := t.TempDir()
+	cacheDir := filepath.Join(dir, "cache", "assets")
+	if err := os.MkdirAll(cacheDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	external := filepath.Join(dir, "external.png")
+	if err := os.WriteFile(external, thumbnailPNG(t), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(external, filepath.Join(cacheDir, "key.png")); err != nil {
+		t.Fatal(err)
+	}
+	s := &Service{CacheDir: filepath.Dir(cacheDir), MaxBytes: 1 << 20}
+	if _, hit, err := s.cached("key", ".png", validatePNG); err != nil || hit {
+		t.Fatalf("symlinked cache entry hit=%v error=%v", hit, err)
+	}
+	if _, err := os.Stat(external); err != nil {
+		t.Fatalf("outside cache target was removed: %v", err)
+	}
+}
+
+func TestCachedPreservesReplacementDuringValidation(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		symlink  bool
+		rejected bool
+	}{
+		{"accepted regular", false, false},
+		{"accepted symlink", true, false},
+		{"rejected regular", false, true},
+		{"rejected symlink", true, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			s := &Service{CacheDir: t.TempDir(), MaxBytes: 1 << 20}
+			valid := thumbnailPNG(t)
+			if err := s.publish(t.Context(), "key", ".png", valid); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(s.CacheDir, "assets", "key.png")
+			retained := path + ".retained"
+			replacement := filepath.Join(t.TempDir(), "replacement.png")
+			if err := os.WriteFile(replacement, []byte("unvalidated replacement"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			old := time.Unix(1, 0)
+			for _, name := range []string{path, replacement} {
+				if err := os.Chtimes(name, old, old); err != nil {
+					t.Fatal(err)
+				}
+			}
+			body, hit, err := s.cached("key", ".png", func(body []byte) error {
+				if err := validatePNG(body); err != nil {
+					return err
+				}
+				if err := os.Rename(path, retained); err != nil {
+					t.Fatal(err)
+				}
+				if test.symlink {
+					if err := os.Symlink(replacement, path); err != nil {
+						t.Fatal(err)
+					}
+				} else if err := os.Rename(replacement, path); err != nil {
+					t.Fatal(err)
+				}
+				if test.rejected {
+					return errors.New("invalid cache asset")
+				}
+				return nil
+			})
+			if err != nil || hit == test.rejected || hit && !bytes.Equal(body, valid) {
+				t.Fatalf("cache hit=%v rejected=%v error=%v content matches=%v", hit, test.rejected, err, bytes.Equal(body, valid))
+			}
+			if content, err := os.ReadFile(path); err != nil || string(content) != "unvalidated replacement" {
+				t.Fatalf("replacement changed or removed: %q, %v", content, err)
+			}
+			target := replacement
+			if !test.symlink {
+				target = path
+			}
+			info, err := os.Stat(target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !info.ModTime().Equal(old) {
+				t.Fatalf("replacement timestamp changed: %v, want %v", info.ModTime(), old)
+			}
+			if !test.rejected && (runtime.GOOS == "linux" || runtime.GOOS == "darwin" || runtime.GOOS == "windows") {
+				validated, err := os.Stat(retained)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !validated.ModTime().After(old) {
+					t.Fatalf("validated file recency was not updated: %v", validated.ModTime())
+				}
+			}
+		})
+	}
+}
+
 func TestThumbnailsRegeneratesCorruptCacheAndHonorsLiveLimit(t *testing.T) {
 	valid := thumbnailPNG(t)
 	s, spec := assetFixture(t, valid)
-	key, err := s.key(t.Context(), spec, "thumb")
+	item, err := s.Media.Get(t.Context(), spec.MediaID)
 	if err != nil {
 		t.Fatal(err)
 	}
+	key := assetKey(item.Media, spec, "thumb")
 	if err := s.publish(t.Context(), key, ".png", []byte("corrupt")); err != nil {
 		t.Fatal(err)
 	}
@@ -311,10 +414,11 @@ func TestWaveformRegeneratesCacheThatDoesNotMatchRequest(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			key, err := s.key(t.Context(), spec, "wave-v2")
+			item, err := s.Media.Get(t.Context(), spec.MediaID)
 			if err != nil {
 				t.Fatal(err)
 			}
+			key := assetKey(item.Media, spec, "wave-v2")
 			if err := s.publish(t.Context(), key, ".json", document); err != nil {
 				t.Fatal(err)
 			}
@@ -349,10 +453,11 @@ func TestThumbnailsRejectsPNGCacheOverFixedCompressedSize(t *testing.T) {
 	}
 	s, spec := assetFixture(t, thumbnailPNG(t))
 	s.MaxBytes = 32 << 20
-	key, err := s.key(t.Context(), spec, "thumb")
+	item, err := s.Media.Get(t.Context(), spec.MediaID)
 	if err != nil {
 		t.Fatal(err)
 	}
+	key := assetKey(item.Media, spec, "thumb")
 	if err := s.publish(t.Context(), key, ".png", data.Bytes()); err != nil {
 		t.Fatal(err)
 	}

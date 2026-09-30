@@ -32,12 +32,6 @@ export const formatBytes = (bytes: number) => {
   return `${value.toFixed(value >= 100 ? 0 : value >= 10 ? 1 : 2)} ${unit}`;
 };
 
-export const formatJobDate = (value?: string) => {
-  if (!value) return "—";
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? value : date.toLocaleString();
-};
-
 export const strategyLabel = (value?: string) => {
   switch (value) {
     case "stream_copy_preferred":

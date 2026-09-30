@@ -62,6 +62,35 @@ func TestJobUseCaseMapsSafeScanResults(t *testing.T) {
 	}
 }
 
+func TestJobUseCasePreservesDetectionLifecycle(t *testing.T) {
+	created := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	updated := created.Add(time.Second)
+	for _, test := range []struct {
+		state    jobqueue.JobState
+		progress float64
+	}{
+		{jobqueue.JobQueued, 0},
+		{jobqueue.JobRunning, .5},
+		{jobqueue.JobSucceeded, 1},
+	} {
+		t.Run(string(test.state), func(t *testing.T) {
+			record := jobqueue.Job{
+				ID: "j_detection1234", Kind: jobqueue.JobDetect, State: test.state,
+				ProjectID: "p_project", ProjectItemID: "i_item", BatchID: "b_detection1234",
+				RequestJSON: `{"mediaId":"m_media","projectRevision":7,"kind":"scene"}`,
+				CreatedAt:   created, UpdatedAt: updated,
+			}
+			got, err := (JobUseCase{Jobs: unifiedJobsStub{job: record}}).Get(t.Context(), record.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Progress != test.progress || !got.CreatedAt.Equal(created) || !got.UpdatedAt.Equal(updated) || got.ProjectID != record.ProjectID || got.ProjectRevision != 7 {
+				t.Fatalf("detection %s lifecycle = %#v", test.state, got)
+			}
+		})
+	}
+}
+
 func TestMediaBrowseForwardsToCatalog(t *testing.T) {
 	want := FolderPage{Folders: []FolderNode{{ID: "f_opaque", Label: "clips"}}}
 	useCase := &MediaUseCase{Catalog: &catalogStub{browse: want}, Configured: true}

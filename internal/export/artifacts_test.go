@@ -489,6 +489,32 @@ func TestArtifactStoreRemoveRetainsManifestAfterCleanupFailure(t *testing.T) {
 	}
 }
 
+func TestArtifactStoreCleanupPreservesReplacedOwnedOutput(t *testing.T) {
+	dir := t.TempDir()
+	output := filepath.Join(dir, "published.mkv")
+	if err := os.WriteFile(output, []byte("original"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	expiry := time.Now().Add(-time.Minute)
+	manifest, err := WriteManifestWithOwners(dir, "j_replaced_output", KindDownload, []string{"published.mkv"}, []string{output}, expiry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	artifacts := NewArtifactStore()
+	artifacts.Put("j_replaced_output", []Artifact{{Path: output, Name: "published.mkv", Kind: KindDownload, Expires: expiry}})
+	artifacts.RegisterManifest("j_replaced_output", manifest)
+	if err := os.Remove(output); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(output, []byte("not owned"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	artifacts.Cleanup(time.Now())
+	if data, err := os.ReadFile(output); err != nil || string(data) != "not owned" {
+		t.Fatalf("cleanup removed replacement: %q, %v", data, err)
+	}
+}
+
 func TestArtifactStoreJobIsolationAndExpiry(t *testing.T) {
 	dir := t.TempDir()
 	first := filepath.Join(dir, "one.mkv")

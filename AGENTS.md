@@ -125,12 +125,35 @@ interaction and reactivity. Tailwind CSS and daisyUI own presentation.
 
 ### Issue tracker
 
-Issues are local Markdown files under `.scratch/`. See `docs/agents/issue-tracker.md`.
+Issues and specs are local Markdown files under `.scratch/<feature-slug>/`:
+
+- Store the specification in `spec.md` and tickets in `issues/<NN>-<slug>.md`.
+  Number tickets in dependency order, starting at `01`.
+- Read the referenced file when fetching an issue; create its directory when publishing.
+- Give each ticket a `# <NN>: <Title>` heading, a `What to build` behavioral outcome,
+  `Blocked by` ticket numbers or `None`, `Category` (`bug` or `enhancement`), and
+  `Status`, followed by testable acceptance checkboxes.
+- Describe stable behavior and contracts rather than file paths or line numbers.
+  Append discussion and completion evidence under `## Comments`.
 
 ### Triage labels
 
-Triage uses the five canonical label strings. See `docs/agents/triage-labels.md`.
+Use these exact local statuses when skills refer to canonical triage roles:
+
+- `needs-triage`: awaiting maintainer evaluation.
+- `needs-info`: awaiting more information.
+- `ready-for-agent`: fully specified and ready for an agent.
+- `ready-for-human`: requires human implementation.
+- `wontfix`: will not be actioned; retained completed tickets also use this status
+  and record completion evidence in comments.
 
 ### Domain docs
 
-Domain documentation uses a single-context layout. See `docs/agents/domain.md`.
+Domain documentation uses a single-context layout:
+
+- Before exploring, read root `CONTEXT.md` (glossary and shared model) and relevant
+  ADRs under `docs/adr/` when present; proceed silently when absent.
+- Create these documents lazily through domain modeling when terminology or
+  decisions are resolved. Use glossary terms, avoid rejected synonyms, and
+  reconsider or flag missing concepts for domain modeling.
+- Explicitly identify output that contradicts an existing ADR.

@@ -89,14 +89,8 @@ func NewJobsStore(db *sql.DB) (*JobsStore, error) {
 }
 
 func (s *JobsStore) Create(ctx context.Context, job Job) (Job, error) {
-	if !jobIDPattern.MatchString(job.ID) || !batchIDPattern.MatchString(job.BatchID) || job.RequestJSON == "" || !validJobKind(job.Kind) {
-		return Job{}, errors.New("valid job ID, batch ID, kind, and request are required")
-	}
-	if job.Kind != JobScan && (job.ProjectID == "" || job.ProjectItemID == "") {
-		return Job{}, errors.New("project job requires project and item")
-	}
-	if job.Kind == JobScan && (job.ProjectID != "" || job.ProjectItemID != "") {
-		return Job{}, errors.New("library scan cannot reference a project item")
+	if err := validateNewJob(job); err != nil {
+		return Job{}, err
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err := s.db.ExecContext(ctx, `INSERT INTO jobs (id,batch_id,kind,project_id,project_item_id,proposal_id,credential_id,state,request_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`, job.ID, job.BatchID, job.Kind, nullString(job.ProjectID), nullString(job.ProjectItemID), nullString(job.ProposalID), nullString(job.CredentialID), JobQueued, job.RequestJSON, now, now)
@@ -158,7 +152,7 @@ func (s *JobsStore) transition(ctx context.Context, id string, from, to JobState
 // Batch returns derived state and progress; it stores neither separately.
 func (s *JobsStore) Batch(ctx context.Context, batchID string) (JobState, float64, error) {
 	var total, terminal, running, failed, cancelled int
-	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*), SUM(state IN ('succeeded','failed','cancelled')), SUM(state='running'), SUM(state='failed'), SUM(state='cancelled') FROM jobs WHERE batch_id=?`, batchID).Scan(&total, &terminal, &running, &failed, &cancelled)
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(state IN ('succeeded','failed','cancelled')),0), COALESCE(SUM(state='running'),0), COALESCE(SUM(state='failed'),0), COALESCE(SUM(state='cancelled'),0) FROM jobs WHERE batch_id=?`, batchID).Scan(&total, &terminal, &running, &failed, &cancelled)
 	if err != nil {
 		return "", 0, err
 	}

@@ -1,9 +1,9 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"strings"
 	"unicode"
@@ -71,24 +71,24 @@ func MediaTools(media MediaReader) []Tool {
 }
 
 func listMedia(ctx Context, media MediaReader, raw json.RawMessage) (ToolResult, error) {
-	var args struct {
-		Cursor string `json:"cursor"`
-		Limit  int    `json:"limit"`
-		Query  string `json:"query"`
+	args := struct {
+		Cursor *string `json:"cursor"`
+		Limit  *int    `json:"limit"`
+		Query  *string `json:"query"`
+	}{Cursor: new(""), Limit: new(mediaPageDefault), Query: new("")}
+	// Defaults survive omitted fields; explicit null clears the pointers.
+	if err := decodeToolArguments(raw, &args); err != nil || args.Cursor == nil || args.Limit == nil || args.Query == nil {
+		return ToolResult{}, ErrInvalidInput
 	}
-	if err := decodeToolArguments(raw, &args); err != nil || !validMediaCursor(args.Cursor) || !validMediaQuery(args.Query) {
-		return ToolResult{}, errors.New("invalid media list arguments")
-	}
-	if args.Limit == 0 {
-		args.Limit = mediaPageDefault
-	}
-	if args.Limit < 1 || args.Limit > mediaPageLimit {
-		return ToolResult{}, errors.New("invalid media list limit")
+	limit := *args.Limit
+	if !validMediaCursor(*args.Cursor) || !validMediaQuery(*args.Query) || limit < 1 || limit > mediaPageLimit {
+		return ToolResult{}, ErrInvalidInput
 	}
 
-	items := make([]map[string]any, 0, args.Limit)
-	cursor := args.Cursor
-	for scanned := 0; scanned < mediaScanLimit && len(items) < args.Limit; {
+	items := make([]map[string]any, 0, limit)
+	cursor := *args.Cursor
+	query := strings.ToLower(*args.Query)
+	for scanned := 0; scanned < mediaScanLimit && len(items) < limit; {
 		batch := min(mediaPageLimit, mediaScanLimit-scanned)
 		page, err := media.List(ctx.Request.Context(), cursor, batch)
 		if err != nil {
@@ -98,15 +98,15 @@ func listMedia(ctx Context, media MediaReader, raw json.RawMessage) (ToolResult,
 		for position, item := range page.Items {
 			scanned++
 			cursor = item.ID
-			if ctx.Credential.AllowsMedia(item.ID, item.RootID) && strings.Contains(strings.ToLower(item.Name), strings.ToLower(args.Query)) {
+			if ctx.Credential.AllowsMedia(item.ID, item.RootID) && strings.Contains(strings.ToLower(item.Name), query) {
 				items = append(items, safeMedia(item))
-				if len(items) == args.Limit {
+				if len(items) == limit {
 					pageComplete = position == len(page.Items)-1
 					break
 				}
 			}
 		}
-		if len(items) == args.Limit {
+		if len(items) == limit {
 			if pageComplete {
 				if page.NextCursor == nil {
 					cursor = ""
@@ -149,16 +149,20 @@ func mediaIDArgument(raw json.RawMessage) (string, error) {
 		ID string `json:"id"`
 	}
 	if err := decodeToolArguments(raw, &args); err != nil || args.ID == "" || !validMediaCursor(args.ID) {
-		return "", errors.New("invalid media ID")
+		return "", ErrInvalidInput
 	}
 	return args.ID, nil
 }
 
 func decodeToolArguments(raw json.RawMessage, value any) error {
-	decoder := json.NewDecoder(strings.NewReader(string(raw)))
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || trimmed[0] != '{' {
+		return ErrInvalidInput
+	}
+	decoder := json.NewDecoder(bytes.NewReader(trimmed))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(value); err != nil || decoder.Decode(new(any)) != io.EOF {
-		return errors.New("invalid arguments")
+		return ErrInvalidInput
 	}
 	return nil
 }

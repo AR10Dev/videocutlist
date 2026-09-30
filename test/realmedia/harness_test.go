@@ -75,6 +75,7 @@ type process struct {
 	base               string
 	log                *boundedLogBuffer
 	cancel             context.CancelFunc
+	stopOnce           sync.Once
 	forbidden          []string
 	redactionViolation bool
 	redactionMu        sync.Mutex
@@ -82,28 +83,49 @@ type process struct {
 
 type redactionBody struct {
 	io.ReadCloser
-	process  *process
-	contents strings.Builder
+	process *process
+	tail    []byte
 }
 
 func (b *redactionBody) Read(data []byte) (int, error) {
 	n, err := b.ReadCloser.Read(data)
-	_, _ = b.contents.Write(data[:n])
-	if err == io.EOF {
-		b.check()
+	if n > 0 {
+		maxLength := 0
+		for _, forbidden := range b.process.forbidden {
+			maxLength = max(maxLength, len(forbidden))
+		}
+		fragment := append(b.tail, data[:n]...)
+		for _, forbidden := range b.process.forbidden {
+			if forbidden != "" && bytes.Contains(fragment, []byte(forbidden)) {
+				b.process.redactionMu.Lock()
+				b.process.redactionViolation = true
+				b.process.redactionMu.Unlock()
+				break
+			}
+		}
+		if keep := min(len(fragment), maxLength-1); keep > 0 {
+			b.tail = bytes.Clone(fragment[len(fragment)-keep:])
+		} else {
+			b.tail = nil
+		}
 	}
 	return n, err
 }
-func (b *redactionBody) Close() error { b.check(); return b.ReadCloser.Close() }
-func (b *redactionBody) check() {
-	value := b.contents.String()
-	for _, forbidden := range b.process.forbidden {
-		if forbidden != "" && strings.Contains(value, forbidden) {
-			b.process.redactionMu.Lock()
-			b.process.redactionViolation = true
-			b.process.redactionMu.Unlock()
-			return
-		}
+
+func TestRedactionBodyDetectsSplitSecretsWithoutBufferingDownloads(t *testing.T) {
+	p := &process{forbidden: []string{"/sensitive/cache/original.mp4"}}
+	body := &redactionBody{
+		ReadCloser: io.NopCloser(strings.NewReader(strings.Repeat("public data ", 8192) + "/sensitive/cache/original.mp4")),
+		process:    p,
+	}
+	if _, err := io.CopyBuffer(io.Discard, body, make([]byte, 3)); err != nil {
+		t.Fatal(err)
+	}
+	if !p.redactionViolation {
+		t.Fatal("secret split across response reads was not detected")
+	}
+	if len(body.tail) >= len(p.forbidden[0]) {
+		t.Fatalf("response scanner retained %d bytes", len(body.tail))
 	}
 }
 
@@ -243,23 +265,7 @@ func startProcessWithEnv(t *testing.T, root string, overrides map[string]string)
 	}
 	p := &process{cmd: cmd, log: logBuffer, cancel: cancel, forbidden: []string{root, mediaRoot, filepath.Join(root, "videocutlist.db"), filepath.Join(root, "cache"), filepath.Join(root, "exports"), fixture}}
 	t.Cleanup(func() {
-		if cmd.Process != nil {
-			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
-		}
-		cancel()
-		waited := make(chan struct{})
-		go func() {
-			_ = cmd.Wait()
-			close(waited)
-		}()
-		select {
-		case <-waited:
-		case <-time.After(5 * time.Second):
-			if cmd.Process != nil {
-				_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-			}
-			<-waited
-		}
+		p.stop()
 		assertNoSecrets(t, p)
 	})
 	client := &http.Client{Timeout: time.Second}
@@ -315,19 +321,22 @@ func startProcessWithEnv(t *testing.T, root string, overrides map[string]string)
 }
 
 func (p *process) stop() {
-	if p.cmd.Process == nil {
-		return
-	}
-	_ = syscall.Kill(-p.cmd.Process.Pid, syscall.SIGTERM)
-	p.cancel()
-	waited := make(chan struct{})
-	go func() { _ = p.cmd.Wait(); close(waited) }()
-	select {
-	case <-waited:
-	case <-time.After(5 * time.Second):
-		_ = syscall.Kill(-p.cmd.Process.Pid, syscall.SIGKILL)
-		<-waited
-	}
+	p.stopOnce.Do(func() {
+		if p.cmd.Process == nil {
+			p.cancel()
+			return
+		}
+		_ = syscall.Kill(-p.cmd.Process.Pid, syscall.SIGTERM)
+		waited := make(chan struct{})
+		go func() { _ = p.cmd.Wait(); close(waited) }()
+		select {
+		case <-waited:
+		case <-time.After(5 * time.Second):
+			_ = syscall.Kill(-p.cmd.Process.Pid, syscall.SIGKILL)
+			<-waited
+		}
+		p.cancel()
+	})
 }
 
 func (p *process) requestNoAuth(t *testing.T, method, path string) *http.Response {

@@ -55,7 +55,23 @@ func TestSoftwarePreviewStreamsAndValidates(t *testing.T) {
 	if err := running.Wait(); err != nil {
 		t.Fatal(err)
 	}
-	if err := ffmpegrunner.ValidateFile(context.Background(), ffprobe, outputName); err != nil {
+	preview, err := os.Open(outputName)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := preview.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	// Validation must inspect the open preview, not a replacement at its name.
+	if err := os.Rename(outputName, outputName+".retained"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(outputName, []byte("not a preview"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ffmpegrunner.ValidateFile(context.Background(), ffprobe, preview); err != nil {
 		t.Fatal(err)
 	}
 	if len(timings) < 3 || timings[len(timings)-1].FirstByteAt.IsZero() || timings[len(timings)-1].CompletedAt.IsZero() || timings[len(timings)-1].SpawnToFirstByte <= 0 || timings[len(timings)-1].Total <= 0 {

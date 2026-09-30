@@ -117,7 +117,8 @@ export function createEditorController(deps: {
           segments: normalizeSegments(editChanges.segments, segmentIdentityScope() ?? "media"),
         }
       : editChanges;
-    let next = timeline();
+    const before = timeline();
+    let next = before;
     if (Object.keys(normalizedEditChanges).length) next = editTimeline(next, normalizedEditChanges);
     if (nextPlayheadMs !== undefined || nextZoom !== undefined)
       next = updateTimelineView(next, {
@@ -137,7 +138,7 @@ export function createEditorController(deps: {
       }
     }
     if (nextPlayheadMs !== undefined) deps.setPreviewCenterMs(next.present.playheadMs);
-    if (Object.keys(normalizedEditChanges).length) {
+    if (next !== before && Object.keys(normalizedEditChanges).length) {
       deps.pausePlayback();
       deps.markDirty();
     }

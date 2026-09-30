@@ -108,6 +108,24 @@ func TestPreviewHTTPMapsDomainErrorsForGetAndHead(t *testing.T) {
 	}
 }
 
+func TestPreviewHTTPRejectsInvalidWindowSpan(t *testing.T) {
+	for _, query := range []string{
+		"centerMs=100&beforeMs=9223372036854775807&afterMs=1",
+		"centerMs=100&beforeMs=0&afterMs=0",
+	} {
+		for _, method := range []string{http.MethodGet, http.MethodHead} {
+			server := newPreviewErrorServer(t, previewErrorService{startErr: errors.New("preview generation must not run")})
+			request := previewRequest(method)
+			request.URL.RawQuery = query
+			response := httptest.NewRecorder()
+			server.ServeHTTP(response, request)
+			if response.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("%s invalid span %q status=%d body=%s", method, query, response.Code, response.Body.String())
+			}
+		}
+	}
+}
+
 func TestPreviewHTTPDoesNotTurnCancellationIntoCapacityError(t *testing.T) {
 	server := newPreviewErrorServer(t, previewErrorService{startErr: context.Canceled, cachedErr: context.Canceled})
 	for _, method := range []string{http.MethodGet, http.MethodHead} {

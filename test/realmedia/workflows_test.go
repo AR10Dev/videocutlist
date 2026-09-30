@@ -195,7 +195,6 @@ func TestProductionCORSAndTrustedProxy(t *testing.T) {
 		t.Fatal("disallowed CORS preflight succeeded")
 	}
 	disallowed.Body.Close()
-	_ = p
 	excluded := startProcessWithEnv(t, t.TempDir(), map[string]string{"VIDEOCUTLIST_AUTH_MODE": "trusted_proxy", "VIDEOCUTLIST_TRUSTED_PROXY_CIDRS": "192.0.2.0/24"})
 	unauthenticated := excluded.requestHeaders(t, http.MethodGet, "/api/v1/media", nil, map[string]string{"X-Forwarded-For": "203.0.113.9", "X-Forwarded-Proto": "https"})
 	if unauthenticated.StatusCode != http.StatusUnauthorized {
@@ -225,12 +224,28 @@ func TestProductionSymlinkAndSourceChange(t *testing.T) {
 		t.Fatal(err)
 	}
 	refresh := p.request(t, http.MethodPost, "/api/v1/media/refresh")
-	if refresh.StatusCode != http.StatusAccepted {
+	var refreshJob struct {
+		ID string `json:"id"`
+	}
+	if refresh.StatusCode != http.StatusAccepted || json.NewDecoder(refresh.Body).Decode(&refreshJob) != nil || refreshJob.ID == "" {
 		refresh.Body.Close()
-		t.Fatalf("refresh status=%d", refresh.StatusCode)
+		t.Fatalf("refresh status=%d job=%+v", refresh.StatusCode, refreshJob)
 	}
 	refresh.Body.Close()
-	time.Sleep(500 * time.Millisecond)
+	waitFor(t, 10*time.Second, func() bool {
+		response := p.request(t, http.MethodGet, "/api/v1/media/import/"+refreshJob.ID)
+		defer response.Body.Close()
+		var job struct {
+			State string `json:"state"`
+		}
+		if err := json.NewDecoder(response.Body).Decode(&job); err != nil {
+			t.Fatalf("refresh status: %v", err)
+		}
+		if job.State == "failed" || job.State == "cancelled" {
+			t.Fatalf("refresh ended unexpectedly: %s", job.State)
+		}
+		return job.State == "succeeded"
+	})
 	var media struct {
 		Items []struct {
 			ID string `json:"id"`
@@ -240,7 +255,9 @@ func TestProductionSymlinkAndSourceChange(t *testing.T) {
 	if len(media.Items) != 1 {
 		t.Fatalf("escaped symlink indexed: %d items", len(media.Items))
 	}
-	os.Remove(filepath.Join(root, "media", "sintel-trailer.mp4"))
+	if err := os.Remove(filepath.Join(root, "media", "sintel-trailer.mp4")); err != nil {
+		t.Fatal(err)
+	}
 	project := map[string]any{"revision": 0, "schemaVersion": 2, "name": "source change", "items": []any{map[string]any{"id": "i_abcdefghijklmnopqrstuvwx", "mediaId": media.Items[0].ID, "segments": []any{map[string]any{"startMs": 0, "endMs": 1000}}, "exportOptions": map[string]any{"mode": "merge", "selection": "segments", "cutStrategy": "stream_copy_preferred", "container": "mkv", "destinationId": "download"}}}}
 	created := p.requestBody(t, http.MethodPut, "/api/v1/projects/p_source_change", project)
 	if created.StatusCode != http.StatusOK {
@@ -385,7 +402,6 @@ func TestProductionBatchCancellationLifecycle(t *testing.T) {
 	output.Body.Close()
 	assertNoTemporaryArtifacts(t, root)
 	suiteSummary.Add("cancellation batch_id=%s job_id=%s state=cancelled", second, secondJob)
-	_ = firstBatch
 }
 
 func TestProductionRestartReconcilesExport(t *testing.T) {

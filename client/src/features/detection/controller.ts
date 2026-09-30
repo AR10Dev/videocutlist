@@ -45,7 +45,6 @@ type DetectionDependencies = {
   segments: Accessor<Segment[]>;
   saveProject: () => Promise<Project | undefined>;
   updateSegments: (segments: Segment[]) => void;
-  markDirty: () => void;
 };
 
 export function createDetectionController(
@@ -364,7 +363,6 @@ export function createDetectionController(
     applyingDetectionEdit = true;
     try {
       dependencies.updateSegments(segments);
-      dependencies.markDirty();
       recordLocalDetectionEdit();
     } finally {
       applyingDetectionEdit = false;

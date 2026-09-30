@@ -100,15 +100,15 @@ func run(ctx context.Context) (runErr error) {
 	if err != nil {
 		return err
 	}
-	validator := cache.ValidatorFunc(func(ctx context.Context, path string) error {
-		return ffmpeg.ValidateFile(ctx, cfg.FFprobePath, path)
-	})
+	validator := func(ctx context.Context, file *os.File) error {
+		return ffmpeg.ValidateFile(ctx, cfg.FFprobePath, file)
+	}
 	mediaCatalog := runtime.MediaCatalog{Scanner: scanner, Store: mediaStore}
 	mediaService := &projects.MediaUseCase{Catalog: mediaCatalog, Configured: len(cfg.MediaRoots) > 0}
 	detectionService := projects.NewDetectionUseCase(&detection.Service{Scanner: scanner, Catalog: mediaStore, FFmpegPath: cfg.FFmpegPath, Capacity: limiter})
 	detectionService.Catalog = mediaCatalog
 	previewRunner := runtime.PreviewRunner{Scanner: scanner, Media: mediaStore, FFmpeg: ffmpeg.Runner{Path: cfg.FFmpegPath}}
-	previewManager, err := projects.NewPreviewManager(runtime.PreviewCache{Store: cacheStore}, previewRunner, projects.Validator(validator), limiter)
+	previewManager, err := projects.NewPreviewManager(runtime.PreviewCache{Store: cacheStore}, previewRunner, validator, limiter)
 	if err != nil {
 		return err
 	}

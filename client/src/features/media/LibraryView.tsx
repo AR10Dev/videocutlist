@@ -1,4 +1,4 @@
-import { For, Show, createEffect, createSignal, onCleanup } from "solid-js";
+import { For, Show, createEffect, createSignal, onCleanup, onMount } from "solid-js";
 import { ChevronDown, Film, Folder, FolderOpen, LoaderCircle, RefreshCw } from "lucide-solid";
 import type { components } from "../../generated/api";
 import { createApiClient, resolveBrowserConfiguration } from "../../api";
@@ -11,7 +11,19 @@ const api = createApiClient(resolveBrowserConfiguration());
 
 function MediaThumbnail(props: { item: Media }) {
   const [source, setSource] = createSignal<string>();
+  const [visible, setVisible] = createSignal(false);
+  let thumbnail!: HTMLSpanElement;
+  onMount(() => {
+    const observer = new IntersectionObserver((entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return;
+      setVisible(true);
+      observer.disconnect();
+    });
+    observer.observe(thumbnail);
+    onCleanup(() => observer.disconnect());
+  });
   createEffect(() => {
+    if (!visible()) return;
     const controller = new AbortController();
     let objectURL: string | undefined;
     setSource();
@@ -40,7 +52,7 @@ function MediaThumbnail(props: { item: Media }) {
     });
   });
   return (
-    <span class="media-thumbnail" aria-hidden="true">
+    <span ref={(element) => (thumbnail = element)} class="media-thumbnail" aria-hidden="true">
       <Show when={source()} fallback={<Film size={18} />}>
         <img src={source()} alt="" loading="lazy" />
       </Show>
@@ -138,7 +150,12 @@ export function LibraryView() {
               {library.importJob()?.errorCode ? ` (${library.importJob()!.errorCode})` : ""}.
               Refresh to try again.
             </span>
-            <button class="btn btn-ghost btn-xs" type="button" onClick={() => void refreshMedia()}>
+            <button
+              class="btn btn-ghost btn-xs"
+              type="button"
+              disabled={library.refreshing() || library.scanActive()}
+              onClick={() => void refreshMedia()}
+            >
               Retry
             </button>
           </div>

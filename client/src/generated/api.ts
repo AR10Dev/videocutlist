@@ -65,7 +65,10 @@ export interface paths {
       path?: never;
       cookie?: never;
     };
-    /** List indexed media */
+    /**
+     * List indexed media
+     * @description Rejects malformed percent encoding, unknown parameters, and duplicate query keys with 422 invalid_query.
+     */
     get: operations["listMedia"];
     put?: never;
     post?: never;
@@ -149,7 +152,9 @@ export interface paths {
     parameters: {
       query: {
         centerMs: number;
+        /** @description Non-negative milliseconds before the center; combined with afterMs, the span must be positive and within the configured preview maximum. */
         beforeMs?: number;
+        /** @description Non-negative milliseconds after the center; combined with beforeMs, the span must be positive and within the configured preview maximum. */
         afterMs?: number;
         mute?: boolean;
       };
@@ -161,7 +166,7 @@ export interface paths {
     };
     /**
      * Stream a normalized preview
-     * @description Revalidates the source before cache lookup. Changed sources return 409 source_changed and require a library refresh; missing sources return 404 not_found. Only process-capacity rejection returns 429 preview_busy with Retry-After: 1. Deadline expiry returns 504 preview_timeout; unexpected startup/cache failures return 500 internal_error.
+     * @description Revalidates the source before cache lookup. Changed sources return 409 source_changed and require a library refresh; missing sources return 404 not_found. Only process-capacity rejection returns 429 preview_busy with Retry-After: 1. Deadline expiry returns 504 preview_timeout; unexpected startup/cache failures return 500 internal_error. Empty or overflowing preview spans return 422 invalid_preview.
      */
     get: operations["streamPreview"];
     put?: never;
@@ -1264,6 +1269,7 @@ export interface operations {
       };
       401: components["responses"]["Error"];
       403: components["responses"]["Error"];
+      422: components["responses"]["Error"];
       500: components["responses"]["Error"];
     };
   };
@@ -1371,7 +1377,9 @@ export interface operations {
     parameters: {
       query: {
         centerMs: number;
+        /** @description Non-negative milliseconds before the center; combined with afterMs, the span must be positive and within the configured preview maximum. */
         beforeMs?: number;
+        /** @description Non-negative milliseconds after the center; combined with beforeMs, the span must be positive and within the configured preview maximum. */
         afterMs?: number;
         mute?: boolean;
       };
@@ -1411,7 +1419,9 @@ export interface operations {
     parameters: {
       query: {
         centerMs: number;
+        /** @description Non-negative milliseconds before the center; combined with afterMs, the span must be positive and within the configured preview maximum. */
         beforeMs?: number;
+        /** @description Non-negative milliseconds after the center; combined with beforeMs, the span must be positive and within the configured preview maximum. */
         afterMs?: number;
         mute?: boolean;
       };

@@ -77,22 +77,20 @@ func ProjectTools(projects ProjectToolService, media MediaReader, credentials *C
 }
 
 func listProjects(ctx Context, service ProjectToolService, raw json.RawMessage) (ToolResult, error) {
-	var args struct {
-		Cursor string `json:"cursor"`
-		Limit  int    `json:"limit"`
+	args := struct {
+		Cursor *string `json:"cursor"`
+		Limit  *int    `json:"limit"`
+	}{Cursor: new(""), Limit: new(projectPageDefault)}
+	if err := decodeToolArguments(raw, &args); err != nil || args.Cursor == nil || args.Limit == nil {
+		return ToolResult{}, ErrInvalidInput
 	}
-	if err := decodeToolArguments(raw, &args); err != nil || !validProjectID(args.Cursor) {
-		return ToolResult{}, errors.New("invalid project list arguments")
+	limit := *args.Limit
+	if !validProjectID(*args.Cursor) || limit < 1 || limit > projectPageLimit {
+		return ToolResult{}, ErrInvalidInput
 	}
-	if args.Limit == 0 {
-		args.Limit = projectPageDefault
-	}
-	if args.Limit < 1 || args.Limit > projectPageLimit {
-		return ToolResult{}, errors.New("invalid project list limit")
-	}
-	items := make([]projects.ProjectSummary, 0, args.Limit)
-	cursor := args.Cursor
-	for scanned := 0; scanned < projectScanLimit && len(items) < args.Limit; {
+	items := make([]projects.ProjectSummary, 0, limit)
+	cursor := *args.Cursor
+	for scanned := 0; scanned < projectScanLimit && len(items) < limit; {
 		page, err := service.List(ctx.Request.Context(), cursor, min(projectPageLimit, projectScanLimit-scanned))
 		if err != nil {
 			return ToolResult{}, err
@@ -103,13 +101,13 @@ func listProjects(ctx Context, service ProjectToolService, raw json.RawMessage) 
 			cursor = project.ID
 			if ctx.Credential.AllowsProjectSummary(project.ID) {
 				items = append(items, project)
-				if len(items) == args.Limit {
+				if len(items) == limit {
 					pageComplete = position == len(page.Items)-1
 					break
 				}
 			}
 		}
-		if len(items) == args.Limit && !pageComplete {
+		if len(items) == limit && !pageComplete {
 			break
 		}
 		if page.NextCursor == nil || len(page.Items) == 0 {
@@ -266,15 +264,15 @@ type createProjectArgs struct {
 func decodeCreateProjectArgs(raw json.RawMessage) (createProjectArgs, error) {
 	var args createProjectArgs
 	if err := decodeToolArguments(raw, &args); err != nil || !validProjectName(args.Name) || len(args.MediaIDs) == 0 || len(args.MediaIDs) > projectMediaLimit {
-		return createProjectArgs{}, errors.New("invalid project creation arguments")
+		return createProjectArgs{}, ErrInvalidInput
 	}
 	seen := make(map[string]struct{}, len(args.MediaIDs))
 	for _, id := range args.MediaIDs {
-		if !validMediaCursor(id) {
-			return createProjectArgs{}, errors.New("invalid project creation arguments")
+		if !validMediaCursor(id) || id == "" {
+			return createProjectArgs{}, ErrInvalidInput
 		}
 		if _, ok := seen[id]; ok {
-			return createProjectArgs{}, errors.New("invalid project creation arguments")
+			return createProjectArgs{}, ErrInvalidInput
 		}
 		seen[id] = struct{}{}
 	}
@@ -299,31 +297,31 @@ type cutlistOperation struct {
 func decodeCutlistArgs(raw json.RawMessage) (cutlistArgs, error) {
 	var args cutlistArgs
 	if err := decodeToolArguments(raw, &args); err != nil || args.ProjectID == "" || !validProjectID(args.ProjectID) || args.ExpectedRevision < 1 || len(args.Operations) == 0 || len(args.Operations) > cutlistOpLimit {
-		return cutlistArgs{}, errors.New("invalid cutlist arguments")
+		return cutlistArgs{}, ErrInvalidInput
 	}
 	for _, operation := range args.Operations {
 		if !validSafeIdentifier(operation.ItemID) {
-			return cutlistArgs{}, errors.New("invalid cutlist arguments")
+			return cutlistArgs{}, ErrInvalidInput
 		}
 		switch operation.Type {
 		case "add":
 			if operation.Segment.ID != "" || operation.Position < 0 || len(operation.SegmentIDs) != 0 || operation.SegmentID != "" {
-				return cutlistArgs{}, errors.New("invalid cutlist arguments")
+				return cutlistArgs{}, ErrInvalidInput
 			}
 		case "adjust":
 			if !validSafeIdentifier(operation.SegmentID) || operation.Segment.ID != operation.SegmentID || operation.Position != 0 || len(operation.SegmentIDs) != 0 {
-				return cutlistArgs{}, errors.New("invalid cutlist arguments")
+				return cutlistArgs{}, ErrInvalidInput
 			}
 		case "remove":
 			if !validSafeIdentifier(operation.SegmentID) || operation.Segment != (model.Segment{}) || operation.Position != 0 || len(operation.SegmentIDs) != 0 {
-				return cutlistArgs{}, errors.New("invalid cutlist arguments")
+				return cutlistArgs{}, ErrInvalidInput
 			}
 		case "reorder":
 			if operation.Segment != (model.Segment{}) || operation.SegmentID != "" || operation.Position != 0 || len(operation.SegmentIDs) == 0 || len(operation.SegmentIDs) > cutlistOpLimit || !validSegmentIDs(operation.SegmentIDs) {
-				return cutlistArgs{}, errors.New("invalid cutlist arguments")
+				return cutlistArgs{}, ErrInvalidInput
 			}
 		default:
-			return cutlistArgs{}, errors.New("invalid cutlist arguments")
+			return cutlistArgs{}, ErrInvalidInput
 		}
 	}
 	return args, nil
@@ -332,32 +330,32 @@ func decodeCutlistArgs(raw json.RawMessage) (cutlistArgs, error) {
 func applyCutlistOperation(document *model.Document, operation cutlistOperation) error {
 	itemIndex := slices.IndexFunc(document.Items, func(item model.ProjectItem) bool { return item.ID == operation.ItemID })
 	if itemIndex < 0 {
-		return errors.New("project item not found")
+		return ErrInvalidInput
 	}
 	item := &document.Items[itemIndex]
 	switch operation.Type {
 	case "add":
+		if operation.Position > len(item.Segments) {
+			return ErrInvalidInput
+		}
 		segmentID, err := randomIdentifier("s_", 18)
 		if err != nil {
 			return err
 		}
 		operation.Segment.ID = segmentID
-		if operation.Position > len(item.Segments) {
-			return errors.New("segment position is out of range")
-		}
 		item.Segments = append(item.Segments, model.Segment{})
 		copy(item.Segments[operation.Position+1:], item.Segments[operation.Position:])
 		item.Segments[operation.Position] = operation.Segment
 	case "adjust":
 		index := slices.IndexFunc(item.Segments, func(segment model.Segment) bool { return segment.ID == operation.SegmentID })
 		if index < 0 {
-			return errors.New("segment not found")
+			return ErrInvalidInput
 		}
 		item.Segments[index] = operation.Segment
 	case "remove":
 		index := slices.IndexFunc(item.Segments, func(segment model.Segment) bool { return segment.ID == operation.SegmentID })
 		if index < 0 {
-			return errors.New("segment not found")
+			return ErrInvalidInput
 		}
 		item.Segments = append(item.Segments[:index], item.Segments[index+1:]...)
 	case "reorder":
@@ -365,12 +363,12 @@ func applyCutlistOperation(document *model.Document, operation cutlistOperation)
 		for _, id := range operation.SegmentIDs {
 			index := slices.IndexFunc(item.Segments, func(segment model.Segment) bool { return segment.ID == id })
 			if index < 0 {
-				return errors.New("segment not found")
+				return ErrInvalidInput
 			}
 			ordered = append(ordered, item.Segments[index])
 		}
 		if len(ordered) != len(item.Segments) {
-			return errors.New("segment reorder must include every segment")
+			return ErrInvalidInput
 		}
 		item.Segments = ordered
 	}
@@ -391,20 +389,12 @@ func projectMedia(ctx context.Context, project projects.Project, media MediaRead
 
 func projectIDArgument(raw json.RawMessage) (string, error) {
 	var args struct {
-		ID        string `json:"id"`
-		ProjectID string `json:"projectId"`
+		ID string `json:"id"`
 	}
-	if err := decodeToolArguments(raw, &args); err != nil {
-		return "", errors.New("invalid project ID")
+	if err := decodeToolArguments(raw, &args); err != nil || args.ID == "" || !validProjectID(args.ID) {
+		return "", ErrInvalidInput
 	}
-	id := args.ID
-	if id == "" {
-		id = args.ProjectID
-	}
-	if id == "" || !validProjectID(id) {
-		return "", errors.New("invalid project ID")
-	}
-	return id, nil
+	return args.ID, nil
 }
 
 func projectResult(project projects.Project) map[string]any {

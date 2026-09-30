@@ -55,6 +55,21 @@ func TestUnifiedJobsTransitionsAndDerivedBatch(t *testing.T) {
 	}
 }
 
+func TestBatchMissingReturnsNotFound(t *testing.T) {
+	database, err := db.OpenDatabase(t.Context(), t.TempDir()+"/jobs.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	jobs, err := store.NewJobsStore(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := jobs.Batch(t.Context(), "b_missingbatch"); !errors.Is(err, store.ErrJobNotFound) {
+		t.Fatalf("missing batch = %v, want ErrJobNotFound", err)
+	}
+}
+
 func TestJobsMigrationReplacesQueueIndexOnExistingDatabase(t *testing.T) {
 	path := t.TempDir() + "/jobs.db"
 	first, err := db.OpenDatabase(t.Context(), path)

@@ -17,7 +17,7 @@ import (
 type testCache struct{ *cache.Store }
 
 func (c testCache) Open(ctx context.Context, key string, validator Validator) (io.ReadCloser, error) {
-	return c.Store.Open(ctx, key, cache.Validator(validator))
+	return c.Store.Open(ctx, key, validator)
 }
 func (c testCache) Begin(key string) (PreviewPartial, error) { return c.Store.Begin(key) }
 
@@ -136,7 +136,7 @@ func TestPreviewCancellationStopsProcessAndDiscardsPartial(t *testing.T) {
 	}
 	runner.mu.Unlock()
 	key := model.PreviewKey(testSpec("m_cancel"))
-	if hit, err := store.Open(context.Background(), key, cache.ValidatorFunc(func(context.Context, string) error { return nil })); !errors.Is(err, cache.ErrMiss) {
+	if hit, err := store.Open(context.Background(), key, func(context.Context, *os.File) error { return nil }); !errors.Is(err, cache.ErrMiss) {
 		if hit != nil {
 			_ = hit.Close()
 		}
@@ -175,7 +175,7 @@ func TestPreviewPartialWriteFailureStillReleasesProcess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager, err := NewPreviewManager(failingCache{}, runner, func(context.Context, string) error { return nil }, limiter)
+	manager, err := NewPreviewManager(failingCache{}, runner, func(context.Context, *os.File) error { return nil }, limiter)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -217,14 +217,14 @@ func newManager(t *testing.T, runner PreviewRunner, global int) (*PreviewManager
 	if err != nil {
 		t.Fatal(err)
 	}
-	validator := cache.ValidatorFunc(func(_ context.Context, path string) error {
-		info, err := os.Stat(path)
+	validator := func(_ context.Context, file *os.File) error {
+		info, err := file.Stat()
 		if err != nil || info.Size() == 0 {
 			return errors.New("invalid")
 		}
 		return nil
-	})
-	manager, err := NewPreviewManager(testCache{store}, runner, Validator(validator), limiter)
+	}
+	manager, err := NewPreviewManager(testCache{store}, runner, validator, limiter)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -225,13 +225,13 @@ func ValidateRuntimeSettings(settings RuntimeSettings) error {
 	if settings.CacheMaxBytes < 2 {
 		return errors.New("cache limit must be at least 2 bytes")
 	}
-	if settings.CacheMaxBytes < 1 || settings.PreviewGlobalLimit < 1 || settings.PreviewBeforeMS < 1 || settings.PreviewAfterMS < 1 || settings.PreviewMaxMS < 1 || settings.PreviewGridMS < 1 || settings.MediaMaxFiles < 1 || settings.MediaMaxDepth < 1 {
+	if settings.PreviewGlobalLimit < 1 || settings.PreviewBeforeMS < 1 || settings.PreviewAfterMS < 1 || settings.PreviewMaxMS < 1 || settings.PreviewGridMS < 1 || settings.MediaMaxFiles < 1 || settings.MediaMaxDepth < 1 {
 		return errors.New("runtime limits must be positive")
 	}
 	if settings.PreviewGlobalLimit > preview.MaxGlobalProcesses {
 		return fmt.Errorf("preview global limit must be 1..%d", preview.MaxGlobalProcesses)
 	}
-	if settings.PreviewBeforeMS+settings.PreviewAfterMS > settings.PreviewMaxMS {
+	if settings.PreviewBeforeMS > settings.PreviewMaxMS-settings.PreviewAfterMS {
 		return errors.New("preview max must cover the default preview window")
 	}
 	if len(settings.Destinations) == 0 {

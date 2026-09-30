@@ -62,6 +62,40 @@ test("shows one actionable loading message while status is pending", async ({ pa
   release();
 });
 
+test("requests library thumbnails only when their rows become visible", async ({ page }) => {
+  const items = Array.from({ length: 50 }, (_, index) => ({
+    id: `m_${String(index).padStart(43, "0")}`,
+    name: `clip-${index}.mp4`,
+    durationMs: 1000,
+    container: "mp4",
+  }));
+  const requested = new Set<string>();
+  await page.setViewportSize({ width: 1280, height: 720 });
+  await page.route(`${apiOrigin}/api/v1/**`, async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === "/api/v1/media/status")
+      return route.fulfill({
+        json: { state: "ready_with_media", message: "Media library is ready." },
+      });
+    if (path === "/api/v1/media/tree") return route.fulfill({ json: { folders: [], items } });
+    if (path.endsWith("/thumbnails")) {
+      requested.add(path.split("/")[4]);
+      return route.fulfill({ status: 404 });
+    }
+    if (path === "/api/v1/destinations") return route.fulfill({ json: { destinations: [] } });
+    return route.fulfill({ status: 404 });
+  });
+  await page.goto("/");
+  await expect(page.getByRole("button", { name: "Select clip-0.mp4", exact: true })).toBeVisible();
+  await expect.poll(() => requested.has(items[0].id)).toBe(true);
+  await page.waitForLoadState("networkidle");
+  expect(requested.has(items[49].id)).toBe(false);
+  await page
+    .getByRole("button", { name: "Select clip-49.mp4", exact: true })
+    .scrollIntoViewIfNeeded();
+  await expect.poll(() => requested.has(items[49].id)).toBe(true);
+});
+
 test("browses folders, paginates within the active folder, and returns to root", async ({
   page,
 }) => {
@@ -196,4 +230,53 @@ test("loads status once and refreshes it after a rescan", async ({ page }) => {
   await expect(page.getByRole("status").filter({ hasText: "No supported media" })).toBeVisible();
   await page.getByRole("button", { name: "Refresh media" }).click();
   await expect.poll(() => statusRequests).toBe(2);
+});
+
+test("keeps one media retry pending and tracks its scan", async ({ page }) => {
+  let submissions = 0;
+  let releaseRetry!: () => void;
+  const retryPending = new Promise<void>((resolve) => (releaseRetry = resolve));
+  await page.route(`${apiOrigin}/api/v1/**`, async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === "/api/v1/media/refresh") {
+      submissions++;
+      if (submissions === 1) {
+        return route.fulfill({
+          status: 202,
+          json: { id: "j_failed", state: "failed", progress: 0, indexed: 0 },
+        });
+      }
+      await retryPending;
+      return route.fulfill({
+        status: 202,
+        json: { id: "j_retry", state: "running", progress: 0.5, indexed: 7 },
+      });
+    }
+    if (path === "/api/v1/media/import/j_retry") {
+      return route.fulfill({
+        json: { id: "j_retry", state: "running", progress: 0.5, indexed: 7 },
+      });
+    }
+    if (path === "/api/v1/media/status") {
+      return route.fulfill({ json: { state: "ready_empty", message: "No supported media." } });
+    }
+    if (path === "/api/v1/media/tree") return route.fulfill({ json: { folders: [], items: [] } });
+    if (path === "/api/v1/destinations") return route.fulfill({ json: { destinations: [] } });
+    return route.fulfill({ status: 404 });
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Refresh media" }).click();
+  const retry = page.getByRole("button", { name: "Retry", exact: true });
+  await expect(retry).toBeVisible();
+  try {
+    await retry.click();
+    await expect(retry).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Refresh media" })).toBeDisabled();
+    expect(submissions).toBe(2);
+  } finally {
+    releaseRetry();
+  }
+  await expect(page.getByRole("status", { name: "Library scan" })).toContainText("7 indexed");
+  await expect(retry).toHaveCount(0);
+  expect(submissions).toBe(2);
 });

@@ -18,11 +18,11 @@ import (
 	"path/filepath"
 	"slices"
 	"sync"
-	"time"
 
 	"videocutlist/internal/db"
 	"videocutlist/internal/fdinput"
 	"videocutlist/internal/library/media/index"
+	"videocutlist/internal/preview/cache"
 	"videocutlist/internal/projects"
 )
 
@@ -67,7 +67,7 @@ func (s *Service) Thumbnails(ctx context.Context, spec projects.AssetSpec) (outp
 	if err := validate(spec, false); err != nil {
 		return projects.AssetResult{}, err
 	}
-	source, _, err := s.Scanner.Open(ctx, s.Media, spec.MediaID)
+	source, item, err := s.Scanner.Open(ctx, s.Media, spec.MediaID)
 	if err != nil {
 		return projects.AssetResult{}, err
 	}
@@ -76,10 +76,7 @@ func (s *Service) Thumbnails(ctx context.Context, spec projects.AssetSpec) (outp
 			err = errors.Join(err, fmt.Errorf("close thumbnail source: %w", closeErr))
 		}
 	}()
-	key, err := s.key(ctx, spec, "thumb")
-	if err != nil {
-		return projects.AssetResult{}, err
-	}
+	key := assetKey(item, spec, "thumb")
 	data, hit, err := s.cached(key, ".png", validatePNG)
 	if err != nil {
 		return projects.AssetResult{}, err
@@ -118,10 +115,7 @@ func (s *Service) Waveform(ctx context.Context, spec projects.AssetSpec) (output
 			err = errors.Join(err, fmt.Errorf("close waveform source: %w", closeErr))
 		}
 	}()
-	key, err := s.key(ctx, spec, "wave-v2")
-	if err != nil {
-		return projects.AssetResult{}, err
-	}
+	key := assetKey(item, spec, "wave-v2")
 	data, hit, err := s.cached(key, ".json", func(data []byte) error {
 		_, err := waveformResult(data, true, spec)
 		return err
@@ -208,13 +202,9 @@ func validate(s projects.AssetSpec, wave bool) error {
 	}
 	return nil
 }
-func (s *Service) key(ctx context.Context, spec projects.AssetSpec, kind string) (string, error) {
-	item, err := s.Media.Get(ctx, spec.MediaID)
-	if err != nil {
-		return "", err
-	}
+func assetKey(item index.Media, spec projects.AssetSpec, kind string) string {
 	sum := sha256.Sum256([]byte(fmt.Sprintf("%s:%s:%d:%d:%d:%d:%d:%d", kind, item.ID, item.SizeBytes, item.MtimeNS, spec.StartMS, spec.DurationMS, spec.Count, spec.Width+spec.Samples)))
-	return hex.EncodeToString(sum[:]), nil
+	return hex.EncodeToString(sum[:])
 }
 func (s *Service) cached(key, ext string, validate func([]byte) error) ([]byte, bool, error) {
 	s.mu.Lock()
@@ -223,7 +213,7 @@ func (s *Service) cached(key, ext string, validate func([]byte) error) ([]byte, 
 		return nil, false, err
 	}
 	p := filepath.Join(s.CacheDir, "assets", key+ext)
-	info, err := os.Stat(p)
+	info, err := os.Lstat(p)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, false, nil
 	}
@@ -231,18 +221,31 @@ func (s *Service) cached(key, ext string, validate func([]byte) error) ([]byte, 
 		return nil, false, err
 	}
 	if !info.Mode().IsRegular() || info.Size() < 1 || info.Size() > s.MaxBytes || ext == ".png" && info.Size() > maxPNGBytes {
-		_ = os.Remove(p)
+		cache.RemoveFileIfOwned(p, info)
 		return nil, false, nil
 	}
-	b, err := os.ReadFile(p)
+	file, err := os.OpenInRoot(s.CacheDir, filepath.Join("assets", key+ext))
 	if err != nil {
 		return nil, false, err
 	}
-	if int64(len(b)) != info.Size() || validate != nil && validate(b) != nil {
-		_ = os.Remove(p)
-		return nil, false, nil
+	openedInfo, statErr := file.Stat()
+	if statErr != nil || !os.SameFile(info, openedInfo) {
+		return nil, false, errors.Join(statErr, file.Close())
 	}
-	if err := os.Chtimes(p, time.Now(), time.Now()); err != nil {
+	b, readErr := io.ReadAll(io.LimitReader(file, info.Size()+1))
+	if readErr != nil {
+		return nil, false, errors.Join(readErr, file.Close())
+	}
+	if int64(len(b)) != info.Size() || validate != nil && validate(b) != nil {
+		closeErr := file.Close()
+		cache.RemoveFileIfOwned(p, openedInfo)
+		return nil, false, closeErr
+	}
+	touchErr := cache.TouchFile(file)
+	if errors.Is(touchErr, errors.ErrUnsupported) {
+		touchErr = nil
+	}
+	if err := errors.Join(touchErr, file.Close()); err != nil {
 		return nil, false, err
 	}
 	return b, true, nil

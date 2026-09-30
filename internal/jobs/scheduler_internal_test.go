@@ -75,10 +75,6 @@ func (b *synchronizedBuffer) Len() int {
 
 func TestSchedulerCancelBetweenClaimAndRegistrationSkipsRunner(t *testing.T) {
 	db := openSchedulerTestDatabase(t)
-	var err error
-	if err != nil {
-		t.Fatal(err)
-	}
 	t.Cleanup(func() {
 		if err := db.Close(); err != nil {
 			t.Error(err)
@@ -136,10 +132,6 @@ func TestSchedulerCancelBetweenClaimAndRegistrationSkipsRunner(t *testing.T) {
 
 func TestSchedulerConcurrentSubmitClaimAndCancel(t *testing.T) {
 	db := openSchedulerTestDatabase(t)
-	var err error
-	if err != nil {
-		t.Fatal(err)
-	}
 	t.Cleanup(func() {
 		if err := db.Close(); err != nil {
 			t.Error(err)

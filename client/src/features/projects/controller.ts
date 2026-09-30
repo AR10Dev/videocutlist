@@ -78,6 +78,7 @@ export type ProjectsControllerDeps = {
   dirty: Accessor<boolean>;
   setDirty: Setter<boolean>;
   editorVersion: Accessor<number>;
+  contextKey: Accessor<string>;
   projectItems: Accessor<EditableProjectItem[]>;
   setProjectItems: Setter<EditableProjectItem[]>;
   setSelectedExportItems: Setter<string[]>;
@@ -346,6 +347,7 @@ export function createProjectsController(deps: ProjectsControllerDeps) {
     if (!preserveConflict) setSaveConflict(false);
     const snapshotEditorVersion = deps.editorVersion();
     const snapshotProject = deps.projectId();
+    const snapshotContext = deps.contextKey();
     deps.clearDetectionContext();
     deps.setDiagnostics();
     projectRequest?.abort();
@@ -379,6 +381,7 @@ export function createProjectsController(deps: ProjectsControllerDeps) {
         request !== projectRequestVersion ||
         snapshotEditorVersion !== deps.editorVersion() ||
         snapshotProject !== deps.projectId() ||
+        snapshotContext !== deps.contextKey() ||
         !restored.length
       )
         return;

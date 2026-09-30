@@ -37,7 +37,7 @@ func PreviewDetectionTools(media MediaReader, preview interface {
 			}
 			spec, err := projects.NormalizePreview(item.ID, item.DurationMS, args.CenterMS, args.Mute, model.WindowConfig{BeforeMS: args.BeforeMS, AfterMS: args.AfterMS, MaxMS: 15_000, GridMS: 500})
 			if err != nil {
-				return ToolResult{}, errors.New("invalid preview arguments")
+				return ToolResult{}, ErrInvalidInput
 			}
 			result, err := preview.Start(ctx.Request.Context(), spec)
 			if err != nil {
@@ -92,9 +92,20 @@ type previewArgs struct {
 }
 
 func previewArguments(raw json.RawMessage) (previewArgs, error) {
-	var args previewArgs
-	if err := decodeToolArguments(raw, &args); err != nil || !validMediaCursor(args.MediaID) || args.CenterMS < 0 || args.BeforeMS < 0 || args.AfterMS < 0 || args.BeforeMS+args.AfterMS < 1 || args.BeforeMS+args.AfterMS > 15_000 {
-		return previewArgs{}, errors.New("invalid preview arguments")
+	// Pointers distinguish omitted/null required fields from explicit 0/false.
+	var input struct {
+		MediaID  string `json:"mediaId"`
+		CenterMS *int64 `json:"centerMs"`
+		BeforeMS *int64 `json:"beforeMs"`
+		AfterMS  *int64 `json:"afterMs"`
+		Mute     *bool  `json:"mute"`
+	}
+	if err := decodeToolArguments(raw, &input); err != nil || input.MediaID == "" || !validMediaCursor(input.MediaID) || input.CenterMS == nil || input.BeforeMS == nil || input.AfterMS == nil || input.Mute == nil {
+		return previewArgs{}, ErrInvalidInput
+	}
+	args := previewArgs{MediaID: input.MediaID, CenterMS: *input.CenterMS, BeforeMS: *input.BeforeMS, AfterMS: *input.AfterMS, Mute: *input.Mute}
+	if args.CenterMS < 0 || args.BeforeMS < 0 || args.AfterMS < 0 || args.BeforeMS > 15_000-args.AfterMS || args.BeforeMS == 0 && args.AfterMS == 0 {
+		return previewArgs{}, ErrInvalidInput
 	}
 	return args, nil
 }
@@ -120,8 +131,8 @@ type detectionArgs struct {
 
 func detectionArguments(raw json.RawMessage) (detectionArgs, error) {
 	var args detectionArgs
-	if err := decodeToolArguments(raw, &args); err != nil || !validProjectID(args.ProjectID) || !validSafeIdentifier(args.ProjectItemID) || !validMediaCursor(args.MediaID) || args.ProjectRevision < 1 || projects.ValidateDetectionRequest(projects.DetectionRequest{MediaID: args.MediaID, ProjectRevision: args.ProjectRevision, Kind: args.Kind, NoiseDB: args.NoiseDB, MinDurationMS: args.MinDurationMS, SceneThreshold: args.SceneThreshold}) != nil {
-		return detectionArgs{}, errors.New("invalid detection arguments")
+	if err := decodeToolArguments(raw, &args); err != nil || args.ProjectID == "" || !validProjectID(args.ProjectID) || !validSafeIdentifier(args.ProjectItemID) || args.MediaID == "" || !validMediaCursor(args.MediaID) || args.ProjectRevision < 1 || projects.ValidateDetectionRequest(projects.DetectionRequest{MediaID: args.MediaID, ProjectRevision: args.ProjectRevision, Kind: args.Kind, NoiseDB: args.NoiseDB, MinDurationMS: args.MinDurationMS, SceneThreshold: args.SceneThreshold}) != nil {
+		return detectionArgs{}, ErrInvalidInput
 	}
 	return args, nil
 }

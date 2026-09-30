@@ -97,14 +97,6 @@ export const normalizeSegments = (segments: Segment[], scope = "media") => {
   });
 };
 
-export const acceptsMediaMetadata = (
-  aborted: boolean,
-  request: number,
-  currentRequest: number,
-  selectedId: string | undefined,
-  metadataId: string,
-) => !aborted && request === currentRequest && selectedId === metadataId;
-
 export type PreviewDiagnostics = {
   cache: string;
   requestId: string;
@@ -232,7 +224,9 @@ export function streamPreview(
   const clean = () => {
     if (disposed) return;
     disposed = true;
-    void reader?.cancel();
+    // Fetch abort may already have errored the stream. Own the cancellation
+    // promise as part of teardown; the read loop handles active stream failures.
+    void reader?.cancel().catch(() => undefined);
     mediaSource.removeEventListener("sourceopen", open);
     sourceBuffer?.removeEventListener("updateend", updateEnd);
     sourceBuffer?.removeEventListener("error", sourceError);
@@ -293,11 +287,18 @@ export function streamPreview(
       sourceBuffer.addEventListener("error", sourceError);
       const started = performance.now();
       const response = await request();
+      // Own the body before callbacks or errors can trigger teardown. A response
+      // may arrive after cleanup has already run and must still be cancelled.
+      reader = response.body?.getReader();
+      if (disposed) {
+        await reader?.cancel();
+        return;
+      }
       if (!response.ok) {
         fail("Preview request failed. Try again.");
         return;
       }
-      if (!response.body) {
+      if (!reader) {
         fail("Preview returned no playable data. Try again.");
         return;
       }
@@ -307,10 +308,9 @@ export function streamPreview(
       );
       onDiagnostics(diagnostics);
       previewOffsetMs = diagnostics.offsetMs;
-      reader = response.body.getReader();
       while (!disposed) {
         const next = await reader.read();
-        if (next.done) break;
+        if (next.done || disposed) break;
         queued.push(next.value);
         appendNext();
       }

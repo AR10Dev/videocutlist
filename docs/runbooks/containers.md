@@ -1,6 +1,6 @@
 # Deployment and settings guide
 
-VideoCutlist has two kinds of configuration:
+VideoCutlist has three configuration scopes:
 
 - **Deployment configuration** comes from the process environment and Compose.
   It includes the listener, authentication, proxy/CORS policy, database/cache/
@@ -9,11 +9,68 @@ VideoCutlist has two kinds of configuration:
   labels/retention, preview/export limits, and scan/cache policy. Existing saved
   values survive restarts. Deployment-owned root and destination locations are
   reconciled from the environment on startup rather than replacing these settings.
+- **Browser preferences** such as mute, panel layout, cut strategy, and filename
+  template are local to one browser profile. They do not change shared server settings.
 
 A media root is a path as seen by the server process. Configure roots in
 `VIDEOCUTLIST_MEDIA_ROOTS_JSON`; startup reconciles configured aliases against
 persisted roots. The Settings page displays safe root aliases and availability,
 not paths or a path editor. The server indexes originals in place without copying them.
+
+## Server configuration
+
+Environment variables configure deployment settings and seed runtime settings
+when the database is new:
+
+```text
+VIDEOCUTLIST_LISTEN_ADDRESS=127.0.0.1
+VIDEOCUTLIST_PORT=8787
+VIDEOCUTLIST_PUBLIC_BASE_URL
+VIDEOCUTLIST_ALLOWED_ORIGINS
+VIDEOCUTLIST_READ_TIMEOUT=15s
+VIDEOCUTLIST_WRITE_TIMEOUT=0s
+VIDEOCUTLIST_IDLE_TIMEOUT=60s
+VIDEOCUTLIST_DATABASE_PATH
+VIDEOCUTLIST_CACHE_DIR
+VIDEOCUTLIST_EXPORT_DIR
+VIDEOCUTLIST_DESTINATIONS_JSON
+VIDEOCUTLIST_MEDIA_ROOTS_JSON
+VIDEOCUTLIST_AUTH_MODE=none|bearer|trusted_proxy
+VIDEOCUTLIST_BEARER_TOKEN
+VIDEOCUTLIST_MCP_ENABLED=false
+VIDEOCUTLIST_TRUSTED_PROXY_CIDRS
+VIDEOCUTLIST_FFMPEG_PATH
+VIDEOCUTLIST_FFPROBE_PATH
+VIDEOCUTLIST_PREVIEW_GLOBAL_LIMIT
+VIDEOCUTLIST_EXPORT_LIMIT
+VIDEOCUTLIST_CACHE_MAX_BYTES
+VIDEOCUTLIST_PREVIEW_BEFORE_MS
+VIDEOCUTLIST_PREVIEW_AFTER_MS
+VIDEOCUTLIST_PREVIEW_MAX_MS
+VIDEOCUTLIST_PREVIEW_GRID_MS
+```
+
+Listener addresses must be IP literals. Read and idle timeouts must be positive
+Go durations such as `15s`; write timeout may be zero so streamed previews are
+not terminated by a whole-response deadline.
+
+Public base URLs and allowed origins must be absolute HTTP(S) values without
+credentials, query, or fragment. Origins also have no path.
+`VIDEOCUTLIST_ALLOWED_ORIGINS` is comma-separated and empty by default; configure
+exact origins rather than wildcards.
+
+## Export destinations
+
+`VIDEOCUTLIST_DESTINATIONS_JSON` is an optional deployment-owned array of export
+destinations. By default, `download` (browser download) and `server` (a durable
+server-side archive) are both rooted at `VIDEOCUTLIST_EXPORT_DIR`; a custom value
+replaces these defaults.
+
+A `source_adjacent` entry explicitly enables save-beside-source and must provide
+its `mediaRoot`. This option is unavailable when the source cannot be verified
+beneath that root or its adjacent export folder is not writable.
+An omitted destination resolves only to a configured `download` entry; custom
+configurations without one must select a destination explicitly.
 
 ## Native deployment
 
@@ -122,6 +179,29 @@ replaces `videocutlist-local`. It retains the database under
 `~/.config/podman/videocutlist/data`) and the exports on redeploy. Back up
 these directories before intentionally resetting them; the deploy script does
 not erase them.
+
+The script creates private files with `umask 077` and sets `videocutlist.env`
+to owner-only mode `0600`, including when reusing an existing environment file.
+
+## Separately hosted browser client
+
+The bundled client uses the current page origin by default. If you host the
+client separately, set `window.VIDEOCUTLIST_CONFIG` before its application module
+loads:
+
+```js
+window.VIDEOCUTLIST_CONFIG = {
+  serverBaseUrl: "https://api.example.test",
+  authentication: { type: "none" },
+};
+```
+
+Requests use `<serverBaseUrl>/api/v1/`. With bearer authentication, the browser
+offers an access form after a 401 and keeps the supplied token only in memory.
+Do not embed a bearer token in a public frontend build or configuration file.
+Use `authentication: { type: "cookie" }` when a proxy authenticates requests
+with cookies. Allow the exact client origin through
+`VIDEOCUTLIST_ALLOWED_ORIGINS` and use HTTPS for both origins.
 
 ## Persistence, backup, and security
 

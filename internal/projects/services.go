@@ -21,7 +21,6 @@ import (
 	"videocutlist/internal/projects/model"
 )
 
-var ErrJobState = jobqueue.ErrJobState
 var ErrInvalidProject = errors.New("invalid project")
 
 type RootStatusCatalog interface {
@@ -482,6 +481,8 @@ func unifiedJobResult(value jobqueue.Job) Job {
 		result, err := storeDetectionJobResult(value)
 		if err == nil {
 			job = detectionJobAsJob(result)
+			job.Progress = jobProgress(value.State)
+			job.CreatedAt, job.UpdatedAt = value.CreatedAt, value.UpdatedAt
 		}
 	case jobqueue.JobScan:
 		result := importJobResult(value)
@@ -489,12 +490,7 @@ func unifiedJobResult(value jobqueue.Job) Job {
 	}
 	if job.ID == "" {
 		job = Job{ID: value.ID, Type: string(value.Kind), State: string(value.State), CreatedAt: value.CreatedAt, UpdatedAt: value.UpdatedAt}
-		switch value.State {
-		case jobqueue.JobRunning:
-			job.Progress = .5
-		case jobqueue.JobSucceeded, jobqueue.JobFailed, jobqueue.JobCancelled:
-			job.Progress = 1
-		}
+		job.Progress = jobProgress(value.State)
 		if value.ErrorCode.Valid {
 			code := value.ErrorCode.String
 			job.ErrorCode = &code
@@ -529,15 +525,19 @@ func detectionJobAsJob(value DetectionJob) Job {
 	return Job{ID: value.ID, Type: value.Type, State: value.State, MediaID: value.MediaID, ProjectID: value.ProjectID, ProjectRevision: value.ProjectRevision, Kind: value.Kind, Candidates: value.Candidates, ErrorCode: value.ErrorCode}
 }
 
+func jobProgress(state jobqueue.JobState) float64 {
+	switch state {
+	case jobqueue.JobRunning:
+		return .5
+	case jobqueue.JobSucceeded, jobqueue.JobFailed, jobqueue.JobCancelled:
+		return 1
+	default:
+		return 0
+	}
+}
+
 func jobResult(record jobqueue.Job) Job {
-	progress := 0.0
-	if record.State == jobqueue.JobRunning {
-		progress = .5
-	}
-	if record.State == jobqueue.JobSucceeded || record.State == jobqueue.JobFailed || record.State == jobqueue.JobCancelled {
-		progress = 1
-	}
-	job := Job{ID: record.ID, Type: "export", State: string(record.State), Progress: progress, CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt}
+	job := Job{ID: record.ID, Type: "export", State: string(record.State), Progress: jobProgress(record.State), CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt}
 	var request ExportInput
 	if json.Unmarshal([]byte(record.RequestJSON), &request) != nil || request.Mode == "" && request.CutStrategy == "" && request.Container == "" {
 		var snapshot ExportSnapshot

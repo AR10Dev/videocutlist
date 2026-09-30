@@ -58,3 +58,50 @@ func TestHandlerFSRootFallbackAndHeaders(t *testing.T) {
 	}
 
 }
+
+func TestHandlerNegotiatesAcceptEncoding(t *testing.T) {
+	server := HandlerFS(fstest.MapFS{
+		"app.js":    &fstest.MapFile{Data: []byte("identity")},
+		"app.js.br": &fstest.MapFile{Data: []byte("br")},
+		"app.js.gz": &fstest.MapFile{Data: []byte("gzip")},
+	})
+	for _, test := range []struct {
+		header, encoding, body string
+	}{
+		{"br;q=0, gzip", "gzip", "gzip"},
+		{"br;q=0.2, gzip;q=0.8, identity;q=0", "gzip", "gzip"},
+		{"br;q=0, gzip;q=0", "", "identity"},
+		{"notbr, xgzip", "", "identity"},
+		{"", "", "identity"},
+		{"*;q=0.5, br;q=0", "gzip", "gzip"},
+		{"gzip;q=0.8, identity;q=1", "", "identity"},
+		{"br;q=0.2", "br", "br"},
+		{"br;q=0.2, gzip;q=0.8", "gzip", "gzip"},
+		{"br;q=invalid, gzip", "gzip", "gzip"},
+	} {
+		t.Run(test.header, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, "/app.js", nil)
+			request.Header.Set("Accept-Encoding", test.header)
+			response := httptest.NewRecorder()
+			response.Header().Set("Vary", "Origin")
+			server.ServeHTTP(response, request)
+			if response.Code != http.StatusOK || response.Header().Get("Content-Encoding") != test.encoding || response.Body.String() != test.body {
+				t.Fatalf("encoding negotiation: status=%d encoding=%q body=%q", response.Code, response.Header().Get("Content-Encoding"), response.Body.String())
+			}
+			if vary := response.Header().Values("Vary"); len(vary) != 2 || vary[0] != "Origin" || vary[1] != "Accept-Encoding" {
+				t.Fatalf("cache variants = %v", vary)
+			}
+		})
+	}
+}
+
+func TestHandlerRejectsUnacceptableRepresentations(t *testing.T) {
+	server := HandlerFS(fstest.MapFS{"app.js": &fstest.MapFile{Data: []byte("identity")}})
+	request := httptest.NewRequest(http.MethodGet, "/app.js", nil)
+	request.Header.Set("Accept-Encoding", "*;q=0")
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusNotAcceptable {
+		t.Fatalf("unacceptable identity status = %d", response.Code)
+	}
+}

@@ -301,6 +301,38 @@ func TestBrowseMediaDispatchesOpaqueQueryToProductionService(t *testing.T) {
 	}
 }
 
+func TestMediaListRejectsMalformedQuery(t *testing.T) {
+	authenticator, err := NewAuthenticator(AuthConfig{Mode: "none"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := New(Config{Authenticator: authenticator, Media: &routeTestMedia{}, Preview: routeTestPreview{}, Projects: routeTestProjects{}, BatchExports: &routeTestBatchExports{}, Jobs: &routeTestJobs{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/media?limit=%ZZ", nil))
+	if response.Code != http.StatusUnprocessableEntity || !strings.Contains(response.Body.String(), `"code":"invalid_query"`) {
+		t.Fatalf("malformed query status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
+func TestMediaImportUnavailableReturnsError(t *testing.T) {
+	authenticator, err := NewAuthenticator(AuthConfig{Mode: "none"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := New(Config{Authenticator: authenticator, Media: &routeTestMedia{}, Preview: routeTestPreview{}, Projects: routeTestProjects{}, BatchExports: &routeTestBatchExports{}, Jobs: &routeTestJobs{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/v1/media/import", nil))
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), `"code":"import_unavailable"`) {
+		t.Fatalf("import status=%d body=%s", response.Code, response.Body.String())
+	}
+}
+
 type routeTestAssets struct{}
 
 func (routeTestAssets) ValidateSource(context.Context, string) error { return nil }

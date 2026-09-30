@@ -227,8 +227,8 @@ if [[ $mode == media ]]; then
 fi
 if [[ $mode == api ]]; then
   for scale in ${BENCH_API_SCALES:-100 1000 5000}; do
-    if [[ ! $scale =~ ^[1-9][0-9]*$ || $scale -gt 10000 ]]; then
-      printf 'BENCH_API_SCALES must contain integers from 1 to 10000\n' >&2
+    if [[ ! $scale =~ ^[1-9][0-9]*$ || $scale -lt 100 || $scale -gt 10000 ]]; then
+      printf 'BENCH_API_SCALES must contain integers from 100 to 10000\n' >&2
       exit 2
     fi
     run_phase api_seed "$scale" "$work/bench-api" seed --db "$work/videocutlist.db" --alias bench --count "$scale"

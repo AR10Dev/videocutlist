@@ -329,6 +329,10 @@ func (s *Scheduler) CancelBatch(ctx context.Context, batchID string) (err error)
 	if closeErr := closeRows(); closeErr != nil {
 		return fmt.Errorf("close scheduler batch rows: %w", closeErr)
 	}
+	if len(ids) == 0 {
+		_, _, err := s.jobs.Batch(ctx, batchID)
+		return err
+	}
 	for _, id := range ids {
 		if _, err := s.Cancel(ctx, id); err != nil && !errors.Is(err, ErrJobState) {
 			return err
