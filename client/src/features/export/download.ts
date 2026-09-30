@@ -1,4 +1,29 @@
+import { createSignal } from "solid-js";
 import type { Authentication, StreamingApiClient } from "../../api";
+
+/** Share the pending, error, and cancellation lifecycle of export download actions. */
+export function createExportDownload(start: (signal: AbortSignal) => Promise<void>) {
+  const [pending, setPending] = createSignal(false);
+  const [error, setError] = createSignal("");
+  let controller: AbortController | undefined;
+  const download = async () => {
+    if (pending()) return;
+    const requestController = new AbortController();
+    controller = requestController;
+    setPending(true);
+    setError("");
+    try {
+      await start(requestController.signal);
+    } catch (cause) {
+      if (requestController.signal.aborted) setError("Download cancelled.");
+      else setError(cause instanceof Error ? cause.message : "Download failed. Try again.");
+    } finally {
+      controller = undefined;
+      setPending(false);
+    }
+  };
+  return { pending, error, download, cancel: () => controller?.abort() };
+}
 
 const scope = "/download-stream/";
 let registration: Promise<ServiceWorkerRegistration> | undefined;

@@ -360,7 +360,7 @@ func (p ProjectUseCase) Create(ctx context.Context, id string, input ProjectInpu
 	if input.Revision != 0 {
 		return Project{}, store.ErrRevisionConflict
 	}
-	return p.save(ctx, id, input)
+	return p.Save(ctx, id, input)
 }
 
 func (p ProjectUseCase) List(ctx context.Context, cursor string, limit int) (ProjectPage, error) {
@@ -391,10 +391,6 @@ func (p ProjectUseCase) Get(ctx context.Context, id string) (Project, error) {
 }
 
 func (p ProjectUseCase) Save(ctx context.Context, id string, input ProjectInput) (Project, error) {
-	return p.save(ctx, id, input)
-}
-
-func (p ProjectUseCase) save(ctx context.Context, id string, input ProjectInput) (Project, error) {
 	if p.Media == nil {
 		return Project{}, errors.New("project media catalog is required")
 	}

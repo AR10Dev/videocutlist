@@ -104,8 +104,6 @@ type DetectionRequest = projects.DetectionRequest
 type DetectionJob = projects.DetectionJob
 type DetectionService interface {
 	Create(context.Context, string, DetectionRequest) (DetectionJob, error)
-	Get(context.Context, string) (DetectionJob, error)
-	Cancel(context.Context, string) error
 }
 type DestinationMetadata struct {
 	ID          string `json:"id"`

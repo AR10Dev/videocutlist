@@ -111,12 +111,6 @@ export interface ApiClient {
     params: Record<string, number>,
     init?: RequestInit,
   ): Promise<Response>;
-  interchangeRequest(
-    projectId: string,
-    format: "csv" | "chapters",
-    init?: RequestInit,
-    projectItemId?: string,
-  ): Promise<Response>;
 }
 
 export interface StreamingApiClient extends ApiClient {
@@ -201,15 +195,5 @@ export function createApiClient(
     );
     return request(`media/${encodeURIComponent(mediaId)}/${kind}?${query}`, init);
   };
-  const interchangeRequest = (
-    projectId: string,
-    format: "csv" | "chapters",
-    init: RequestInit = {},
-    projectItemId?: string,
-  ) =>
-    request(
-      `projects/${encodeURIComponent(projectId)}/interchange/${format}${projectItemId ? `?itemId=${encodeURIComponent(projectItemId)}` : ""}`,
-      init,
-    );
-  return { url, request, assetRequest, interchangeRequest, reportUnauthorized };
+  return { url, request, assetRequest, reportUnauthorized };
 }

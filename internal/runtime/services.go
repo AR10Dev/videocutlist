@@ -86,11 +86,7 @@ func (m MediaCatalog) Preview(ctx context.Context, request projects.PreviewSpec)
 	}
 	return preview(item, request), nil
 }
-func media(item index.Media, roots ...string) projects.Media {
-	rootID := ""
-	if len(roots) > 0 {
-		rootID = roots[0]
-	}
+func media(item index.Media, rootID string) projects.Media {
 	streams := map[string]any{}
 	if item.Metadata.Video != nil {
 		streams["video"] = item.Metadata.Video
@@ -196,7 +192,7 @@ func NewExportExecutor(jobs *jobqueue.JobsStore, scanner *index.Scanner, media *
 	return ExportExecutor{Jobs: jobs, Scanner: scanner, Media: media, Service: service}
 }
 func (e ExportExecutor) Preflight(ctx context.Context, _ string, project projects.Project, input projects.ExportInput) (projects.ExportPreflight, error) {
-	items, err := preflightItems(project, input.ItemIDs)
+	items, err := projects.SelectProjectItems(project.Document, input.ItemIDs)
 	if err != nil {
 		return projects.ExportPreflight{}, err
 	}
@@ -253,32 +249,6 @@ func (e ExportExecutor) Preflight(ctx context.Context, _ string, project project
 		}
 	}
 	return result, nil
-}
-
-func preflightItems(project projects.Project, itemIDs []string) ([]model.ProjectItem, error) {
-	if len(itemIDs) == 0 {
-		return append([]model.ProjectItem(nil), project.Items...), nil
-	}
-	requested := make(map[string]struct{}, len(itemIDs))
-	for _, id := range itemIDs {
-		if id == "" {
-			return nil, errors.New("preflight item ID is required")
-		}
-		if _, exists := requested[id]; exists {
-			return nil, fmt.Errorf("preflight item %q is duplicated", id)
-		}
-		requested[id] = struct{}{}
-	}
-	items := make([]model.ProjectItem, 0, len(itemIDs))
-	for _, item := range project.Items {
-		if _, ok := requested[item.ID]; ok {
-			items = append(items, item)
-		}
-	}
-	if len(items) != len(requested) {
-		return nil, errors.New("preflight item is not in the project")
-	}
-	return items, nil
 }
 
 func preflightRequest(item model.ProjectItem, input projects.ExportInput, useInput bool) exporter.Request {

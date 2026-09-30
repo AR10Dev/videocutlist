@@ -101,26 +101,6 @@ func (e *DetectionUseCase) Create(ctx context.Context, projectID string, request
 	}
 	return DetectionJob{}, errors.New("detection scheduler is not configured")
 }
-func (e *DetectionUseCase) Get(ctx context.Context, id string) (DetectionJob, error) {
-	if e.UnifiedJobs != nil {
-		j, err := e.UnifiedJobs.Get(ctx, id)
-		if err != nil {
-			return DetectionJob{}, err
-		}
-		if j.Kind != jobqueue.JobDetect {
-			return DetectionJob{}, jobqueue.ErrJobNotFound
-		}
-		return detectionJobResult(j), nil
-	}
-	return DetectionJob{}, jobqueue.ErrJobNotFound
-}
-func (e *DetectionUseCase) Cancel(ctx context.Context, id string) error {
-	if e.UnifiedJobs == nil || e.Scheduler == nil {
-		return jobqueue.ErrJobNotFound
-	}
-	_, err := e.Scheduler.Cancel(ctx, id)
-	return err
-}
 func detectionJobResult(j jobqueue.Job) DetectionJob {
 	var request DetectionRequest
 	_ = json.Unmarshal([]byte(j.RequestJSON), &request)

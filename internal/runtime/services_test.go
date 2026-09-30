@@ -24,23 +24,28 @@ import (
 	"videocutlist/internal/projects/model"
 )
 
-func TestPreflightItemsSelectsProjectItemsInDocumentOrder(t *testing.T) {
+func TestPreflightRejectsInvalidItemSelectionBeforeOpeningMedia(t *testing.T) {
 	project := projects.Project{Document: model.Document{Items: []model.ProjectItem{
 		{ID: "i_first"},
 		{ID: "i_second"},
 	}}}
-	items, err := preflightItems(project, []string{"i_second", "i_first"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(items) != 2 || items[0].ID != "i_first" || items[1].ID != "i_second" {
-		t.Fatalf("selected items = %#v", items)
-	}
-	if _, err := preflightItems(project, []string{"i_first", "i_first"}); err == nil {
-		t.Fatal("duplicate item selection was accepted")
-	}
-	if _, err := preflightItems(project, []string{"i_missing"}); err == nil {
-		t.Fatal("unknown item selection was accepted")
+	for _, test := range []struct {
+		name    string
+		itemIDs []string
+		itemID  string
+		code    string
+	}{
+		{name: "empty", itemIDs: []string{""}, code: "item_id_required"},
+		{name: "duplicate", itemIDs: []string{"i_first", "i_first"}, itemID: "i_first", code: "item_id_duplicate"},
+		{name: "unknown", itemIDs: []string{"i_first", "i_missing"}, itemID: "i_missing", code: "item_id_unknown"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := (ExportExecutor{}).Preflight(t.Context(), project.ID, project, projects.ExportInput{ItemIDs: test.itemIDs})
+			itemErr, ok := errors.AsType[*projects.ProjectItemError](err)
+			if !ok || itemErr.ItemID != test.itemID || itemErr.Code != test.code {
+				t.Fatalf("selection error = %v, want item %q with code %q", err, test.itemID, test.code)
+			}
+		})
 	}
 }
 
@@ -78,7 +83,7 @@ func TestMediaAPIShapeHidesStorageAndProviderMetadata(t *testing.T) {
 			Codec: "h264", Width: 1280, Height: 720, AvgFrameRate: "30/1",
 		}},
 	}
-	response, err := json.Marshal(media(item))
+	response, err := json.Marshal(media(item, ""))
 	if err != nil {
 		t.Fatal(err)
 	}

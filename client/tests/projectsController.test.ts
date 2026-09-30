@@ -50,7 +50,6 @@ describe("projects controller", () => {
         url: (path) => path,
         request,
         assetRequest: () => Promise.resolve(Response.json({})),
-        interchangeRequest: () => Promise.resolve(Response.json({})),
       };
       const [selected, setSelected] = createSignal<components["schemas"]["Media"]>();
       const [projectId, setProjectId] = createSignal("p_currentproject");
@@ -216,7 +215,6 @@ describe("projects controller", () => {
         return Promise.reject(new Error(`Unexpected request: ${path}`));
       },
       assetRequest: () => Promise.resolve(Response.json({})),
-      interchangeRequest: () => Promise.resolve(Response.json({})),
     };
     const [selected, setSelected] = createSignal<components["schemas"]["Media"] | undefined>(media);
     const [projectId, setProjectId] = createSignal("p_conflict-load1");
@@ -349,7 +347,6 @@ describe("projects controller", () => {
         return Promise.resolve(Response.json(media));
       },
       assetRequest: () => Promise.resolve(Response.json({})),
-      interchangeRequest: () => Promise.resolve(Response.json({})),
     };
     const queryClient = new QueryClient();
     queryClient.invalidateQueries = () => Promise.reject(new Error("cache refresh failed"));

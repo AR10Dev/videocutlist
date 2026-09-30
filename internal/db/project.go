@@ -180,9 +180,7 @@ func (s *ProjectStore) getTx(tx *sql.Tx, id string) (ProjectRecord, error) {
 	return record, err
 }
 
-type projectScanner interface{ Scan(...any) error }
-
-func scanProject(row projectScanner) (ProjectRecord, error) {
+func scanProject(row rowScanner) (ProjectRecord, error) {
 	var record ProjectRecord
 	var created, updated string
 	if err := row.Scan(&record.ID, &record.Revision, &record.DocumentJSON, &created, &updated); err != nil {

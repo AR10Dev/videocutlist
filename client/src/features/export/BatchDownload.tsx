@@ -1,45 +1,30 @@
-import { createSignal, Show } from "solid-js";
+import { Show } from "solid-js";
 import { createApiClient, resolveBrowserConfiguration } from "../../api";
-import { downloadExport } from "./download";
+import { createExportDownload, downloadExport } from "./download";
 
 const configuration = resolveBrowserConfiguration();
 const api = createApiClient(configuration);
 /** Prepare one authenticated archive without exposing server paths. */
 export function BatchDownload(props: { batchId: string; outputCount: number }) {
-  const [pending, setPending] = createSignal(false);
-  const [error, setError] = createSignal("");
-  let controller: AbortController | undefined;
-  const path = () => `batches/${encodeURIComponent(props.batchId)}/download`;
-  const download = async () => {
-    if (pending() || props.outputCount < 2) return;
-    const requestController = new AbortController();
-    controller = requestController;
-    setPending(true);
-    setError("");
-    try {
-      await downloadExport(
-        api,
-        path(),
-        "videocutlist-clips.zip",
-        configuration.authentication,
-        requestController.signal,
-      );
-    } catch (cause) {
-      if (requestController.signal.aborted) setError("Download cancelled.");
-      else setError(cause instanceof Error ? cause.message : "Download failed. Try again.");
-    } finally {
-      if (controller === requestController) controller = undefined;
-      setPending(false);
-    }
-  };
-  const cancel = () => controller?.abort();
+  const { pending, error, download, cancel } = createExportDownload((signal) =>
+    downloadExport(
+      api,
+      `batches/${encodeURIComponent(props.batchId)}/download`,
+      "videocutlist-clips.zip",
+      configuration.authentication,
+      signal,
+    ),
+  );
   return (
     <div class="controls" aria-busy={pending()}>
       <button
         class="btn btn-sm"
         type="button"
         disabled={pending() || props.outputCount < 2}
-        onClick={() => void download()}
+        onClick={() => {
+          if (props.outputCount < 2) return;
+          void download();
+        }}
       >
         {pending() ? "Downloading all clips…" : "Download all clips"}
       </button>

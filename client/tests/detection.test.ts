@@ -69,7 +69,6 @@ it("preserves a local detection cancellation over stale cached status", async ()
       return Promise.resolve(Response.json(queuedDetectionJob));
     },
     assetRequest: () => Promise.resolve(Response.json({})),
-    interchangeRequest: () => Promise.resolve(Response.json({})),
   };
 
   await new Promise<void>((resolve, reject) => {
@@ -149,7 +148,6 @@ it("accepts successive detection candidates across its own saved revisions but r
     url: (path) => path,
     request: () => Promise.resolve(Response.json(completed)),
     assetRequest: () => Promise.resolve(Response.json({})),
-    interchangeRequest: () => Promise.resolve(Response.json({})),
   };
   await new Promise<void>((resolve, reject) => {
     createRoot((dispose) => {

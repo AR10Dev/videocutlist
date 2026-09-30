@@ -65,10 +65,6 @@ func (s *contractDetectionService) Create(context.Context, string, DetectionRequ
 	s.creates++
 	return DetectionJob{ID: "j_detection1234", State: "queued"}, s.err
 }
-func (*contractDetectionService) Get(context.Context, string) (DetectionJob, error) {
-	return DetectionJob{}, nil
-}
-func (*contractDetectionService) Cancel(context.Context, string) error { return nil }
 
 type contractJobService struct {
 	getErr    error

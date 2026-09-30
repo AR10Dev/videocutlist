@@ -403,35 +403,16 @@ func (j *routeTestJobs) Cancel(context.Context, string) error {
 	return nil
 }
 
-type routeTestDetection struct{ gets, cancels int }
-
-func (d *routeTestDetection) Create(context.Context, string, DetectionRequest) (DetectionJob, error) {
-	return DetectionJob{}, nil
-}
-func (d *routeTestDetection) Get(context.Context, string) (DetectionJob, error) {
-	d.gets++
-	return DetectionJob{
-		ID: "j_detection", Type: "detection", State: "succeeded",
-		MediaID: "m_media", ProjectID: "p_project", ProjectRevision: 7, Kind: model.DetectSilence,
-		Candidates: []model.Candidate{{ID: "c_candidate", MediaID: "m_media", ProjectID: "p_project", ProjectRevision: 7, StartMS: 100, EndMS: 200, Source: model.DetectSilence}},
-	}, nil
-}
-func (d *routeTestDetection) Cancel(context.Context, string) error {
-	d.cancels++
-	return nil
-}
-
-func TestDetectionJobsDispatchThroughDetectionService(t *testing.T) {
+func TestDetectionJobResponsesUseUnifiedJobContract(t *testing.T) {
 	authenticator, err := NewAuthenticator(AuthConfig{Mode: "none"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	detection := &routeTestDetection{}
 	jobs := &routeTestJobs{job: Job{
 		ID: "j_detection", Type: "detection", State: "succeeded", MediaID: "m_media", ProjectID: "p_project", ProjectRevision: 7, Kind: model.DetectSilence,
 		Candidates: []model.Candidate{{ID: "c_candidate", MediaID: "m_media", ProjectID: "p_project", ProjectRevision: 7, StartMS: 100, EndMS: 200, Source: model.DetectSilence}},
 	}}
-	server, err := New(Config{Authenticator: authenticator, Media: &routeTestMedia{}, Preview: routeTestPreview{}, Projects: routeTestProjects{}, BatchExports: &routeTestBatchExports{}, Detection: detection, Jobs: jobs})
+	server, err := New(Config{Authenticator: authenticator, Media: &routeTestMedia{}, Preview: routeTestPreview{}, Projects: routeTestProjects{}, BatchExports: &routeTestBatchExports{}, Jobs: jobs})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -473,9 +454,6 @@ func TestDetectionJobsDispatchThroughDetectionService(t *testing.T) {
 				t.Error("detection response exposes fabricated confidence")
 			}
 		}
-	}
-	if detection.gets != 0 || detection.cancels != 0 || jobs.gets != 1 || jobs.cancels != 1 {
-		t.Fatalf("detection dispatch gets=%d cancels=%d; unified gets=%d cancels=%d", detection.gets, detection.cancels, jobs.gets, jobs.cancels)
 	}
 }
 
