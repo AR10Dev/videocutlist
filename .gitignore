@@ -2,10 +2,21 @@
 .worktrees/
 .scratch/
 .cache/
+
+# Build output and dependency caches (including nested frontend assets)
 dist/
 node_modules/
 .pnpm-store/
 test-results/
+playwright-report/
+blob-report/
+coverage/
+*.tsbuildinfo
+*.test
+/videocutlist
+/videocutlist.exe
+
+# Incomplete generated files
 *.tmp
 *.partial
 

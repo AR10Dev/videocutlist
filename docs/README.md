@@ -8,6 +8,10 @@ Guides for installing, using, and maintaining VideoCutlist.
 - [Operations](runbooks/operations.md)
 - [Connectivity examples](../deployments/connectivity-examples/README.md)
 
+## Developing
+
+- [Contributor setup and checks](../CONTRIBUTING.md)
+
 ## Editing and exporting
 
 1. Configure a media root using the deployment guide, then use **Rescan library**

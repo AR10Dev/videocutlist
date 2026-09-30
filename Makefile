@@ -7,13 +7,21 @@ GO_TEST_PACKAGES := $(GO_PACKAGES) ./test/...
 SHELL_FILES := $(shell find scripts deployments test -type f -name '*.sh')
 DATA_DIR ?= .cache/videocutlist
 
-.PHONY: benchmark-backend build check client-install e2e format lint run smoke test test-podman test-real-media
+.PHONY: benchmark-backend build check clean client-install e2e format lint run smoke test test-podman test-real-media
 
 build:
 	$(PNPM) --dir client run build
 	rm -rf internal/web/webassets/dist
 	cp -a client/dist internal/web/webassets/dist
 	$(GO) build -tags embed_frontend $(GO_PACKAGES)
+
+# Remove reproducible output only; preserve dependencies and application data.
+clean:
+	rm -rf -- client/dist internal/web/webassets/dist \
+		client/test-results client/playwright-report client/blob-report client/coverage \
+		test-results playwright-report blob-report coverage \
+		client/node_modules/.vite client/node_modules/.vite-temp node_modules/.vite
+	rm -f -- videocutlist videocutlist.exe *.test *.tsbuildinfo client/*.tsbuildinfo
 
 run:
 	VIDEOCUTLIST_DATABASE_PATH="$${VIDEOCUTLIST_DATABASE_PATH:-$(DATA_DIR)/videocutlist.db}" \

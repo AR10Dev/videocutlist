@@ -86,13 +86,26 @@ authentication; plain HTTP is rejected for non-loopback clients.
 embedding an artifact in the MCP response. Fetch it with the same bearer token;
 each download rechecks the credential, scope, and revocation state.
 
+## Repository at a glance
+
+| Location | What you will find |
+| --- | --- |
+| `cmd/videocutlist/` | Go server entry point and startup wiring |
+| `internal/` | Go application code and infrastructure |
+| `client/` | SolidJS/TypeScript frontend and its pnpm tooling |
+| `docs/` | Guides and API contracts |
+| `test/` | Cross-package and media workflow tests |
+
+For setup and checks, use the [contributor guide](CONTRIBUTING.md).
+
 ## Development
 
 ```bash
 make client-install
-make check             # formatting check, lint, tests, and build
+make check             # lint, tests, and production build
 make smoke             # check plus browser tests
 make test-real-media   # opt-in production process and FFmpeg verification
+make clean             # remove generated output, preserving dependencies and local data
 ```
 
 CI and release validation install the same `make check` prerequisites as the
@@ -100,8 +113,6 @@ development shell: golangci-lint v2.13.1, shfmt v3.13.1, and ShellCheck.
 Both workflows run `make check`; the CI browser job separately runs `make e2e`.
 CI limits browser tests to two concurrent workers to keep the Vite development
 server responsive on the hosted runner.
-
-See [Contributing](CONTRIBUTING.md) before opening a pull request.
 
 ## Documentation
 
