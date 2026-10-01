@@ -2,10 +2,13 @@ package projects
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"math"
 
+	store "videocutlist/internal/db"
 	jobqueue "videocutlist/internal/jobs"
 	"videocutlist/internal/projects/model"
 )
@@ -54,6 +57,7 @@ func ValidateDetectionRequest(request DetectionRequest) error {
 
 type DetectionUseCase struct {
 	Catalog     MediaCatalog
+	Projects    ProjectRepository
 	UnifiedJobs *jobqueue.JobsStore
 	Scheduler   *jobqueue.Scheduler
 	Detector    Detector
@@ -62,6 +66,113 @@ type DetectionUseCase struct {
 func NewDetectionUseCase(d Detector) *DetectionUseCase {
 	return &DetectionUseCase{Detector: d}
 }
+func (e *DetectionUseCase) Submit(ctx context.Context, projectID, idempotencyKey string, request DetectionRequest) (DetectionJob, error) {
+	if e.Scheduler == nil || e.UnifiedJobs == nil || e.Projects == nil || e.Catalog == nil || !jobqueue.ValidCommandKey(idempotencyKey) {
+		return DetectionJob{}, errors.New("detection command dependencies and valid idempotency key are required")
+	}
+	if err := validateDetectionSubmission(request); err != nil {
+		return DetectionJob{}, err
+	}
+	admission, err := detectionAdmission(idempotencyKey, projectID, request)
+	if err != nil {
+		return DetectionJob{}, err
+	}
+	if replay, found, err := e.Scheduler.LookupCommand(ctx, admission); err != nil {
+		return DetectionJob{}, err
+	} else if found {
+		return detectionJobResult(replay.Jobs[0]), nil
+	}
+	replayOnFailure := func(failure error) (DetectionJob, error) {
+		result, found, lookupErr := e.Scheduler.LookupCommand(ctx, admission)
+		if lookupErr != nil {
+			return DetectionJob{}, lookupErr
+		}
+		if found {
+			return detectionJobResult(result.Jobs[0]), nil
+		}
+		return DetectionJob{}, failure
+	}
+	project, err := e.Projects.Get(ctx, projectID)
+	if err != nil {
+		return replayOnFailure(err)
+	}
+	if project.Revision != request.ProjectRevision || !detectionProjectContains(project.Document, request.ProjectItemID, request.MediaID) {
+		return replayOnFailure(store.ErrRevisionConflict)
+	}
+	media, err := e.Catalog.Get(ctx, request.MediaID)
+	if err != nil {
+		return replayOnFailure(err)
+	}
+	if request.SourceFingerprint != "" && request.SourceFingerprint != media.ETag {
+		return replayOnFailure(jobqueue.ErrSourceChanged)
+	}
+	request.ProjectID = projectID
+	request.CredentialID = ""
+	request.SourceFingerprint = media.ETag
+	data, err := json.Marshal(request)
+	if err != nil {
+		return DetectionJob{}, err
+	}
+	id, err := newID("j_")
+	if err != nil {
+		return DetectionJob{}, err
+	}
+	batchID, err := newID("b_")
+	if err != nil {
+		return DetectionJob{}, err
+	}
+	created, err := e.Scheduler.SubmitCommand(ctx, admission, []jobqueue.Job{{ID: id, BatchID: batchID, Kind: jobqueue.JobDetect, ProjectID: projectID, ProjectItemID: request.ProjectItemID, RequestJSON: string(data)}})
+	if err != nil {
+		if replay, found, lookupErr := e.Scheduler.LookupCommand(ctx, admission); lookupErr == nil && found {
+			return detectionJobResult(replay.Jobs[0]), nil
+		}
+		return DetectionJob{}, err
+	}
+	return detectionJobResult(created.Jobs[0]), nil
+}
+
+func validateDetectionSubmission(request DetectionRequest) error {
+	if request.ProjectItemID == "" {
+		return errors.New("project item is required")
+	}
+	return ValidateDetectionRequest(request)
+}
+
+func detectionAdmission(key, projectID string, request DetectionRequest) (jobqueue.CommandAdmission, error) {
+	noiseDB := request.NoiseDB
+	if noiseDB == 0 {
+		noiseDB = 0
+	}
+	sceneThreshold := request.SceneThreshold
+	if sceneThreshold == 0 {
+		sceneThreshold = 0
+	}
+	payload, err := json.Marshal(struct {
+		ProjectRevision   int64               `json:"projectRevision"`
+		ProjectItemID     string              `json:"projectItemId"`
+		MediaID           string              `json:"mediaId"`
+		SourceFingerprint string              `json:"sourceFingerprint"`
+		Kind              model.DetectionKind `json:"kind"`
+		NoiseDB           float64             `json:"noiseDb"`
+		MinDurationMS     int64               `json:"minDurationMs"`
+		SceneThreshold    float64             `json:"sceneThreshold"`
+	}{request.ProjectRevision, request.ProjectItemID, request.MediaID, request.SourceFingerprint, request.Kind, noiseDB, request.MinDurationMS, sceneThreshold})
+	if err != nil {
+		return jobqueue.CommandAdmission{}, err
+	}
+	digest := sha256.Sum256(payload)
+	return jobqueue.CommandAdmission{Key: key, Scope: "detection-submit", Kind: "detection-submit", Target: projectID, Digest: hex.EncodeToString(digest[:])}, nil
+}
+
+func detectionProjectContains(document model.Document, itemID, mediaID string) bool {
+	for _, item := range document.Items {
+		if item.ID == itemID && item.MediaID == mediaID {
+			return true
+		}
+	}
+	return false
+}
+
 func (e *DetectionUseCase) Create(ctx context.Context, projectID string, request DetectionRequest) (DetectionJob, error) {
 	if request.ProjectItemID == "" {
 		return DetectionJob{}, errors.New("project item is required")

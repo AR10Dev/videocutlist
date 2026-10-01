@@ -13,7 +13,6 @@ import (
 	store "videocutlist/internal/db"
 	jobqueue "videocutlist/internal/jobs"
 	"videocutlist/internal/projects"
-	"videocutlist/internal/projects/model"
 )
 
 type contractProjectService struct {
@@ -65,7 +64,7 @@ type contractDetectionService struct {
 	creates int
 }
 
-func (s *contractDetectionService) Create(context.Context, string, DetectionRequest) (DetectionJob, error) {
+func (s *contractDetectionService) Submit(context.Context, string, string, DetectionRequest) (DetectionJob, error) {
 	s.creates++
 	return DetectionJob{ID: "j_detection1234", State: "queued"}, s.err
 }
@@ -93,36 +92,32 @@ func contractErrorCode(t *testing.T, response *httptest.ResponseRecorder) string
 	return envelope.Error.Code
 }
 
-func TestCreateDetectionSeparatesInvalidInputFromStaleProject(t *testing.T) {
-	project := projects.Project{
-		Revision: 7,
-		Document: model.Document{Items: []model.ProjectItem{{ID: "i_contract123456789012345678", MediaID: "m_contract"}}},
-	}
+func TestCreateDetectionRequiresKeyAndValidInputBeforeSubmission(t *testing.T) {
 	valid := `{"mediaId":"m_contract","projectItemId":"i_contract123456789012345678","projectRevision":7,"kind":"silence"}`
 	for _, test := range []struct {
 		name   string
+		key    string
 		body   string
 		status int
 		code   string
 	}{
-		{name: "malformed JSON", body: "{", status: http.StatusBadRequest, code: "invalid_detection"},
-		{name: "invalid kind", body: strings.Replace(valid, `"silence"`, `"unknown"`, 1), status: http.StatusBadRequest, code: "invalid_detection"},
-		{name: "stale revision", body: strings.Replace(valid, `"projectRevision":7`, `"projectRevision":6`, 1), status: http.StatusConflict, code: "stale_project"},
-		{name: "stale item membership", body: strings.Replace(valid, `"projectItemId":"i_contract123456789012345678"`, `"projectItemId":"i_other1234567890123456789"`, 1), status: http.StatusConflict, code: "stale_project"},
+		{name: "missing key", body: valid, status: http.StatusBadRequest, code: "invalid_idempotency_key"},
+		{name: "invalid key", key: "bad key", body: valid, status: http.StatusBadRequest, code: "invalid_idempotency_key"},
+		{name: "malformed JSON", key: "valid-key", body: "{", status: http.StatusBadRequest, code: "invalid_detection"},
+		{name: "invalid kind", key: "valid-key", body: strings.Replace(valid, `"silence"`, `"unknown"`, 1), status: http.StatusBadRequest, code: "invalid_detection"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			detection := &contractDetectionService{}
-			server := &Server{
-				config:  Config{Projects: contractProjectService{project: project}, Detection: detection},
-				metrics: NewMetrics(),
-			}
+			server := &Server{config: Config{Detection: detection}, metrics: NewMetrics()}
+			request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(test.body))
+			request.Header.Set("Idempotency-Key", test.key)
 			response := httptest.NewRecorder()
-			server.createDetection(response, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(test.body)), "p_contract1234", "request")
+			server.createDetection(response, request, "p_contract1234", "request")
 			if response.Code != test.status || contractErrorCode(t, response) != test.code {
 				t.Fatalf("response = %d %s", response.Code, response.Body.String())
 			}
 			if detection.creates != 0 {
-				t.Fatalf("detection creates = %d", detection.creates)
+				t.Fatalf("detection submitted = %d", detection.creates)
 			}
 		})
 	}

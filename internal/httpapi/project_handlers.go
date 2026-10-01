@@ -194,38 +194,30 @@ func (s *Server) createDetection(writer http.ResponseWriter, request *http.Reque
 		internalError(writer, id)
 		return
 	}
-	owned, err := s.config.Projects.Get(request.Context(), project)
-	if err != nil {
-		resourceError(writer, id, err)
+	key := request.Header.Get("Idempotency-Key")
+	if !jobqueue.ValidCommandKey(key) {
+		httpx.Error(writer, http.StatusBadRequest, "invalid_idempotency_key", "A valid Idempotency-Key is required.", id)
 		return
 	}
 	var input DetectionRequest
-	if httpx.ReadJSON(request, &input) != nil || !input.Kind.Valid() {
+	if httpx.ReadJSON(request, &input) != nil || input.ProjectItemID == "" || projects.ValidateDetectionRequest(input) != nil {
 		httpx.Error(writer, http.StatusBadRequest, "invalid_detection", "Detection request is invalid.", id)
 		return
 	}
-	if input.ProjectRevision != owned.Revision {
-		httpx.Error(writer, http.StatusConflict, "stale_project", "Detection request is stale.", id)
-		return
-	}
-	matched := false
-	for _, item := range owned.Items {
-		if item.ID == input.ProjectItemID && item.MediaID == input.MediaID {
-			matched = true
-			break
-		}
-	}
-	if !matched {
-		httpx.Error(writer, http.StatusConflict, "stale_project", "Detection request is stale.", id)
-		return
-	}
-	job, err := s.config.Detection.Create(request.Context(), project, input)
+	job, err := s.config.Detection.Submit(request.Context(), project, key, input)
 	if err != nil {
-		if errors.Is(err, projects.ErrBusy) {
+		switch {
+		case errors.Is(err, projects.ErrBusy), errors.Is(err, jobqueue.ErrQueueFull):
 			httpx.Error(writer, http.StatusTooManyRequests, "detection_busy", "Detection capacity is full.", id)
-			return
+		case errors.Is(err, jobqueue.ErrAdmissionConflict):
+			httpx.Error(writer, http.StatusConflict, "idempotency_conflict", "Idempotency-Key was already used for a different command.", id)
+		case errors.Is(err, store.ErrRevisionConflict), errors.Is(err, jobqueue.ErrSourceChanged):
+			httpx.Error(writer, http.StatusConflict, "stale_project", "Detection request is stale.", id)
+		case errors.Is(err, store.ErrProjectNotFound):
+			resourceError(writer, id, err)
+		default:
+			resourceError(writer, id, err)
 		}
-		httpx.Error(writer, http.StatusBadRequest, "invalid_detection", "Detection request is invalid.", id)
 		return
 	}
 	httpx.WriteJSON(writer, http.StatusAccepted, job)

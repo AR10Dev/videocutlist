@@ -107,6 +107,7 @@ func run(ctx context.Context) (runErr error) {
 	mediaService := &projects.MediaUseCase{Catalog: mediaCatalog, Configured: len(cfg.MediaRoots) > 0}
 	detectionService := projects.NewDetectionUseCase(&detection.Service{Scanner: scanner, Catalog: mediaStore, FFmpegPath: cfg.FFmpegPath, Capacity: limiter})
 	detectionService.Catalog = mediaCatalog
+	detectionService.Projects = runtime.ProjectRepository{Store: projectStore}
 	previewRunner := runtime.PreviewRunner{Scanner: scanner, Media: mediaStore, FFmpeg: ffmpeg.Runner{Path: cfg.FFmpegPath}}
 	previewManager, err := projects.NewPreviewManager(runtime.PreviewCache{Store: cacheStore}, previewRunner, validator, limiter)
 	if err != nil {
