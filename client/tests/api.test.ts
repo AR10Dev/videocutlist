@@ -1,9 +1,12 @@
+import { Effect } from "effect";
+import * as HttpClient from "effect/http/HttpClient";
 import { describe, expect, it, vi } from "vitest";
 import {
   authenticationRequiredEvent,
   apiJson,
   ApiFailure,
   createApiClient,
+  createNativeHttpClientLayer,
   MAX_INTERCHANGE_FILE_BYTES,
   readApiError,
   runEffect,
@@ -70,13 +73,22 @@ describe("client API boundary", () => {
     "http://100.80.20.10:8787",
     "https://video.example.com",
   ])("accepts the configured server URL %s", (serverBaseUrl) => {
-    expect(api(serverBaseUrl).url("media")).toBe(`${serverBaseUrl}/api/v1/media`);
+    expect(api(serverBaseUrl).url("media")).toBe(`${serverBaseUrl}/api/v2/media`);
+  });
+
+  it("keeps native media URLs below the configured deployment prefix", () => {
+    const client = api("https://video.example.com/videocutlist/");
+    expect(client.mediaUrl("m_fixture/thumbnails?width=240")).toBe(
+      "https://video.example.com/videocutlist/media/v2/m_fixture/thumbnails?width=240",
+    );
+    expect(() => client.mediaUrl("../api/v2/projects")).toThrow();
+    expect(() => client.mediaUrl("https://attacker.test/file")).toThrow();
   });
 
   it("normalizes trailing slashes and keeps API paths below a prefix", () => {
     const client = api("https://video.example.com/videocutlist///");
     expect(client.url("media/m_a%2Fb?label=two%20words")).toBe(
-      "https://video.example.com/videocutlist/api/v1/media/m_a%2Fb?label=two%20words",
+      "https://video.example.com/videocutlist/api/v2/media/m_a%2Fb?label=two%20words",
     );
   });
 
@@ -115,7 +127,7 @@ describe("client API boundary", () => {
     await client.request("media/status");
 
     expect(fetch).toHaveBeenCalledWith(
-      "https://video.example.com/api/v1/media/status",
+      "https://video.example.com/api/v2/media/status",
       expect.objectContaining({ credentials: "omit" }),
     );
   });
@@ -137,11 +149,55 @@ describe("client API boundary", () => {
     });
 
     expect(fetch).toHaveBeenCalledWith(
-      "https://video.example.com/api/v1/media",
+      "https://video.example.com/api/v2/media",
       expect.objectContaining({ signal, credentials: "omit" }),
     );
     const init = fetch.mock.calls[0][1] as RequestInit;
     expect(new Headers(init.headers).get("x-request-id")).toBe("r-1");
+    expect(new Headers(init.headers).has("authorization")).toBe(false);
+  });
+
+  it("applies configured bearer and cookie policy to native Effect HTTP", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(() => Promise.resolve(new Response("ok")));
+    const configuration = {
+      serverBaseUrl: "https://video.example.com/videocutlist",
+      authentication: { type: "bearer" as const, token: "session-token" },
+    };
+    const client = api(configuration.serverBaseUrl);
+    const layer = createNativeHttpClientLayer(configuration, fetch);
+    await runEffect(
+      HttpClient.get(client.url("projects"), {
+        headers: { authorization: "Basic caller", "x-request-id": "r-native" },
+      }).pipe(Effect.provide(layer)),
+    );
+    await runEffect(
+      HttpClient.get(client.mediaUrl("m_fixture/output")).pipe(Effect.provide(layer)),
+    );
+    expect(String(fetch.mock.calls[0][0])).toBe(
+      "https://video.example.com/videocutlist/api/v2/projects",
+    );
+    const init = fetch.mock.calls[0][1] as RequestInit;
+    expect(init.credentials).toBe("omit");
+    expect(new Headers(init.headers).get("authorization")).toBe("Bearer session-token");
+    expect(new Headers(init.headers).get("x-request-id")).toBe("r-native");
+    expect(String(fetch.mock.calls[1][0])).toBe(
+      "https://video.example.com/videocutlist/media/v2/m_fixture/output",
+    );
+  });
+
+  it("uses cookie credentials and strips caller authorization for native HTTP", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(() => Promise.resolve(new Response("ok")));
+    const configuration = {
+      serverBaseUrl: "https://video.example.com",
+      authentication: { type: "cookie" as const },
+    };
+    await runEffect(
+      HttpClient.get("https://video.example.com/api/v2/projects", {
+        headers: { authorization: "Basic caller" },
+      }).pipe(Effect.provide(createNativeHttpClientLayer(configuration, fetch))),
+    );
+    const init = fetch.mock.calls[0][1] as RequestInit;
+    expect(init.credentials).toBe("include");
     expect(new Headers(init.headers).has("authorization")).toBe(false);
   });
 
@@ -163,7 +219,7 @@ describe("client API boundary", () => {
     });
 
     expect(fetch).toHaveBeenCalledWith(
-      "https://video.example.com/api/v1/projects/p_demo",
+      "https://video.example.com/api/v2/projects/p_demo",
       expect.objectContaining({ credentials: "omit" }),
     );
     const init = fetch.mock.calls[0][1] as RequestInit;

@@ -1,14 +1,9 @@
-import { Cause, Effect, Exit } from "effect";
-import { z } from "zod";
+import { Cause, Effect, Exit, Layer } from "effect";
+import * as FetchHttpClient from "effect/http/FetchHttpClient";
+import * as HttpClient from "effect/http/HttpClient";
+import * as Schema from "effect/Schema";
 import type { components } from "./generated/api";
-
-const errorEnvelope = z.object({
-  error: z.object({
-    code: z.string().min(1),
-    message: z.string(),
-    requestId: z.string(),
-  }),
-});
+import { Error as ApiErrorSchema } from "./generated/effect-api";
 
 /** Decode only the public error envelope; malformed/proxy errors retain a safe fallback. */
 export async function readApiError(
@@ -16,8 +11,11 @@ export async function readApiError(
   fallback = "Request could not be completed.",
 ): Promise<components["schemas"]["Error"]["error"]> {
   const body: unknown = await response.json().catch(() => undefined);
-  const decoded = errorEnvelope.safeParse(body);
-  if (decoded.success) return decoded.data.error;
+  try {
+    return Schema.decodeUnknownSync(ApiErrorSchema)(body).error;
+  } catch {
+    // Malformed/proxy errors retain a safe fallback.
+  }
   return {
     code: "http_error",
     message: fallback,
@@ -49,6 +47,30 @@ declare global {
 
 type Fetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
+function resolveRelativeUrl(base: URL, relativePath: string, root: string) {
+  if (
+    typeof relativePath !== "string" ||
+    relativePath.startsWith("/") ||
+    relativePath.startsWith("//") ||
+    /^[a-z][a-z\d+.-]*:/i.test(relativePath) ||
+    relativePath.includes("#") ||
+    relativePath.includes("\\")
+  )
+    throw new Error(`Paths must be relative and remain within ${root}.`);
+  let decodedPath: string;
+  try {
+    decodedPath = decodeURIComponent(relativePath.split("?", 1)[0]);
+  } catch {
+    throw new Error("Paths must use valid percent encoding.");
+  }
+  if (decodedPath.split(/[\\/]/).some((segment) => segment === "." || segment === ".."))
+    throw new Error("Paths must not contain parent-escaping segments.");
+  const target = new URL(relativePath, base);
+  if (target.origin !== base.origin || !target.pathname.startsWith(base.pathname))
+    throw new Error(`Paths must remain within ${root}.`);
+  return target;
+}
+
 const hasControlCharacter = (value: string) =>
   Array.from(value).some((character) => {
     const code = character.charCodeAt(0);
@@ -70,7 +92,7 @@ function apiBase(serverBaseUrl: string) {
     base.hash
   )
     throw new Error("serverBaseUrl must not contain credentials, a query, or a fragment.");
-  base.pathname = `${base.pathname.replace(/\/+$/, "")}/api/v1/`;
+  base.pathname = `${base.pathname.replace(/\/+$/, "")}/api/v2/`;
   return base;
 }
 
@@ -121,32 +143,18 @@ export interface StreamingApiClient extends ApiClient {
 export function createApiClient(
   configuration: ClientConfiguration,
   fetchImplementation: Fetch = fetch,
-): StreamingApiClient {
+): StreamingApiClient & { mediaUrl(relativePath: string): string } {
   const base = apiBase(configuration.serverBaseUrl);
   validateAuthentication(configuration.authentication);
 
-  const url = (relativePath: string) => {
-    if (
-      typeof relativePath !== "string" ||
-      relativePath.startsWith("/") ||
-      relativePath.startsWith("//") ||
-      /^[a-z][a-z\d+.-]*:/i.test(relativePath) ||
-      relativePath.includes("#") ||
-      relativePath.includes("\\")
-    )
-      throw new Error("API paths must be relative and remain within /api/v1/.");
-    const path = relativePath.split("?", 1)[0];
-    let decodedPath: string;
-    try {
-      decodedPath = decodeURIComponent(path);
-    } catch {
-      throw new Error("API paths must use valid percent encoding.");
-    }
-    if (decodedPath.split(/[\\/]/).some((segment) => segment === "." || segment === ".."))
-      throw new Error("API paths must not contain parent-escaping segments.");
-    const target = new URL(relativePath, base);
-    if (target.origin !== base.origin || !target.pathname.startsWith(base.pathname))
-      throw new Error("API paths must remain within /api/v1/.");
+  const url = (relativePath: string) =>
+    resolveRelativeUrl(base, relativePath, "/api/v2/").toString();
+
+  const mediaBase = new URL(base);
+  mediaBase.pathname = `${base.pathname.replace(/\/api\/v2\/$/, "")}/media/v2/`;
+
+  const mediaUrl = (relativePath: string) => {
+    const target = resolveRelativeUrl(mediaBase, relativePath, "/media/v2/");
     return target.toString();
   };
 
@@ -190,9 +198,57 @@ export function createApiClient(
     const query = new URLSearchParams(
       Object.entries(params).map(([key, value]) => [key, String(value)]),
     );
-    return request(`media/${encodeURIComponent(mediaId)}/${kind}?${query}`, init);
+    const authentication = validateAuthentication(configuration.authentication);
+    const headers = new Headers(init.headers);
+    headers.delete("Authorization");
+    if (authentication.type === "bearer")
+      headers.set("Authorization", `Bearer ${authentication.token}`);
+    return fetchImplementation(mediaUrl(`${encodeURIComponent(mediaId)}/${kind}?${query}`), {
+      ...init,
+      credentials: authentication.type === "cookie" ? "include" : "omit",
+      headers,
+    }).then((response) => {
+      reportUnauthorized(response.status, authentication, init.signal);
+      return response;
+    });
   };
-  return { url, request, assetRequest, reportUnauthorized };
+  return { url, mediaUrl, request, assetRequest, reportUnauthorized };
+}
+
+/** FetchHttpClient policy for generated JSON and native HTTP requests. */
+export function createNativeHttpClientLayer(
+  configuration: ClientConfiguration,
+  fetchImplementation: Fetch = fetch,
+): Layer.Layer<HttpClient.HttpClient> {
+  const api = createApiClient(configuration, fetchImplementation);
+  const base = new URL(api.url(""));
+  const mediaBase = new URL(api.mediaUrl(""));
+  const authorizedFetch: typeof fetch = (input, init) => {
+    const target = input instanceof Request ? input.url : String(input);
+    const parsed = new URL(target);
+    if (parsed.hash) throw new Error("HTTP requests must not contain URL fragments.");
+    const root = parsed.pathname.startsWith(base.pathname) ? base : mediaBase;
+    resolveRelativeUrl(
+      root,
+      `${parsed.pathname.slice(root.pathname.length)}${parsed.search}`,
+      root.pathname,
+    );
+    const authentication = validateAuthentication(configuration.authentication);
+    const headers = new Headers(input instanceof Request ? input.headers : undefined);
+    new Headers(init?.headers).forEach((value, key) => headers.set(key, value));
+    headers.delete("Authorization");
+    if (authentication.type === "bearer")
+      headers.set("Authorization", `Bearer ${authentication.token}`);
+    const credentials = authentication.type === "cookie" ? "include" : "omit";
+    const signal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
+    return fetchImplementation(input, { ...init, credentials, headers }).then((response) => {
+      api.reportUnauthorized(response.status, authentication, signal);
+      return response;
+    });
+  };
+  return FetchHttpClient.layer.pipe(
+    Layer.provide(Layer.succeed(FetchHttpClient.Fetch, authorizedFetch)),
+  );
 }
 
 /** Public server failures retain their stable code and correlation ID. */
