@@ -25,8 +25,10 @@ import { createServerState, useServerAtom } from "./server";
 type Media = components["schemas"]["Media"];
 
 export function createWorkspaceController() {
-  const api = createApiClient(resolveBrowserConfiguration());
-  const server = createServerState(api, useContext(RegistryContext));
+  const configuration = resolveBrowserConfiguration();
+  const api = createApiClient(configuration);
+  const registry = useContext(RegistryContext);
+  const server = createServerState(api, registry, configuration);
   const [selected, setSelected] = createSignal<Media>();
   const [visibleTimelineRange, setVisibleTimelineRange] = createSignal<AssetViewport>({
     startMs: 0,
@@ -413,6 +415,7 @@ export function createWorkspaceController() {
   onCleanup(() => {
     projectsFeature.dispose();
     clearDetectionContext();
+    server.registry.dispose();
   });
   const detectionFeature = createDetectionController(server, {
     selected,

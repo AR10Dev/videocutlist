@@ -3,8 +3,17 @@ import { Cause, Effect, Exit, Layer, Option, Schedule } from "effect";
 import * as AsyncResult from "effect/reactivity/AsyncResult";
 import * as Atom from "effect/reactivity/Atom";
 import * as AtomRegistry from "effect/reactivity/AtomRegistry";
+import * as AtomHttpApi from "effect/reactivity/AtomHttpApi";
 import { createMemo, type Accessor } from "solid-js";
-import { apiJson, ApiFailure, type ApiClient } from "../../api";
+import {
+  apiJson,
+  ApiFailure,
+  createApiClient,
+  createNativeHttpClientLayer,
+  type ApiClient,
+  type ClientConfiguration,
+} from "../../api";
+import { VideoCutListApi } from "../../generated/effect-api";
 import type { components } from "../../generated/api";
 
 type Media = components["schemas"]["Media"];
@@ -13,16 +22,28 @@ export interface ServerState {
   readonly api: ApiClient;
   readonly registry: AtomRegistry.AtomRegistry;
   readonly runtime: Atom.AtomRuntime<never>;
+  readonly generatedApi?: ReturnType<typeof createGeneratedApi>;
   readonly media: (id: string) => Atom.Atom<AsyncResult.AsyncResult<Media, Error>>;
   readonly mediaRevision: Atom.Writable<number>;
   refreshMedia(): void;
 }
 
 /** One workspace owns the registry, resource identities and Effect dependency graph. */
+function createGeneratedApi(configuration: ClientConfiguration) {
+  const api = createApiClient(configuration);
+  return AtomHttpApi.Service()("WorkspaceApi", {
+    api: VideoCutListApi,
+    httpClient: createNativeHttpClientLayer(configuration),
+    baseUrl: api.url(""),
+  });
+}
+
 export function createServerState(
   api: ApiClient,
   registry: AtomRegistry.AtomRegistry,
-): ServerState {
+  configuration?: ClientConfiguration,
+) {
+  const generatedApi = configuration ? createGeneratedApi(configuration) : undefined;
   const runtime = Atom.runtime(Layer.empty);
   const mediaRevision = Atom.make(0);
   const media = Atom.family((id: string) =>
@@ -51,6 +72,7 @@ export function createServerState(
     api,
     registry,
     runtime,
+    generatedApi,
     media,
     mediaRevision,
     refreshMedia() {
