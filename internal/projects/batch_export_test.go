@@ -17,6 +17,15 @@ import (
 
 type batchProjectRepo struct{ project ProjectRecord }
 
+type failedBatchProjectRepo struct{ err error }
+
+func (r failedBatchProjectRepo) Get(context.Context, string) (ProjectRecord, error) {
+	return ProjectRecord{}, r.err
+}
+func (r failedBatchProjectRepo) Save(context.Context, string, int64, model.Document) (ProjectRecord, error) {
+	return ProjectRecord{}, r.err
+}
+
 func (r batchProjectRepo) Get(context.Context, string) (ProjectRecord, error) { return r.project, nil }
 func (r batchProjectRepo) Save(context.Context, string, int64, model.Document) (ProjectRecord, error) {
 	return r.project, nil
@@ -88,7 +97,7 @@ func TestBatchExportSnapshotsItemsInProjectOrder(t *testing.T) {
 	items := []model.ProjectItem{{ID: "i_aaaaaaaaaaaaaaaaaaaaaaaa", MediaID: "m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Segments: []model.Segment{{StartMS: 0, EndMS: 100}}, ExportOptions: model.ExportOptions{Container: "mkv"}}, {ID: "i_bbbbbbbbbbbbbbbbbbbbbbbb", MediaID: "m_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Segments: []model.Segment{{StartMS: 100, EndMS: 200}}}}
 	uc := BatchExportUseCase{Projects: batchProjectRepo{}, Media: batchCatalog{media: map[string]Media{"m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": {ID: items[0].MediaID, ETag: "a", SizeBytes: 10, DurationMS: 300}, "m_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb": {ID: items[1].MediaID, ETag: "b", SizeBytes: 20, DurationMS: 400}}}, Jobs: jobs, Scheduler: scheduler}
 	uc.Projects = batchProjectRepo{project: ProjectRecord{Document: model.Document{SchemaVersion: 2, Name: "Batch", Items: items}, Revision: 7}}
-	batchID, submitted, err := uc.Submit(context.Background(), BatchExportRequest{ProjectID: "p_aaaaaaaaaaaa", ItemIDs: []string{items[1].ID, items[0].ID}})
+	batchID, submitted, err := uc.Submit(context.Background(), BatchExportRequest{ProjectID: "p_aaaaaaaaaaaa", IdempotencyKey: "snapshot-test", ProjectRevision: 7, ItemIDs: []string{items[1].ID, items[0].ID}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,6 +126,90 @@ func TestBatchExportSnapshotsItemsInProjectOrder(t *testing.T) {
 	}
 	if state, progress, err := jobs.Batch(context.Background(), batchID); err != nil || state != jobqueue.JobQueued || progress != 0 {
 		t.Fatalf("progress = %s %v %v", state, progress, err)
+	}
+}
+
+func TestBatchExportReplayPrecedesCurrentProjectValidation(t *testing.T) {
+	ctx := t.Context()
+	path := t.TempDir() + "/jobs.db"
+	database, err := store.OpenDatabase(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	jobs, err := jobqueue.NewJobsStore(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scheduler, err := jobqueue.NewScheduler(jobs, jobqueue.SchedulerConfig{QueueCapacity: 4, WorkerLimit: 1}, func(context.Context, jobqueue.Job) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	mediaID := "m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	item := model.ProjectItem{ID: "i_aaaaaaaaaaaaaaaaaaaaaaaa", MediaID: mediaID}
+	request := BatchExportRequest{ProjectID: "p_aaaaaaaaaaaa", IdempotencyKey: "replay-after-edit", ProjectRevision: 4, ItemIDs: []string{item.ID}}
+	uc := BatchExportUseCase{
+		Projects: batchProjectRepo{project: ProjectRecord{Revision: 4, Document: model.Document{SchemaVersion: 2, Name: "Batch", Items: []model.ProjectItem{item}}}},
+		Media:    batchCatalog{media: map[string]Media{mediaID: {ID: mediaID, ETag: "source-v1", SizeBytes: 10, DurationMS: 100}}}, Jobs: jobs, Scheduler: scheduler,
+	}
+	originalBatch, originalJobs, err := uc.Submit(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	uc.Projects = failedBatchProjectRepo{err: store.ErrRevisionConflict}
+	replayedBatch, replayedJobs, err := uc.Submit(ctx, request)
+	if err != nil {
+		t.Fatalf("replay after project edit: %v", err)
+	}
+	if replayedBatch != originalBatch || len(replayedJobs) != len(originalJobs) || replayedJobs[0].ID != originalJobs[0].ID {
+		t.Fatalf("replay = %q %#v; original = %q %#v", replayedBatch, replayedJobs, originalBatch, originalJobs)
+	}
+	changed := request
+	changed.ProjectRevision++
+	if _, _, err := uc.Submit(ctx, changed); !errors.Is(err, jobqueue.ErrAdmissionConflict) {
+		t.Fatalf("changed request replay error = %v, want admission conflict", err)
+	}
+	uc.Projects = batchProjectRepo{project: ProjectRecord{Revision: 4, Document: model.Document{SchemaVersion: 2, Name: "Batch", Items: []model.ProjectItem{item}}}}
+	stale := request
+	stale.IdempotencyKey = "fresh-stale-revision"
+	stale.ProjectRevision = 3
+	if _, _, err := uc.Submit(ctx, stale); !errors.Is(err, store.ErrRevisionConflict) {
+		t.Fatalf("fresh stale revision error = %v, want revision conflict", err)
+	}
+	var staleAdmissions int
+	if err := database.QueryRowContext(ctx, `SELECT COUNT(*) FROM command_admissions WHERE idempotency_key=?`, stale.IdempotencyKey).Scan(&staleAdmissions); err != nil || staleAdmissions != 0 {
+		t.Fatalf("stale revision admissions = %d, %v", staleAdmissions, err)
+	}
+	var count int
+	if err := database.QueryRowContext(ctx, `SELECT COUNT(*) FROM jobs`).Scan(&count); err != nil || count != len(originalJobs) {
+		t.Fatalf("jobs after replay/conflict = %d, %v", count, err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	database, err = store.OpenDatabase(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopenedJobs, err := jobqueue.NewJobsStore(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopenedScheduler, err := jobqueue.NewScheduler(reopenedJobs, jobqueue.SchedulerConfig{QueueCapacity: 4, WorkerLimit: 1}, func(context.Context, jobqueue.Job) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened := BatchExportUseCase{
+		Projects: batchProjectRepo{project: ProjectRecord{Revision: 5, Document: model.Document{SchemaVersion: 2, Name: "Edited", Items: []model.ProjectItem{{ID: "i_editedaaaaaaaaaaaaaaaaaa", MediaID: "m_edited"}}}}},
+		Media:    batchCatalog{media: map[string]Media{}}, Jobs: reopenedJobs, Scheduler: reopenedScheduler,
+	}
+	replayedBatch, replayedJobs, err = reopened.Submit(ctx, request)
+	if err != nil || replayedBatch != originalBatch || len(replayedJobs) != 1 || replayedJobs[0].ID != originalJobs[0].ID {
+		t.Fatalf("replay after restart and project edit = %q %#v, %v; original = %q %#v", replayedBatch, replayedJobs, err, originalBatch, originalJobs)
 	}
 }
 
@@ -189,12 +282,12 @@ func TestBatchExportUsesSchedulerCapacity(t *testing.T) {
 	id := "m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	items := []model.ProjectItem{{ID: "i_aaaaaaaaaaaaaaaaaaaaaaaa", MediaID: id}, {ID: "i_bbbbbbbbbbbbbbbbbbbbbbbb", MediaID: id}}
 	uc := BatchExportUseCase{
-		Projects:  batchProjectRepo{project: ProjectRecord{Document: model.Document{SchemaVersion: 2, Name: "Batch", Items: items}}},
+		Projects:  batchProjectRepo{project: ProjectRecord{Revision: 1, Document: model.Document{SchemaVersion: 2, Name: "Batch", Items: items}}},
 		Media:     batchCatalog{media: map[string]Media{id: {ID: id, ETag: "a", SizeBytes: 1, DurationMS: 10}}},
 		Jobs:      jobs,
 		Scheduler: scheduler,
 	}
-	if _, _, err := uc.Submit(context.Background(), BatchExportRequest{ProjectID: "p_aaaaaaaaaaaa"}); !errors.Is(err, jobqueue.ErrQueueFull) {
+	if _, _, err := uc.Submit(context.Background(), BatchExportRequest{ProjectID: "p_aaaaaaaaaaaa", IdempotencyKey: "capacity-test", ProjectRevision: 1}); !errors.Is(err, jobqueue.ErrQueueFull) {
 		t.Fatalf("capacity error = %v", err)
 	}
 	var count int
@@ -243,7 +336,8 @@ func TestBatchExportRetryCreatesNewQueuedJobFromImmutableSnapshot(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	batch, err := (BatchExportUseCase{Jobs: jobs, Scheduler: scheduler}).Retry(ctx, original.ID)
+	useCase := BatchExportUseCase{Jobs: jobs, Scheduler: scheduler}
+	batch, err := useCase.Retry(ctx, original.ID, "retry-test")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -256,6 +350,13 @@ func TestBatchExportRetryCreatesNewQueuedJobFromImmutableSnapshot(t *testing.T) 
 	}
 	if retry.RequestJSON != snapshot || retry.ProjectItemID != original.ProjectItemID {
 		t.Fatalf("retry changed immutable snapshot: %+v", retry)
+	}
+	replayed, err := useCase.Retry(ctx, original.ID, "retry-test")
+	if err != nil || replayed.BatchID != batch.BatchID || len(replayed.Jobs) != 1 || replayed.Jobs[0].ID != batch.Jobs[0].ID {
+		t.Fatalf("retry replay = %+v, %v; original = %+v", replayed, err, batch)
+	}
+	if _, err := useCase.Retry(ctx, "j_differentjob", "retry-test"); !errors.Is(err, jobqueue.ErrAdmissionConflict) {
+		t.Fatalf("retry key reused for another job = %v, want admission conflict", err)
 	}
 }
 
@@ -418,7 +519,7 @@ func TestBatchExportRunningCancellationPropagatesContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	uc = BatchExportUseCase{
-		Projects: batchProjectRepo{project: ProjectRecord{Document: model.Document{SchemaVersion: 2, Name: "Batch", Items: []model.ProjectItem{{ID: "i_aaaaaaaaaaaaaaaaaaaaaaaa", MediaID: id}}}}},
+		Projects: batchProjectRepo{project: ProjectRecord{Revision: 1, Document: model.Document{SchemaVersion: 2, Name: "Batch", Items: []model.ProjectItem{{ID: "i_aaaaaaaaaaaaaaaaaaaaaaaa", MediaID: id}}}}},
 		Media:    catalog, Jobs: jobs, Scheduler: scheduler,
 		RunSnapshot: func(ctx context.Context, _ string, _ ExportSnapshot) (string, error) {
 			close(started)
@@ -432,7 +533,7 @@ func TestBatchExportRunningCancellationPropagatesContext(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	batchID, submitted, err := uc.Submit(context.Background(), BatchExportRequest{ProjectID: "p_aaaaaaaaaaaa"})
+	batchID, submitted, err := uc.Submit(context.Background(), BatchExportRequest{ProjectID: "p_aaaaaaaaaaaa", IdempotencyKey: "running-cancel", ProjectRevision: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -473,8 +574,8 @@ func TestBatchExportCancellationAndSourceFingerprint(t *testing.T) {
 	}
 	id := "m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	item := model.ProjectItem{ID: "i_aaaaaaaaaaaaaaaaaaaaaaaa", MediaID: id}
-	uc := BatchExportUseCase{Projects: batchProjectRepo{project: ProjectRecord{Document: model.Document{SchemaVersion: 2, Name: "Batch", Items: []model.ProjectItem{item}}}}, Media: batchCatalog{media: map[string]Media{id: {ID: id, ETag: "a", SizeBytes: 1, DurationMS: 10}}}, Jobs: jobs, Scheduler: scheduler}
-	batchID, _, err := uc.Submit(context.Background(), BatchExportRequest{ProjectID: "p_aaaaaaaaaaaa"})
+	uc := BatchExportUseCase{Projects: batchProjectRepo{project: ProjectRecord{Revision: 1, Document: model.Document{SchemaVersion: 2, Name: "Batch", Items: []model.ProjectItem{item}}}}, Media: batchCatalog{media: map[string]Media{id: {ID: id, ETag: "a", SizeBytes: 1, DurationMS: 10}}}, Jobs: jobs, Scheduler: scheduler}
+	batchID, _, err := uc.Submit(context.Background(), BatchExportRequest{ProjectID: "p_aaaaaaaaaaaa", IdempotencyKey: "cancel-source", ProjectRevision: 1})
 	if err != nil {
 		t.Fatal(err)
 	}

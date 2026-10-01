@@ -300,7 +300,8 @@ func TestBatchExportEndpointsUseInjectedService(t *testing.T) {
 	}
 	project := "p_" + strings.Repeat("a", 12)
 	batchID := "b_" + strings.Repeat("a", 12)
-	request := httptest.NewRequest(http.MethodPost, "/api/v2/projects/"+project+"/exports", strings.NewReader(`{"itemIds":["i_aaaaaaaaaaaaaaaaaaaaaaaa"]}`))
+	request := httptest.NewRequest(http.MethodPost, "/api/v2/projects/"+project+"/exports", strings.NewReader(`{"projectRevision":1,"itemIds":["i_aaaaaaaaaaaaaaaaaaaaaaaa"]}`))
+	request.Header.Set("Idempotency-Key", "route-export-key")
 	recorder := httptest.NewRecorder()
 	server.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusAccepted || batch.submits != 1 {
@@ -555,7 +556,7 @@ func (b *routeTestBatchExports) List(_ context.Context, cursor string, limit int
 	}
 	return projects.BatchPage{Items: []projects.Batch{}}, nil
 }
-func (b *routeTestBatchExports) Retry(context.Context, string) (projects.Batch, error) {
+func (b *routeTestBatchExports) Retry(context.Context, string, string) (projects.Batch, error) {
 	return projects.Batch{BatchID: "b_aaaaaaaaaaaa", State: "queued", Jobs: []projects.Job{}}, nil
 }
 func (b *routeTestBatchExports) Cancel(context.Context, string) error {

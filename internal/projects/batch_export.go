@@ -2,7 +2,9 @@ package projects
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -34,8 +36,10 @@ type SourceSnapshot struct {
 }
 
 type BatchExportRequest struct {
-	ProjectID string
-	ItemIDs   []string
+	ProjectID       string
+	IdempotencyKey  string
+	ProjectRevision int64
+	ItemIDs         []string
 }
 
 var (
@@ -60,13 +64,38 @@ func (b BatchExportUseCase) Submit(ctx context.Context, request BatchExportReque
 	if b.Projects == nil || b.Media == nil || b.Jobs == nil || b.Scheduler == nil {
 		return "", nil, errors.New("batch export dependencies are required")
 	}
-	project, err := b.Projects.Get(ctx, request.ProjectID)
+	if request.ProjectRevision < 1 || !jobqueue.ValidCommandKey(request.IdempotencyKey) {
+		return "", nil, errors.New("project revision and valid idempotency key are required")
+	}
+	admission, err := exportSubmissionAdmission(request)
 	if err != nil {
 		return "", nil, err
 	}
+	if replay, found, err := b.Scheduler.LookupCommand(ctx, admission); err != nil {
+		return "", nil, err
+	} else if found {
+		return exportAdmissionResult(replay.Jobs)
+	}
+	replayOnFailure := func(failure error) (string, []Job, error) {
+		result, found, lookupErr := b.Scheduler.LookupCommand(ctx, admission)
+		if lookupErr != nil {
+			return "", nil, lookupErr
+		}
+		if found {
+			return exportAdmissionResult(result.Jobs)
+		}
+		return "", nil, failure
+	}
+	project, err := b.Projects.Get(ctx, request.ProjectID)
+	if err != nil {
+		return replayOnFailure(err)
+	}
+	if project.Revision != request.ProjectRevision {
+		return replayOnFailure(store.ErrRevisionConflict)
+	}
 	items, err := SelectProjectItems(project.Document, request.ItemIDs)
 	if err != nil {
-		return "", nil, err
+		return replayOnFailure(err)
 	}
 	batchID, err := newID("b_")
 	if err != nil {
@@ -76,10 +105,10 @@ func (b BatchExportUseCase) Submit(ctx context.Context, request BatchExportReque
 	for _, item := range items {
 		media, err := b.Media.Get(ctx, item.MediaID)
 		if err != nil {
-			return "", nil, &ProjectItemError{ItemID: item.ID, Code: "media_unavailable"}
+			return replayOnFailure(&ProjectItemError{ItemID: item.ID, Code: "media_unavailable"})
 		}
 		if strings.ContainsAny(item.ExportOptions.FilenameTemplate, `/\\`) {
-			return "", nil, &ProjectItemError{ItemID: item.ID, Code: "invalid_filename"}
+			return replayOnFailure(&ProjectItemError{ItemID: item.ID, Code: "invalid_filename"})
 		}
 		resolved := cloneProjectItem(item)
 		resolved.ExportOptions = resolved.ExportOptions.WithExportDefaults()
@@ -95,14 +124,41 @@ func (b BatchExportUseCase) Submit(ctx context.Context, request BatchExportReque
 		jobs = append(jobs, jobqueue.Job{ID: id, BatchID: batchID, Kind: jobqueue.JobExport, ProjectID: request.ProjectID, ProjectItemID: item.ID, RequestJSON: string(payload)})
 	}
 	if len(jobs) == 0 {
-		return "", nil, errors.New("no project items selected")
+		return replayOnFailure(errors.New("no project items selected"))
 	}
-	created, err := b.Scheduler.Submit(ctx, jobs)
+	created, err := b.Scheduler.SubmitCommand(ctx, admission, jobs)
 	if err != nil {
+		if replay, found, lookupErr := b.Scheduler.LookupCommand(ctx, admission); lookupErr == nil && found {
+			return exportAdmissionResult(replay.Jobs)
+		}
 		return "", nil, err
 	}
+	return exportAdmissionResult(created.Jobs)
+}
+
+func exportSubmissionAdmission(request BatchExportRequest) (jobqueue.CommandAdmission, error) {
+	itemIDs := slices.Clone(request.ItemIDs)
+	if itemIDs == nil {
+		itemIDs = []string{}
+	}
+	payload, err := json.Marshal(struct {
+		ProjectRevision int64    `json:"projectRevision"`
+		ItemIDs         []string `json:"itemIds"`
+	}{request.ProjectRevision, itemIDs})
+	if err != nil {
+		return jobqueue.CommandAdmission{}, err
+	}
+	digest := sha256.Sum256(payload)
+	return jobqueue.CommandAdmission{Key: request.IdempotencyKey, Scope: "export-submit", Kind: "export-submit", Target: request.ProjectID, Digest: hex.EncodeToString(digest[:])}, nil
+}
+
+func exportAdmissionResult(created []jobqueue.Job) (string, []Job, error) {
 	result := make([]Job, 0, len(created))
+	batchID := ""
 	for _, job := range created {
+		if batchID == "" {
+			batchID = job.BatchID
+		}
 		result = append(result, unifiedJobResult(job))
 	}
 	return batchID, result, nil
@@ -250,9 +306,22 @@ func decodeBatchCursor(value string) (*jobqueue.BatchPosition, error) {
 	return &jobqueue.BatchPosition{CreatedAt: createdAt, ID: id}, nil
 }
 
-func (b BatchExportUseCase) Retry(ctx context.Context, jobID string) (Batch, error) {
-	if b.Jobs == nil || b.Scheduler == nil {
-		return Batch{}, errors.New("batch export dependencies are required")
+func (b BatchExportUseCase) Retry(ctx context.Context, jobID, idempotencyKey string) (Batch, error) {
+	if b.Jobs == nil || b.Scheduler == nil || !jobqueue.ValidCommandKey(idempotencyKey) {
+		return Batch{}, errors.New("batch export dependencies and valid idempotency key are required")
+	}
+	payload, err := json.Marshal(struct {
+		JobID string `json:"jobId"`
+	}{jobID})
+	if err != nil {
+		return Batch{}, err
+	}
+	digest := sha256.Sum256(payload)
+	admission := jobqueue.CommandAdmission{Key: idempotencyKey, Scope: "export-retry", Kind: "export-retry", Target: jobID, Digest: hex.EncodeToString(digest[:])}
+	if replay, found, err := b.Scheduler.LookupCommand(ctx, admission); err != nil {
+		return Batch{}, err
+	} else if found {
+		return b.Get(ctx, replay.Jobs[0].BatchID)
 	}
 	original, err := b.Jobs.Get(ctx, jobID)
 	if err != nil {
@@ -269,10 +338,14 @@ func (b BatchExportUseCase) Retry(ctx context.Context, jobID string) (Batch, err
 	if err != nil {
 		return Batch{}, err
 	}
-	if _, err := b.Scheduler.Submit(ctx, []jobqueue.Job{{ID: newJobID, BatchID: batchID, Kind: original.Kind, ProjectID: original.ProjectID, ProjectItemID: original.ProjectItemID, RequestJSON: original.RequestJSON}}); err != nil {
+	result, err := b.Scheduler.SubmitCommand(ctx, admission, []jobqueue.Job{{ID: newJobID, BatchID: batchID, Kind: original.Kind, ProjectID: original.ProjectID, ProjectItemID: original.ProjectItemID, RequestJSON: original.RequestJSON}})
+	if err != nil {
+		if replay, found, lookupErr := b.Scheduler.LookupCommand(ctx, admission); lookupErr == nil && found {
+			return b.Get(ctx, replay.Jobs[0].BatchID)
+		}
 		return Batch{}, err
 	}
-	return b.Get(ctx, batchID)
+	return b.Get(ctx, result.Jobs[0].BatchID)
 }
 
 // ValidateSnapshot reports source_changed when current metadata differs from the queued snapshot.

@@ -29,6 +29,23 @@ type CommandAdmissionResult struct {
 	Replayed bool
 }
 
+// ValidCommandKey reports whether a key meets the bounded HTTP command-key syntax.
+func ValidCommandKey(key string) bool { return admissionKeyPattern.MatchString(key) }
+
+// LookupCommand reads an accepted command without reserving a fresh key.
+func (s *Scheduler) LookupCommand(ctx context.Context, command CommandAdmission) (CommandAdmissionResult, bool, error) {
+	ctx, cancel := s.requestContext(ctx)
+	defer cancel()
+	if !ValidCommandKey(command.Key) || command.Scope == "" || command.Kind == "" || command.Target == "" || !admissionDigestPattern.MatchString(command.Digest) {
+		return CommandAdmissionResult{}, false, errors.New("valid command key, scope, kind, target, and digest are required")
+	}
+	result, err := readCommandAdmission(ctx, s.jobs.db, command)
+	if errors.Is(err, sql.ErrNoRows) {
+		return CommandAdmissionResult{}, false, nil
+	}
+	return result, err == nil, err
+}
+
 // SubmitCommand atomically records a command identity and its jobs. The
 // idempotency namespace is the deployment-local command scope plus key.
 func (s *Scheduler) SubmitCommand(ctx context.Context, command CommandAdmission, jobs []Job) (out CommandAdmissionResult, err error) {

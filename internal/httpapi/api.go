@@ -83,7 +83,8 @@ func (p ProjectInput) input() projects.ProjectInput {
 type Project = projects.Project
 type ExportInput = projects.ExportInput
 type ExportSubmissionInput struct {
-	ItemIDs []string `json:"itemIds,omitempty"`
+	ProjectRevision int64    `json:"projectRevision"`
+	ItemIDs         []string `json:"itemIds,omitempty"`
 }
 
 type Job = projects.Job
@@ -120,7 +121,7 @@ type BatchExportService interface {
 	Submit(context.Context, projects.BatchExportRequest) (string, []projects.Job, error)
 	Get(context.Context, string) (projects.Batch, error)
 	List(context.Context, string, int) (projects.BatchPage, error)
-	Retry(context.Context, string) (projects.Batch, error)
+	Retry(context.Context, string, string) (projects.Batch, error)
 	Cancel(context.Context, string) error
 }
 type BatchDownloadService interface {
