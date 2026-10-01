@@ -14,6 +14,9 @@ import (
 //go:embed migrations/001_jobs.sql
 var migration string
 
+//go:embed migrations/002_command_admissions.sql
+var commandAdmissionsMigration string
+
 // Migrate creates the durable job schema.
 func Migrate(ctx context.Context, db *sql.DB) error {
 	if db == nil {
@@ -36,7 +39,10 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 			}
 		}
 	}
-	_, err := db.ExecContext(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS jobs_proposal_item ON jobs (proposal_id, project_item_id) WHERE proposal_id IS NOT NULL`)
+	if _, err := db.ExecContext(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS jobs_proposal_item ON jobs (proposal_id, project_item_id) WHERE proposal_id IS NOT NULL`); err != nil {
+		return err
+	}
+	_, err := db.ExecContext(ctx, commandAdmissionsMigration)
 	return err
 }
 
