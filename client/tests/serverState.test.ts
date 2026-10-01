@@ -1,9 +1,12 @@
 import { Clock, Effect, Exit, Layer } from "effect";
 import * as Atom from "effect/reactivity/Atom";
 import * as AtomRegistry from "effect/reactivity/AtomRegistry";
+import { RegistryContext, RegistryProvider } from "@effect/atom-solid";
 import * as TestClock from "effect/testing/TestClock";
+import { createComponent, createRoot, untrack, useContext } from "solid-js";
 import { describe, expect, it, vi } from "@effect/vitest";
-import { createApiClient } from "../src/api";
+import { authenticationRequiredEvent, createApiClient } from "../src/api";
+import { createWorkspaceController } from "../src/features/app/controller";
 import { createServerState, pollAtom } from "../src/features/app/server";
 
 describe("workspace server atoms", () => {
@@ -91,6 +94,118 @@ describe("workspace server atoms", () => {
     expect(fetch).toHaveBeenCalledOnce();
     registry.dispose();
     vi.unstubAllGlobals();
+  });
+
+  it("isolates generated requests and auth events across actual workspace replacement", async () => {
+    let oldRequestsStarted = 0;
+    let resolveOldStarted!: () => void;
+    const oldStarted = new Promise<void>((resolve) => {
+      resolveOldStarted = resolve;
+    });
+    const oldResponses: { url: string; resolve: (response: Response) => void }[] = [];
+    let oldAbortedRequests = 0;
+    let authRequiredEvents = 0;
+    let newRequestUsedNewAuth = false;
+    const fetch: typeof globalThis.fetch = vi.fn(
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input);
+        const authorization = new Headers(init?.headers).get("Authorization");
+        if (
+          authorization === "Bearer old-token" &&
+          (url.includes("/api/v2/media") || url.includes("/api/v2/settings"))
+        ) {
+          init?.signal?.addEventListener("abort", () => oldAbortedRequests++, { once: true });
+          oldRequestsStarted++;
+          if (oldRequestsStarted === 2) resolveOldStarted();
+          return new Promise<Response>((resolve) => oldResponses.push({ url, resolve }));
+        }
+        if (url.includes("/api/v2/media") && authorization === "Bearer new-token") {
+          newRequestUsedNewAuth = true;
+          return Response.json({ items: [], nextCursor: null });
+        }
+        return Response.json({});
+      },
+    );
+    vi.stubGlobal("fetch", fetch);
+    const browser = Object.assign(new EventTarget(), {
+      location: { origin: "https://example.test" },
+      confirm: () => true,
+    }) as Window;
+    vi.stubGlobal("window", browser);
+    vi.stubGlobal("localStorage", {
+      getItem: () => null,
+      setItem: () => undefined,
+      removeItem: () => undefined,
+    } satisfies Partial<Storage>);
+    const mountWorkspace = (token: string) => {
+      browser.VIDEOCUTLIST_CONFIG = {
+        serverBaseUrl: "https://example.test",
+        authentication: { type: "bearer", token },
+      };
+      let dispose!: () => void;
+      let registry!: AtomRegistry.AtomRegistry;
+      let getResult!: () => Promise<unknown>;
+      createRoot((disposeRoot: () => void) => {
+        dispose = disposeRoot;
+        createComponent(RegistryProvider, {
+          get children() {
+            untrack(() => {
+              registry = useContext(RegistryContext);
+              createWorkspaceController();
+              const configuration = browser.VIDEOCUTLIST_CONFIG!;
+              const server = createServerState(
+                createApiClient(configuration),
+                registry,
+                configuration,
+              );
+              const atom = server.generatedApi!.query("default", "listMedia", { query: {} });
+              const settingsAtom = server.generatedApi!.query("default", "getSettings", {});
+              registry.mount(atom);
+              if (token === "old-token") registry.mount(settingsAtom);
+              getResult = () =>
+                Effect.runPromise(
+                  AtomRegistry.getResult(registry, atom, { suspendOnWaiting: true }),
+                );
+            });
+            return null;
+          },
+        });
+      });
+      return { dispose, registry, getResult };
+    };
+    const onAuthRequired = () => authRequiredEvents++;
+    window.addEventListener(authenticationRequiredEvent, onAuthRequired);
+    try {
+      const oldWorkspace = mountWorkspace("old-token");
+      await oldStarted;
+      oldWorkspace.dispose();
+      expect(oldRequestsStarted).toBeGreaterThanOrEqual(2);
+      expect(oldAbortedRequests).toBe(oldRequestsStarted);
+
+      const replacement = mountWorkspace("new-token");
+      const newResult = await replacement.getResult();
+      expect(newResult).toMatchObject({ items: [] });
+      expect(newRequestUsedNewAuth).toBe(true);
+
+      for (const { url, resolve } of oldResponses) {
+        resolve(
+          url.includes("/api/v2/media")
+            ? Response.json({ items: [{ id: "stale" }], nextCursor: null })
+            : Response.json(
+                { error: { code: "unauthorized", message: "Unauthorized", requestId: "" } },
+                { status: 401 },
+              ),
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(authRequiredEvents).toBe(0);
+      expect(await replacement.getResult()).toEqual(newResult);
+      replacement.dispose();
+    } finally {
+      browser.removeEventListener(authenticationRequiredEvent, onAuthRequired);
+      vi.unstubAllGlobals();
+      delete browser.VIDEOCUTLIST_CONFIG;
+    }
   });
 
   it("interrupts an in-flight generated atom when its workspace registry is disposed", async () => {

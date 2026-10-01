@@ -29,6 +29,11 @@ export function createWorkspaceController() {
   const api = createApiClient(configuration);
   const registry = useContext(RegistryContext);
   const server = createServerState(api, registry, configuration);
+  onCleanup(() => {
+    projectsFeature.dispose();
+    clearDetectionContext();
+    server.registry.dispose();
+  });
   const [selected, setSelected] = createSignal<Media>();
   const [visibleTimelineRange, setVisibleTimelineRange] = createSignal<AssetViewport>({
     startMs: 0,
@@ -411,11 +416,6 @@ export function createWorkspaceController() {
     };
     window.addEventListener("beforeunload", handler);
     onCleanup(() => window.removeEventListener("beforeunload", handler));
-  });
-  onCleanup(() => {
-    projectsFeature.dispose();
-    clearDetectionContext();
-    server.registry.dispose();
   });
   const detectionFeature = createDetectionController(server, {
     selected,
