@@ -1,3 +1,5 @@
+import * as Schema from "effect/Schema";
+
 export const PANEL_PREFERENCES_KEY = "videocutlist.workspace-panels.v1";
 
 export const PANEL_MIN_WIDTH = 200;
@@ -22,8 +24,18 @@ export const defaultPanelPreferences = (): PanelPreferences => ({
   segmentsCollapsed: false,
 });
 
-const numberOr = (value: unknown, fallback: number) =>
-  typeof value === "number" && Number.isFinite(value) ? value : fallback;
+const finiteNumber = Schema.Number.check(Schema.isFinite());
+const decodeOrDefault = <S extends Schema.ConstraintDecoder<unknown>>(
+  schema: S,
+  value: unknown,
+  fallback: S["Type"],
+): S["Type"] => {
+  try {
+    return Schema.decodeUnknownSync(schema)(value);
+  } catch {
+    return fallback;
+  }
+};
 
 export function parsePanelPreferences(value: string | null): PanelPreferences {
   const defaults = defaultPanelPreferences();
@@ -31,16 +43,18 @@ export function parsePanelPreferences(value: string | null): PanelPreferences {
   try {
     const parsed = JSON.parse(value) as Record<string, unknown>;
     return {
-      mediaWidth: numberOr(parsed.mediaWidth, defaults.mediaWidth),
-      segmentsWidth: numberOr(parsed.segmentsWidth, defaults.segmentsWidth),
-      mediaCollapsed:
-        typeof parsed.mediaCollapsed === "boolean"
-          ? parsed.mediaCollapsed
-          : defaults.mediaCollapsed,
-      segmentsCollapsed:
-        typeof parsed.segmentsCollapsed === "boolean"
-          ? parsed.segmentsCollapsed
-          : defaults.segmentsCollapsed,
+      mediaWidth: decodeOrDefault(finiteNumber, parsed.mediaWidth, defaults.mediaWidth),
+      segmentsWidth: decodeOrDefault(finiteNumber, parsed.segmentsWidth, defaults.segmentsWidth),
+      mediaCollapsed: decodeOrDefault(
+        Schema.Boolean,
+        parsed.mediaCollapsed,
+        defaults.mediaCollapsed,
+      ),
+      segmentsCollapsed: decodeOrDefault(
+        Schema.Boolean,
+        parsed.segmentsCollapsed,
+        defaults.segmentsCollapsed,
+      ),
     };
   } catch {
     return defaults;

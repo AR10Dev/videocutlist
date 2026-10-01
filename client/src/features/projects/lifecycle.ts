@@ -1,3 +1,4 @@
+import * as Schema from "effect/Schema";
 import { z } from "zod";
 import { validateSegmentLabel } from "../preview/model";
 
@@ -5,10 +6,18 @@ export type RecentProject = { id: string; label: string; lastOpened: number };
 
 export const recentProjectsKey = "videocutlist.recent-projects.v1";
 const projectId = /^p_[A-Za-z0-9_-]{12,64}$/;
-const recentProjectSchema = z.object({
-  id: z.string().regex(projectId),
-  label: z.string().refine((label) => Boolean(label.trim()) && label.length <= 120),
-  lastOpened: z.number().int().min(0).max(8_640_000_000_000_000),
+const recentProjectSchema = Schema.Struct({
+  id: Schema.String.check(
+    Schema.makeFilter((id) => (projectId.test(id) ? undefined : "Invalid project ID")),
+  ),
+  label: Schema.String.check(
+    Schema.makeFilter((label) =>
+      label.trim() && label.length <= 120 ? undefined : "Invalid recent project label",
+    ),
+  ),
+  lastOpened: Schema.Number.check(Schema.isInt())
+    .check(Schema.isGreaterThanOrEqualTo(0))
+    .check(Schema.isLessThanOrEqualTo(8_640_000_000_000_000)),
 });
 
 export const newProjectId = () => `p_${crypto.randomUUID()}`;
@@ -21,10 +30,15 @@ export const recentProjects = (value: unknown): RecentProject[] => {
   const ids = new Set<string>();
   return value
     .flatMap((entry) => {
-      const parsed = recentProjectSchema.safeParse(entry);
-      if (!parsed.success || ids.has(parsed.data.id)) return [];
-      ids.add(parsed.data.id);
-      return [parsed.data];
+      let parsed: Schema.Schema.Type<typeof recentProjectSchema>;
+      try {
+        parsed = Schema.decodeUnknownSync(recentProjectSchema)(entry);
+      } catch {
+        return [];
+      }
+      if (ids.has(parsed.id)) return [];
+      ids.add(parsed.id);
+      return [parsed];
     })
     .slice(0, 20);
 };

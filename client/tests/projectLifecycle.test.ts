@@ -11,6 +11,17 @@ describe("project lifecycle helpers", () => {
     expect(recentProjects([{ id: "p_bad", label: "x", lastOpened: 1 }])).toEqual([]);
   });
 
+  it("filters invalid and duplicate recent projects and strips unknown fields", () => {
+    const project = { id: `p_${"a".repeat(12)}`, label: "Project", lastOpened: 1 };
+    expect(
+      recentProjects([
+        { ...project, secret: "not persisted" },
+        project,
+        { ...project, id: "p_invalid" },
+      ]),
+    ).toEqual([project]);
+  });
+
   it("keeps the existing UTF-16 label bound when reading recent-project storage", () => {
     const boundary = { id: `p_${"a".repeat(12)}`, label: "🎬".repeat(60), lastOpened: 1 };
     const tooLong = { id: `p_${"b".repeat(12)}`, label: "🎬".repeat(61), lastOpened: 2 };
