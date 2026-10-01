@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 
+	store "videocutlist/internal/db"
 	jobqueue "videocutlist/internal/jobs"
 	"videocutlist/internal/projects"
 )
@@ -100,11 +101,19 @@ func (s *Server) retryJob(writer http.ResponseWriter, request *http.Request, job
 		internalError(writer, id)
 		return
 	}
-	batch, err := s.config.BatchExports.Retry(request.Context(), jobID)
+	key := request.Header.Get("Idempotency-Key")
+	if !jobqueue.ValidCommandKey(key) {
+		httpx.Error(writer, http.StatusBadRequest, "invalid_idempotency_key", "A valid Idempotency-Key is required.", id)
+		return
+	}
+	batch, err := s.config.BatchExports.Retry(request.Context(), jobID, key)
 	if err != nil {
-		if errors.Is(err, jobqueue.ErrJobState) {
+		switch {
+		case errors.Is(err, jobqueue.ErrJobState):
 			httpx.Error(writer, http.StatusConflict, "job_not_retryable", "Only failed export jobs can be retried.", id)
-		} else {
+		case errors.Is(err, jobqueue.ErrAdmissionConflict):
+			httpx.Error(writer, http.StatusConflict, "idempotency_conflict", "Idempotency-Key was already used for a different command.", id)
+		default:
 			resourceError(writer, id, err)
 		}
 		return
@@ -151,18 +160,27 @@ func (s *Server) createExport(writer http.ResponseWriter, request *http.Request,
 		internalError(writer, id)
 		return
 	}
+	key := request.Header.Get("Idempotency-Key")
+	if !jobqueue.ValidCommandKey(key) {
+		httpx.Error(writer, http.StatusBadRequest, "invalid_idempotency_key", "A valid Idempotency-Key is required.", id)
+		return
+	}
 	var input ExportSubmissionInput
-	if httpx.ReadJSON(request, &input) != nil {
+	if httpx.ReadJSON(request, &input) != nil || input.ProjectRevision < 1 {
 		httpx.Error(writer, http.StatusBadRequest, "invalid_export", "Export is invalid.", id)
 		return
 	}
-	batchID, submitted, err := s.config.BatchExports.Submit(request.Context(), projects.BatchExportRequest{ProjectID: project, ItemIDs: input.ItemIDs})
+	batchID, submitted, err := s.config.BatchExports.Submit(request.Context(), projects.BatchExportRequest{ProjectID: project, IdempotencyKey: key, ProjectRevision: input.ProjectRevision, ItemIDs: input.ItemIDs})
 	if err != nil {
 		switch {
 		case errors.Is(err, jobqueue.ErrQueueFull):
 			httpx.Error(writer, http.StatusTooManyRequests, "export_busy", "Export capacity is full.", id)
 		case errors.Is(err, projects.ErrInvalidProject):
 			httpx.Error(writer, http.StatusBadRequest, "invalid_export", "Export is invalid.", id)
+		case errors.Is(err, jobqueue.ErrAdmissionConflict):
+			httpx.Error(writer, http.StatusConflict, "idempotency_conflict", "Idempotency-Key was already used for a different command.", id)
+		case errors.Is(err, store.ErrRevisionConflict):
+			httpx.Error(writer, http.StatusConflict, "stale_project", "Export request is stale.", id)
 		default:
 			resourceError(writer, id, err)
 		}

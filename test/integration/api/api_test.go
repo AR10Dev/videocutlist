@@ -95,7 +95,7 @@ func (*exportStub) Get(context.Context, string) (projects.Batch, error) { return
 func (*exportStub) List(context.Context, string, int) (projects.BatchPage, error) {
 	return projects.BatchPage{}, nil
 }
-func (*exportStub) Retry(context.Context, string) (projects.Batch, error) {
+func (*exportStub) Retry(context.Context, string, string) (projects.Batch, error) {
 	return projects.Batch{}, nil
 }
 func (*exportStub) Cancel(context.Context, string) error { return nil }

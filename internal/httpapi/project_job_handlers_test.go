@@ -32,9 +32,11 @@ func (s contractProjectService) Save(context.Context, string, projects.ProjectIn
 }
 
 type contractBatchService struct {
-	err     error
-	submits int
-	request projects.BatchExportRequest
+	err                  error
+	submits              int
+	retries              int
+	request              projects.BatchExportRequest
+	retryJobID, retryKey string
 }
 
 func (s *contractBatchService) Submit(_ context.Context, request projects.BatchExportRequest) (string, []projects.Job, error) {
@@ -51,8 +53,10 @@ func (*contractBatchService) Get(context.Context, string) (projects.Batch, error
 func (*contractBatchService) List(context.Context, string, int) (projects.BatchPage, error) {
 	return projects.BatchPage{}, nil
 }
-func (*contractBatchService) Retry(context.Context, string) (projects.Batch, error) {
-	return projects.Batch{}, nil
+func (s *contractBatchService) Retry(_ context.Context, jobID, key string) (projects.Batch, error) {
+	s.retries++
+	s.retryJobID, s.retryKey = jobID, key
+	return projects.Batch{BatchID: "b_contract1234"}, s.err
 }
 func (*contractBatchService) Cancel(context.Context, string) error { return nil }
 
@@ -124,6 +128,25 @@ func TestCreateDetectionSeparatesInvalidInputFromStaleProject(t *testing.T) {
 	}
 }
 
+func TestCreateExportRequiresValidIdempotencyKey(t *testing.T) {
+	for _, key := range []string{"", "bad key", strings.Repeat("a", 129)} {
+		t.Run(fmt.Sprintf("key_%d", len(key)), func(t *testing.T) {
+			batch := &contractBatchService{}
+			server := &Server{config: Config{BatchExports: batch}, metrics: NewMetrics()}
+			request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"projectRevision":7,"itemIds":["i_contract"]}`))
+			request.Header.Set("Idempotency-Key", key)
+			response := httptest.NewRecorder()
+			server.createExport(response, request, "p_contract1234", "request")
+			if response.Code != http.StatusBadRequest || contractErrorCode(t, response) != "invalid_idempotency_key" {
+				t.Fatalf("response = %d %s", response.Code, response.Body.String())
+			}
+			if batch.submits != 0 {
+				t.Fatalf("invalid key submitted: %d", batch.submits)
+			}
+		})
+	}
+}
+
 func TestCreateExportUsesRequestAndServiceErrorTaxonomy(t *testing.T) {
 	for _, test := range []struct {
 		name   string
@@ -133,23 +156,51 @@ func TestCreateExportUsesRequestAndServiceErrorTaxonomy(t *testing.T) {
 		code   string
 	}{
 		{name: "obsolete options are rejected", body: `{"mode":"merge"}`, status: http.StatusBadRequest, code: "invalid_export"},
-		{name: "missing project", err: fmt.Errorf("load project: %w", store.ErrProjectNotFound), body: `{"itemIds":["i_contract"]}`, status: http.StatusNotFound, code: "not_found"},
-		{name: "queue capacity", err: jobqueue.ErrQueueFull, body: `{"itemIds":["i_contract"]}`, status: http.StatusTooManyRequests, code: "export_busy"},
-		{name: "invalid project", err: projects.ErrInvalidProject, body: `{"itemIds":["i_contract"]}`, status: http.StatusBadRequest, code: "invalid_export"},
-		{name: "unexpected failure", err: errors.New("database unavailable"), body: `{"itemIds":["i_contract"]}`, status: http.StatusInternalServerError, code: "internal_error"},
+		{name: "missing project", err: fmt.Errorf("load project: %w", store.ErrProjectNotFound), body: `{"projectRevision":7,"itemIds":["i_contract"]}`, status: http.StatusNotFound, code: "not_found"},
+		{name: "queue capacity", err: jobqueue.ErrQueueFull, body: `{"projectRevision":7,"itemIds":["i_contract"]}`, status: http.StatusTooManyRequests, code: "export_busy"},
+		{name: "idempotency conflict", err: jobqueue.ErrAdmissionConflict, body: `{"projectRevision":7,"itemIds":["i_contract"]}`, status: http.StatusConflict, code: "idempotency_conflict"},
+		{name: "stale project", err: store.ErrRevisionConflict, body: `{"projectRevision":7,"itemIds":["i_contract"]}`, status: http.StatusConflict, code: "stale_project"},
+		{name: "invalid project", err: projects.ErrInvalidProject, body: `{"projectRevision":7,"itemIds":["i_contract"]}`, status: http.StatusBadRequest, code: "invalid_export"},
+		{name: "unexpected failure", err: errors.New("database unavailable"), body: `{"projectRevision":7,"itemIds":["i_contract"]}`, status: http.StatusInternalServerError, code: "internal_error"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			batch := &contractBatchService{err: test.err}
 			server := &Server{config: Config{BatchExports: batch}, metrics: NewMetrics()}
+			request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(test.body))
+			request.Header.Set("Idempotency-Key", "handler-key")
 			response := httptest.NewRecorder()
-			server.createExport(response, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(test.body)), "p_contract1234", "request")
+			server.createExport(response, request, "p_contract1234", "request")
 			if response.Code != test.status || contractErrorCode(t, response) != test.code {
 				t.Fatalf("response = %d %s", response.Code, response.Body.String())
 			}
 			if test.name == "obsolete options are rejected" && batch.submits != 0 {
 				t.Fatalf("obsolete request submitted: %d", batch.submits)
 			}
+			if test.name != "obsolete options are rejected" && (batch.request.ProjectID != "p_contract1234" || batch.request.ProjectRevision != 7 || batch.request.IdempotencyKey != "handler-key") {
+				t.Fatalf("service request = %+v", batch.request)
+			}
 		})
+	}
+}
+
+func TestRetryJobRequiresAndPassesIdempotencyKey(t *testing.T) {
+	batch := &contractBatchService{}
+	server := &Server{config: Config{BatchExports: batch}, metrics: NewMetrics()}
+	for _, key := range []string{"", "invalid key", strings.Repeat("a", 129)} {
+		request := httptest.NewRequest(http.MethodPost, "/", nil)
+		request.Header.Set("Idempotency-Key", key)
+		response := httptest.NewRecorder()
+		server.retryJob(response, request, "j_contract1234", "request")
+		if response.Code != http.StatusBadRequest || contractErrorCode(t, response) != "invalid_idempotency_key" {
+			t.Fatalf("key length %d: response = %d %s", len(key), response.Code, response.Body.String())
+		}
+	}
+	request := httptest.NewRequest(http.MethodPost, "/", nil)
+	request.Header.Set("Idempotency-Key", "retry-handler-key")
+	response := httptest.NewRecorder()
+	server.retryJob(response, request, "j_contract1234", "request")
+	if response.Code != http.StatusAccepted || batch.retries != 1 || batch.retryJobID != "j_contract1234" || batch.retryKey != "retry-handler-key" {
+		t.Fatalf("retry response=%d calls=%d request=%+v body=%s", response.Code, batch.retries, batch.retryJobID, response.Body.String())
 	}
 }
 
