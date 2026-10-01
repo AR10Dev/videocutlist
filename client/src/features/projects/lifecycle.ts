@@ -1,5 +1,5 @@
 import * as Schema from "effect/Schema";
-import { z } from "zod";
+import type { components } from "../../generated/api";
 import { validateSegmentLabel } from "../preview/model";
 
 export type RecentProject = { id: string; label: string; lastOpened: number };
@@ -51,47 +51,96 @@ export const projectJson = (project: unknown): string => {
   return JSON.stringify(project);
 };
 
-const projectRecord = z.record(z.string(), z.unknown());
-const projectHeader = z.looseObject({
-  schemaVersion: z.literal(2),
-  name: z.string().refine((name) => Boolean(name.trim())),
-  items: z.array(z.unknown()).min(1),
+const jsonObject = Schema.Record(Schema.String, Schema.Unknown);
+const projectRecord = jsonObject;
+const loose = <A extends Schema.Struct.Fields>(fields: A) =>
+  Schema.StructWithRest(Schema.Struct(fields), [jsonObject]);
+const projectHeader = loose({
+  schemaVersion: Schema.Literal(2),
+  name: Schema.String.check(
+    Schema.makeFilter((name) => (name.trim() ? undefined : "Project name is required")),
+  ),
+  items: Schema.Array(Schema.Unknown).check(Schema.isMinLength(1)),
 });
-const projectItemHeader = z.looseObject({
-  id: z.string().regex(/^i_[A-Za-z0-9_-]{12,64}$/),
-  mediaId: z.string().regex(/^m_[A-Za-z0-9_-]{43}$/),
-  segments: z.array(z.unknown()),
+const projectItemHeader = loose({
+  id: Schema.String.check(Schema.isPattern(/^i_[A-Za-z0-9_-]{12,64}$/)),
+  mediaId: Schema.String.check(Schema.isPattern(/^m_[A-Za-z0-9_-]{43}$/)),
+  segments: Schema.Array(Schema.Unknown),
   exportOptions: projectRecord,
 });
-const interchangeSegments = z.array(
-  z.looseObject({
-    startMs: z.number().int(),
-    endMs: z.number().int(),
-    label: z
-      .string()
-      .refine((label) => validateSegmentLabel(label) === undefined)
-      .optional(),
+const interchangeSegments = Schema.Array(
+  loose({
+    startMs: Schema.Number.check(Schema.isInt()),
+    endMs: Schema.Number.check(Schema.isInt()),
+    label: Schema.optionalKey(
+      Schema.String.check(
+        Schema.makeFilter((label) =>
+          validateSegmentLabel(label) === undefined ? undefined : "Invalid segment label",
+        ),
+      ),
+    ),
   }),
 );
-const interchangeExportOptions = z.looseObject({
-  mode: z.enum(["merge", "separate"]).optional(),
-  selection: z.enum(["segments", "gaps"]).optional(),
-  cutStrategy: z.enum(["stream_copy_preferred", "precise_reencode", "hybrid_smart_cut"]).optional(),
-  container: z.enum(["mkv", "mp4", "mov"]).optional(),
-  destinationId: z.string().optional(),
-  filenameTemplate: z.string().optional(),
-  streamIndexes: z.array(z.number().int().min(0)).optional(),
+const interchangeExportOptions = loose({
+  mode: Schema.optionalKey(Schema.Literals(["merge", "separate"])),
+  selection: Schema.optionalKey(Schema.Literals(["segments", "gaps"])),
+  cutStrategy: Schema.optionalKey(
+    Schema.Literals(["stream_copy_preferred", "precise_reencode", "hybrid_smart_cut"]),
+  ),
+  container: Schema.optionalKey(Schema.Literals(["mkv", "mp4", "mov"])),
+  destinationId: Schema.optionalKey(Schema.String),
+  filenameTemplate: Schema.optionalKey(Schema.String),
+  streamIndexes: Schema.optionalKey(
+    Schema.Array(Schema.Number.check(Schema.isInt()).check(Schema.isGreaterThanOrEqualTo(0))),
+  ),
 });
-const interchangeEditorState = z.object({
-  playheadMs: z.number(),
-  zoom: z.number().min(1),
-  muted: z.boolean(),
+const interchangeEditorState = Schema.Struct({
+  playheadMs: Schema.Number.check(Schema.isFinite()),
+  zoom: Schema.Number.check(Schema.isGreaterThanOrEqualTo(1)),
+  muted: Schema.Boolean,
 });
-const legacyProject = z.looseObject({
-  mediaId: z.string(),
-  segments: z.array(z.unknown()),
-  uiState: z.unknown().refine((value) => Boolean(value) && typeof value === "object"),
+const legacyProject = loose({
+  mediaId: Schema.String,
+  segments: Schema.Array(Schema.Unknown),
+  uiState: Schema.Unknown.check(
+    Schema.makeFilter((value) =>
+      value && typeof value === "object" ? undefined : "Invalid legacy editor state",
+    ),
+  ),
 });
+
+export type ProjectRecovery = {
+  version: 1;
+  projectId: string;
+  revision: number;
+  schemaVersion: 2;
+  name: string;
+  items: components["schemas"]["ProjectItem"][];
+  savedAt: number;
+};
+const projectRecoverySchema = loose({
+  version: Schema.Literal(1),
+  projectId: Schema.String.check(
+    Schema.makeFilter((id) => (projectId.test(id) ? undefined : "Invalid project ID")),
+  ),
+  revision: Schema.Number.check(Schema.isInt()).check(Schema.isGreaterThanOrEqualTo(0)),
+  schemaVersion: Schema.Literal(2),
+  name: Schema.String.check(
+    Schema.makeFilter((name) => (name.trim() ? undefined : "Project name is required")),
+  ),
+  items: Schema.Array(Schema.Unknown).check(Schema.isMinLength(1)),
+  savedAt: Schema.Number.check(Schema.isInt()).check(Schema.isGreaterThanOrEqualTo(0)),
+});
+
+export const parseProjectRecovery = (value: unknown): ProjectRecovery | undefined => {
+  if (!Schema.is(projectRecoverySchema)(value)) return;
+  try {
+    parseProjectJson(JSON.stringify(value));
+    return value as ProjectRecovery;
+  } catch {
+    return;
+  }
+};
 
 export const parseProjectJson = (text: string): Record<string, unknown> => {
   if (text.length > 1_000_000) throw new Error("Project file is too large.");
@@ -101,22 +150,22 @@ export const parseProjectJson = (text: string): Record<string, unknown> => {
   } catch {
     throw new Error("Project file is invalid JSON.");
   }
-  if (!projectRecord.validate(value)) throw new Error("Project shape is invalid.");
+  if (!Schema.is(projectRecord)(value)) throw new Error("Project shape is invalid.");
   if (value.schemaVersion === 2) {
-    if (!projectHeader.validate(value)) throw new Error("Project shape is invalid.");
+    if (!Schema.is(projectHeader)(value)) throw new Error("Project shape is invalid.");
     const ids = new Set<string>();
     for (const item of value.items) {
-      if (!projectItemHeader.validate(item) || ids.has(item.id))
+      if (!Schema.is(projectItemHeader)(item) || ids.has(item.id))
         throw new Error("Project item is invalid.");
       ids.add(item.id);
-      if (!interchangeSegments.validate(item.segments))
+      if (!Schema.is(interchangeSegments)(item.segments))
         throw new Error("Project segments are invalid.");
-      if (!interchangeExportOptions.validate(item.exportOptions))
+      if (!Schema.is(interchangeExportOptions)(item.exportOptions))
         throw new Error("Project export options are invalid.");
-      if (item.editorState && !interchangeEditorState.validate(item.editorState))
+      if (item.editorState && !Schema.is(interchangeEditorState)(item.editorState))
         throw new Error("Project editor state is invalid.");
     }
-  } else if (!legacyProject.validate(value)) {
+  } else if (!Schema.is(legacyProject)(value)) {
     throw new Error("Project shape is invalid.");
   }
   return value;
