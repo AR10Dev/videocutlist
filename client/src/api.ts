@@ -224,15 +224,53 @@ export function createNativeHttpClientLayer(
   const base = new URL(api.url(""));
   const mediaBase = new URL(api.mediaUrl(""));
   const authorizedFetch: typeof fetch = (input, init) => {
-    const target = input instanceof Request ? input.url : String(input);
-    const parsed = new URL(target);
-    if (parsed.hash) throw new Error("HTTP requests must not contain URL fragments.");
-    const root = parsed.pathname.startsWith(base.pathname) ? base : mediaBase;
-    resolveRelativeUrl(
-      root,
-      `${parsed.pathname.slice(root.pathname.length)}${parsed.search}`,
-      root.pathname,
+    const rawUrl = input instanceof Request ? input.url : input instanceof URL ? input.href : input;
+    if (typeof rawUrl !== "string" || hasControlCharacter(rawUrl))
+      throw new Error("HTTP requests must use a safe absolute URL.");
+    const schemeEnd = rawUrl.indexOf("://");
+    if (schemeEnd < 1) throw new Error("HTTP requests must use an absolute URL.");
+    const afterAuthority = rawUrl.slice(schemeEnd + 3);
+    const pathStart = afterAuthority.search(/[/?#]/);
+    const rawPath =
+      pathStart < 0 || afterAuthority[pathStart] !== "/"
+        ? "/"
+        : afterAuthority.slice(pathStart).split(/[?#]/, 1)[0];
+    let decodedRawPath: string;
+    try {
+      decodedRawPath = decodeURIComponent(rawPath);
+    } catch {
+      throw new Error("HTTP request paths must use valid percent encoding.");
+    }
+    if (
+      hasControlCharacter(decodedRawPath) ||
+      decodedRawPath.split(/[\\/]/).some((segment) => segment === "." || segment === "..")
+    )
+      throw new Error("HTTP request paths must not contain control or traversal segments.");
+    const target = new URL(rawUrl);
+    if (
+      (target.protocol !== "http:" && target.protocol !== "https:") ||
+      target.origin !== base.origin ||
+      target.username ||
+      target.password ||
+      target.hash
+    )
+      throw new Error("HTTP requests must remain on the configured origin.");
+    const root = [base, mediaBase].find((candidate) =>
+      target.pathname.startsWith(candidate.pathname),
     );
+    if (!root)
+      throw new Error("HTTP requests must remain within the configured API or media root.");
+    let decodedPath: string;
+    try {
+      decodedPath = decodeURIComponent(target.pathname);
+    } catch {
+      throw new Error("HTTP request paths must use valid percent encoding.");
+    }
+    if (
+      hasControlCharacter(decodedPath) ||
+      decodedPath.split(/[\\/]/).some((segment) => segment === "." || segment === "..")
+    )
+      throw new Error("HTTP request paths must not contain control or traversal segments.");
     const authentication = validateAuthentication(configuration.authentication);
     const headers = new Headers(input instanceof Request ? input.headers : undefined);
     new Headers(init?.headers).forEach((value, key) => headers.set(key, value));
@@ -241,7 +279,12 @@ export function createNativeHttpClientLayer(
       headers.set("Authorization", `Bearer ${authentication.token}`);
     const credentials = authentication.type === "cookie" ? "include" : "omit";
     const signal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
-    return fetchImplementation(input, { ...init, credentials, headers }).then((response) => {
+    return fetchImplementation(input instanceof Request ? input : target, {
+      ...init,
+      credentials,
+      headers,
+      redirect: "error",
+    }).then((response) => {
       api.reportUnauthorized(response.status, authentication, signal);
       return response;
     });

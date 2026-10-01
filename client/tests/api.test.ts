@@ -180,9 +180,36 @@ describe("client API boundary", () => {
     expect(init.credentials).toBe("omit");
     expect(new Headers(init.headers).get("authorization")).toBe("Bearer session-token");
     expect(new Headers(init.headers).get("x-request-id")).toBe("r-native");
+    expect(init.redirect).toBe("error");
     expect(String(fetch.mock.calls[1][0])).toBe(
       "https://video.example.com/videocutlist/media/v2/m_fixture/output",
     );
+  });
+
+  it("rejects unsafe native URL origins and roots before fetching credentials", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(() => Promise.resolve(new Response("unexpected")));
+    const configuration = {
+      serverBaseUrl: "https://video.example.com/videocutlist",
+      authentication: { type: "bearer" as const, token: "session-token" },
+    };
+    const layer = createNativeHttpClientLayer(configuration, fetch);
+    for (const url of [
+      "https://attacker.example/videocutlist/api/v2/projects",
+      new URL("https://attacker.example/videocutlist/api/v2/projects"),
+      "//attacker.example/videocutlist/api/v2/projects",
+      "https://user:secret@video.example.com/videocutlist/api/v2/projects",
+      "https://video.example.com/videocutlist/api/v2/projects#fragment",
+      "https://video.example.com/videocutlist/api/v2/../../admin",
+      "https://video.example.com/videocutlist/api/v2/../media/v2/output",
+      "https://video.example.com/videocutlist/api/v2evil/projects",
+      "https://video.example.com/videocutlist/media/v2evil/output",
+    ]) {
+      const failure = await runEffect(HttpClient.get(url).pipe(Effect.provide(layer))).catch(
+        (error: unknown) => error,
+      );
+      expect(failure).toBeInstanceOf(Error);
+    }
+    expect(fetch).not.toHaveBeenCalled();
   });
 
   it("uses cookie credentials and strips caller authorization for native HTTP", async () => {
