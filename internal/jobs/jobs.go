@@ -117,9 +117,16 @@ func (s *JobsStore) Cancel(ctx context.Context, id string) (Job, error) {
 		return Job{}, err
 	}
 	if job.State != JobQueued && job.State != JobRunning {
+		if isTerminal(job.State) {
+			return job, nil
+		}
 		return Job{}, ErrJobState
 	}
 	return s.transition(ctx, id, job.State, JobCancelled, sql.NullString{}, sql.NullString{})
+}
+
+func isTerminal(state JobState) bool {
+	return state == JobSucceeded || state == JobFailed || state == JobCancelled
 }
 func (s *JobsStore) Start(ctx context.Context, id string) (Job, error) {
 	return s.transition(ctx, id, JobQueued, JobRunning, sql.NullString{}, sql.NullString{})

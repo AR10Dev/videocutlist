@@ -543,8 +543,8 @@ func TestSchedulerCancellationArbitratesRunnerSuccessBothOrders(t *testing.T) {
 				if err := <-succeedAttempted; err != nil {
 					t.Fatalf("runner success = %v", err)
 				}
-				if _, err := scheduler.Cancel(t.Context(), job.ID); !errors.Is(err, ErrJobState) {
-					t.Fatalf("cancellation after success = %v", err)
+				if cancelled, err := scheduler.Cancel(t.Context(), job.ID); err != nil || cancelled.State != JobSucceeded {
+					t.Fatalf("cancellation after success = %#v, %v", cancelled, err)
 				}
 				releaseRunner()
 			}

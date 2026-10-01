@@ -63,6 +63,65 @@ func TestSchedulerPreservesRunnerResult(t *testing.T) {
 	t.Fatal("scheduled job did not complete")
 }
 
+func TestCancelTerminalJobsIsIdempotentAndPreservesOutcome(t *testing.T) {
+	database, err := db.OpenDatabase(t.Context(), t.TempDir()+"/jobs.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	jobs, err := store.NewJobsStore(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scheduler, err := store.NewScheduler(jobs, store.SchedulerConfig{QueueCapacity: 1, WorkerLimit: 1}, func(context.Context, store.Job) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cases := []struct {
+		name  string
+		state store.JobState
+	}{
+		{name: "succeeded", state: store.JobSucceeded},
+		{name: "failed", state: store.JobFailed},
+		{name: "cancelled", state: store.JobCancelled},
+	}
+	for i, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			job := schedulerJob(fmt.Sprintf("%02d", i+1))
+			if _, err := jobs.Create(t.Context(), job); err != nil {
+				t.Fatal(err)
+			}
+			if test.state != store.JobCancelled {
+				if _, err := jobs.Start(t.Context(), job.ID); err != nil {
+					t.Fatal(err)
+				}
+				if test.state == store.JobSucceeded {
+					if _, err := jobs.Succeed(t.Context(), job.ID, `{"preserved":true}`); err != nil {
+						t.Fatal(err)
+					}
+				} else if _, err := jobs.Fail(t.Context(), job.ID, "preserved_error"); err != nil {
+					t.Fatal(err)
+				}
+			} else if _, err := jobs.Cancel(t.Context(), job.ID); err != nil {
+				t.Fatal(err)
+			}
+
+			before, err := jobs.Get(t.Context(), job.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			after, err := scheduler.Cancel(t.Context(), job.ID)
+			if err != nil {
+				t.Fatalf("cancel terminal job: %v", err)
+			}
+			if after.State != before.State || after.ResultJSON != before.ResultJSON || after.ErrorCode != before.ErrorCode {
+				t.Fatalf("terminal outcome changed: before %#v, after %#v", before, after)
+			}
+		})
+	}
+}
+
 func TestCancelBatchDistinguishesUnknownFromCompleted(t *testing.T) {
 	database, err := db.OpenDatabase(t.Context(), t.TempDir()+"/jobs.db")
 	if err != nil {
