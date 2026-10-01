@@ -4,7 +4,7 @@ test("authenticates existing API clients without persisting the deployment token
   page,
 }) => {
   const token = "browser-test-deployment-token";
-  await page.route("**/api/v1/**", async (route) => {
+  await page.route("**/api/v2/**", async (route) => {
     if (route.request().headers().authorization !== `Bearer ${token}`)
       return route.fulfill({
         status: 401,
