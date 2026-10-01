@@ -1,0 +1,7 @@
+# JSON control API and native media transport
+
+The protocol rewrite uses generated Effect HttpApi/AtomHttpApi for JSON resources and commands, and centralized native Effect HTTP plus browser streaming adapters for media/files. Go retains authorization, revision checks, durable jobs and SQLite integrity. This avoids a generator fork or whole-body media buffering: both RC.118 and stable 4.0.0 fail binary HttpApi generation, while the corrected JSON-operation generation probe compiles.
+
+The full Go OpenAPI contract remains authoritative for both boundaries; generated JSON selection is reproducible tooling, not a second hand-maintained contract. Both transports share authentication, safe errors, correlation IDs, cancellation and URL-confinement policy. Native atoms remain the sole browser server-resource cache. Metrics stays a deployment endpoint rather than an application resource.
+
+Breaking protocol changes are permitted by the owner, but do not justify weakening validation, disclosing paths/secrets, changing segment/edit semantics or replacing working media processing. The response schemas for Project and MCPCredentialCreated must be corrected to describe their existing wire shapes: extending an additionalProperties:false object with required new fields through allOf is unsatisfiable. Any event-stream or idempotency contract must specify reconnect, uncertain outcomes and durable-write semantics before adoption.
