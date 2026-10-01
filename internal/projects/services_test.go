@@ -2,7 +2,9 @@ package projects
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"strconv"
@@ -88,6 +90,78 @@ func TestJobUseCasePreservesDetectionLifecycle(t *testing.T) {
 				t.Fatalf("detection %s lifecycle = %#v", test.state, got)
 			}
 		})
+	}
+}
+
+func TestMediaImportCommandReplaysAcrossRestart(t *testing.T) {
+	ctx := t.Context()
+	path := t.TempDir() + "/jobs.db"
+	database, err := store.OpenDatabase(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobs, err := jobqueue.NewJobsStore(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scheduler, err := jobqueue.NewScheduler(jobs, jobqueue.SchedulerConfig{QueueCapacity: 4, WorkerLimit: 1}, func(context.Context, jobqueue.Job) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	useCase := &MediaUseCase{Configured: true, Scheduler: scheduler, UnifiedJobs: jobs}
+	first, err := useCase.StartImport(ctx, "library-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := store.OpenDatabase(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	reopenedJobs, err := jobqueue.NewJobsStore(reopened)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopenedScheduler, err := jobqueue.NewScheduler(reopenedJobs, jobqueue.SchedulerConfig{QueueCapacity: 4, WorkerLimit: 1}, func(context.Context, jobqueue.Job) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	replayed, err := (&MediaUseCase{Configured: true, Scheduler: reopenedScheduler, UnifiedJobs: reopenedJobs}).StartImport(ctx, "library-key")
+	if err != nil || replayed.ID != first.ID {
+		t.Fatalf("replayed = %#v, want original %#v, err=%v", replayed, first, err)
+	}
+}
+
+func TestMediaImportCapacityFailureLeavesNoCommandRecord(t *testing.T) {
+	ctx := t.Context()
+	database, err := store.OpenDatabase(ctx, t.TempDir()+"/jobs.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	jobs, err := jobqueue.NewJobsStore(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scheduler, err := jobqueue.NewScheduler(jobs, jobqueue.SchedulerConfig{QueueCapacity: 1, WorkerLimit: 1}, func(context.Context, jobqueue.Job) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	useCase := &MediaUseCase{Configured: true, Scheduler: scheduler, UnifiedJobs: jobs}
+	if _, err := useCase.StartImport(ctx, "accepted-scan"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := useCase.StartImport(ctx, "capacity-scan"); !errors.Is(err, jobqueue.ErrQueueFull) {
+		t.Fatalf("full queue error = %v", err)
+	}
+	digest := sha256.Sum256([]byte(`{}`))
+	_, found, err := scheduler.LookupCommand(ctx, jobqueue.CommandAdmission{Key: "capacity-scan", Scope: "library-scan", Kind: "library-scan", Target: "library", Digest: hex.EncodeToString(digest[:])})
+	if err != nil || found {
+		t.Fatalf("failed admission record found=%v err=%v", found, err)
 	}
 }
 

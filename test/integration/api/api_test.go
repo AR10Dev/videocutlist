@@ -41,7 +41,7 @@ func (m *mediaStub) RefreshMedia(_ context.Context) error {
 	return m.refreshErr
 }
 func (m *mediaStub) Status() api.LibraryStatus { return m.status }
-func (m *mediaStub) StartImport(context.Context) (projects.ImportJob, error) {
+func (m *mediaStub) StartImport(context.Context, string) (projects.ImportJob, error) {
 	m.importStarts++
 	if m.importErr != nil {
 		return projects.ImportJob{}, m.importErr
@@ -404,7 +404,9 @@ func TestRefreshReturnsAcceptedUnifiedJobAndPropagatesSubmissionFailure(t *testi
 	media := &mediaStub{}
 	service := server(t, noneAuth(t), media, &previewStub{start: func(context.Context) (api.PreviewResult, error) { return api.PreviewResult{}, nil }}, &exportStub{})
 	response := httptest.NewRecorder()
-	service.ServeHTTP(response, localRequest(http.MethodPost, "/api/v2/media/refresh", nil))
+	request := localRequest(http.MethodPost, "/api/v2/media/refresh", nil)
+	request.Header.Set("Idempotency-Key", "integration-scan")
+	service.ServeHTTP(response, request)
 	var job projects.ImportJob
 	if err := json.Unmarshal(response.Body.Bytes(), &job); err != nil {
 		t.Fatal(err)
@@ -414,7 +416,9 @@ func TestRefreshReturnsAcceptedUnifiedJobAndPropagatesSubmissionFailure(t *testi
 	}
 	media.importErr = errors.New("submission failed")
 	response = httptest.NewRecorder()
-	service.ServeHTTP(response, localRequest(http.MethodPost, "/api/v2/media/refresh", nil))
+	request = localRequest(http.MethodPost, "/api/v2/media/refresh", nil)
+	request.Header.Set("Idempotency-Key", "integration-scan-failure")
+	service.ServeHTTP(response, request)
 	if response.Code != http.StatusInternalServerError || media.importStarts != 2 {
 		t.Fatalf("failure status=%d starts=%d", response.Code, media.importStarts)
 	}

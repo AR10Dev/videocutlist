@@ -69,7 +69,7 @@ type ImportJob struct {
 }
 
 type MediaImportService interface {
-	StartImport(context.Context) (ImportJob, error)
+	StartImport(context.Context, string) (ImportJob, error)
 	ImportStatus(context.Context, string) (ImportJob, error)
 	CancelImport(context.Context, string) error
 }

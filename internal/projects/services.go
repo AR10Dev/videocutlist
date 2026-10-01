@@ -3,7 +3,9 @@ package projects
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -100,7 +102,7 @@ type MediaUseCase struct {
 	refreshID   uint64
 }
 
-func (m *MediaUseCase) StartImport(ctx context.Context) (ImportJob, error) {
+func (m *MediaUseCase) StartImport(ctx context.Context, key string) (ImportJob, error) {
 	if !m.Configured {
 		return ImportJob{}, errors.New("media library is not configured")
 	}
@@ -115,11 +117,14 @@ func (m *MediaUseCase) StartImport(ctx context.Context) (ImportJob, error) {
 	if err != nil {
 		return ImportJob{}, err
 	}
-	jobs, err := m.Scheduler.Submit(ctx, []jobqueue.Job{{ID: id, BatchID: batchID, Kind: jobqueue.JobScan, RequestJSON: `{}`}})
+	digest := sha256.Sum256([]byte(`{}`))
+	admission, err := m.Scheduler.SubmitCommand(ctx, jobqueue.CommandAdmission{
+		Key: key, Scope: "library-scan", Kind: "library-scan", Target: "library", Digest: hex.EncodeToString(digest[:]),
+	}, []jobqueue.Job{{ID: id, BatchID: batchID, Kind: jobqueue.JobScan, RequestJSON: `{}`}})
 	if err != nil {
 		return ImportJob{}, err
 	}
-	return importJobResult(jobs[0]), nil
+	return importJobResult(admission.Jobs[0]), nil
 }
 
 func (m *MediaUseCase) ImportStatus(ctx context.Context, id string) (ImportJob, error) {

@@ -10,6 +10,7 @@ import (
 	"os"
 
 	store "videocutlist/internal/db"
+	jobqueue "videocutlist/internal/jobs"
 	settings "videocutlist/internal/settings"
 )
 
@@ -114,9 +115,21 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, id string) 
 }
 
 func (s *Server) refreshSettings(w http.ResponseWriter, r *http.Request, id string) {
-	job, err := s.startMediaScan(r.Context())
+	key := r.Header.Get("Idempotency-Key")
+	if !jobqueue.ValidCommandKey(key) {
+		httpx.Error(w, http.StatusBadRequest, "invalid_idempotency_key", "A valid Idempotency-Key is required.", id)
+		return
+	}
+	job, err := s.startMediaScan(r.Context(), key)
 	if err != nil {
-		httpx.Error(w, http.StatusConflict, "refresh_unavailable", "The media library could not be refreshed. Check the deployment mount or directory permissions.", id)
+		switch {
+		case errors.Is(err, jobqueue.ErrAdmissionConflict):
+			httpx.Error(w, http.StatusConflict, "idempotency_conflict", "Idempotency-Key was already used for a different command.", id)
+		case errors.Is(err, jobqueue.ErrQueueFull):
+			httpx.Error(w, http.StatusTooManyRequests, "library_busy", "Library scan capacity is full.", id)
+		default:
+			httpx.Error(w, http.StatusConflict, "refresh_unavailable", "The media library could not be refreshed. Check the deployment mount or directory permissions.", id)
+		}
 		return
 	}
 	httpx.WriteJSON(w, http.StatusAccepted, job)

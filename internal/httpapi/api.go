@@ -17,6 +17,7 @@ import (
 
 	"videocutlist/internal/db"
 	"videocutlist/internal/exportpolicy"
+	jobqueue "videocutlist/internal/jobs"
 	"videocutlist/internal/mcp"
 	"videocutlist/internal/projects"
 	"videocutlist/internal/projects/interchange"
@@ -287,9 +288,18 @@ func (s *Server) dispatch(writer http.ResponseWriter, request *http.Request, id 
 		s.refreshMedia(writer, request, id)
 		return "/api/v2/media/refresh", ""
 	case routeStartMediaImport:
-		job, err := s.startMediaScan(request.Context())
-		if err != nil {
+		key := request.Header.Get("Idempotency-Key")
+		if !jobqueue.ValidCommandKey(key) {
+			httpx.Error(writer, http.StatusBadRequest, "invalid_idempotency_key", "A valid Idempotency-Key is required.", id)
+			return "/api/v2/media/import", ""
+		}
+		if s.config.MediaImport == nil {
 			httpx.Error(writer, http.StatusConflict, "import_unavailable", "Import could not be started.", id)
+			return "/api/v2/media/import", ""
+		}
+		job, err := s.startMediaScan(request.Context(), key)
+		if err != nil {
+			writeMediaScanError(writer, err, id)
 			return "/api/v2/media/import", ""
 		}
 		httpx.WriteJSON(writer, http.StatusAccepted, job)

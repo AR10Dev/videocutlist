@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
@@ -160,7 +162,11 @@ func run(ctx context.Context) (runErr error) {
 		}
 	}()
 	if mediaService.Configured {
-		if _, err := mediaService.StartImport(ctx); err != nil && !errors.Is(err, jobqueue.ErrQueueFull) {
+		startupKey := make([]byte, 16)
+		if _, err := rand.Read(startupKey); err != nil {
+			return fmt.Errorf("create startup scan key: %w", err)
+		}
+		if _, err := mediaService.StartImport(ctx, "startup-"+hex.EncodeToString(startupKey)); err != nil && !errors.Is(err, jobqueue.ErrQueueFull) {
 			if ctx.Err() != nil {
 				return nil
 			}

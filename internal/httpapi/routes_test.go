@@ -260,11 +260,16 @@ func (m *routeTestMedia) Status() LibraryStatus {
 	return LibraryStatus{State: LibraryReadyEmpty, Message: "No supported media was found."}
 }
 
-type routeTestMediaImport struct{ starts int }
+type routeTestMediaImport struct {
+	starts int
+	err    error
+	key    string
+}
 
-func (m *routeTestMediaImport) StartImport(context.Context) (projects.ImportJob, error) {
+func (m *routeTestMediaImport) StartImport(_ context.Context, key string) (projects.ImportJob, error) {
 	m.starts++
-	return projects.ImportJob{ID: "j_scanresult1234", State: "queued"}, nil
+	m.key = key
+	return projects.ImportJob{ID: "j_scanresult1234", State: "queued"}, m.err
 }
 func (m *routeTestMediaImport) ImportStatus(context.Context, string) (projects.ImportJob, error) {
 	return projects.ImportJob{}, nil
@@ -282,9 +287,42 @@ func TestRefreshMediaSubmitsUnifiedScanJob(t *testing.T) {
 		t.Fatal(err)
 	}
 	recorder := httptest.NewRecorder()
-	server.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/api/v2/media/refresh", nil))
-	if recorder.Code != http.StatusAccepted || imports.starts != 1 {
-		t.Fatalf("refresh status=%d starts=%d body=%s", recorder.Code, imports.starts, recorder.Body.String())
+	request := httptest.NewRequest(http.MethodPost, "/api/v2/media/refresh", nil)
+	request.Header.Set("Idempotency-Key", "scan-key")
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusAccepted || imports.starts != 1 || imports.key != "scan-key" {
+		t.Fatalf("refresh status=%d starts=%d key=%q body=%s", recorder.Code, imports.starts, imports.key, recorder.Body.String())
+	}
+
+	for _, path := range []string{"/api/v2/media/refresh", "/api/v2/settings/media/refresh", "/api/v2/media/import"} {
+		for _, key := range []string{"", "bad key", strings.Repeat("x", 129)} {
+			request = httptest.NewRequest(http.MethodPost, path, nil)
+			if key != "" {
+				request.Header.Set("Idempotency-Key", key)
+			}
+			recorder = httptest.NewRecorder()
+			server.ServeHTTP(recorder, request)
+			if recorder.Code != http.StatusBadRequest || imports.starts != 1 || !strings.Contains(recorder.Body.String(), `"code":"invalid_idempotency_key"`) {
+				t.Fatalf("invalid key %q at %s status=%d starts=%d body=%s", key, path, recorder.Code, imports.starts, recorder.Body.String())
+			}
+		}
+	}
+
+	request = httptest.NewRequest(http.MethodPost, "/api/v2/settings/media/refresh", nil)
+	request.Header.Set("Idempotency-Key", "scan-key")
+	recorder = httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusAccepted || imports.starts != 2 || imports.key != "scan-key" {
+		t.Fatalf("settings refresh status=%d starts=%d key=%q body=%s", recorder.Code, imports.starts, imports.key, recorder.Body.String())
+	}
+
+	imports.err = jobqueue.ErrAdmissionConflict
+	request = httptest.NewRequest(http.MethodPost, "/api/v2/media/import", nil)
+	request.Header.Set("Idempotency-Key", "scan-key")
+	recorder = httptest.NewRecorder()
+	server.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusConflict || !strings.Contains(recorder.Body.String(), `"code":"idempotency_conflict"`) {
+		t.Fatalf("conflicting import status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
 
@@ -419,7 +457,9 @@ func TestMediaImportUnavailableReturnsError(t *testing.T) {
 		t.Fatal(err)
 	}
 	response := httptest.NewRecorder()
-	server.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/api/v2/media/import", nil))
+	request := httptest.NewRequest(http.MethodPost, "/api/v2/media/import", nil)
+	request.Header.Set("Idempotency-Key", "scan-unavailable")
+	server.ServeHTTP(response, request)
 	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), `"code":"import_unavailable"`) {
 		t.Fatalf("import status=%d body=%s", response.Code, response.Body.String())
 	}
