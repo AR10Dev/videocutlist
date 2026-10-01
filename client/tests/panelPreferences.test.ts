@@ -25,6 +25,24 @@ describe("workspace panel preferences", () => {
     expect(parsePanelPreferences(serializePanelPreferences(preferences))).toEqual(preferences);
   });
 
+  it("defaults invalid fields independently and strips unknown stored properties", () => {
+    expect(
+      parsePanelPreferences(
+        JSON.stringify({
+          mediaWidth: Number.POSITIVE_INFINITY,
+          segmentsWidth: 315,
+          mediaCollapsed: "true",
+          segmentsCollapsed: true,
+          secret: "not a preference",
+        }),
+      ),
+    ).toEqual({
+      ...defaultPanelPreferences(),
+      segmentsWidth: 315,
+      segmentsCollapsed: true,
+    });
+  });
+
   it("clamps restored widths while preserving the center minimum", () => {
     const clamped = clampPanelPreferences(
       {

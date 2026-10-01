@@ -1,9 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   appearances,
   defaultSettings,
   loadSettings,
   resolveAppearance,
+  storedSettings,
   validFilenameTemplateLength,
 } from "../src/features/settings/model";
 
@@ -41,6 +42,31 @@ describe("appearance settings", () => {
     expect(loadSettings({ filenameTemplate: "é".repeat(81) }).filenameTemplate).toBe(
       defaultSettings.filenameTemplate,
     );
+  });
+
+  it("strips unknown persisted settings and defaults invalid fields independently", () => {
+    expect(
+      loadSettings({
+        ...defaultSettings,
+        muted: "yes",
+        appearance: "unknown",
+        filenameTemplate: "ok",
+        secret: "must not survive",
+      }),
+    ).toEqual({ ...defaultSettings, filenameTemplate: "ok" });
+  });
+
+  it("falls back to defaults when browser storage denies access", () => {
+    vi.stubGlobal("localStorage", {
+      getItem: () => {
+        throw new Error("denied");
+      },
+    });
+    try {
+      expect(storedSettings()).toEqual(defaultSettings);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("resolves System to the operating-system preference", () => {

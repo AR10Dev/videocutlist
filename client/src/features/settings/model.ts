@@ -1,29 +1,32 @@
-import { z } from "zod";
+import * as Schema from "effect/Schema";
 import type { components } from "../../generated/api";
 
 type RuntimeSettings = components["schemas"]["RuntimeSettings"];
 type RuntimeSettingsInput = components["schemas"]["SettingsUpdate"]["settings"];
 
-const positiveLimit = z.number().int().positive();
-const runtimeSettingsInput = z
-  .object({
-    exportLimit: positiveLimit.max(64),
-    cacheMaxBytes: positiveLimit,
-    previewGlobalLimit: positiveLimit.max(64),
-    previewBeforeMs: positiveLimit,
-    previewAfterMs: positiveLimit,
-    previewMaxMs: positiveLimit,
-    previewGridMs: positiveLimit,
-    mediaMaxFiles: positiveLimit,
-    mediaMaxDepth: positiveLimit,
-    mcpEnabled: z.boolean(),
-  })
-  .refine((value) => value.previewBeforeMs + value.previewAfterMs <= value.previewMaxMs);
+const positiveLimit = Schema.Number.check(Schema.isInt()).check(Schema.isGreaterThan(0));
+const runtimeSettingsInput = Schema.Struct({
+  exportLimit: positiveLimit.check(Schema.isLessThanOrEqualTo(64)),
+  cacheMaxBytes: positiveLimit,
+  previewGlobalLimit: positiveLimit.check(Schema.isLessThanOrEqualTo(64)),
+  previewBeforeMs: positiveLimit,
+  previewAfterMs: positiveLimit,
+  previewMaxMs: positiveLimit,
+  previewGridMs: positiveLimit,
+  mediaMaxFiles: positiveLimit,
+  mediaMaxDepth: positiveLimit,
+  mcpEnabled: Schema.Boolean,
+});
 
 export function validRuntimeSettingsInput(
   value: Partial<RuntimeSettings>,
 ): value is RuntimeSettingsInput {
-  return runtimeSettingsInput.validate(value);
+  try {
+    const settings = Schema.decodeUnknownSync(runtimeSettingsInput)(value);
+    return settings.previewBeforeMs + settings.previewAfterMs <= settings.previewMaxMs;
+  } catch {
+    return false;
+  }
 }
 
 export const appearances = [
@@ -94,21 +97,48 @@ export function applyAppearance(appearance: Appearance, prefersDark = false): vo
   document.documentElement.dataset.theme = resolveAppearance(appearance, prefersDark);
 }
 
-const browserSettings = z.object({
-  filenameTemplate: z
-    .string()
-    .refine(validFilenameTemplateLength)
-    .catch(defaultSettings.filenameTemplate),
-  cutStrategy: z
-    .enum(["stream_copy_preferred", "precise_reencode", "hybrid_smart_cut"])
-    .catch(defaultSettings.cutStrategy),
-  muted: z.boolean().catch(defaultSettings.muted),
-  appearance: z.enum(appearances).catch(defaultSettings.appearance),
-});
+const filenameTemplateSchema = Schema.String.check(
+  Schema.makeFilter((value) =>
+    validFilenameTemplateLength(value) ? undefined : "UTF-8 filename template is too long",
+  ),
+);
+const cutStrategySchema = Schema.Literals([
+  "stream_copy_preferred",
+  "precise_reencode",
+  "hybrid_smart_cut",
+]);
+const appearanceSchema = Schema.Literals(appearances);
+
+function decodeOrDefault<S extends Schema.ConstraintDecoder<unknown>>(
+  schema: S,
+  value: unknown,
+  fallback: S["Type"],
+): S["Type"] {
+  try {
+    return Schema.decodeUnknownSync(schema)(value);
+  } catch {
+    return fallback;
+  }
+}
 
 export function loadSettings(value: unknown): AppSettings {
-  const parsed = browserSettings.safeParse(value);
-  return parsed.success ? parsed.data : defaultSettings;
+  const settings = value && typeof value === "object" ? value : {};
+  const field = (key: string) =>
+    Object.hasOwn(settings, key) ? Reflect.get(settings, key) : undefined;
+  return {
+    filenameTemplate: decodeOrDefault(
+      filenameTemplateSchema,
+      field("filenameTemplate"),
+      defaultSettings.filenameTemplate,
+    ),
+    cutStrategy: decodeOrDefault(
+      cutStrategySchema,
+      field("cutStrategy"),
+      defaultSettings.cutStrategy,
+    ),
+    muted: decodeOrDefault(Schema.Boolean, field("muted"), defaultSettings.muted),
+    appearance: decodeOrDefault(appearanceSchema, field("appearance"), defaultSettings.appearance),
+  };
 }
 
 export function storedSettings(): AppSettings {
