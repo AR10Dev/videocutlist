@@ -67,7 +67,7 @@ export interface paths {
     };
     /**
      * List indexed media
-     * @description Rejects malformed percent encoding, unknown parameters, and duplicate query keys with 422 invalid_query.
+     * @description Rejects malformed percent encoding, unknown parameters, and duplicate query keys with 400 invalid_query.
      */
     get: operations["listMedia"];
     put?: never;
@@ -166,7 +166,7 @@ export interface paths {
     };
     /**
      * Stream a normalized preview
-     * @description Revalidates the source before cache lookup. Changed sources return 409 source_changed and require a library refresh; missing sources return 404 not_found. Only process-capacity rejection returns 429 preview_busy with Retry-After: 1. Deadline expiry returns 504 preview_timeout; unexpected startup/cache failures return 500 internal_error. Empty or overflowing preview spans return 422 invalid_preview.
+     * @description Revalidates the source before cache lookup. Changed sources return 409 source_changed and require a library refresh; missing sources return 404 not_found. Only process-capacity rejection returns 429 preview_busy with Retry-After: 1. Deadline expiry returns 504 preview_timeout; unexpected startup/cache failures return 500 internal_error. Empty or overflowing preview spans return 400 invalid_preview.
      */
     get: operations["streamPreview"];
     put?: never;
@@ -348,6 +348,56 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/jobs/{jobId}/events": {
+    parameters: {
+      query?: never;
+      header?: {
+        /** @description Scoped opaque snapshot cursor; invalid, stale, or ahead cursors resynchronize with the current snapshot. */
+        "Last-Event-ID"?: string;
+      };
+      path: {
+        jobId: components["parameters"]["JobId"];
+      };
+      cookie?: never;
+    };
+    /**
+     * Observe the latest durable job snapshot
+     * @description Authenticated latest-state synchronization, not an event log. The server sends a current snapshot on connect/reconnect, may coalesce intermediate progress, and sends terminal snapshots before clean closure. Data events use event: snapshot and contain JSON matching GET /jobs/{jobId}. Their opaque job-scoped IDs identify persisted monotonic job revisions; clients suppress duplicate revisions. Keepalives are SSE comments. Missing or stale cursors receive the current snapshot. Malformed, ahead, or resource-mismatched cursors explicitly resync to current state. Observation cadence and concurrent stream reads are server-bounded. Cancellation, shutdown, and heartbeat auth checks are honored. Disconnecting never cancels the job.
+     */
+    get: operations["observeJob"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/batches/{batchId}/events": {
+    parameters: {
+      query?: never;
+      header?: {
+        /** @description Scoped opaque snapshot cursor; invalid, stale, or ahead cursors resynchronize with the current snapshot. */
+        "Last-Event-ID"?: string;
+      };
+      path: {
+        batchId: components["parameters"]["BatchId"];
+      };
+      cookie?: never;
+    };
+    /**
+     * Observe the latest durable batch snapshot
+     * @description Authenticated latest-state synchronization using a deterministic opaque cursor derived from persisted child job revisions. The server sends the current safe snapshot on connect/reconnect and terminal state before clean closure. Data events use event: snapshot and contain JSON matching GET /batches/{batchId}; clients suppress duplicate aggregate revisions. Keepalives are SSE comments. Missing/stale cursors receive current snapshots. Malformed, ahead, or resource-mismatched cursors explicitly resynchronize to current state. Stream cadence/read rates are bounded. Cancellation, shutdown, and heartbeat auth checks are honored. Disconnecting never cancels child jobs.
+     */
+    get: operations["observeBatch"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/jobs/{jobId}": {
     parameters: {
       query?: never;
@@ -418,7 +468,7 @@ export interface paths {
     get: operations["getSettings"];
     /**
      * Replace runtime settings
-     * @description Complete mutable settings document, at most 1048576 bytes. Deployment roots and destinations remain server-owned and may be omitted; destination metadata may be echoed unchanged. Invalid settings (including exportLimit outside 1..64) are rejected with 422 before live mutation or persistence. Stale revisions are 409. Unexpected application/persistence/rollback failures are 500. Live settings affect new work; existing export snapshots retain their settings, except shared worker/process/cache limits. Preview defaults, scan limits, and MCP enablement apply live. MCP transport request capacity remains the startup value; previewGlobalLimit controls media processes.
+     * @description Complete mutable settings document, at most 1048576 bytes. Deployment roots and destinations remain server-owned and may be omitted; destination metadata may be echoed unchanged. Invalid settings (including exportLimit outside 1..64) are rejected with 400 before live mutation or persistence. Stale revisions are 409. Unexpected application/persistence/rollback failures are 500. Live settings affect new work; existing export snapshots retain their settings, except shared worker/process/cache limits. Preview defaults, scan limits, and MCP enablement apply live. MCP transport request capacity remains the startup value; previewGlobalLimit controls media processes.
      */
     put: operations["updateSettings"];
     post?: never;
@@ -547,7 +597,7 @@ export interface paths {
     put?: never;
     /**
      * Queue a durable media-library scan
-     * @description Scans configured server roots; takes no parameters or request body. The existing 409 import_unavailable response covers unconfigured roots or unavailable queue capacity. Poll the returned opaque job ID.
+     * @description Scans configured server roots; takes no parameters or request body. Unconfigured roots return 409 import_unavailable; admission-capacity rejection returns 429. Poll the returned opaque job ID.
      */
     post: operations["startMediaImport"];
     delete?: never;
@@ -595,7 +645,7 @@ export interface paths {
     };
     /**
      * Read a PNG timeline thumbnail strip
-     * @description Duration is clamped to the remaining media duration. Unknown or repeated query keys are rejected. Existing validation responses use 422 invalid_asset. PNG output is validated before publication and on cache reads; invalid generated output is a safe 500, never a published image. Output is bounded to 8 MiB compressed and 16777216 decoded pixels. Source identity is revalidated before cache hits and conditional 304 responses; changed sources return 409 source_changed until refreshed.
+     * @description Duration is clamped to the remaining media duration. Unknown or repeated query keys are rejected. Existing validation responses use 400 invalid_asset. PNG output is validated before publication and on cache reads; invalid generated output is a safe 500, never a published image. Output is bounded to 8 MiB compressed and 16777216 decoded pixels. Source identity is revalidated before cache hits and conditional 304 responses; changed sources return 409 source_changed until refreshed.
      */
     get: operations["getThumbnails"];
     put?: never;
@@ -624,7 +674,7 @@ export interface paths {
     };
     /**
      * Read normalized timeline waveform peaks
-     * @description Duration is clamped to the remaining media duration. Each peak covers whole float32 audio samples, normalized to 0..1. Unknown or repeated query keys and invalid bounds use the existing 422 invalid_asset response; media without audio uses 422 no_audio. Malformed generated output is 500. Source identity is revalidated before cache hits and conditional 304 responses; changed sources return 409 source_changed until refreshed.
+     * @description Duration is clamped to the remaining media duration. Each peak covers whole float32 audio samples, normalized to 0..1. Unknown or repeated query keys and invalid bounds use the existing 400 invalid_asset response; media without audio uses 400 no_audio. Malformed generated output is 500. Source identity is revalidated before cache hits and conditional 304 responses; changed sources return 409 source_changed until refreshed.
      */
     get: operations["getWaveform"];
     put?: never;
@@ -653,7 +703,7 @@ export interface paths {
     put?: never;
     /**
      * Replace a project item's segments from a cut list
-     * @description Maximum input is 1048576 bytes and 10000 segments. CSV requires the header start,end,label. Chapters accept start title or start --> end title lines. Timestamps are seconds, MM:SS, or HH:MM:SS with up to three fractional digits. Labels may not contain slash or backslash and are limited to 200 characters. Ranges must be valid for the media. Saving uses the revision read by the server; a concurrent edit returns 409. Missing/ambiguous item selection also returns 409 project_item_required. Existing invalid/oversized input responses use 422 invalid_interchange, not 400/413.
+     * @description Maximum input is 1048576 bytes and 10000 segments. CSV requires the header start,end,label. Chapters accept start title or start --> end title lines. Timestamps are seconds, MM:SS, or HH:MM:SS with up to three fractional digits. Labels may not contain slash or backslash and are limited to 200 characters. Ranges must be valid for the media. Saving uses the revision read by the server; a concurrent edit returns 409. Missing/ambiguous item selection also returns 409 project_item_required. Invalid and oversized input returns 400 invalid_interchange; this route does not return 413.
      */
     post: operations["importInterchange"];
     delete?: never;
@@ -673,7 +723,7 @@ export interface paths {
     put?: never;
     /**
      * Execute an authenticated local automation command
-     * @description Requires a loopback listener, configured deployment authentication (bearer or trusted proxy), and no Origin header. This is REST, not MCP JSON-RPC. The entire JSON body is limited to 1048576 bytes (413 on overflow). Unknown/trailing JSON and invalid commands use the existing 422 status. project.import/project.export require projectId and format; projectItemId may be omitted only for a sole-item project. project.import also requires nonempty input and applies the interchange validation rules. job.status requires jobId. Filesystem paths are never accepted or returned.
+     * @description Requires a loopback listener, configured deployment authentication (bearer or trusted proxy), and no Origin header. This is REST, not MCP JSON-RPC. The entire JSON body is limited to 1048576 bytes (413 on overflow). Unknown/trailing JSON and invalid commands use the existing 400 status. project.import/project.export require projectId and format; projectItemId may be omitted only for a sole-item project. project.import also requires nonempty input and applies the interchange validation rules. job.status requires jobId. Filesystem paths are never accepted or returned.
      */
     post: operations["automation"];
     delete?: never;
@@ -794,7 +844,24 @@ export interface components {
       /** @enum {string} */
       status?: "active" | "expired" | "revoked";
     };
-    MCPCredentialCreated: components["schemas"]["MCPCredential"] & {
+    MCPCredentialCreated: {
+      id: string;
+      tokenIdentifier: string;
+      name: string;
+      permissions: string[];
+      mediaScope: components["schemas"]["MCPMediaScope"];
+      projectScope: components["schemas"]["MCPProjectScope"];
+      /** Format: date-time */
+      expiresAt?: string;
+      /** Format: date-time */
+      revokedAt?: string;
+      unattendedExports: boolean;
+      /** Format: date-time */
+      createdAt: string;
+      /** Format: date-time */
+      lastUsedAt?: string;
+      /** @enum {string} */
+      status?: "active" | "expired" | "revoked";
       secret: string;
     };
     MCPCredentialCreate: {
@@ -892,10 +959,15 @@ export interface components {
       items: components["schemas"]["ProjectSummary"][];
       nextCursor: string | null;
     };
-    Project: components["schemas"]["ProjectInput"] & {
+    Project: {
       id: string;
       /** Format: date-time */
       updatedAt: string;
+      revision: number;
+      /** @constant */
+      schemaVersion: 2;
+      name: string;
+      items: components["schemas"]["ProjectItem"][];
     };
     ProjectItem: {
       id: string;
@@ -979,6 +1051,8 @@ export interface components {
       errorCode?: string;
     };
     ExportSubmissionInput: {
+      /** @description Persisted revision verified by fresh export preflight. */
+      projectRevision: number;
       /** @description Optional ordered project-item selection; omitted selects all. Export options are read from each saved project item. */
       itemIds?: string[];
     };
@@ -1172,6 +1246,9 @@ export interface components {
     };
   };
   parameters: {
+    /** @description Case-sensitive opaque ASCII token for one intentional durable command submission. Clients generate fresh values with crypto.randomUUID(). Redeliver uncertain submissions with the same key and semantic payload; this returns original safe resource IDs without re-admitting work. The same key with a different payload returns 409 idempotency_conflict. Failed admission does not consume the key. Keys are unique per deployment and command scope and retained for the lifetime of referenced jobs. */
+    IdempotencyKey: string;
+    BatchId: string;
     /** @description Must be less than the media duration. */
     AssetStart: number;
     AssetDuration: number;
@@ -1267,9 +1344,9 @@ export interface operations {
           "application/json": components["schemas"]["MediaPage"];
         };
       };
+      400: components["responses"]["Error"];
       401: components["responses"]["Error"];
       403: components["responses"]["Error"];
-      422: components["responses"]["Error"];
       500: components["responses"]["Error"];
     };
   };
@@ -1327,7 +1404,10 @@ export interface operations {
   refreshMedia: {
     parameters: {
       query?: never;
-      header?: never;
+      header: {
+        /** @description Case-sensitive opaque ASCII token for one intentional durable command submission. Clients generate fresh values with crypto.randomUUID(). Redeliver uncertain submissions with the same key and semantic payload; this returns original safe resource IDs without re-admitting work. The same key with a different payload returns 409 idempotency_conflict. Failed admission does not consume the key. Keys are unique per deployment and command scope and retained for the lifetime of referenced jobs. */
+        "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+      };
       path?: never;
       cookie?: never;
     };
@@ -1342,8 +1422,11 @@ export interface operations {
           "application/json": components["schemas"]["ImportJob"];
         };
       };
+      400: components["responses"]["Error"];
       401: components["responses"]["Error"];
       403: components["responses"]["Error"];
+      409: components["responses"]["Error"];
+      429: components["responses"]["Error"];
       500: components["responses"]["Error"];
     };
   };
@@ -1405,11 +1488,11 @@ export interface operations {
           "video/mp4": string;
         };
       };
+      400: components["responses"]["Error"];
       401: components["responses"]["Error"];
       403: components["responses"]["Error"];
       404: components["responses"]["Error"];
       409: components["responses"]["Error"];
-      422: components["responses"]["Error"];
       429: components["responses"]["Error"];
       500: components["responses"]["Error"];
       504: components["responses"]["Error"];
@@ -1440,6 +1523,7 @@ export interface operations {
         };
         content?: never;
       };
+      400: components["responses"]["Error"];
       401: components["responses"]["Error"];
       403: components["responses"]["Error"];
       /** @description No complete cached preview */
@@ -1450,7 +1534,6 @@ export interface operations {
         content?: never;
       };
       409: components["responses"]["Error"];
-      422: components["responses"]["Error"];
       429: components["responses"]["Error"];
       500: components["responses"]["Error"];
       504: components["responses"]["Error"];
@@ -1533,18 +1616,21 @@ export interface operations {
           "application/json": components["schemas"]["Project"];
         };
       };
+      400: components["responses"]["Error"];
       401: components["responses"]["Error"];
       403: components["responses"]["Error"];
       404: components["responses"]["Error"];
       409: components["responses"]["Error"];
-      422: components["responses"]["Error"];
       500: components["responses"]["Error"];
     };
   };
   createDetection: {
     parameters: {
       query?: never;
-      header?: never;
+      header: {
+        /** @description Case-sensitive opaque ASCII token for one intentional durable command submission. Clients generate fresh values with crypto.randomUUID(). Redeliver uncertain submissions with the same key and semantic payload; this returns original safe resource IDs without re-admitting work. The same key with a different payload returns 409 idempotency_conflict. Failed admission does not consume the key. Keys are unique per deployment and command scope and retained for the lifetime of referenced jobs. */
+        "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+      };
       path: {
         projectId: components["parameters"]["ProjectId"];
       };
@@ -1565,18 +1651,22 @@ export interface operations {
           "application/json": components["schemas"]["DetectionJob"];
         };
       };
+      400: components["responses"]["Error"];
       401: components["responses"]["Error"];
       403: components["responses"]["Error"];
       404: components["responses"]["Error"];
       409: components["responses"]["Error"];
-      422: components["responses"]["Error"];
+      429: components["responses"]["Error"];
       500: components["responses"]["Error"];
     };
   };
   createExport: {
     parameters: {
       query?: never;
-      header?: never;
+      header: {
+        /** @description Case-sensitive opaque ASCII token for one intentional durable command submission. Clients generate fresh values with crypto.randomUUID(). Redeliver uncertain submissions with the same key and semantic payload; this returns original safe resource IDs without re-admitting work. The same key with a different payload returns 409 idempotency_conflict. Failed admission does not consume the key. Keys are unique per deployment and command scope and retained for the lifetime of referenced jobs. */
+        "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+      };
       path: {
         projectId: components["parameters"]["ProjectId"];
       };
@@ -1597,10 +1687,11 @@ export interface operations {
           "application/json": components["schemas"]["BatchExportSubmission"];
         };
       };
+      400: components["responses"]["Error"];
       401: components["responses"]["Error"];
       403: components["responses"]["Error"];
       404: components["responses"]["Error"];
-      422: components["responses"]["Error"];
+      409: components["responses"]["Error"];
       429: components["responses"]["Error"];
       500: components["responses"]["Error"];
     };
@@ -1731,9 +1822,9 @@ export interface operations {
           "application/json": components["schemas"]["ExportPreflight"];
         };
       };
+      400: components["responses"]["Error"];
       401: components["responses"]["Error"];
       403: components["responses"]["Error"];
-      422: components["responses"]["Error"];
       500: components["responses"]["Error"];
     };
   };
@@ -1760,6 +1851,66 @@ export interface operations {
       };
       401: components["responses"]["Error"];
       403: components["responses"]["Error"];
+      500: components["responses"]["Error"];
+    };
+  };
+  observeJob: {
+    parameters: {
+      query?: never;
+      header?: {
+        /** @description Scoped opaque snapshot cursor; invalid, stale, or ahead cursors resynchronize with the current snapshot. */
+        "Last-Event-ID"?: string;
+      };
+      path: {
+        jobId: components["parameters"]["JobId"];
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Server-sent job snapshots and keepalive comments */
+      200: {
+        headers: {
+          "X-Request-ID"?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          "text/event-stream": string;
+        };
+      };
+      401: components["responses"]["Error"];
+      403: components["responses"]["Error"];
+      404: components["responses"]["Error"];
+      500: components["responses"]["Error"];
+    };
+  };
+  observeBatch: {
+    parameters: {
+      query?: never;
+      header?: {
+        /** @description Scoped opaque snapshot cursor; invalid, stale, or ahead cursors resynchronize with the current snapshot. */
+        "Last-Event-ID"?: string;
+      };
+      path: {
+        batchId: components["parameters"]["BatchId"];
+      };
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Server-sent batch snapshots and keepalive comments */
+      200: {
+        headers: {
+          "X-Request-ID"?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          "text/event-stream": string;
+        };
+      };
+      401: components["responses"]["Error"];
+      403: components["responses"]["Error"];
+      404: components["responses"]["Error"];
       500: components["responses"]["Error"];
     };
   };
@@ -1816,7 +1967,10 @@ export interface operations {
   retryJob: {
     parameters: {
       query?: never;
-      header?: never;
+      header: {
+        /** @description Case-sensitive opaque ASCII token for one intentional durable command submission. Clients generate fresh values with crypto.randomUUID(). Redeliver uncertain submissions with the same key and semantic payload; this returns original safe resource IDs without re-admitting work. The same key with a different payload returns 409 idempotency_conflict. Failed admission does not consume the key. Keys are unique per deployment and command scope and retained for the lifetime of referenced jobs. */
+        "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+      };
       path: {
         jobId: components["parameters"]["JobId"];
       };
@@ -1833,6 +1987,7 @@ export interface operations {
           "application/json": components["schemas"]["Batch"];
         };
       };
+      400: components["responses"]["Error"];
       401: components["responses"]["Error"];
       403: components["responses"]["Error"];
       404: components["responses"]["Error"];
@@ -1916,11 +2071,11 @@ export interface operations {
           "application/json": components["schemas"]["SettingsUpdated"];
         };
       };
+      400: components["responses"]["Error"];
       401: components["responses"]["Error"];
       403: components["responses"]["Error"];
       404: components["responses"]["Error"];
       409: components["responses"]["Error"];
-      422: components["responses"]["Error"];
       500: components["responses"]["Error"];
     };
   };
@@ -1978,10 +2133,10 @@ export interface operations {
           "application/json": components["schemas"]["MCPCredentialCreated"];
         };
       };
+      400: components["responses"]["Error"];
       401: components["responses"]["Error"];
       403: components["responses"]["Error"];
       404: components["responses"]["Error"];
-      422: components["responses"]["Error"];
       500: components["responses"]["Error"];
     };
   };
@@ -2067,7 +2222,10 @@ export interface operations {
   refreshSettingsMedia: {
     parameters: {
       query?: never;
-      header?: never;
+      header: {
+        /** @description Case-sensitive opaque ASCII token for one intentional durable command submission. Clients generate fresh values with crypto.randomUUID(). Redeliver uncertain submissions with the same key and semantic payload; this returns original safe resource IDs without re-admitting work. The same key with a different payload returns 409 idempotency_conflict. Failed admission does not consume the key. Keys are unique per deployment and command scope and retained for the lifetime of referenced jobs. */
+        "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+      };
       path?: never;
       cookie?: never;
     };
@@ -2082,16 +2240,21 @@ export interface operations {
           "application/json": components["schemas"]["ImportJob"];
         };
       };
+      400: components["responses"]["Error"];
       401: components["responses"]["Error"];
       403: components["responses"]["Error"];
       409: components["responses"]["Error"];
+      429: components["responses"]["Error"];
       500: components["responses"]["Error"];
     };
   };
   startMediaImport: {
     parameters: {
       query?: never;
-      header?: never;
+      header: {
+        /** @description Case-sensitive opaque ASCII token for one intentional durable command submission. Clients generate fresh values with crypto.randomUUID(). Redeliver uncertain submissions with the same key and semantic payload; this returns original safe resource IDs without re-admitting work. The same key with a different payload returns 409 idempotency_conflict. Failed admission does not consume the key. Keys are unique per deployment and command scope and retained for the lifetime of referenced jobs. */
+        "Idempotency-Key": components["parameters"]["IdempotencyKey"];
+      };
       path?: never;
       cookie?: never;
     };
@@ -2106,9 +2269,11 @@ export interface operations {
           "application/json": components["schemas"]["ImportJob"];
         };
       };
+      400: components["responses"]["Error"];
       401: components["responses"]["Error"];
       403: components["responses"]["Error"];
       409: components["responses"]["Error"];
+      429: components["responses"]["Error"];
       500: components["responses"]["Error"];
     };
   };
@@ -2199,11 +2364,11 @@ export interface operations {
         };
         content?: never;
       };
+      400: components["responses"]["Error"];
       401: components["responses"]["Error"];
       403: components["responses"]["Error"];
       404: components["responses"]["Error"];
       409: components["responses"]["Error"];
-      422: components["responses"]["Error"];
       500: components["responses"]["Error"];
       504: components["responses"]["Error"];
     };
@@ -2244,11 +2409,11 @@ export interface operations {
         };
         content?: never;
       };
+      400: components["responses"]["Error"];
       401: components["responses"]["Error"];
       403: components["responses"]["Error"];
       404: components["responses"]["Error"];
       409: components["responses"]["Error"];
-      422: components["responses"]["Error"];
       500: components["responses"]["Error"];
       504: components["responses"]["Error"];
     };
@@ -2315,11 +2480,11 @@ export interface operations {
           "application/json": components["schemas"]["Project"];
         };
       };
+      400: components["responses"]["Error"];
       401: components["responses"]["Error"];
       403: components["responses"]["Error"];
       404: components["responses"]["Error"];
       409: components["responses"]["Error"];
-      422: components["responses"]["Error"];
       500: components["responses"]["Error"];
     };
   };
@@ -2353,12 +2518,12 @@ export interface operations {
             | components["schemas"]["Job"];
         };
       };
+      400: components["responses"]["Error"];
       401: components["responses"]["Error"];
       403: components["responses"]["Error"];
       404: components["responses"]["Error"];
       409: components["responses"]["Error"];
       413: components["responses"]["Error"];
-      422: components["responses"]["Error"];
       500: components["responses"]["Error"];
     };
   };
