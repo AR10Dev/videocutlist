@@ -141,6 +141,17 @@ func exportSubmissionAdmission(request BatchExportRequest) (jobqueue.CommandAdmi
 	if itemIDs == nil {
 		itemIDs = []string{}
 	}
+	seen := make(map[string]struct{}, len(itemIDs))
+	for _, id := range itemIDs {
+		if id == "" {
+			return jobqueue.CommandAdmission{}, &ProjectItemError{Code: "item_id_required"}
+		}
+		if _, exists := seen[id]; exists {
+			return jobqueue.CommandAdmission{}, &ProjectItemError{ItemID: id, Code: "item_id_duplicate"}
+		}
+		seen[id] = struct{}{}
+	}
+	slices.Sort(itemIDs)
 	payload, err := json.Marshal(struct {
 		ProjectRevision int64    `json:"projectRevision"`
 		ItemIDs         []string `json:"itemIds"`

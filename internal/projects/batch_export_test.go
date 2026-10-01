@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -150,30 +151,62 @@ func TestBatchExportReplayPrecedesCurrentProjectValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	mediaID := "m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	secondMediaID := "m_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	item := model.ProjectItem{ID: "i_aaaaaaaaaaaaaaaaaaaaaaaa", MediaID: mediaID}
-	request := BatchExportRequest{ProjectID: "p_aaaaaaaaaaaa", IdempotencyKey: "replay-after-edit", ProjectRevision: 4, ItemIDs: []string{item.ID}}
+	secondItem := model.ProjectItem{ID: "i_bbbbbbbbbbbbbbbbbbbbbbbb", MediaID: secondMediaID}
+	request := BatchExportRequest{ProjectID: "p_aaaaaaaaaaaa", IdempotencyKey: "replay-after-edit", ProjectRevision: 4, ItemIDs: []string{secondItem.ID, item.ID}}
+	originalSelection := slices.Clone(request.ItemIDs)
 	uc := BatchExportUseCase{
-		Projects: batchProjectRepo{project: ProjectRecord{Revision: 4, Document: model.Document{SchemaVersion: 2, Name: "Batch", Items: []model.ProjectItem{item}}}},
-		Media:    batchCatalog{media: map[string]Media{mediaID: {ID: mediaID, ETag: "source-v1", SizeBytes: 10, DurationMS: 100}}}, Jobs: jobs, Scheduler: scheduler,
+		Projects: batchProjectRepo{project: ProjectRecord{Revision: 4, Document: model.Document{SchemaVersion: 2, Name: "Batch", Items: []model.ProjectItem{item, secondItem}}}},
+		Media: batchCatalog{media: map[string]Media{
+			mediaID:       {ID: mediaID, ETag: "source-v1", SizeBytes: 10, DurationMS: 100},
+			secondMediaID: {ID: secondMediaID, ETag: "source-v2", SizeBytes: 20, DurationMS: 200},
+		}}, Jobs: jobs, Scheduler: scheduler,
 	}
 	originalBatch, originalJobs, err := uc.Submit(ctx, request)
 	if err != nil {
 		t.Fatal(err)
 	}
-	uc.Projects = failedBatchProjectRepo{err: store.ErrRevisionConflict}
-	replayedBatch, replayedJobs, err := uc.Submit(ctx, request)
-	if err != nil {
-		t.Fatalf("replay after project edit: %v", err)
+	allSelection := request
+	allSelection.IdempotencyKey = "empty-means-all"
+	allSelection.ItemIDs = nil
+	allBatch, allJobs, err := uc.Submit(ctx, allSelection)
+	if err != nil || len(allJobs) != 2 {
+		t.Fatalf("all-items selection = %q %#v, %v", allBatch, allJobs, err)
 	}
-	if replayedBatch != originalBatch || len(replayedJobs) != len(originalJobs) || replayedJobs[0].ID != originalJobs[0].ID {
+	reordered := request
+	reordered.ItemIDs = []string{item.ID, secondItem.ID}
+	uc.Projects = failedBatchProjectRepo{err: store.ErrRevisionConflict}
+	replayedBatch, replayedJobs, err := uc.Submit(ctx, reordered)
+	if err != nil {
+		t.Fatalf("replay after project edit with reordered selection: %v", err)
+	}
+	if replayedBatch != originalBatch || len(replayedJobs) != len(originalJobs) || replayedJobs[0].ID != originalJobs[0].ID || replayedJobs[1].ID != originalJobs[1].ID {
 		t.Fatalf("replay = %q %#v; original = %q %#v", replayedBatch, replayedJobs, originalBatch, originalJobs)
+	}
+	if !slices.Equal(request.ItemIDs, originalSelection) {
+		t.Fatalf("request item IDs mutated: got %v want %v", request.ItemIDs, originalSelection)
+	}
+	changedSet := request
+	changedSet.ItemIDs = []string{item.ID}
+	if _, _, err := uc.Submit(ctx, changedSet); !errors.Is(err, jobqueue.ErrAdmissionConflict) {
+		t.Fatalf("changed selection replay error = %v, want admission conflict", err)
+	}
+	duplicate := request
+	duplicate.ItemIDs = []string{item.ID, item.ID}
+	if _, _, err := uc.Submit(ctx, duplicate); !errors.Is(err, ErrInvalidProject) {
+		t.Fatalf("duplicate accepted selection error = %v, want invalid project", err)
+	}
+	duplicate.IdempotencyKey = "duplicate-invalid"
+	if _, _, err := uc.Submit(ctx, duplicate); !errors.Is(err, ErrInvalidProject) {
+		t.Fatalf("fresh duplicate selection error = %v, want invalid project", err)
 	}
 	changed := request
 	changed.ProjectRevision++
 	if _, _, err := uc.Submit(ctx, changed); !errors.Is(err, jobqueue.ErrAdmissionConflict) {
-		t.Fatalf("changed request replay error = %v, want admission conflict", err)
+		t.Fatalf("changed revision replay error = %v, want admission conflict", err)
 	}
-	uc.Projects = batchProjectRepo{project: ProjectRecord{Revision: 4, Document: model.Document{SchemaVersion: 2, Name: "Batch", Items: []model.ProjectItem{item}}}}
+	uc.Projects = batchProjectRepo{project: ProjectRecord{Revision: 4, Document: model.Document{SchemaVersion: 2, Name: "Batch", Items: []model.ProjectItem{item, secondItem}}}}
 	stale := request
 	stale.IdempotencyKey = "fresh-stale-revision"
 	stale.ProjectRevision = 3
@@ -185,7 +218,7 @@ func TestBatchExportReplayPrecedesCurrentProjectValidation(t *testing.T) {
 		t.Fatalf("stale revision admissions = %d, %v", staleAdmissions, err)
 	}
 	var count int
-	if err := database.QueryRowContext(ctx, `SELECT COUNT(*) FROM jobs`).Scan(&count); err != nil || count != len(originalJobs) {
+	if err := database.QueryRowContext(ctx, `SELECT COUNT(*) FROM jobs`).Scan(&count); err != nil || count != len(originalJobs)+len(allJobs) {
 		t.Fatalf("jobs after replay/conflict = %d, %v", count, err)
 	}
 	if err := database.Close(); err != nil {
@@ -208,8 +241,13 @@ func TestBatchExportReplayPrecedesCurrentProjectValidation(t *testing.T) {
 		Media:    batchCatalog{media: map[string]Media{}}, Jobs: reopenedJobs, Scheduler: reopenedScheduler,
 	}
 	replayedBatch, replayedJobs, err = reopened.Submit(ctx, request)
-	if err != nil || replayedBatch != originalBatch || len(replayedJobs) != 1 || replayedJobs[0].ID != originalJobs[0].ID {
+	if err != nil || replayedBatch != originalBatch || len(replayedJobs) != 2 || replayedJobs[0].ID != originalJobs[0].ID || replayedJobs[1].ID != originalJobs[1].ID {
 		t.Fatalf("replay after restart and project edit = %q %#v, %v; original = %q %#v", replayedBatch, replayedJobs, err, originalBatch, originalJobs)
+	}
+	allSelection.ItemIDs = []string{}
+	allReplayBatch, allReplayJobs, err := reopened.Submit(ctx, allSelection)
+	if err != nil || allReplayBatch != allBatch || len(allReplayJobs) != len(allJobs) || allReplayJobs[0].ID != allJobs[0].ID || allReplayJobs[1].ID != allJobs[1].ID {
+		t.Fatalf("empty/all replay after restart and project edit = %q %#v, %v; original = %q %#v", allReplayBatch, allReplayJobs, err, allBatch, allJobs)
 	}
 }
 
