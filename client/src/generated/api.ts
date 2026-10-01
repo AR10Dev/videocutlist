@@ -1091,6 +1091,7 @@ export interface components {
     };
     BatchPage: {
       items: components["schemas"]["Batch"][];
+      nextCursor: string | null;
     };
     Destination: {
       id: string;
@@ -1700,6 +1701,8 @@ export interface operations {
     parameters: {
       query?: {
         limit?: number;
+        /** @description Opaque batch-list continuation cursor. */
+        cursor?: string;
       };
       header?: never;
       path?: never;

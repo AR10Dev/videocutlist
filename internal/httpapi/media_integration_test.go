@@ -73,7 +73,7 @@ func TestMediaTreeUsesProductionMediaUseCaseWiring(t *testing.T) {
 		}
 		return page
 	}
-	rootPage := getTree("/api/v1/media/tree")
+	rootPage := getTree("/api/v2/media/tree")
 	folders, ok := rootPage["folders"].([]any)
 	if !ok || len(folders) != 1 {
 		t.Fatalf("root folders=%#v, want one opaque folder", rootPage["folders"])
@@ -86,7 +86,7 @@ func TestMediaTreeUsesProductionMediaUseCaseWiring(t *testing.T) {
 	if !ok || !strings.HasPrefix(folderID, "f_") {
 		t.Fatalf("folder id=%q, want opaque ID", folder["id"])
 	}
-	nestedPage := getTree("/api/v1/media/tree?folderId=" + folderID)
+	nestedPage := getTree("/api/v2/media/tree?folderId=" + folderID)
 	items, ok := nestedPage["items"].([]any)
 	if !ok || len(items) != 1 {
 		t.Fatalf("nested items=%#v, want one item", nestedPage["items"])

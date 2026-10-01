@@ -129,7 +129,7 @@ func (s *Server) createMCPCredential(w http.ResponseWriter, r *http.Request, id 
 	}
 	var input mcpCredentialCreateRequest
 	if err := decodeMCPRequest(r, &input); err != nil {
-		httpx.Error(w, http.StatusUnprocessableEntity, "invalid_mcp_credential", "Credential settings are invalid.", id)
+		httpx.Error(w, http.StatusBadRequest, "invalid_mcp_credential", "Credential settings are invalid.", id)
 		return
 	}
 	if input.MediaScope.Kind == mcp.MediaScopeRoots {
@@ -140,7 +140,7 @@ func (s *Server) createMCPCredential(w http.ResponseWriter, r *http.Request, id 
 		}
 		for _, rootID := range input.MediaScope.RootIDs {
 			if _, ok := settings.Settings.MediaRoots[rootID]; !ok {
-				httpx.Error(w, http.StatusUnprocessableEntity, "invalid_mcp_credential", "Credential settings are invalid.", id)
+				httpx.Error(w, http.StatusBadRequest, "invalid_mcp_credential", "Credential settings are invalid.", id)
 				return
 			}
 		}
@@ -152,7 +152,7 @@ func (s *Server) createMCPCredential(w http.ResponseWriter, r *http.Request, id 
 	})
 	if err != nil {
 		if errors.Is(err, mcp.ErrCredentialInvalid) || errors.Is(err, mcp.ErrCredentialExpired) || errors.Is(err, mcp.ErrNonExpiringCredentialNeedsAck) {
-			httpx.Error(w, http.StatusUnprocessableEntity, "invalid_mcp_credential", "Credential settings are invalid.", id)
+			httpx.Error(w, http.StatusBadRequest, "invalid_mcp_credential", "Credential settings are invalid.", id)
 			return
 		}
 		httpx.Error(w, http.StatusInternalServerError, "mcp_settings_unavailable", "Credential could not be created.", id)

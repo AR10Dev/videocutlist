@@ -10,8 +10,8 @@ import (
 
 const (
 	restAllowedMethods = "GET, HEAD, POST, PUT, DELETE"
-	restAllowedHeaders = "Authorization, Content-Type, If-Match, If-None-Match"
-	restExposedHeaders = "ETag, X-Request-ID, X-Preview-Start, X-Preview-Duration, X-Preview-Offset, X-Preview-Cache, Retry-After"
+	restAllowedHeaders = "Authorization, Content-Type, If-Match, If-None-Match, Idempotency-Key, Last-Event-ID"
+	restExposedHeaders = "Content-Disposition, ETag, X-Request-ID, X-Preview-Start, X-Preview-Duration, X-Preview-Offset, X-Preview-Cache, Retry-After"
 	mcpAllowedMethods  = "GET, POST, DELETE"
 	mcpAllowedHeaders  = "Authorization, Content-Type, MCP-Protocol-Version, Mcp-Session-Id"
 	mcpExposedHeaders  = "Mcp-Session-Id"
@@ -100,7 +100,9 @@ func HostGuard(listenPort int, publicBaseURL string, next http.Handler) http.Han
 func cors(allowedOrigins []string, next http.Handler, policy corsPolicy) http.Handler {
 	allowed := make(map[string]struct{}, len(allowedOrigins))
 	for _, origin := range allowedOrigins {
-		allowed[origin] = struct{}{}
+		if origin != "*" {
+			allowed[origin] = struct{}{}
+		}
 	}
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		origins := request.Header.Values("Origin")
@@ -141,7 +143,7 @@ func cors(allowedOrigins []string, next http.Handler, policy corsPolicy) http.Ha
 }
 
 func rejectOrigin(w http.ResponseWriter, r *http.Request) {
-	if strings.HasPrefix(r.URL.Path, "/api/") {
+	if strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/api" || strings.HasPrefix(r.URL.Path, "/media/") || r.URL.Path == "/media" || r.URL.Path == "/health" || r.URL.Path == "/ready" {
 		id := w.Header().Get("X-Request-ID")
 		if id == "" {
 			id = RequestID()

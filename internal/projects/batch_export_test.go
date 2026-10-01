@@ -120,6 +120,57 @@ func TestBatchExportSnapshotsItemsInProjectOrder(t *testing.T) {
 	}
 }
 
+func TestBatchListUsesStableOpaqueCursor(t *testing.T) {
+	ctx := t.Context()
+	database, err := store.OpenDatabase(ctx, t.TempDir()+"/jobs.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	jobs, err := jobqueue.NewJobsStore(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, batchID := range []string{"b_aaaaaaaaaaaa", "b_bbbbbbbbbbbb", "b_cccccccccccc"} {
+		jobID := fmt.Sprintf("j_batchpage%03d", i)
+		job := jobqueue.Job{ID: jobID, BatchID: batchID, Kind: jobqueue.JobExport, ProjectID: "p_aaaaaaaaaaaa", ProjectItemID: "i_aaaaaaaaaaaaaaaaaaaaaaaa", RequestJSON: `{}`}
+		if _, err := jobs.Create(ctx, job); err != nil {
+			t.Fatal(err)
+		}
+		createdAt := "2025-01-02T00:00:00Z"
+		if i == 2 {
+			createdAt = "2025-01-03T00:00:00Z"
+		}
+		if _, err := database.ExecContext(ctx, `UPDATE jobs SET created_at=? WHERE id=?`, createdAt, jobID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	useCase := BatchExportUseCase{Jobs: jobs}
+	first, err := useCase.List(ctx, "", 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Items) != 2 || first.Items[0].BatchID != "b_cccccccccccc" || first.Items[1].BatchID != "b_bbbbbbbbbbbb" || first.NextCursor == nil {
+		t.Fatalf("first page = %+v", first)
+	}
+	second, err := useCase.List(ctx, *first.NextCursor, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(second.Items) != 1 || second.Items[0].BatchID != "b_aaaaaaaaaaaa" || second.NextCursor != nil {
+		t.Fatalf("second page = %+v", second)
+	}
+	for _, cursor := range []string{"invalid", strings.Repeat("x", 257)} {
+		if _, err := useCase.List(ctx, cursor, 2); !errors.Is(err, ErrInvalidBatchCursor) {
+			t.Errorf("cursor length %d error = %v, want invalid batch cursor", len(cursor), err)
+		}
+	}
+}
+
 func TestBatchExportUsesSchedulerCapacity(t *testing.T) {
 	db, err := store.OpenDatabase(context.Background(), t.TempDir()+"/jobs.db")
 	if err != nil {

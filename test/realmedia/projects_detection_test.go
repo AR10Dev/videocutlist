@@ -48,7 +48,7 @@ type realJob struct {
 func TestProjectsInterchangeAndDetectionUseProductionProcess(t *testing.T) {
 	p := startProcess(t, t.TempDir())
 	var media realMediaPage
-	p.json(t, http.MethodGet, "/api/v1/media", nil, http.StatusOK, &media)
+	p.json(t, http.MethodGet, "/api/v2/media", nil, http.StatusOK, &media)
 	if len(media.Items) != 1 || media.Items[0].ID == "" || len(media.Items[0].ID) < 3 {
 		t.Fatalf("media did not return one opaque item: %+v", media)
 	}
@@ -59,20 +59,20 @@ func TestProjectsInterchangeAndDetectionUseProductionProcess(t *testing.T) {
 		"id": itemID, "mediaId": m.ID, "segments": []any{map[string]any{"startMs": 1000, "endMs": 3000, "label": "opening"}, map[string]any{"startMs": 5000, "endMs": 7000, "label": "second"}},
 	}}}
 	var project realProject
-	p.json(t, http.MethodPut, "/api/v1/projects/"+projectID, payload, http.StatusOK, &project)
+	p.json(t, http.MethodPut, "/api/v2/projects/"+projectID, payload, http.StatusOK, &project)
 	if project.Revision != 1 {
 		t.Fatalf("create revision=%d, want 1", project.Revision)
 	}
-	p.json(t, http.MethodGet, "/api/v1/projects/"+projectID, nil, http.StatusOK, &project)
-	p.json(t, http.MethodGet, "/api/v1/projects?limit=1", nil, http.StatusOK, &struct {
+	p.json(t, http.MethodGet, "/api/v2/projects/"+projectID, nil, http.StatusOK, &project)
+	p.json(t, http.MethodGet, "/api/v2/projects?limit=1", nil, http.StatusOK, &struct {
 		Items []realProject `json:"items"`
 	}{})
 	stale := payload
 	stale["revision"] = 0
-	p.json(t, http.MethodPut, "/api/v1/projects/"+projectID, stale, http.StatusConflict, nil)
+	p.json(t, http.MethodPut, "/api/v2/projects/"+projectID, stale, http.StatusConflict, nil)
 
 	for _, format := range []string{"csv", "chapters"} {
-		resp := p.raw(t, http.MethodGet, "/api/v1/projects/"+projectID+"/interchange/"+format+"?itemId="+itemID, nil)
+		resp := p.raw(t, http.MethodGet, "/media/v2/projects/"+projectID+"/interchange/"+format+"?itemId="+itemID, nil)
 		if resp.StatusCode != http.StatusOK {
 			t.Fatalf("export %s status=%d", format, resp.StatusCode)
 		}
@@ -81,20 +81,20 @@ func TestProjectsInterchangeAndDetectionUseProductionProcess(t *testing.T) {
 		if len(data) == 0 {
 			t.Fatalf("empty %s export", format)
 		}
-		p.rawJSON(t, http.MethodPost, "/api/v1/projects/"+projectID+"/interchange/"+format+"?itemId="+itemID, data, http.StatusOK, &project)
+		p.rawJSON(t, http.MethodPost, "/api/v2/projects/"+projectID+"/interchange/"+format+"?itemId="+itemID, data, http.StatusOK, &project)
 		if project.Revision < 2 {
 			t.Fatalf("%s import did not increment revision: %d", format, project.Revision)
 		}
 		bad := []byte("start,end,label\n999:00,999:01,bad\n")
-		p.json(t, http.MethodPost, "/api/v1/projects/"+projectID+"/interchange/csv?itemId="+itemID, bad, http.StatusUnprocessableEntity, nil)
+		p.json(t, http.MethodPost, "/api/v2/projects/"+projectID+"/interchange/csv?itemId="+itemID, bad, http.StatusBadRequest, nil)
 	}
 
 	for _, kind := range []string{"silence", "black", "scene"} {
 		request := map[string]any{"mediaId": m.ID, "projectItemId": itemID, "projectRevision": project.Revision, "kind": kind, "sourceFingerprint": m.ETag, "minDurationMs": 100}
 		var job realJob
-		p.json(t, http.MethodPost, "/api/v1/projects/"+projectID+"/detections", request, http.StatusAccepted, &job)
+		p.json(t, http.MethodPost, "/api/v2/projects/"+projectID+"/detections", request, http.StatusAccepted, &job)
 		waitFor(t, 45*time.Second, func() bool {
-			p.jsonNoFail(t, http.MethodGet, "/api/v1/jobs/"+job.ID, nil, http.StatusOK, &job)
+			p.jsonNoFail(t, http.MethodGet, "/api/v2/jobs/"+job.ID, nil, http.StatusOK, &job)
 			return job.State == "succeeded"
 		})
 		for _, candidate := range job.Candidates {
@@ -112,13 +112,13 @@ func TestProjectsInterchangeAndDetectionUseProductionProcess(t *testing.T) {
 	}
 	cancelRequest := map[string]any{"mediaId": m.ID, "projectItemId": itemID, "projectRevision": project.Revision, "kind": "scene", "sourceFingerprint": m.ETag, "minDurationMs": 100}
 	var cancelled realJob
-	p.json(t, http.MethodPost, "/api/v1/projects/"+projectID+"/detections", cancelRequest, http.StatusAccepted, &cancelled)
+	p.json(t, http.MethodPost, "/api/v2/projects/"+projectID+"/detections", cancelRequest, http.StatusAccepted, &cancelled)
 	waitFor(t, 10*time.Second, func() bool {
-		p.jsonNoFail(t, http.MethodGet, "/api/v1/jobs/"+cancelled.ID, nil, http.StatusOK, &cancelled)
+		p.jsonNoFail(t, http.MethodGet, "/api/v2/jobs/"+cancelled.ID, nil, http.StatusOK, &cancelled)
 		return cancelled.State == "running"
 	})
 	ffmpegPID := ffmpegDescendant(t, p)
-	cancelResponse := p.request(t, http.MethodDelete, "/api/v1/jobs/"+cancelled.ID)
+	cancelResponse := p.request(t, http.MethodDelete, "/api/v2/jobs/"+cancelled.ID)
 	if cancelResponse.StatusCode != http.StatusNoContent {
 		cancelResponse.Body.Close()
 		t.Fatalf("detection cancellation status=%d", cancelResponse.StatusCode)
@@ -127,18 +127,18 @@ func TestProjectsInterchangeAndDetectionUseProductionProcess(t *testing.T) {
 	_ = syscall.Kill(ffmpegPID, syscall.SIGCONT)
 	waitPIDExit(t, ffmpegPID)
 	waitFor(t, 45*time.Second, func() bool {
-		p.jsonNoFail(t, http.MethodGet, "/api/v1/jobs/"+cancelled.ID, nil, http.StatusOK, &cancelled)
+		p.jsonNoFail(t, http.MethodGet, "/api/v2/jobs/"+cancelled.ID, nil, http.StatusOK, &cancelled)
 		return cancelled.State == "cancelled"
 	})
 	badDetection := map[string]any{"mediaId": m.ID, "projectItemId": itemID, "projectRevision": project.Revision, "kind": "scene", "sourceFingerprint": "stale"}
 	var staleJob realJob
-	p.json(t, http.MethodPost, "/api/v1/projects/"+projectID+"/detections", badDetection, http.StatusAccepted, &staleJob)
+	p.json(t, http.MethodPost, "/api/v2/projects/"+projectID+"/detections", badDetection, http.StatusAccepted, &staleJob)
 	waitFor(t, 45*time.Second, func() bool {
-		p.jsonNoFail(t, http.MethodGet, "/api/v1/jobs/"+staleJob.ID, nil, http.StatusOK, &staleJob)
+		p.jsonNoFail(t, http.MethodGet, "/api/v2/jobs/"+staleJob.ID, nil, http.StatusOK, &staleJob)
 		return staleJob.State == "failed"
 	})
 	var unchanged realProject
-	p.json(t, http.MethodGet, "/api/v1/projects/"+projectID, nil, http.StatusOK, &unchanged)
+	p.json(t, http.MethodGet, "/api/v2/projects/"+projectID, nil, http.StatusOK, &unchanged)
 	if unchanged.Revision != project.Revision || len(unchanged.Items) != len(project.Items) {
 		t.Fatalf("stale detection mutated project: before revision %d, after %d", project.Revision, unchanged.Revision)
 	}

@@ -2,9 +2,11 @@ package projects
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -35,6 +37,13 @@ type BatchExportRequest struct {
 	ProjectID string
 	ItemIDs   []string
 }
+
+var (
+	ErrInvalidBatchCursor = errors.New("invalid batch cursor")
+	batchCursorID         = regexp.MustCompile(`^b_[A-Za-z0-9_-]{12,64}$`)
+)
+
+const batchCursorScope = "batches-v1"
 
 type BatchExportUseCase struct {
 	Projects  ProjectRepository
@@ -179,20 +188,66 @@ func (b BatchExportUseCase) Get(ctx context.Context, batchID string) (Batch, err
 	return result, nil
 }
 
-func (b BatchExportUseCase) List(ctx context.Context, limit int) (BatchPage, error) {
-	ids, err := b.Jobs.ListBatchIDs(ctx, jobqueue.JobExport, limit)
+func (b BatchExportUseCase) List(ctx context.Context, cursor string, limit int) (BatchPage, error) {
+	if b.Jobs == nil || limit < 1 || limit > 100 {
+		return BatchPage{}, errors.New("batch list dependencies or limit are invalid")
+	}
+	after, err := decodeBatchCursor(cursor)
 	if err != nil {
 		return BatchPage{}, err
 	}
-	page := BatchPage{Items: make([]Batch, 0, len(ids))}
-	for _, id := range ids {
-		batch, err := b.Get(ctx, id)
+	positions, err := b.Jobs.ListBatchIDs(ctx, jobqueue.JobExport, after, limit+1)
+	if err != nil {
+		return BatchPage{}, err
+	}
+	hasMore := len(positions) > limit
+	if hasMore {
+		positions = positions[:limit]
+	}
+	page := BatchPage{Items: make([]Batch, 0, len(positions))}
+	for _, position := range positions {
+		batch, err := b.Get(ctx, position.ID)
 		if err != nil {
 			return BatchPage{}, err
 		}
 		page.Items = append(page.Items, batch)
 	}
+	if hasMore {
+		token := encodeBatchCursor(positions[len(positions)-1])
+		page.NextCursor = &token
+	}
 	return page, nil
+}
+
+func encodeBatchCursor(position jobqueue.BatchPosition) string {
+	payload := batchCursorScope + "\x00" + position.CreatedAt + "\x00" + position.ID
+	return base64.RawURLEncoding.EncodeToString([]byte(payload))
+}
+
+func decodeBatchCursor(value string) (*jobqueue.BatchPosition, error) {
+	if value == "" {
+		return nil, nil
+	}
+	if len(value) > 256 {
+		return nil, ErrInvalidBatchCursor
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(value)
+	if err != nil || base64.RawURLEncoding.EncodeToString(payload) != value {
+		return nil, ErrInvalidBatchCursor
+	}
+	scope, remainder, ok := strings.Cut(string(payload), "\x00")
+	if !ok || scope != batchCursorScope {
+		return nil, ErrInvalidBatchCursor
+	}
+	createdAt, id, ok := strings.Cut(remainder, "\x00")
+	if !ok || strings.Contains(id, "\x00") || !batchCursorID.MatchString(id) {
+		return nil, ErrInvalidBatchCursor
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, createdAt)
+	if err != nil || parsed.UTC().Format(time.RFC3339Nano) != createdAt {
+		return nil, ErrInvalidBatchCursor
+	}
+	return &jobqueue.BatchPosition{CreatedAt: createdAt, ID: id}, nil
 }
 
 func (b BatchExportUseCase) Retry(ctx context.Context, jobID string) (Batch, error) {

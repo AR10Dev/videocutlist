@@ -94,11 +94,11 @@ func TestExportProposalHTTPApprovalAndSettingsListDetails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	settings := mcpAdminRequest(server, http.MethodGet, "/api/v1/settings/mcp", "", "")
+	settings := mcpAdminRequest(server, http.MethodGet, "/api/v2/settings/mcp", "", "")
 	if settings.Code != http.StatusOK || !strings.Contains(settings.Body.String(), proposal.ID) || !strings.Contains(settings.Body.String(), "clip.mp4") {
 		t.Fatalf("settings status=%d body=%s", settings.Code, settings.Body.String())
 	}
-	firstPage := mcpAdminRequest(server, http.MethodGet, "/api/v1/settings/mcp?proposalLimit=2", "", "")
+	firstPage := mcpAdminRequest(server, http.MethodGet, "/api/v2/settings/mcp?proposalLimit=2", "", "")
 	var page struct {
 		Proposals          []mcp.ExportProposal `json:"proposals"`
 		ProposalNextCursor string               `json:"proposalNextCursor"`
@@ -109,7 +109,7 @@ func TestExportProposalHTTPApprovalAndSettingsListDetails(t *testing.T) {
 	if firstPage.Code != http.StatusOK || len(page.Proposals) != 2 || page.ProposalNextCursor == "" {
 		t.Fatalf("first proposal page=%s", firstPage.Body.String())
 	}
-	secondPage := mcpAdminRequest(server, http.MethodGet, "/api/v1/settings/mcp?proposalLimit=2&proposalCursor="+page.ProposalNextCursor, "", "")
+	secondPage := mcpAdminRequest(server, http.MethodGet, "/api/v2/settings/mcp?proposalLimit=2&proposalCursor="+page.ProposalNextCursor, "", "")
 	var rest struct {
 		Proposals          []mcp.ExportProposal `json:"proposals"`
 		ProposalNextCursor string               `json:"proposalNextCursor"`
@@ -120,11 +120,11 @@ func TestExportProposalHTTPApprovalAndSettingsListDetails(t *testing.T) {
 	if secondPage.Code != http.StatusOK || len(rest.Proposals) != 1 || rest.ProposalNextCursor != "" || rest.Proposals[0].ID == page.Proposals[0].ID {
 		t.Fatalf("second proposal page=%s", secondPage.Body.String())
 	}
-	invalidCursor := mcpAdminRequest(server, http.MethodGet, "/api/v1/settings/mcp?proposalCursor=invalid", "", "")
+	invalidCursor := mcpAdminRequest(server, http.MethodGet, "/api/v2/settings/mcp?proposalCursor=invalid", "", "")
 	if invalidCursor.Code != http.StatusBadRequest || !strings.Contains(invalidCursor.Body.String(), `"code":"invalid_query"`) {
 		t.Fatalf("invalid proposal cursor status=%d body=%s", invalidCursor.Code, invalidCursor.Body.String())
 	}
-	approved := mcpAdminRequest(server, http.MethodPost, "/api/v1/export-proposals/"+proposal.ID+"/approval", "", "")
+	approved := mcpAdminRequest(server, http.MethodPost, "/api/v2/export-proposals/"+proposal.ID+"/approval", "", "")
 	if approved.Code != http.StatusOK || !strings.Contains(approved.Body.String(), `"approvedAt"`) {
 		t.Fatalf("approval status=%d body=%s", approved.Code, approved.Body.String())
 	}

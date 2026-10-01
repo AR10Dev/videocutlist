@@ -196,7 +196,8 @@ window.VIDEOCUTLIST_CONFIG = {
 };
 ```
 
-Requests use `<serverBaseUrl>/api/v1/`. With bearer authentication, the browser
+JSON control requests use `<serverBaseUrl>/api/v2/`; native media and file
+responses use `<serverBaseUrl>/media/v2/`. With bearer authentication, the browser
 offers an access form after a 401 and keeps the supplied token only in memory.
 Do not embed a bearer token in a public frontend build or configuration file.
 Use `authentication: { type: "cookie" }` when a proxy authenticates requests

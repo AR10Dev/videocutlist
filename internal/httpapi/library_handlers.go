@@ -11,18 +11,18 @@ import (
 
 func (s *Server) browseMedia(writer http.ResponseWriter, request *http.Request, id string) {
 	if !queryKeys(request, "folderId", "cursor", "limit") {
-		httpx.Error(writer, 422, "invalid_query", "Query parameters are invalid.", id)
+		httpx.Error(writer, 400, "invalid_query", "Query parameters are invalid.", id)
 		return
 	}
 	q := request.URL.Query()
 	folderID, cursor := q.Get("folderId"), q.Get("cursor")
 	if folderID != "" && !validFolderID(folderID) || cursor != "" && !validMediaID(cursor) {
-		httpx.Error(writer, 422, "invalid_query", "Query parameters are invalid.", id)
+		httpx.Error(writer, 400, "invalid_query", "Query parameters are invalid.", id)
 		return
 	}
 	limit, err := parseLimit(q.Get("limit"))
 	if err != nil {
-		httpx.Error(writer, 422, "invalid_query", "Query parameters are invalid.", id)
+		httpx.Error(writer, 400, "invalid_query", "Query parameters are invalid.", id)
 		return
 	}
 	page, err := s.config.Media.Browse(request.Context(), folderID, cursor, limit)
@@ -35,17 +35,17 @@ func (s *Server) browseMedia(writer http.ResponseWriter, request *http.Request, 
 
 func (s *Server) listMedia(writer http.ResponseWriter, request *http.Request, id string) {
 	if !queryKeys(request, "limit", "cursor") {
-		httpx.Error(writer, 422, "invalid_query", "Query parameters are invalid.", id)
+		httpx.Error(writer, 400, "invalid_query", "Query parameters are invalid.", id)
 		return
 	}
 	limit, err := parseLimit(request.URL.Query().Get("limit"))
 	if err != nil {
-		httpx.Error(writer, 422, "invalid_query", "Query parameters are invalid.", id)
+		httpx.Error(writer, 400, "invalid_query", "Query parameters are invalid.", id)
 		return
 	}
 	cursor := request.URL.Query().Get("cursor")
 	if len(cursor) > 128 || cursor != "" && !validMediaID(cursor) {
-		httpx.Error(writer, 422, "invalid_query", "Query parameters are invalid.", id)
+		httpx.Error(writer, 400, "invalid_query", "Query parameters are invalid.", id)
 		return
 	}
 	page, err := s.config.Media.List(request.Context(), cursor, limit)

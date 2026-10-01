@@ -126,9 +126,9 @@ for ((i = 0; i < 300; i++)); do
   fi
   if [[ -n $base ]]; then
     if [[ $auth_mode == bearer ]]; then
-      status=$(curl -fsS --max-time 2 -H "Authorization: Bearer $token" "$base/api/v1/media/status" 2>/dev/null) || status=''
+      status=$(curl -fsS --max-time 2 -H "Authorization: Bearer $token" "$base/api/v2/media/status" 2>/dev/null) || status=''
     else
-      status=$(curl -fsS --max-time 2 "$base/api/v1/media/status" 2>/dev/null) || status=''
+      status=$(curl -fsS --max-time 2 "$base/api/v2/media/status" 2>/dev/null) || status=''
     fi
     if [[ $status == *"\"state\":\"$expected_state\""* ]]; then
       ready=true

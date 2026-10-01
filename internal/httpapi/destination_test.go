@@ -25,7 +25,7 @@ func TestDestinationCapabilitiesAreSafeAndDefaultDisabled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodGet, "/api/v1/destinations", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/v2/destinations", nil)
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
 	if response.Code != http.StatusOK {

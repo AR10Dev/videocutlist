@@ -7,8 +7,8 @@ Run commands from `deployments/containers`.
 ```bash
 docker compose ps
 docker compose logs -f videocutlist
-curl --fail http://127.0.0.1:8787/api/v1/health
-curl --fail http://127.0.0.1:8787/api/v1/ready
+curl --fail http://127.0.0.1:8787/health
+curl --fail http://127.0.0.1:8787/ready
 ```
 
 Use `podman compose` instead of `docker compose` with Podman. The bundled

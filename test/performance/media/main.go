@@ -230,7 +230,7 @@ func (b *bench) expect(ctx context.Context, method, path string, payload any, he
 func (b *bench) findMedia(ctx context.Context, name string, size int64) (media, error) {
 	cursor := ""
 	for range 10000 {
-		path := "/api/v1/media?limit=100"
+		path := "/api/v2/media?limit=100"
 		if cursor != "" {
 			path += "&cursor=" + url.QueryEscape(cursor)
 		}
@@ -275,7 +275,7 @@ func (b *bench) run() error {
 	defer cancel()
 	var err error
 	if b.opt.mediaID != "" {
-		_, err = b.expect(ctx, "GET", "/api/v1/media/"+url.PathEscape(b.opt.mediaID), nil, nil, 200, &b.media)
+		_, err = b.expect(ctx, "GET", "/api/v2/media/"+url.PathEscape(b.opt.mediaID), nil, nil, 200, &b.media)
 		if err != nil {
 			return b.failure("media.lookup", err)
 		}
@@ -402,7 +402,7 @@ func (b *bench) scan(scenario string) error {
 	defer cancel()
 	start := time.Now()
 	var started job
-	resp, err := b.expect(ctx, "POST", "/api/v1/media/refresh", nil, nil, http.StatusAccepted, &started)
+	resp, err := b.expect(ctx, "POST", "/api/v2/media/refresh", nil, nil, http.StatusAccepted, &started)
 	if err != nil {
 		return err
 	}
@@ -428,7 +428,7 @@ func (b *bench) poll(ctx context.Context, id string, onRunning func() error) (jo
 	var runningAt *time.Time
 	for {
 		var current job
-		_, err := b.expect(ctx, "GET", "/api/v1/jobs/"+url.PathEscape(id), nil, nil, 200, &current)
+		_, err := b.expect(ctx, "GET", "/api/v2/jobs/"+url.PathEscape(id), nil, nil, 200, &current)
 		if err != nil {
 			return job{}, runningAt, err
 		}
@@ -462,7 +462,7 @@ func (b *bench) poll(ctx context.Context, id string, onRunning func() error) (jo
 	}
 }
 func (b *bench) previewPath(center int64) string {
-	return fmt.Sprintf("/api/v1/media/%s/preview?centerMs=%d&beforeMs=1000&afterMs=1000", url.PathEscape(b.media.ID), center)
+	return fmt.Sprintf("/media/v2/media/%s/preview?centerMs=%d&beforeMs=1000&afterMs=1000", url.PathEscape(b.media.ID), center)
 }
 func (b *bench) preview(ctx context.Context, path, expected string) (requestResult, error) {
 	resp, err := b.expect(ctx, "GET", path, nil, nil, 200, nil)
@@ -517,7 +517,7 @@ func (b *bench) previewPair(center int64, prefix string) error {
 func (b *bench) assets(center int64, i int) error {
 	ctx, cancel := context.WithTimeout(context.Background(), b.opt.timeout)
 	defer cancel()
-	base := "/api/v1/media/" + url.PathEscape(b.media.ID)
+	base := "/media/v2/media/" + url.PathEscape(b.media.ID)
 	start := center + int64(i%3)
 	for _, asset := range []struct{ name, path string }{
 		{"thumbnails", fmt.Sprintf("%s/thumbnails?startMs=%d&durationMs=1000&count=1&width=80", base, start)},
@@ -581,7 +581,7 @@ func (b *bench) assetCardinality() error {
 	if int64(n) > b.media.DurationMS-2000 {
 		return fmt.Errorf("asset cardinality %d exceeds media's %d available 1s windows", n, b.media.DurationMS-2000)
 	}
-	base := "/api/v1/media/" + url.PathEscape(b.media.ID)
+	base := "/media/v2/media/" + url.PathEscape(b.media.ID)
 	var path string
 	var seeded requestResult
 	for i := range n {
@@ -657,7 +657,7 @@ func (b *bench) exports() error {
 			var saved struct {
 				Revision int64 `json:"revision"`
 			}
-			_, err := b.expect(ctx, "PUT", "/api/v1/projects/"+id, map[string]any{"revision": revision, "schemaVersion": 2, "name": "media benchmark", "items": []any{projectItem}}, nil, 200, &saved)
+			_, err := b.expect(ctx, "PUT", "/api/v2/projects/"+id, map[string]any{"revision": revision, "schemaVersion": 2, "name": "media benchmark", "items": []any{projectItem}}, nil, 200, &saved)
 			if err != nil {
 				cancel()
 				return err
@@ -672,7 +672,7 @@ func (b *bench) exports() error {
 				Allowed   bool  `json:"allowed"`
 				Selection []int `json:"selection"`
 			}
-			_, err = b.expect(ctx, "POST", "/api/v1/projects/"+id+"/exports/preflight", preflight, nil, 200, &checked)
+			_, err = b.expect(ctx, "POST", "/api/v2/projects/"+id+"/exports/preflight", preflight, nil, 200, &checked)
 			if err != nil {
 				cancel()
 				return err
@@ -703,7 +703,7 @@ func (b *bench) exportOnce(ctx context.Context, projectID, itemID, strategy stri
 		} `json:"jobs"`
 		BatchID string `json:"batchId"`
 	}
-	resp, err := b.expect(ctx, "POST", "/api/v1/projects/"+projectID+"/exports", map[string]any{"itemIds": []string{itemID}}, nil, 202, &submitted)
+	resp, err := b.expect(ctx, "POST", "/api/v2/projects/"+projectID+"/exports", map[string]any{"itemIds": []string{itemID}}, nil, 202, &submitted)
 	if err != nil {
 		return err
 	}
@@ -714,7 +714,7 @@ func (b *bench) exportOnce(ctx context.Context, projectID, itemID, strategy stri
 	var mixedRun func() error
 	if mixed {
 		mixedRun = func() error {
-			browse, browseErr := b.expect(ctx, "GET", "/api/v1/media?limit=100", nil, nil, 200, nil)
+			browse, browseErr := b.expect(ctx, "GET", "/api/v2/media?limit=100", nil, nil, 200, nil)
 			if browseErr != nil {
 				return browseErr
 			}
@@ -758,7 +758,7 @@ func (b *bench) verifyOutput(ctx context.Context, id string, finished job) error
 	if finished.Result.OutputName == "" && len(finished.Result.OutputNames) != 1 {
 		return errors.New("expected one export output")
 	}
-	output, err := b.expect(ctx, "GET", "/api/v1/jobs/"+url.PathEscape(id)+"/outputs/0", nil, nil, 200, nil)
+	output, err := b.expect(ctx, "GET", "/media/v2/jobs/"+url.PathEscape(id)+"/outputs/0", nil, nil, 200, nil)
 	if err != nil {
 		return err
 	}

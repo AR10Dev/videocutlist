@@ -124,7 +124,7 @@ func TestRunWithNoMediaRootsHidesRemovedRootAndServesAPI(t *testing.T) {
 			t.Fatalf("unconfigured server stopped before serving: %v", err)
 		default:
 		}
-		response, err := http.Get(base + "/api/v1/ready")
+		response, err := http.Get(base + "/ready")
 		if err == nil {
 			_ = response.Body.Close()
 			if response.StatusCode == http.StatusOK {
@@ -137,7 +137,7 @@ func TestRunWithNoMediaRootsHidesRemovedRootAndServesAPI(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	for path, check := range map[string]func(*json.Decoder) error{
-		"/api/v1/media": func(decoder *json.Decoder) error {
+		"/api/v2/media": func(decoder *json.Decoder) error {
 			var page struct {
 				Items []json.RawMessage `json:"items"`
 			}
@@ -149,7 +149,7 @@ func TestRunWithNoMediaRootsHidesRemovedRootAndServesAPI(t *testing.T) {
 			}
 			return nil
 		},
-		"/api/v1/media/status": func(decoder *json.Decoder) error {
+		"/api/v2/media/status": func(decoder *json.Decoder) error {
 			var status struct {
 				State string `json:"state"`
 			}

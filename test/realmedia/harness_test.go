@@ -155,7 +155,7 @@ func TestMain(m *testing.M) {
 				code = 1
 			}
 		}
-		for _, route := range []string{"GET /api/v1/health", "GET /api/v1/ready", "GET /", "GET /metrics"} {
+		for _, route := range []string{"GET /health", "GET /ready", "GET /", "GET /metrics"} {
 			if _, ok := executedRoutes.Load(route); !ok {
 				fmt.Fprintf(os.Stderr, "real-media route not exercised: %s\n", route)
 				code = 1
@@ -185,7 +185,7 @@ func routeKey(method, path string) string {
 func recordRoute(method, path string) {
 	path = strings.Split(path, "?")[0]
 	executedRoutes.Store(routeKey(method, path), true)
-	if path == "/" || path == "/metrics" || path == "/api/v1/health" || path == "/api/v1/ready" {
+	if path == "/" || path == "/metrics" || path == "/health" || path == "/ready" {
 		executedRoutes.Store(method+" "+path, true)
 	}
 }
@@ -281,12 +281,12 @@ func startProcessWithEnv(t *testing.T, root string, overrides map[string]string)
 			time.Sleep(100 * time.Millisecond)
 			continue
 		}
-		resp, err := client.Get(p.base + "/api/v1/ready")
+		resp, err := client.Get(p.base + "/ready")
 		if err == nil {
 			_ = resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
 				// Dependency readiness does not imply the initial library scan is complete.
-				request, err := http.NewRequestWithContext(ctx, http.MethodGet, p.base+"/api/v1/media/status", nil)
+				request, err := http.NewRequestWithContext(ctx, http.MethodGet, p.base+"/api/v2/media/status", nil)
 				if err != nil {
 					t.Fatal(err)
 				}

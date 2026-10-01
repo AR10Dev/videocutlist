@@ -223,7 +223,9 @@ test.beforeEach(async ({ page }) => {
         },
       });
     if (path === "/api/v1/batches" && request.method() === "GET")
-      return route.fulfill({ json: { items: [] } satisfies components["schemas"]["BatchPage"] });
+      return route.fulfill({
+        json: { items: [], nextCursor: null } satisfies components["schemas"]["BatchPage"],
+      });
     if (
       (path === `/api/v1/batches/${batch.batchId}` || path === `/api/v1/jobs/${job.id}`) &&
       request.method() === "GET"

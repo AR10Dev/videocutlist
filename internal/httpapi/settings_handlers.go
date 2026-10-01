@@ -65,19 +65,19 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, id string) 
 	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, MaxJSONBody+1))
 	if err != nil || len(body) > MaxJSONBody {
-		httpx.Error(w, http.StatusUnprocessableEntity, "invalid_settings", "Settings must be a complete valid document.", id)
+		httpx.Error(w, http.StatusBadRequest, "invalid_settings", "Settings must be a complete valid document.", id)
 		return
 	}
 	var input settingsUpdateRequest
 	decoder := json.NewDecoder(bytes.NewReader(body))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&input); err != nil || input.Revision < 1 {
-		httpx.Error(w, http.StatusUnprocessableEntity, "invalid_settings", "Settings must be a complete valid document.", id)
+		httpx.Error(w, http.StatusBadRequest, "invalid_settings", "Settings must be a complete valid document.", id)
 		return
 	}
 	var extra any
 	if decoder.Decode(&extra) != io.EOF {
-		httpx.Error(w, http.StatusUnprocessableEntity, "invalid_settings", "Settings must be a complete valid document.", id)
+		httpx.Error(w, http.StatusBadRequest, "invalid_settings", "Settings must be a complete valid document.", id)
 		return
 	}
 	var complete struct {
@@ -86,14 +86,14 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, id string) 
 		} `json:"settings"`
 	}
 	if err := json.Unmarshal(body, &complete); err != nil || complete.Settings.MCPEnabled == nil {
-		httpx.Error(w, http.StatusUnprocessableEntity, "invalid_settings", "Settings must be a complete valid document.", id)
+		httpx.Error(w, http.StatusBadRequest, "invalid_settings", "Settings must be a complete valid document.", id)
 		return
 	}
 	var document struct {
 		Settings settings.DeploymentDocument `json:"settings"`
 	}
 	if err := json.Unmarshal(body, &document); err != nil {
-		httpx.Error(w, http.StatusUnprocessableEntity, "invalid_settings", "Settings must be a complete valid document.", id)
+		httpx.Error(w, http.StatusBadRequest, "invalid_settings", "Settings must be a complete valid document.", id)
 		return
 	}
 	record, err := s.config.Settings.Update(r.Context(), input.Revision, input.Settings, document.Settings)
@@ -102,9 +102,9 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, id string) 
 		case errors.Is(err, store.ErrRuntimeSettingsRevisionConflict):
 			httpx.Error(w, http.StatusConflict, "settings_revision_conflict", "Settings changed; reload before updating.", id)
 		case errors.Is(err, settings.ErrDeploymentSettingsReadOnly):
-			httpx.Error(w, http.StatusUnprocessableEntity, "deployment_settings_read_only", "Deployment paths and destinations are server-managed.", id)
+			httpx.Error(w, http.StatusBadRequest, "deployment_settings_read_only", "Deployment paths and destinations are server-managed.", id)
 		case errors.Is(err, settings.ErrInvalidSettings):
-			httpx.Error(w, http.StatusUnprocessableEntity, "invalid_settings", "Settings could not be applied safely.", id)
+			httpx.Error(w, http.StatusBadRequest, "invalid_settings", "Settings could not be applied safely.", id)
 		default:
 			httpx.Error(w, http.StatusInternalServerError, "settings_unavailable", "Settings are temporarily unavailable.", id)
 		}

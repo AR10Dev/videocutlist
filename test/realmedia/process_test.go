@@ -32,7 +32,7 @@ func TestProductionProcessMediaAndDerivedAssets(t *testing.T) {
 			Retention       any `json:"retention"`
 		} `json:"destinations"`
 	}
-	getJSON(t, p, "/api/v1/destinations", &destinations)
+	getJSON(t, p, "/api/v2/destinations", &destinations)
 	if len(destinations.Items) == 0 || destinations.Items[0].ID == "" || destinations.Items[0].Label == "" || destinations.Items[0].Kind == "" || destinations.Items[0].Retention == nil {
 		t.Fatalf("unsafe or incomplete destinations: %#v", destinations)
 	}
@@ -42,15 +42,15 @@ func TestProductionProcessMediaAndDerivedAssets(t *testing.T) {
 		Schema   int            `json:"schemaVersion"`
 		Roots    any            `json:"roots"`
 	}
-	getJSON(t, p, "/api/v1/settings", &settings)
+	getJSON(t, p, "/api/v2/settings", &settings)
 	if settings.Revision < 1 || settings.Schema < 1 || len(settings.Settings) == 0 || settings.Roots == nil {
 		t.Fatalf("incomplete settings response: %#v", settings)
 	}
 	var batches struct {
 		Items []map[string]any `json:"items"`
 	}
-	getJSON(t, p, "/api/v1/batches?limit=1", &batches)
-	for _, value := range []string{"/api/v1/health", "/api/v1/ready"} {
+	getJSON(t, p, "/api/v2/batches?limit=1", &batches)
+	for _, value := range []string{"/health", "/ready"} {
 		resp := p.request(t, http.MethodGet, value)
 		if resp.StatusCode != http.StatusOK {
 			resp.Body.Close()
@@ -62,7 +62,7 @@ func TestProductionProcessMediaAndDerivedAssets(t *testing.T) {
 	var status struct {
 		State string `json:"state"`
 	}
-	getJSON(t, p, "/api/v1/media/status", &status)
+	getJSON(t, p, "/api/v2/media/status", &status)
 	if status.State != "ready_with_media" {
 		t.Fatalf("media state=%q", status.State)
 	}
@@ -71,7 +71,7 @@ func TestProductionProcessMediaAndDerivedAssets(t *testing.T) {
 			ID string `json:"id"`
 		} `json:"items"`
 	}
-	getJSON(t, p, "/api/v1/media?limit=10", &page)
+	getJSON(t, p, "/api/v2/media?limit=10", &page)
 	if len(page.Items) != 1 || page.Items[0].ID == "" || strings.Contains(page.Items[0].ID, "/") {
 		t.Fatalf("unexpected media page: %#v", page)
 	}
@@ -84,11 +84,11 @@ func TestProductionProcessMediaAndDerivedAssets(t *testing.T) {
 		Container  string         `json:"container"`
 		Streams    map[string]any `json:"streams"`
 	}
-	getJSON(t, p, "/api/v1/media/"+mediaID, &detail)
+	getJSON(t, p, "/api/v2/media/"+mediaID, &detail)
 	if detail.ID != mediaID || detail.DurationMS < 52000 || detail.DurationMS > 53000 || detail.SizeBytes != 4372373 || detail.Container == "" || detail.Streams["video"] == nil || detail.Streams["audio"] == nil {
 		t.Fatalf("unexpected media detail: %#v", detail)
 	}
-	resp = p.request(t, http.MethodGet, "/api/v1/media/tree")
+	resp = p.request(t, http.MethodGet, "/api/v2/media/tree")
 	var tree struct {
 		Folders []any `json:"folders"`
 		Items   []struct {
@@ -100,13 +100,13 @@ func TestProductionProcessMediaAndDerivedAssets(t *testing.T) {
 		t.Fatalf("media tree missing root or opaque item status=%d", resp.StatusCode)
 	}
 	resp.Body.Close()
-	resp = p.request(t, http.MethodGet, "/api/v1/media?limit=1")
+	resp = p.request(t, http.MethodGet, "/api/v2/media?limit=1")
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
 		t.Fatalf("GET media page status=%d", resp.StatusCode)
 	}
 	resp.Body.Close()
-	for _, path := range []string{"/api/v1/media/refresh", "/api/v1/settings/media/refresh"} {
+	for _, path := range []string{"/api/v2/media/refresh", "/api/v2/settings/media/refresh"} {
 		resp := p.request(t, http.MethodPost, path)
 		if resp.StatusCode != http.StatusAccepted {
 			resp.Body.Close()
@@ -114,7 +114,7 @@ func TestProductionProcessMediaAndDerivedAssets(t *testing.T) {
 		}
 		resp.Body.Close()
 	}
-	resp = p.request(t, http.MethodPost, "/api/v1/media/import")
+	resp = p.request(t, http.MethodPost, "/api/v2/media/import")
 	var importJob struct {
 		ID string `json:"id"`
 	}
@@ -123,20 +123,20 @@ func TestProductionProcessMediaAndDerivedAssets(t *testing.T) {
 		t.Fatalf("POST media import status=%d", resp.StatusCode)
 	}
 	resp.Body.Close()
-	resp = p.request(t, http.MethodGet, "/api/v1/media/import/"+importJob.ID)
+	resp = p.request(t, http.MethodGet, "/api/v2/media/import/"+importJob.ID)
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
 		t.Fatalf("GET media import status=%d", resp.StatusCode)
 	}
 	resp.Body.Close()
-	resp = p.request(t, http.MethodDelete, "/api/v1/media/import/"+importJob.ID)
+	resp = p.request(t, http.MethodDelete, "/api/v2/media/import/"+importJob.ID)
 	if resp.StatusCode != http.StatusNoContent {
 		resp.Body.Close()
 		t.Fatalf("DELETE media import status=%d", resp.StatusCode)
 	}
 	resp.Body.Close()
 	waitFor(t, 10*time.Second, func() bool {
-		response := p.request(t, http.MethodGet, "/api/v1/media/import/"+importJob.ID)
+		response := p.request(t, http.MethodGet, "/api/v2/media/import/"+importJob.ID)
 		defer response.Body.Close()
 		var job struct {
 			State string `json:"state"`
@@ -147,7 +147,7 @@ func TestProductionProcessMediaAndDerivedAssets(t *testing.T) {
 		return job.State == "cancelled" || job.State == "succeeded" || job.State == "failed"
 	})
 
-	previewPath := "/api/v1/media/" + mediaID + "/preview?centerMs=26000&beforeMs=1000&afterMs=1000"
+	previewPath := "/media/v2/media/" + mediaID + "/preview?centerMs=26000&beforeMs=1000&afterMs=1000"
 	resp = p.request(t, http.MethodHead, previewPath)
 	if resp.StatusCode != http.StatusNotFound {
 		resp.Body.Close()
@@ -162,7 +162,7 @@ func TestProductionProcessMediaAndDerivedAssets(t *testing.T) {
 	}
 	probeBytes(t, preview, ".mp4")
 	cancelContext, cancelRequest := context.WithCancel(context.Background())
-	cancelledRequest, err := http.NewRequestWithContext(cancelContext, http.MethodGet, p.base+"/api/v1/media/"+mediaID+"/preview?centerMs=12000&beforeMs=7000&afterMs=7000", nil)
+	cancelledRequest, err := http.NewRequestWithContext(cancelContext, http.MethodGet, p.base+"/media/v2/media/"+mediaID+"/preview?centerMs=12000&beforeMs=7000&afterMs=7000", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +210,7 @@ func TestProductionProcessMediaAndDerivedAssets(t *testing.T) {
 	}
 	resp.Body.Close()
 	for _, center := range []string{"0", "52000"} {
-		resp = p.request(t, http.MethodGet, "/api/v1/media/"+mediaID+"/preview?centerMs="+center+"&beforeMs=1000&afterMs=1000")
+		resp = p.request(t, http.MethodGet, "/media/v2/media/"+mediaID+"/preview?centerMs="+center+"&beforeMs=1000&afterMs=1000")
 		if resp.StatusCode != http.StatusOK {
 			resp.Body.Close()
 			t.Fatalf("boundary preview center=%s status=%d", center, resp.StatusCode)
@@ -218,7 +218,7 @@ func TestProductionProcessMediaAndDerivedAssets(t *testing.T) {
 		resp.Body.Close()
 	}
 
-	thumbPath := "/api/v1/media/" + mediaID + "/thumbnails?startMs=26000&durationMs=1000&count=1&width=80"
+	thumbPath := "/media/v2/media/" + mediaID + "/thumbnails?startMs=26000&durationMs=1000&count=1&width=80"
 	resp = p.request(t, http.MethodGet, thumbPath)
 	thumb, err := io.ReadAll(resp.Body)
 	resp.Body.Close()
@@ -242,7 +242,7 @@ func TestProductionProcessMediaAndDerivedAssets(t *testing.T) {
 	}
 	conditional.Body.Close()
 
-	wavePath := "/api/v1/media/" + mediaID + "/waveform?startMs=26000&durationMs=1000&samples=64"
+	wavePath := "/media/v2/media/" + mediaID + "/waveform?startMs=26000&durationMs=1000&samples=64"
 	var wave struct {
 		StartMS    int64     `json:"startMs"`
 		DurationMS int64     `json:"durationMs"`
@@ -309,18 +309,18 @@ func TestProductionProcessSecurityBoundaries(t *testing.T) {
 		}
 		return resp.StatusCode, string(body)
 	}
-	if status, _ := request(http.MethodGet, "/api/v1/media", "", nil); status != http.StatusUnauthorized {
+	if status, _ := request(http.MethodGet, "/api/v2/media", "", nil); status != http.StatusUnauthorized {
 		t.Fatalf("missing bearer status=%d", status)
 	}
-	if status, _ := request(http.MethodGet, "/api/v1/media", "wrong", nil); status != http.StatusUnauthorized {
+	if status, _ := request(http.MethodGet, "/api/v2/media", "wrong", nil); status != http.StatusUnauthorized {
 		t.Fatalf("bad bearer status=%d", status)
 	}
-	for _, path := range []string{"/api/v1/not-a-route", "/api/v1/media?unexpected=true", "/api/v1/media/m_bad"} {
+	for _, path := range []string{"/api/v2/not-a-route", "/api/v2/media?unexpected=true", "/api/v2/media/m_bad"} {
 		if status, body := request(http.MethodGet, path, bearerToken, nil); status < 400 || status >= 500 || strings.Contains(body, root) {
 			t.Fatalf("unsafe request %s status=%d body=%s", path, status, body)
 		}
 	}
-	if status, body := request(http.MethodPost, "/api/v1/automation", bearerToken, map[string]string{"Origin": "https://untrusted.example"}); status != http.StatusForbidden || strings.Contains(body, root) {
+	if status, body := request(http.MethodPost, "/api/v2/automation", bearerToken, map[string]string{"Origin": "https://untrusted.example"}); status != http.StatusForbidden || strings.Contains(body, root) {
 		t.Fatalf("automation origin status=%d body=%s", status, body)
 	}
 	if status, body := request(http.MethodGet, "/metrics", "", nil); status != http.StatusUnauthorized || strings.Contains(body, "http_requests_total") {

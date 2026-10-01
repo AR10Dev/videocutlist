@@ -34,5 +34,5 @@ ENV VIDEOCUTLIST_LISTEN_ADDRESS=0.0.0.0 \
     VIDEOCUTLIST_FFMPEG_PATH=/usr/bin/ffmpeg \
     VIDEOCUTLIST_FFPROBE_PATH=/usr/bin/ffprobe
 EXPOSE 8787
-HEALTHCHECK --interval=30s --timeout=5s --start-period=10s CMD curl --fail --silent http://127.0.0.1:8787/api/v1/health || exit 1
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s CMD curl --fail --silent http://127.0.0.1:8787/health || exit 1
 ENTRYPOINT ["/usr/local/bin/videocutlist"]

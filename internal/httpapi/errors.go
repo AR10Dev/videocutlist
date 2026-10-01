@@ -32,7 +32,7 @@ func projectError(w http.ResponseWriter, id string, err error) {
 				message = "A project item has invalid editor or export settings. Reload the project and try again."
 			}
 		}
-		httpx.Error(w, http.StatusUnprocessableEntity, "invalid_project", message, id)
+		httpx.Error(w, http.StatusBadRequest, "invalid_project", message, id)
 	default:
 		resourceError(w, id, err)
 	}

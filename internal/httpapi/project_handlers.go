@@ -44,7 +44,7 @@ func (s *Server) getProject(writer http.ResponseWriter, request *http.Request, p
 func (s *Server) putProject(writer http.ResponseWriter, request *http.Request, project string, id string) {
 	var input ProjectInput
 	if httpx.ReadJSON(request, &input) != nil {
-		httpx.Error(writer, 422, "invalid_project", "Project data could not be read. Reload the page and try again.", id)
+		httpx.Error(writer, 400, "invalid_project", "Project data could not be read. Reload the page and try again.", id)
 		return
 	}
 	saved, err := s.config.Projects.Save(request.Context(), project, input.input())
@@ -59,12 +59,22 @@ func (s *Server) listBatches(writer http.ResponseWriter, request *http.Request, 
 		internalError(writer, id)
 		return
 	}
-	limit, err := parseLimit(request.URL.Query().Get("limit"))
-	if err != nil {
+	if !queryKeys(request, "cursor", "limit") {
 		httpx.Error(writer, http.StatusBadRequest, "invalid_query", "Invalid query.", id)
 		return
 	}
-	page, err := s.config.BatchExports.List(request.Context(), limit)
+	query := request.URL.Query()
+	limit, err := parseLimit(query.Get("limit"))
+	cursor := query.Get("cursor")
+	if err != nil || len(cursor) > 256 {
+		httpx.Error(writer, http.StatusBadRequest, "invalid_query", "Invalid query.", id)
+		return
+	}
+	page, err := s.config.BatchExports.List(request.Context(), cursor, limit)
+	if errors.Is(err, projects.ErrInvalidBatchCursor) {
+		httpx.Error(writer, http.StatusBadRequest, "invalid_query", "Invalid query.", id)
+		return
+	}
 	if err != nil {
 		internalError(writer, id)
 		return
@@ -126,12 +136,12 @@ func (s *Server) preflightExport(writer http.ResponseWriter, request *http.Reque
 	}
 	var input ExportInput
 	if httpx.ReadJSON(request, &input) != nil || !validExport(input) {
-		httpx.Error(writer, 422, "invalid_export", "Export is invalid.", id)
+		httpx.Error(writer, 400, "invalid_export", "Export is invalid.", id)
 		return
 	}
 	result, err := s.config.Preflight.Preflight(request.Context(), project, owned, input)
 	if err != nil {
-		httpx.Error(writer, 422, "preflight_failed", "Export preflight failed.", id)
+		httpx.Error(writer, 400, "preflight_failed", "Export preflight failed.", id)
 		return
 	}
 	httpx.WriteJSON(writer, 200, result)
@@ -143,7 +153,7 @@ func (s *Server) createExport(writer http.ResponseWriter, request *http.Request,
 	}
 	var input ExportSubmissionInput
 	if httpx.ReadJSON(request, &input) != nil {
-		httpx.Error(writer, http.StatusUnprocessableEntity, "invalid_export", "Export is invalid.", id)
+		httpx.Error(writer, http.StatusBadRequest, "invalid_export", "Export is invalid.", id)
 		return
 	}
 	batchID, submitted, err := s.config.BatchExports.Submit(request.Context(), projects.BatchExportRequest{ProjectID: project, ItemIDs: input.ItemIDs})
@@ -152,7 +162,7 @@ func (s *Server) createExport(writer http.ResponseWriter, request *http.Request,
 		case errors.Is(err, jobqueue.ErrQueueFull):
 			httpx.Error(writer, http.StatusTooManyRequests, "export_busy", "Export capacity is full.", id)
 		case errors.Is(err, projects.ErrInvalidProject):
-			httpx.Error(writer, http.StatusUnprocessableEntity, "invalid_export", "Export is invalid.", id)
+			httpx.Error(writer, http.StatusBadRequest, "invalid_export", "Export is invalid.", id)
 		default:
 			resourceError(writer, id, err)
 		}
@@ -173,7 +183,7 @@ func (s *Server) createDetection(writer http.ResponseWriter, request *http.Reque
 	}
 	var input DetectionRequest
 	if httpx.ReadJSON(request, &input) != nil || !input.Kind.Valid() {
-		httpx.Error(writer, http.StatusUnprocessableEntity, "invalid_detection", "Detection request is invalid.", id)
+		httpx.Error(writer, http.StatusBadRequest, "invalid_detection", "Detection request is invalid.", id)
 		return
 	}
 	if input.ProjectRevision != owned.Revision {
@@ -197,7 +207,7 @@ func (s *Server) createDetection(writer http.ResponseWriter, request *http.Reque
 			httpx.Error(writer, http.StatusTooManyRequests, "detection_busy", "Detection capacity is full.", id)
 			return
 		}
-		httpx.Error(writer, http.StatusUnprocessableEntity, "invalid_detection", "Detection request is invalid.", id)
+		httpx.Error(writer, http.StatusBadRequest, "invalid_detection", "Detection request is invalid.", id)
 		return
 	}
 	httpx.WriteJSON(writer, http.StatusAccepted, job)

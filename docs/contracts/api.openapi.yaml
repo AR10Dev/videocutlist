@@ -484,6 +484,12 @@ paths:
             minimum: 1
             maximum: 100
             default: 50
+        - name: cursor
+          in: query
+          description: Opaque batch-list continuation cursor.
+          schema:
+            type: string
+            maxLength: 256
       responses:
         "200":
           description: Recent durable batches
@@ -2219,11 +2225,14 @@ components:
       type: object
       required:
         - items
+        - nextCursor
       properties:
         items:
           type: array
           items:
             $ref: "#/components/schemas/Batch"
+        nextCursor:
+          type: [string, "null"]
     Destination:
       type: object
       required:

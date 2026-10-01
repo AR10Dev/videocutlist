@@ -99,10 +99,20 @@ func validProposalID(value string) bool {
 }
 
 func parseRoute(method, path string) route {
-	if !strings.HasPrefix(path, "/api/v1/") || strings.Contains(path, "\\") {
+	var prefix string
+	native := false
+	switch {
+	case strings.HasPrefix(path, "/api/v2/"):
+		prefix = "/api/v2/"
+	case strings.HasPrefix(path, "/media/v2/"):
+		prefix, native = "/media/v2/", true
+	default:
 		return route{}
 	}
-	parts := strings.Split(strings.TrimPrefix(path, "/api/v1/"), "/")
+	if strings.Contains(path, "\\") {
+		return route{}
+	}
+	parts := strings.Split(strings.TrimPrefix(path, prefix), "/")
 	for i := range parts {
 		decoded, err := url.PathUnescape(parts[i])
 		if err != nil || decoded == "" || decoded != parts[i] && strings.Contains(decoded, "/") {
@@ -110,6 +120,23 @@ func parseRoute(method, path string) route {
 		}
 		parts[i] = decoded
 	}
+	parsed := parseRouteParts(method, parts)
+	if parsed.kind == routeUnknown || isNativeRoute(parsed.kind) != native {
+		return route{}
+	}
+	return parsed
+}
+
+func isNativeRoute(kind routeKind) bool {
+	switch kind {
+	case routePreview, routeThumbnails, routeWaveform, routeDownloadOutput, routeDownloadBatch, routeExportInterchange:
+		return true
+	default:
+		return false
+	}
+}
+
+func parseRouteParts(method string, parts []string) route {
 	switch {
 	case len(parts) == 1 && parts[0] == "media" && method == http.MethodGet:
 		return route{kind: routeListMedia}

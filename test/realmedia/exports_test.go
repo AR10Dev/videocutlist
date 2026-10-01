@@ -77,7 +77,7 @@ func TestProductionExportsJobsAndOutputs(t *testing.T) {
 		} `json:"items"`
 	}
 	waitFor(t, startupWait, func() bool {
-		resp := p.request(t, "GET", "/api/v1/media")
+		resp := p.request(t, "GET", "/api/v2/media")
 		defer resp.Body.Close()
 		return resp.StatusCode == 200 && json.NewDecoder(resp.Body).Decode(&media) == nil && len(media.Items) > 0
 	})
@@ -101,7 +101,7 @@ func TestProductionExportsJobsAndOutputs(t *testing.T) {
 		map[string]any{"startMs": 3000, "endMs": 5000, "label": "second"},
 	}}
 	project := map[string]any{"revision": 0, "schemaVersion": 2, "name": "real-media exports", "items": []any{projectItem}}
-	resp := p.requestBody(t, "PUT", "/api/v1/projects/"+projectID, project)
+	resp := p.requestBody(t, "PUT", "/api/v2/projects/"+projectID, project)
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
@@ -120,14 +120,14 @@ func TestProductionExportsJobsAndOutputs(t *testing.T) {
 			} `json:"segments"`
 		} `json:"items"`
 	}
-	getJSON(t, p, "/api/v1/projects/"+projectID, &reloaded)
+	getJSON(t, p, "/api/v2/projects/"+projectID, &reloaded)
 	if reloaded.Revision != 1 || len(reloaded.Items) != 1 || reloaded.Items[0].MediaID != item.ID || len(reloaded.Items[0].Segments) != 2 || reloaded.Items[0].Segments[0].StartMS != 0 || reloaded.Items[0].Segments[1].Label != "second" {
 		t.Fatalf("reloaded project = %#v", reloaded)
 	}
 	revision := int64(1)
 
 	export := func(payload map[string]any) []string {
-		preflight := p.requestBody(t, "POST", "/api/v1/projects/"+projectID+"/exports/preflight", payload)
+		preflight := p.requestBody(t, "POST", "/api/v2/projects/"+projectID+"/exports/preflight", payload)
 		if preflight.StatusCode != 200 {
 			body, _ := io.ReadAll(preflight.Body)
 			preflight.Body.Close()
@@ -146,7 +146,7 @@ func TestProductionExportsJobsAndOutputs(t *testing.T) {
 			t.Fatalf("preflight selection=%v allowed=%v", checked.Selection, checked.Allowed)
 		}
 		preflight.Body.Close()
-		response := p.requestBody(t, "POST", "/api/v1/projects/"+projectID+"/exports", map[string]any{"itemIds": payload["itemIds"]})
+		response := p.requestBody(t, "POST", "/api/v2/projects/"+projectID+"/exports", map[string]any{"itemIds": payload["itemIds"]})
 		var submitted struct {
 			BatchID string `json:"batchId"`
 			Jobs    []struct {
@@ -159,7 +159,7 @@ func TestProductionExportsJobsAndOutputs(t *testing.T) {
 			t.Fatalf("export status=%d body=%s", response.StatusCode, body)
 		}
 		response.Body.Close()
-		listing := p.request(t, "GET", "/api/v1/batches?limit=100")
+		listing := p.request(t, "GET", "/api/v2/batches?limit=100")
 		var batches struct {
 			Items []struct {
 				ID       string  `json:"batchId"`
@@ -195,7 +195,7 @@ func TestProductionExportsJobsAndOutputs(t *testing.T) {
 	} {
 		projectItem["exportOptions"] = map[string]any{"mode": tc.mode, "selection": tc.selection, "cutStrategy": tc.strategy, "container": "mkv", "destinationId": "download", "streamIndexes": []int{0, 1}}
 		project["revision"] = revision
-		update := p.requestBody(t, "PUT", "/api/v1/projects/"+projectID, project)
+		update := p.requestBody(t, "PUT", "/api/v2/projects/"+projectID, project)
 		var saved struct {
 			Revision int64 `json:"revision"`
 		}
@@ -212,7 +212,7 @@ func TestProductionExportsJobsAndOutputs(t *testing.T) {
 		var terminal map[string]any
 		last := -1.0
 		waitFor(t, 90*time.Second, func() bool {
-			batch := p.request(t, "GET", "/api/v1/batches/"+batchID)
+			batch := p.request(t, "GET", "/api/v2/batches/"+batchID)
 			defer batch.Body.Close()
 			var value struct {
 				State    string           `json:"state"`
@@ -226,7 +226,7 @@ func TestProductionExportsJobsAndOutputs(t *testing.T) {
 				t.Fatalf("batch progress regressed from %v to %v", last, value.Progress)
 			}
 			last = value.Progress
-			job := p.request(t, "GET", "/api/v1/jobs/"+jobID)
+			job := p.request(t, "GET", "/api/v2/jobs/"+jobID)
 			var current map[string]any
 			if json.NewDecoder(job.Body).Decode(&current) != nil {
 				job.Body.Close()
@@ -245,7 +245,7 @@ func TestProductionExportsJobsAndOutputs(t *testing.T) {
 			if final["state"] != "failed" {
 				t.Fatalf("hybrid batch state=%v", final["state"])
 			}
-			retry := p.request(t, "POST", "/api/v1/jobs/"+jobID+"/retry")
+			retry := p.request(t, "POST", "/api/v2/jobs/"+jobID+"/retry")
 			if retry.StatusCode != http.StatusAccepted {
 				retry.Body.Close()
 				t.Fatalf("hybrid retry status=%d", retry.StatusCode)
@@ -256,7 +256,7 @@ func TestProductionExportsJobsAndOutputs(t *testing.T) {
 		if final["state"] != "succeeded" {
 			t.Fatalf("batch %s terminal state = %v jobs=%v detail=%v\n%s", batchID, final["state"], final["jobs"], terminal, boundedLog(p.log.Snapshot()))
 		}
-		job := p.request(t, "GET", "/api/v1/jobs/"+jobID)
+		job := p.request(t, "GET", "/api/v2/jobs/"+jobID)
 		var detail struct {
 			State  string `json:"state"`
 			Result *struct {
@@ -281,7 +281,7 @@ func TestProductionExportsJobsAndOutputs(t *testing.T) {
 		}
 		positions := 1
 		if tc.strategy == "stream_copy_preferred" && tc.mode == "merge" {
-			archiveResponse := p.request(t, "GET", "/api/v1/batches/"+batchID+"/download")
+			archiveResponse := p.request(t, "GET", "/media/v2/batches/"+batchID+"/download")
 			archiveData, readErr := io.ReadAll(archiveResponse.Body)
 			archiveResponse.Body.Close()
 			if archiveResponse.StatusCode != http.StatusOK || archiveResponse.Header.Get("Content-Type") != "application/zip" || readErr != nil || len(archiveData) == 0 {
@@ -305,7 +305,7 @@ func TestProductionExportsJobsAndOutputs(t *testing.T) {
 			positions = 2
 		}
 		for position := 0; position < positions; position++ {
-			output := p.request(t, "GET", "/api/v1/jobs/"+jobID+"/outputs/"+strconv.Itoa(position))
+			output := p.request(t, "GET", "/media/v2/jobs/"+jobID+"/outputs/"+strconv.Itoa(position))
 			if output.StatusCode != 200 {
 				output.Body.Close()
 				t.Fatalf("download output status=%d", output.StatusCode)
@@ -359,19 +359,19 @@ func TestProductionExportsJobsAndOutputs(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		terminalDelete := p.request(t, "DELETE", "/api/v1/jobs/"+jobID)
+		terminalDelete := p.request(t, "DELETE", "/api/v2/jobs/"+jobID)
 		if terminalDelete.StatusCode != http.StatusNoContent {
 			terminalDelete.Body.Close()
 			t.Fatalf("terminal cancellation status=%d", terminalDelete.StatusCode)
 		}
 		terminalDelete.Body.Close()
-		retry := p.request(t, "POST", "/api/v1/jobs/"+jobID+"/retry")
+		retry := p.request(t, "POST", "/api/v2/jobs/"+jobID+"/retry")
 		if retry.StatusCode != http.StatusConflict {
 			retry.Body.Close()
 			t.Fatalf("successful retry status=%d", retry.StatusCode)
 		}
 		retry.Body.Close()
-		invalidPosition := p.request(t, "GET", "/api/v1/jobs/"+jobID+"/outputs/99")
+		invalidPosition := p.request(t, "GET", "/media/v2/jobs/"+jobID+"/outputs/99")
 		if invalidPosition.StatusCode != http.StatusNotFound {
 			invalidPosition.Body.Close()
 			t.Fatalf("invalid output position status=%d", invalidPosition.StatusCode)
@@ -392,13 +392,13 @@ func TestProductionExportsJobsAndOutputs(t *testing.T) {
 	assertNoTemporaryArtifacts(t, root)
 	suiteSummary.Add("exports=validated output_names_safe sizes_positive durations_plausible streams=video,audio positions_and_count source_unchanged temp_free")
 
-	invalid := p.request(t, "GET", "/api/v1/jobs/j_invalid-output/outputs/99")
+	invalid := p.request(t, "GET", "/media/v2/jobs/j_invalid-output/outputs/99")
 	if invalid.StatusCode != 404 {
 		invalid.Body.Close()
 		t.Fatalf("invalid output status=%d", invalid.StatusCode)
 	}
 	invalid.Body.Close()
-	cancel := p.request(t, "DELETE", "/api/v1/jobs/"+"j_invalid-output")
+	cancel := p.request(t, "DELETE", "/api/v2/jobs/"+"j_invalid-output")
 	if cancel.StatusCode != 404 {
 		cancel.Body.Close()
 		t.Fatalf("unknown cancellation status=%d", cancel.StatusCode)

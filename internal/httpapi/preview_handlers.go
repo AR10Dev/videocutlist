@@ -22,7 +22,7 @@ func (s *Server) preview(writer http.ResponseWriter, request *http.Request, medi
 	}
 	spec, err := s.previewSpec(request, item)
 	if err != nil {
-		httpx.Error(writer, 422, "invalid_preview", "Preview parameters are invalid.", id)
+		httpx.Error(writer, 400, "invalid_preview", "Preview parameters are invalid.", id)
 		return
 	}
 	if request.Method == http.MethodHead {
@@ -126,7 +126,7 @@ func (s *Server) thumbnails(w http.ResponseWriter, r *http.Request, media, id st
 	}
 	spec, err := s.assetSpec(r, item, false)
 	if err != nil {
-		httpx.Error(w, 422, "invalid_asset", "Thumbnail parameters are invalid.", id)
+		httpx.Error(w, 400, "invalid_asset", "Thumbnail parameters are invalid.", id)
 		return
 	}
 	if err := s.config.Assets.ValidateSource(r.Context(), item.ID); err != nil {
@@ -158,12 +158,12 @@ func (s *Server) waveform(w http.ResponseWriter, r *http.Request, media, id stri
 		return
 	}
 	if item.Streams["audio"] == nil {
-		httpx.Error(w, 422, "no_audio", "Media has no audio stream.", id)
+		httpx.Error(w, 400, "no_audio", "Media has no audio stream.", id)
 		return
 	}
 	spec, err := s.assetSpec(r, item, true)
 	if err != nil {
-		httpx.Error(w, 422, "invalid_asset", "Waveform parameters are invalid.", id)
+		httpx.Error(w, 400, "invalid_asset", "Waveform parameters are invalid.", id)
 		return
 	}
 	if err := s.config.Assets.ValidateSource(r.Context(), item.ID); err != nil {
@@ -175,7 +175,7 @@ func (s *Server) waveform(w http.ResponseWriter, r *http.Request, media, id stri
 	}
 	result, err := s.config.Assets.Waveform(r.Context(), spec)
 	if errors.Is(err, projects.ErrNoAudio) {
-		httpx.Error(w, 422, "no_audio", "Media has no audio stream.", id)
+		httpx.Error(w, 400, "no_audio", "Media has no audio stream.", id)
 		return
 	}
 	if err != nil {

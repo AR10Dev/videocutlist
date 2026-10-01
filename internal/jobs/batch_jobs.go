@@ -66,8 +66,21 @@ func (s *JobsStore) ListByProposal(ctx context.Context, proposalID string) ([]Jo
 	return result, nil
 }
 
-func (s *JobsStore) ListBatchIDs(ctx context.Context, kind JobKind, limit int) (result []string, err error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT batch_id FROM jobs WHERE kind=? GROUP BY batch_id ORDER BY MAX(created_at) DESC, batch_id DESC LIMIT ?`, kind, limit)
+type BatchPosition struct {
+	ID        string
+	CreatedAt string
+}
+
+func (s *JobsStore) ListBatchIDs(ctx context.Context, kind JobKind, after *BatchPosition, limit int) (result []BatchPosition, err error) {
+	query := `SELECT batch_id, MAX(created_at) FROM jobs WHERE kind=? GROUP BY batch_id`
+	args := []any{kind}
+	if after != nil {
+		query += ` HAVING MAX(created_at) < ? OR (MAX(created_at) = ? AND batch_id < ?)`
+		args = append(args, after.CreatedAt, after.CreatedAt, after.ID)
+	}
+	query += ` ORDER BY MAX(created_at) DESC, batch_id DESC LIMIT ?`
+	args = append(args, limit)
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -85,11 +98,11 @@ func (s *JobsStore) ListBatchIDs(ctx context.Context, kind JobKind, limit int) (
 		}
 	}()
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
+		var position BatchPosition
+		if err := rows.Scan(&position.ID, &position.CreatedAt); err != nil {
 			return nil, err
 		}
-		result = append(result, id)
+		result = append(result, position)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err

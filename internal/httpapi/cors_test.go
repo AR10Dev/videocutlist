@@ -39,7 +39,7 @@ func TestHostGuardRejectsReboundAuthorityWithoutOrigin(t *testing.T) {
 		{"127.0.0.1:8787", "video.example.test", "", "203.0.113.4:1234", http.StatusNoContent},
 		{"127.0.0.1:8787", "rebound.attacker.test", "", "127.0.0.1:1234", http.StatusForbidden},
 	} {
-		request := httptest.NewRequest(http.MethodGet, "http://"+test.host+"/api/v1/media", nil)
+		request := httptest.NewRequest(http.MethodGet, "http://"+test.host+"/api/v2/media", nil)
 		request.RemoteAddr = test.remote
 		if test.origin != "" {
 			request.Header.Set("Origin", test.origin)
@@ -152,17 +152,17 @@ func TestCORSAllowsActualAndValidPreflight(t *testing.T) {
 	actual.Header.Set("Origin", "https://editor.example.test")
 	actualResponse := httptest.NewRecorder()
 	handler.ServeHTTP(actualResponse, actual)
-	if actualResponse.Code != http.StatusOK || actualResponse.Header().Get("Access-Control-Allow-Origin") != "https://editor.example.test" || actualResponse.Header().Get("Access-Control-Allow-Credentials") != "true" || actualResponse.Header().Get("Access-Control-Expose-Headers") == "" || !variesOn(actualResponse.Header(), "Origin") {
+	if actualResponse.Code != http.StatusOK || actualResponse.Header().Get("Access-Control-Allow-Origin") != "https://editor.example.test" || actualResponse.Header().Get("Access-Control-Allow-Credentials") != "true" || actualResponse.Header().Get("Access-Control-Expose-Headers") != restExposedHeaders || !variesOn(actualResponse.Header(), "Origin") {
 		t.Fatalf("actual response = %#v", actualResponse.Result())
 	}
 
 	preflight := httptest.NewRequest(http.MethodOptions, "http://api.test", nil)
 	preflight.Header.Set("Origin", "https://editor.example.test")
 	preflight.Header.Set("Access-Control-Request-Method", http.MethodPut)
-	preflight.Header.Set("Access-Control-Request-Headers", "authorization, If-Match")
+	preflight.Header.Set("Access-Control-Request-Headers", "authorization, If-Match, Idempotency-Key, Last-Event-ID")
 	preflightResponse := httptest.NewRecorder()
 	handler.ServeHTTP(preflightResponse, preflight)
-	if preflightResponse.Code != http.StatusNoContent || called != 1 || preflightResponse.Header().Get("Access-Control-Allow-Methods") != "GET, HEAD, POST, PUT, DELETE" || preflightResponse.Header().Get("Access-Control-Allow-Headers") != "Authorization, Content-Type, If-Match, If-None-Match" || preflightResponse.Header().Get("Access-Control-Expose-Headers") != "" || !variesOn(preflightResponse.Header(), "Origin") || !variesOn(preflightResponse.Header(), "Access-Control-Request-Method") || !variesOn(preflightResponse.Header(), "Access-Control-Request-Headers") {
+	if preflightResponse.Code != http.StatusNoContent || called != 1 || preflightResponse.Header().Get("Access-Control-Allow-Methods") != "GET, HEAD, POST, PUT, DELETE" || preflightResponse.Header().Get("Access-Control-Allow-Headers") != restAllowedHeaders || preflightResponse.Header().Get("Access-Control-Expose-Headers") != "" || !variesOn(preflightResponse.Header(), "Origin") || !variesOn(preflightResponse.Header(), "Access-Control-Request-Method") || !variesOn(preflightResponse.Header(), "Access-Control-Request-Headers") {
 		t.Fatalf("preflight status = %d, calls = %d, headers = %#v", preflightResponse.Code, called, preflightResponse.Header())
 	}
 }
@@ -229,7 +229,7 @@ func TestAPICORSErrorsAndLogsAreCorrelated(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			request := httptest.NewRequest(test.method, "/api/v1/ready?secret=private-secret", strings.NewReader("private-secret"))
+			request := httptest.NewRequest(test.method, "/ready?secret=private-secret", strings.NewReader("private-secret"))
 			request.Header["Origin"] = test.origins
 			request.Header.Set("Authorization", "Bearer private-secret")
 			request.Header.Set("Cookie", "session=private-secret")
@@ -322,7 +322,7 @@ func TestMCPCORSRejectsForeignOriginsAndRESTDoesNotAcceptMCPHeaders(t *testing.T
 	}
 
 	rest := CORS([]string{"https://editor.example.test"}, http.NotFoundHandler())
-	restRequest := httptest.NewRequest(http.MethodOptions, "http://api.test/api/v1/media", nil)
+	restRequest := httptest.NewRequest(http.MethodOptions, "http://api.test/api/v2/media", nil)
 	restRequest.Header.Set("Origin", "https://editor.example.test")
 	restRequest.Header.Set("Access-Control-Request-Method", http.MethodPost)
 	restRequest.Header.Set("Access-Control-Request-Headers", "MCP-Protocol-Version")

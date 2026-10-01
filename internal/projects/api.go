@@ -143,7 +143,8 @@ type Batch struct {
 }
 
 type BatchPage struct {
-	Items []Batch `json:"items"`
+	Items      []Batch `json:"items"`
+	NextCursor *string `json:"nextCursor"`
 }
 
 type AppliedStrategy struct {

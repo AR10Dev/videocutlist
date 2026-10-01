@@ -50,7 +50,7 @@ func TestProjectValidationErrorsGiveSafeActions(t *testing.T) {
 			if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
 				t.Fatal(err)
 			}
-			if response.Code != http.StatusUnprocessableEntity || envelope.Error.Code != "invalid_project" || envelope.Error.Message != test.message {
+			if response.Code != http.StatusBadRequest || envelope.Error.Code != "invalid_project" || envelope.Error.Message != test.message {
 				t.Fatalf("response = %d %s", response.Code, response.Body.String())
 			}
 		})
@@ -59,8 +59,11 @@ func TestProjectValidationErrorsGiveSafeActions(t *testing.T) {
 
 func TestProjectAndMediaErrorsPreserveClassification(t *testing.T) {
 	privateFailure := errors.New("database unavailable: /private/database.db")
-	projectPath := "/api/v1/projects/p_aaaaaaaaaaaa"
-	mediaPath := "/api/v1/media/m_" + strings.Repeat("a", 43)
+	projectPath := "/api/v2/projects/p_aaaaaaaaaaaa"
+	mediaID := "m_" + strings.Repeat("a", 43)
+	mediaPath := "/api/v2/media/" + mediaID
+	previewPath := "/media/v2/media/" + mediaID + "/preview"
+	interchangePath := "/media/v2/projects/p_aaaaaaaaaaaa/interchange/csv"
 	valid := `{"revision":1,"schemaVersion":2,"name":"Project","items":[{"id":"i_aaaaaaaaaaaaaaaaaaaaaaaa","mediaId":"m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","segments":[]}]}`
 	for _, test := range []struct {
 		name, method, path, body string
@@ -73,13 +76,13 @@ func TestProjectAndMediaErrorsPreserveClassification(t *testing.T) {
 		{"project missing", "GET", projectPath, "", fmt.Errorf("get: %w", store.ErrProjectNotFound), nil, 404, "not_found"},
 		{"update missing", "PUT", projectPath, valid, store.ErrProjectNotFound, nil, 404, "not_found"},
 		{"revision conflict", "PUT", projectPath, valid, store.ErrRevisionConflict, nil, 409, "revision_conflict"},
-		{"invalid document", "PUT", projectPath, strings.Replace(valid, `"schemaVersion":2`, `"schemaVersion":1`, 1), nil, nil, 422, "invalid_project"},
-		{"missing project media", "PUT", projectPath, valid, nil, store.ErrMediaNotFound, 422, "invalid_project"},
+		{"invalid document", "PUT", projectPath, strings.Replace(valid, `"schemaVersion":2`, `"schemaVersion":1`, 1), nil, nil, 400, "invalid_project"},
+		{"missing project media", "PUT", projectPath, valid, nil, store.ErrMediaNotFound, 400, "invalid_project"},
 		{"project media database failure", "PUT", projectPath, valid, nil, privateFailure, 500, "internal_error"},
 		{"media read failure", "GET", mediaPath, "", nil, privateFailure, 500, "internal_error"},
 		{"media missing", "GET", mediaPath, "", nil, store.ErrMediaNotFound, 404, "not_found"},
-		{"preview media read failure", "GET", mediaPath + "/preview", "", nil, privateFailure, 500, "internal_error"},
-		{"interchange project read failure", "GET", projectPath + "/interchange/csv", "", privateFailure, nil, 500, "internal_error"},
+		{"preview media read failure", "GET", previewPath, "", nil, privateFailure, 500, "internal_error"},
+		{"interchange project read failure", "GET", interchangePath, "", privateFailure, nil, 500, "internal_error"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			auth, err := NewAuthenticator(AuthConfig{Mode: "none"})

@@ -940,6 +940,7 @@ export type BatchPage = {
       >;
     } & { readonly [x: string]: Schema.Json }
   >;
+  readonly nextCursor: string | null;
 } & { readonly [x: string]: Schema.Json };
 export const BatchPage = Schema.StructWithRest(
   Schema.Struct({
@@ -1147,6 +1148,7 @@ export const BatchPage = Schema.StructWithRest(
         [Schema.Record(Schema.String, Schema.Json.annotate({ expected: "JSON value" }))],
       ),
     ),
+    nextCursor: Schema.Union([Schema.String, Schema.Null]),
   }),
   [Schema.Record(Schema.String, Schema.Json.annotate({ expected: "JSON value" }))],
 ).annotate({ identifier: "BatchPage" });
@@ -3026,7 +3028,7 @@ export type CreateExport429 = Error;
 export const CreateExport429 = Error;
 export type CreateExport500 = Error;
 export const CreateExport500 = Error;
-export type ListBatchesParams = { readonly limit?: number };
+export type ListBatchesParams = { readonly limit?: number; readonly cursor?: string };
 export const ListBatchesParams = Schema.Struct({
   limit: Schema.optionalKey(
     Schema.Number.annotate({ default: 50 })
@@ -3040,8 +3042,13 @@ export const ListBatchesParams = Schema.Struct({
         Schema.isLessThanOrEqualTo(100).annotate({ expected: "a value less than or equal to 100" }),
       ),
   ),
+  cursor: Schema.optionalKey(
+    Schema.String.check(
+      Schema.isMaxCodePoints(256).annotate({ expected: "a string with at most 256 code points" }),
+    ),
+  ),
 });
-export type ListBatchesQuery = { readonly limit?: number };
+export type ListBatchesQuery = { readonly limit?: number; readonly cursor?: string };
 export const ListBatchesQuery = Schema.Struct({
   limit: Schema.optionalKey(
     Schema.Number.annotate({ default: 50 })
@@ -3054,6 +3061,11 @@ export const ListBatchesQuery = Schema.Struct({
       .check(
         Schema.isLessThanOrEqualTo(100).annotate({ expected: "a value less than or equal to 100" }),
       ),
+  ),
+  cursor: Schema.optionalKey(
+    Schema.String.check(
+      Schema.isMaxCodePoints(256).annotate({ expected: "a string with at most 256 code points" }),
+    ),
   ),
 });
 export type ListBatches200 = BatchPage;

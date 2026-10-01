@@ -200,7 +200,7 @@ test("creates, downloads, and verifies every export option with real media", asy
     "hybrid-smart-cut.mkv",
   );
 
-  const persistedResponse = await request.get(`/api/v1/projects/${saved.id}`, {
+  const persistedResponse = await request.get(`/api/v2/projects/${saved.id}`, {
     headers: { Authorization: `Bearer ${token}` },
   });
   expect(persistedResponse.status()).toBe(200);

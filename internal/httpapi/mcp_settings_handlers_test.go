@@ -51,13 +51,13 @@ func TestMCPAdministrationRequiresDeploymentAuthAndRevealsSecretOnce(t *testing.
 
 	expires := time.Now().UTC().Add(time.Hour).Format(time.RFC3339Nano)
 	invalidRoot := `{"name":"assistant","permissions":["media:read"],"mediaScope":{"kind":"roots","rootIds":["unknown-root"]},"projectScope":{"kind":"all"},"expiresAt":"` + expires + `"}`
-	invalidRootResponse := mcpAdminRequest(server, http.MethodPost, "/api/v1/settings/mcp/credentials", invalidRoot, "deployment-admin")
-	if invalidRootResponse.Code != http.StatusUnprocessableEntity {
+	invalidRootResponse := mcpAdminRequest(server, http.MethodPost, "/api/v2/settings/mcp/credentials", invalidRoot, "deployment-admin")
+	if invalidRootResponse.Code != http.StatusBadRequest {
 		t.Fatalf("unknown root status=%d body=%s", invalidRootResponse.Code, invalidRootResponse.Body.String())
 	}
 
 	body := `{"name":"assistant","permissions":["media:read","exports:run"],"mediaScope":{"kind":"all"},"projectScope":{"kind":"all"},"expiresAt":"` + expires + `","unattendedExports":true}`
-	createdResponse := mcpAdminRequest(server, http.MethodPost, "/api/v1/settings/mcp/credentials", body, "deployment-admin")
+	createdResponse := mcpAdminRequest(server, http.MethodPost, "/api/v2/settings/mcp/credentials", body, "deployment-admin")
 	if createdResponse.Code != http.StatusCreated {
 		t.Fatalf("create status=%d body=%s", createdResponse.Code, createdResponse.Body.String())
 	}
@@ -71,14 +71,14 @@ func TestMCPAdministrationRequiresDeploymentAuthAndRevealsSecretOnce(t *testing.
 
 	for name, token := range map[string]string{"missing": "", "scoped MCP credential": created.Secret} {
 		t.Run(name+" cannot administer", func(t *testing.T) {
-			response := mcpAdminRequest(server, http.MethodGet, "/api/v1/settings/mcp", "", token)
+			response := mcpAdminRequest(server, http.MethodGet, "/api/v2/settings/mcp", "", token)
 			if response.Code != http.StatusUnauthorized {
 				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 			}
 		})
 	}
 
-	listResponse := mcpAdminRequest(server, http.MethodGet, "/api/v1/settings/mcp", "", "deployment-admin")
+	listResponse := mcpAdminRequest(server, http.MethodGet, "/api/v2/settings/mcp", "", "deployment-admin")
 	if listResponse.Code != http.StatusOK {
 		t.Fatalf("list status=%d body=%s", listResponse.Code, listResponse.Body.String())
 	}
@@ -95,11 +95,11 @@ func TestMCPAdministrationRequiresDeploymentAuthAndRevealsSecretOnce(t *testing.
 	if strings.Contains(listed, `"nextCursor"`) {
 		t.Fatalf("final page must omit nextCursor: %s", listed)
 	}
-	second := mcpAdminRequest(server, http.MethodPost, "/api/v1/settings/mcp/credentials", body, "deployment-admin")
+	second := mcpAdminRequest(server, http.MethodPost, "/api/v2/settings/mcp/credentials", body, "deployment-admin")
 	if second.Code != http.StatusCreated {
 		t.Fatalf("second create status=%d", second.Code)
 	}
-	firstPage := mcpAdminRequest(server, http.MethodGet, "/api/v1/settings/mcp?limit=1", "", "deployment-admin")
+	firstPage := mcpAdminRequest(server, http.MethodGet, "/api/v2/settings/mcp?limit=1", "", "deployment-admin")
 	var page struct {
 		Credentials []mcpCredentialView `json:"credentials"`
 		NextCursor  string              `json:"nextCursor"`
@@ -110,12 +110,12 @@ func TestMCPAdministrationRequiresDeploymentAuthAndRevealsSecretOnce(t *testing.
 	if firstPage.Code != http.StatusOK || len(page.Credentials) != 1 || page.NextCursor == "" {
 		t.Fatalf("first page=%s", firstPage.Body.String())
 	}
-	lastPage := mcpAdminRequest(server, http.MethodGet, "/api/v1/settings/mcp?limit=1&cursor="+page.NextCursor, "", "deployment-admin")
+	lastPage := mcpAdminRequest(server, http.MethodGet, "/api/v2/settings/mcp?limit=1&cursor="+page.NextCursor, "", "deployment-admin")
 	if lastPage.Code != http.StatusOK || strings.Contains(lastPage.Body.String(), `"nextCursor"`) || strings.Contains(lastPage.Body.String(), page.Credentials[0].ID) {
 		t.Fatalf("last page=%s", lastPage.Body.String())
 	}
 
-	revokeResponse := mcpAdminRequest(server, http.MethodDelete, "/api/v1/settings/mcp/credentials/"+created.ID, "", "deployment-admin")
+	revokeResponse := mcpAdminRequest(server, http.MethodDelete, "/api/v2/settings/mcp/credentials/"+created.ID, "", "deployment-admin")
 	if revokeResponse.Code != http.StatusOK || !strings.Contains(revokeResponse.Body.String(), `"status":"revoked"`) {
 		t.Fatalf("revoke status=%d body=%s", revokeResponse.Code, revokeResponse.Body.String())
 	}
@@ -155,7 +155,7 @@ func TestMCPEnablementUsesPersistedRuntimeSettings(t *testing.T) {
 	if response.Code != http.StatusOK {
 		t.Fatalf("enable status=%d body=%s", response.Code, response.Body.String())
 	}
-	status := mcpAdminRequest(server, http.MethodGet, "/api/v1/settings/mcp", "", "")
+	status := mcpAdminRequest(server, http.MethodGet, "/api/v2/settings/mcp", "", "")
 	if status.Code != http.StatusOK || !strings.Contains(status.Body.String(), `"enabled":true`) {
 		t.Fatalf("mcp status=%d body=%s", status.Code, status.Body.String())
 	}
@@ -198,14 +198,14 @@ func TestMCPSettingsQueryAndStorageErrorsUseSafeEnvelopes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	invalid := mcpAdminRequest(server, http.MethodGet, "/api/v1/settings/mcp?cursor=invalid", "", "")
+	invalid := mcpAdminRequest(server, http.MethodGet, "/api/v2/settings/mcp?cursor=invalid", "", "")
 	if invalid.Code != http.StatusBadRequest || !strings.Contains(invalid.Body.String(), `"code":"invalid_query"`) {
 		t.Fatalf("invalid cursor status=%d body=%s", invalid.Code, invalid.Body.String())
 	}
 	if err := credentialsDatabase.Close(); err != nil {
 		t.Fatal(err)
 	}
-	failed := mcpAdminRequest(server, http.MethodGet, "/api/v1/settings/mcp", "", "")
+	failed := mcpAdminRequest(server, http.MethodGet, "/api/v2/settings/mcp", "", "")
 	if failed.Code != http.StatusInternalServerError || strings.Contains(failed.Body.String(), `"code":"invalid_query"`) {
 		t.Fatalf("storage failure status=%d body=%s", failed.Code, failed.Body.String())
 	}

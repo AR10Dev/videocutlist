@@ -119,7 +119,7 @@ type DestinationCapabilities struct {
 type BatchExportService interface {
 	Submit(context.Context, projects.BatchExportRequest) (string, []projects.Job, error)
 	Get(context.Context, string) (projects.Batch, error)
-	List(context.Context, int) (projects.BatchPage, error)
+	List(context.Context, string, int) (projects.BatchPage, error)
 	Retry(context.Context, string) (projects.Batch, error)
 	Cancel(context.Context, string) error
 }
@@ -207,17 +207,17 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 }
 
 func (s *Server) dispatch(writer http.ResponseWriter, request *http.Request, id string) (string, string) {
-	if request.URL.Path == "/api/v1/health" && request.Method == http.MethodGet {
+	if request.URL.Path == "/health" && request.Method == http.MethodGet {
 		writer.WriteHeader(http.StatusOK)
-		return "/api/v1/health", ""
+		return "/health", ""
 	}
-	if request.URL.Path == "/api/v1/ready" && request.Method == http.MethodGet {
+	if request.URL.Path == "/ready" && request.Method == http.MethodGet {
 		if s.config.Ready != nil && s.config.Ready(request.Context()) != nil {
 			Error(writer, http.StatusServiceUnavailable, "not_ready", "Service is not ready.", id)
 		} else {
 			writer.WriteHeader(http.StatusOK)
 		}
-		return "/api/v1/ready", ""
+		return "/ready", ""
 	}
 	if err := s.config.Authenticator.Authenticate(request); err != nil {
 		Error(writer, http.StatusUnauthorized, "unauthenticated", "Authentication is required.", id)
@@ -248,137 +248,137 @@ func (s *Server) dispatch(writer http.ResponseWriter, request *http.Request, id 
 			}
 		}
 		httpx.WriteJSON(writer, http.StatusOK, map[string]any{"destinations": s.config.Destinations, "capabilities": capabilities})
-		return "/api/v1/destinations", ""
+		return "/api/v2/destinations", ""
 	case routeGetSettings:
 		s.getSettings(writer, request, id)
-		return "/api/v1/settings", ""
+		return "/api/v2/settings", ""
 	case routePutSettings:
 		s.putSettings(writer, request, id)
-		return "/api/v1/settings", ""
+		return "/api/v2/settings", ""
 	case routeRefreshSettings:
 		s.refreshSettings(writer, request, id)
-		return "/api/v1/settings/media/refresh", ""
+		return "/api/v2/settings/media/refresh", ""
 	case routeGetMCPSettings:
 		s.getMCPSettings(writer, request, id)
-		return "/api/v1/settings/mcp", ""
+		return "/api/v2/settings/mcp", ""
 	case routeCreateMCPCredential:
 		s.createMCPCredential(writer, request, id)
-		return "/api/v1/settings/mcp/credentials", ""
+		return "/api/v2/settings/mcp/credentials", ""
 	case routeRevokeMCPCredential:
 		s.revokeMCPCredential(writer, request, r.id, id)
-		return "/api/v1/settings/mcp/credentials/{credentialId}", ""
+		return "/api/v2/settings/mcp/credentials/{credentialId}", ""
 	case routeGetExportProposal:
 		s.getExportProposal(writer, request, r.id, id)
-		return "/api/v1/export-proposals/{proposalId}", ""
+		return "/api/v2/export-proposals/{proposalId}", ""
 	case routeApproveExportProposal:
 		s.approveExportProposal(writer, request, r.id, id)
-		return "/api/v1/export-proposals/{proposalId}/approval", ""
+		return "/api/v2/export-proposals/{proposalId}/approval", ""
 	case routeListMedia:
 		s.listMedia(writer, request, id)
-		return "/api/v1/media", ""
+		return "/api/v2/media", ""
 	case routeBrowseMedia:
 		s.browseMedia(writer, request, id)
-		return "/api/v1/media/tree", ""
+		return "/api/v2/media/tree", ""
 	case routeMediaStatus:
 		httpx.WriteJSON(writer, http.StatusOK, s.config.Media.Status())
-		return "/api/v1/media/status", ""
+		return "/api/v2/media/status", ""
 	case routeRefreshMedia:
 		s.refreshMedia(writer, request, id)
-		return "/api/v1/media/refresh", ""
+		return "/api/v2/media/refresh", ""
 	case routeStartMediaImport:
 		job, err := s.startMediaScan(request.Context())
 		if err != nil {
 			httpx.Error(writer, http.StatusConflict, "import_unavailable", "Import could not be started.", id)
-			return "/api/v1/media/import", ""
+			return "/api/v2/media/import", ""
 		}
 		httpx.WriteJSON(writer, http.StatusAccepted, job)
-		return "/api/v1/media/import", ""
+		return "/api/v2/media/import", ""
 	case routeGetMediaImport:
 		if s.config.MediaImport == nil {
 			notFound(writer, id)
-			return "/api/v1/media/import/{jobId}", ""
+			return "/api/v2/media/import/{jobId}", ""
 		}
 		job, err := s.config.MediaImport.ImportStatus(request.Context(), r.id)
 		if err != nil {
 			resourceError(writer, id, err)
-			return "/api/v1/media/import/{jobId}", ""
+			return "/api/v2/media/import/{jobId}", ""
 		}
 		httpx.WriteJSON(writer, http.StatusOK, job)
-		return "/api/v1/media/import/{jobId}", ""
+		return "/api/v2/media/import/{jobId}", ""
 	case routeCancelMediaImport:
 		if s.config.MediaImport == nil {
 			notFound(writer, id)
-			return "/api/v1/media/import/{jobId}", ""
+			return "/api/v2/media/import/{jobId}", ""
 		}
 		if err := s.config.MediaImport.CancelImport(request.Context(), r.id); err != nil {
 			resourceError(writer, id, err)
-			return "/api/v1/media/import/{jobId}", ""
+			return "/api/v2/media/import/{jobId}", ""
 		}
 		writer.WriteHeader(http.StatusNoContent)
-		return "/api/v1/media/import/{jobId}", ""
+		return "/api/v2/media/import/{jobId}", ""
 	case routeGetMedia:
 		s.getMedia(writer, request, r.id, id)
-		return "/api/v1/media/{mediaId}", ""
+		return "/api/v2/media/{mediaId}", ""
 	case routePreview:
 		s.preview(writer, request, r.id, id)
-		return "/api/v1/media/{mediaId}/preview", ""
+		return "/media/v2/media/{mediaId}/preview", ""
 	case routeThumbnails:
 		s.thumbnails(writer, request, r.id, id)
-		return "/api/v1/media/{mediaId}/thumbnails", ""
+		return "/media/v2/media/{mediaId}/thumbnails", ""
 	case routeWaveform:
 		s.waveform(writer, request, r.id, id)
-		return "/api/v1/media/{mediaId}/waveform", ""
+		return "/media/v2/media/{mediaId}/waveform", ""
 	case routeListProjects:
 		s.listProjects(writer, request, id)
-		return "/api/v1/projects", ""
+		return "/api/v2/projects", ""
 	case routeGetProject:
 		s.getProject(writer, request, r.id, id)
-		return "/api/v1/projects/{projectId}", ""
+		return "/api/v2/projects/{projectId}", ""
 	case routePutProject:
 		s.putProject(writer, request, r.id, id)
-		return "/api/v1/projects/{projectId}", ""
+		return "/api/v2/projects/{projectId}", ""
 	case routeCreateExport:
 		s.createExport(writer, request, r.id, id)
-		return "/api/v1/projects/{projectId}/exports", ""
+		return "/api/v2/projects/{projectId}/exports", ""
 	case routeListBatches:
 		s.listBatches(writer, request, id)
-		return "/api/v1/batches", ""
+		return "/api/v2/batches", ""
 	case routeGetBatch:
 		s.getBatch(writer, request, r.id, id)
-		return "/api/v1/batches/{batchId}", ""
+		return "/api/v2/batches/{batchId}", ""
 	case routeCancelBatch:
 		s.cancelBatch(writer, request, r.id, id)
-		return "/api/v1/batches/{batchId}", ""
+		return "/api/v2/batches/{batchId}", ""
 	case routePreflightExport:
 		s.preflightExport(writer, request, r.id, id)
-		return "/api/v1/projects/{projectId}/exports/preflight", ""
+		return "/api/v2/projects/{projectId}/exports/preflight", ""
 	case routeImportInterchange:
 		s.importInterchange(writer, request, r.id, id)
-		return "/api/v1/projects/{projectId}/interchange/{format}", ""
+		return "/api/v2/projects/{projectId}/interchange/{format}", ""
 	case routeExportInterchange:
 		s.exportInterchange(writer, request, r.id, id)
-		return "/api/v1/projects/{projectId}/interchange/{format}", ""
+		return "/api/v2/projects/{projectId}/interchange/{format}", ""
 	case routeCreateDetection:
 		s.createDetection(writer, request, r.id, id)
-		return "/api/v1/projects/{projectId}/detections", ""
+		return "/api/v2/projects/{projectId}/detections", ""
 	case routeGetJob:
 		s.getJob(writer, request, r.id, id)
-		return "/api/v1/jobs/{jobId}", ""
+		return "/api/v2/jobs/{jobId}", ""
 	case routeDownloadOutput:
 		s.downloadOutput(writer, request, r.id, id)
-		return "/api/v1/jobs/{jobId}/outputs/{position}", ""
+		return "/media/v2/jobs/{jobId}/outputs/{position}", ""
 	case routeDownloadBatch:
 		s.downloadBatch(writer, request, r.id, id)
-		return "/api/v1/batches/{batchId}/download", ""
+		return "/media/v2/batches/{batchId}/download", ""
 	case routeCancelJob:
 		s.cancelJob(writer, request, r.id, id)
-		return "/api/v1/jobs/{jobId}", ""
+		return "/api/v2/jobs/{jobId}", ""
 	case routeRetryJob:
 		s.retryJob(writer, request, r.id, id)
-		return "/api/v1/jobs/{jobId}/retry", ""
+		return "/api/v2/jobs/{jobId}/retry", ""
 	case routeAutomation:
 		s.automation(writer, request, id)
-		return "/api/v1/automation", ""
+		return "/api/v2/automation", ""
 	}
 	httpx.Error(writer, http.StatusNotFound, "not_found", "Resource not found.", id)
 	return routeFor(request.URL.Path), ""
@@ -473,7 +473,9 @@ func routeFor(path string) string {
 	case path == "/metrics":
 		return "/metrics"
 	case path == "/api" || strings.HasPrefix(path, "/api/"):
-		return "/api/v1/unknown"
+		return "/api/v2/unknown"
+	case path == "/media/v2" || strings.HasPrefix(path, "/media/v2/"):
+		return "/media/v2/unknown"
 	default:
 		return "/unknown"
 	}

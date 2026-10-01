@@ -68,7 +68,7 @@ func newPreviewErrorServer(t *testing.T, preview PreviewService) *Server {
 
 func previewRequest(method string) *http.Request {
 	mediaID := "m_" + strings.Repeat("a", 43)
-	return httptest.NewRequest(method, "/api/v1/media/"+mediaID+"/preview?centerMs=100", nil)
+	return httptest.NewRequest(method, "/media/v2/media/"+mediaID+"/preview?centerMs=100", nil)
 }
 
 func TestPreviewHTTPMapsDomainErrorsForGetAndHead(t *testing.T) {
@@ -119,7 +119,7 @@ func TestPreviewHTTPRejectsInvalidWindowSpan(t *testing.T) {
 			request.URL.RawQuery = query
 			response := httptest.NewRecorder()
 			server.ServeHTTP(response, request)
-			if response.Code != http.StatusUnprocessableEntity {
+			if response.Code != http.StatusBadRequest {
 				t.Fatalf("%s invalid span %q status=%d body=%s", method, query, response.Code, response.Body.String())
 			}
 		}
@@ -173,8 +173,8 @@ func TestConditionalAssetsValidateSourceBefore304(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, path := range []string{
-		"/api/v1/media/" + mediaID + "/thumbnails?startMs=0&durationMs=1000&count=1&width=80",
-		"/api/v1/media/" + mediaID + "/waveform?startMs=0&durationMs=1000&samples=16",
+		"/media/v2/media/" + mediaID + "/thumbnails?startMs=0&durationMs=1000&count=1&width=80",
+		"/media/v2/media/" + mediaID + "/waveform?startMs=0&durationMs=1000&samples=16",
 	} {
 		request := httptest.NewRequest(http.MethodGet, path, nil)
 		kind := "thumbnails-v2"

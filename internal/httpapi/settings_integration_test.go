@@ -132,7 +132,7 @@ func TestPutSettingsRejectsInvalidDocumentsWithoutToggling(t *testing.T) {
 				t.Fatal(err)
 			}
 			response := putSettingsBodyRequest(t, server, body)
-			if response.Code != http.StatusUnprocessableEntity {
+			if response.Code != http.StatusBadRequest {
 				t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 			}
 			got, err := settings.Get(ctx)
@@ -177,7 +177,7 @@ func TestGetSettingsReturnsCompleteMutableDocument(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodGet, "/api/v1/settings", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/v2/settings", nil)
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
 	if response.Code != http.StatusOK {
@@ -233,7 +233,7 @@ func TestPutSettingsRejectsDeploymentMutation(t *testing.T) {
 		t.Fatal(err)
 	}
 	response := putSettingsRequest(t, server, previous.Revision, candidate)
-	if response.Code != http.StatusUnprocessableEntity || applied {
+	if response.Code != http.StatusBadRequest || applied {
 		t.Fatalf("status=%d applied=%v body=%s", response.Code, applied, response.Body.String())
 	}
 	got, err := settings.Get(ctx)
@@ -243,7 +243,7 @@ func TestPutSettingsRejectsDeploymentMutation(t *testing.T) {
 	candidate = testRuntimeSettings()
 	candidate.Destinations[0].Root = "/attacker"
 	response = putSettingsRequest(t, server, previous.Revision, candidate)
-	if response.Code != http.StatusUnprocessableEntity || applied {
+	if response.Code != http.StatusBadRequest || applied {
 		t.Fatalf("destination status=%d applied=%v body=%s", response.Code, applied, response.Body.String())
 	}
 }
@@ -315,7 +315,7 @@ func putSettingsRequest(t *testing.T, server http.Handler, revision int64, setti
 
 func putSettingsBodyRequest(t *testing.T, server http.Handler, body []byte) *httptest.ResponseRecorder {
 	t.Helper()
-	request := httptest.NewRequest(http.MethodPut, "/api/v1/settings", strings.NewReader(string(body)))
+	request := httptest.NewRequest(http.MethodPut, "/api/v2/settings", strings.NewReader(string(body)))
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, request)
 	return response

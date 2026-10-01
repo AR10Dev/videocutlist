@@ -84,7 +84,7 @@ Start a real production server with an empty configured root named bench and wai
 initial media scan to finish. Then seed its disposable SQLite database while the server
 is running. Run this command before another media refresh or restart: a scan of the
 empty bench directory will mark synthetic records unavailable. Seeded rows are catalog
-metadata only, not files: benchmark only GET /api/v1/media and /api/v1/media/tree.
+metadata only, not files: benchmark only GET /api/v2/media and /api/v2/media/tree.
 To compare 100/1000/5000 rows, repeat seed (same alias) and run for each scale.
 Set VIDEOCUTLIST_BENCH_BASE / VIDEOCUTLIST_BENCH_TOKEN instead of --base / --token.
 Only measured HTTP requests appear on stdout, as CSV; diagnostics go to stderr.
@@ -203,12 +203,12 @@ func makeScenarios(base, alias string, count int) []scenario {
 		return spec
 	}
 	return []scenario{
-		build("media_list_first", "/api/v1/media", "", all, nil, false),
-		build("media_list_late", "/api/v1/media", "", all, nil, true),
-		build("media_tree_root_first", "/api/v1/media/tree", "", root, map[string]string{index.FolderID(alias, "collection"): "collection"}, false),
-		build("media_tree_root_late", "/api/v1/media/tree", "", root, map[string]string{index.FolderID(alias, "collection"): "collection"}, true),
-		build("media_tree_deep_first", "/api/v1/media/tree", index.FolderID(alias, "collection/deep"), deep, nil, false),
-		build("media_tree_deep_late", "/api/v1/media/tree", index.FolderID(alias, "collection/deep"), deep, nil, true),
+		build("media_list_first", "/api/v2/media", "", all, nil, false),
+		build("media_list_late", "/api/v2/media", "", all, nil, true),
+		build("media_tree_root_first", "/api/v2/media/tree", "", root, map[string]string{index.FolderID(alias, "collection"): "collection"}, false),
+		build("media_tree_root_late", "/api/v2/media/tree", "", root, map[string]string{index.FolderID(alias, "collection"): "collection"}, true),
+		build("media_tree_deep_first", "/api/v2/media/tree", index.FolderID(alias, "collection/deep"), deep, nil, false),
+		build("media_tree_deep_late", "/api/v2/media/tree", index.FolderID(alias, "collection/deep"), deep, nil, true),
 	}
 }
 

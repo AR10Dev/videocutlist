@@ -48,7 +48,7 @@ func (*contractBatchService) Progress(context.Context, string) (jobqueue.JobStat
 func (*contractBatchService) Get(context.Context, string) (projects.Batch, error) {
 	return projects.Batch{}, nil
 }
-func (*contractBatchService) List(context.Context, int) (projects.BatchPage, error) {
+func (*contractBatchService) List(context.Context, string, int) (projects.BatchPage, error) {
 	return projects.BatchPage{}, nil
 }
 func (*contractBatchService) Retry(context.Context, string) (projects.Batch, error) {
@@ -101,8 +101,8 @@ func TestCreateDetectionSeparatesInvalidInputFromStaleProject(t *testing.T) {
 		status int
 		code   string
 	}{
-		{name: "malformed JSON", body: "{", status: http.StatusUnprocessableEntity, code: "invalid_detection"},
-		{name: "invalid kind", body: strings.Replace(valid, `"silence"`, `"unknown"`, 1), status: http.StatusUnprocessableEntity, code: "invalid_detection"},
+		{name: "malformed JSON", body: "{", status: http.StatusBadRequest, code: "invalid_detection"},
+		{name: "invalid kind", body: strings.Replace(valid, `"silence"`, `"unknown"`, 1), status: http.StatusBadRequest, code: "invalid_detection"},
 		{name: "stale revision", body: strings.Replace(valid, `"projectRevision":7`, `"projectRevision":6`, 1), status: http.StatusConflict, code: "stale_project"},
 		{name: "stale item membership", body: strings.Replace(valid, `"projectItemId":"i_contract123456789012345678"`, `"projectItemId":"i_other1234567890123456789"`, 1), status: http.StatusConflict, code: "stale_project"},
 	} {
@@ -132,10 +132,10 @@ func TestCreateExportUsesRequestAndServiceErrorTaxonomy(t *testing.T) {
 		status int
 		code   string
 	}{
-		{name: "obsolete options are rejected", body: `{"mode":"merge"}`, status: http.StatusUnprocessableEntity, code: "invalid_export"},
+		{name: "obsolete options are rejected", body: `{"mode":"merge"}`, status: http.StatusBadRequest, code: "invalid_export"},
 		{name: "missing project", err: fmt.Errorf("load project: %w", store.ErrProjectNotFound), body: `{"itemIds":["i_contract"]}`, status: http.StatusNotFound, code: "not_found"},
 		{name: "queue capacity", err: jobqueue.ErrQueueFull, body: `{"itemIds":["i_contract"]}`, status: http.StatusTooManyRequests, code: "export_busy"},
-		{name: "invalid project", err: projects.ErrInvalidProject, body: `{"itemIds":["i_contract"]}`, status: http.StatusUnprocessableEntity, code: "invalid_export"},
+		{name: "invalid project", err: projects.ErrInvalidProject, body: `{"itemIds":["i_contract"]}`, status: http.StatusBadRequest, code: "invalid_export"},
 		{name: "unexpected failure", err: errors.New("database unavailable"), body: `{"itemIds":["i_contract"]}`, status: http.StatusInternalServerError, code: "internal_error"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
