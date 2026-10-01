@@ -1,5 +1,7 @@
-import { createEffect, createSignal, onCleanup } from "solid-js";
-import { useQuery, useQueryClient } from "@tanstack/solid-query";
+import { RegistryContext } from "@effect/atom-solid";
+import * as AsyncResult from "effect/reactivity/AsyncResult";
+import * as Atom from "effect/reactivity/Atom";
+import { createEffect, createSignal, onCleanup, useContext } from "solid-js";
 import { createApiClient, resolveBrowserConfiguration } from "../../api";
 import { createPreviewController } from "../preview/controller";
 import type { components } from "../../generated/api";
@@ -19,10 +21,12 @@ import { lastDestinationId } from "../export/destination";
 import { createEditorController } from "../editor/controller";
 import { createTimelineHistory } from "../editor/timeline";
 import type { AssetViewport } from "../preview/assets";
+import { createServerState, useServerAtom } from "./server";
 type Media = components["schemas"]["Media"];
-const api = createApiClient(resolveBrowserConfiguration());
 
 export function createWorkspaceController() {
+  const api = createApiClient(resolveBrowserConfiguration());
+  const server = createServerState(api, useContext(RegistryContext));
   const [selected, setSelected] = createSignal<Media>();
   const [visibleTimelineRange, setVisibleTimelineRange] = createSignal<AssetViewport>({
     startMs: 0,
@@ -36,7 +40,7 @@ export function createWorkspaceController() {
     setVisibleTimelineRange({ startMs: 0, endMs: item?.durationMs ?? 0 });
   });
   const [status, setStatus] = createSignal("Loading media…");
-  const settingsFeature = createSettingsController(api);
+  const settingsFeature = createSettingsController(api, server);
   const {
     settings,
     setSettings,
@@ -148,10 +152,9 @@ export function createWorkspaceController() {
     splitActiveSegment,
     newSegment,
   } = editorFeature;
-  const queryClient = useQueryClient();
   const exportFeature = createExportController({
     api,
-    queryClient,
+    server,
     selected,
     projectId,
     revision,
@@ -264,7 +267,7 @@ export function createWorkspaceController() {
     setFilenameTemplate(item.exportOptions.filenameTemplate ?? settings().filenameTemplate);
     setDiagnostics();
   };
-  const libraryFeature = createLibraryController(api, queryClient, setStatus);
+  const libraryFeature = createLibraryController(server, setStatus);
   const {
     media,
     setMedia,
@@ -281,24 +284,20 @@ export function createWorkspaceController() {
     await refreshLibraryMedia();
     const refreshed = media().find((item) => item.id === selected()?.id);
     if (refreshed) {
-      queryClient.setQueryData(["media", refreshed.id], refreshed);
+      server.registry.refresh(server.media(refreshed.id));
       setSelected(refreshed);
     }
   };
-  const selectedMediaQuery = useQuery(() => ({
-    queryKey: ["media", selected()?.id ?? null],
-    enabled: Boolean(selected()?.id),
-    queryFn: async ({ signal }) => {
-      const id = selected()?.id;
-      if (!id) throw new Error("Media ID is missing.");
-      const response = await api.request(`media/${encodeURIComponent(id)}`, { signal });
-      if (!response.ok) throw new Error(`Metadata request failed (${response.status}).`);
-      return (await response.json()) as Media;
-    },
-  }));
+  const noMedia = Atom.make(AsyncResult.initial<Media, Error>());
+  const selectedMediaAtom = () => {
+    const id = selected()?.id;
+    return id ? server.media(id) : noMedia;
+  };
+  const selectedMedia = useServerAtom(selectedMediaAtom);
   createEffect(() => {
-    const item = selectedMediaQuery.data;
-    if (item && item.id === selected()?.id) setSelected(item);
+    const result = selectedMedia.result();
+    if (AsyncResult.isSuccess(result) && !result.waiting && result.value.id === selected()?.id)
+      setSelected(result.value);
   });
   const initializedPreviewFeature = createPreviewController(api, {
     selected,
@@ -415,7 +414,7 @@ export function createWorkspaceController() {
     projectsFeature.dispose();
     clearDetectionContext();
   });
-  const detectionFeature = createDetectionController(api, queryClient, {
+  const detectionFeature = createDetectionController(server, {
     selected,
     activeItemId,
     projectId,
@@ -442,8 +441,7 @@ export function createWorkspaceController() {
     bulkAcceptDetection,
   } = detectionFeature;
   const projectsFeature = createProjectsController({
-    api,
-    queryClient,
+    server,
     selected,
     projectId,
     setProjectId,
@@ -493,9 +491,9 @@ export function createWorkspaceController() {
     refreshing,
     status,
     setStatus,
-    metadataError: () => selectedMediaQuery.error?.message,
-    metadataLoading: () => selectedMediaQuery.isFetching,
-    retryMetadata: () => void selectedMediaQuery.refetch(),
+    metadataError: () => selectedMedia.error()?.message,
+    metadataLoading: () => Boolean(selected()) && selectedMedia.waiting(),
+    retryMetadata: () => server.registry.refresh(selectedMediaAtom()),
     serverSettingsLoading: settingsFeature.serverSettingsLoading,
     loadServerSettings: settingsFeature.loadServerSettings,
     assetStatus,

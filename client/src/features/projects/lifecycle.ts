@@ -1,9 +1,15 @@
+import { z } from "zod";
 import { validateSegmentLabel } from "../preview/model";
 
 export type RecentProject = { id: string; label: string; lastOpened: number };
 
 export const recentProjectsKey = "videocutlist.recent-projects.v1";
 const projectId = /^p_[A-Za-z0-9_-]{12,64}$/;
+const recentProjectSchema = z.object({
+  id: z.string().regex(projectId),
+  label: z.string().refine((label) => Boolean(label.trim()) && label.length <= 120),
+  lastOpened: z.number().int().min(0).max(8_640_000_000_000_000),
+});
 
 export const newProjectId = () => `p_${crypto.randomUUID()}`;
 
@@ -15,27 +21,10 @@ export const recentProjects = (value: unknown): RecentProject[] => {
   const ids = new Set<string>();
   return value
     .flatMap((entry) => {
-      if (
-        !entry ||
-        typeof entry !== "object" ||
-        !validProjectId((entry as RecentProject).id) ||
-        typeof (entry as RecentProject).label !== "string" ||
-        !(entry as RecentProject).label.trim() ||
-        (entry as RecentProject).label.length > 120 ||
-        !Number.isSafeInteger((entry as RecentProject).lastOpened) ||
-        (entry as RecentProject).lastOpened < 0 ||
-        (entry as RecentProject).lastOpened > 8_640_000_000_000_000 ||
-        ids.has((entry as RecentProject).id)
-      )
-        return [];
-      ids.add((entry as RecentProject).id);
-      return [
-        {
-          id: (entry as RecentProject).id,
-          label: (entry as RecentProject).label,
-          lastOpened: (entry as RecentProject).lastOpened,
-        },
-      ];
+      const parsed = recentProjectSchema.safeParse(entry);
+      if (!parsed.success || ids.has(parsed.data.id)) return [];
+      ids.add(parsed.data.id);
+      return [parsed.data];
     })
     .slice(0, 20);
 };
@@ -48,6 +37,48 @@ export const projectJson = (project: unknown): string => {
   return JSON.stringify(project);
 };
 
+const projectRecord = z.record(z.string(), z.unknown());
+const projectHeader = z.looseObject({
+  schemaVersion: z.literal(2),
+  name: z.string().refine((name) => Boolean(name.trim())),
+  items: z.array(z.unknown()).min(1),
+});
+const projectItemHeader = z.looseObject({
+  id: z.string().regex(/^i_[A-Za-z0-9_-]{12,64}$/),
+  mediaId: z.string().regex(/^m_[A-Za-z0-9_-]{43}$/),
+  segments: z.array(z.unknown()),
+  exportOptions: projectRecord,
+});
+const interchangeSegments = z.array(
+  z.looseObject({
+    startMs: z.number().int(),
+    endMs: z.number().int(),
+    label: z
+      .string()
+      .refine((label) => validateSegmentLabel(label) === undefined)
+      .optional(),
+  }),
+);
+const interchangeExportOptions = z.looseObject({
+  mode: z.enum(["merge", "separate"]).optional(),
+  selection: z.enum(["segments", "gaps"]).optional(),
+  cutStrategy: z.enum(["stream_copy_preferred", "precise_reencode", "hybrid_smart_cut"]).optional(),
+  container: z.enum(["mkv", "mp4", "mov"]).optional(),
+  destinationId: z.string().optional(),
+  filenameTemplate: z.string().optional(),
+  streamIndexes: z.array(z.number().int().min(0)).optional(),
+});
+const interchangeEditorState = z.object({
+  playheadMs: z.number(),
+  zoom: z.number().min(1),
+  muted: z.boolean(),
+});
+const legacyProject = z.looseObject({
+  mediaId: z.string(),
+  segments: z.array(z.unknown()),
+  uiState: z.unknown().refine((value) => Boolean(value) && typeof value === "object"),
+});
+
 export const parseProjectJson = (text: string): Record<string, unknown> => {
   if (text.length > 1_000_000) throw new Error("Project file is too large.");
   let value: unknown;
@@ -56,86 +87,23 @@ export const parseProjectJson = (text: string): Record<string, unknown> => {
   } catch {
     throw new Error("Project file is invalid JSON.");
   }
-  if (!value || typeof value !== "object" || Array.isArray(value))
-    throw new Error("Project shape is invalid.");
-  const object = value as Record<string, unknown>;
-  if (object.schemaVersion === 2) {
-    if (
-      typeof object.name !== "string" ||
-      !object.name.trim() ||
-      !Array.isArray(object.items) ||
-      !object.items.length
-    )
-      throw new Error("Project shape is invalid.");
+  if (!projectRecord.validate(value)) throw new Error("Project shape is invalid.");
+  if (value.schemaVersion === 2) {
+    if (!projectHeader.validate(value)) throw new Error("Project shape is invalid.");
     const ids = new Set<string>();
-    for (const item of object.items) {
-      if (
-        !item ||
-        typeof item !== "object" ||
-        typeof item.id !== "string" ||
-        !/^i_[A-Za-z0-9_-]{12,64}$/.test(item.id) ||
-        ids.has(item.id) ||
-        typeof item.mediaId !== "string" ||
-        !/^m_[A-Za-z0-9_-]{43}$/.test(item.mediaId) ||
-        !Array.isArray(item.segments) ||
-        !item.exportOptions ||
-        typeof item.exportOptions !== "object" ||
-        Array.isArray(item.exportOptions)
-      )
+    for (const item of value.items) {
+      if (!projectItemHeader.validate(item) || ids.has(item.id))
         throw new Error("Project item is invalid.");
       ids.add(item.id);
-      if (
-        item.segments.some(
-          (segment: unknown) =>
-            !segment ||
-            typeof segment !== "object" ||
-            !("startMs" in segment) ||
-            !("endMs" in segment) ||
-            !Number.isSafeInteger(segment.startMs) ||
-            !Number.isSafeInteger(segment.endMs) ||
-            ("label" in segment && typeof segment.label !== "string") ||
-            ("label" in segment &&
-              typeof segment.label === "string" &&
-              validateSegmentLabel(segment.label) !== undefined),
-        )
-      )
+      if (!interchangeSegments.validate(item.segments))
         throw new Error("Project segments are invalid.");
-      const options = item.exportOptions;
-      if (
-        (options.mode !== undefined && !["merge", "separate"].includes(options.mode)) ||
-        (options.selection !== undefined && !["segments", "gaps"].includes(options.selection)) ||
-        (options.cutStrategy !== undefined &&
-          !["stream_copy_preferred", "precise_reencode", "hybrid_smart_cut"].includes(
-            options.cutStrategy,
-          )) ||
-        (options.container !== undefined && !["mkv", "mp4", "mov"].includes(options.container)) ||
-        (options.destinationId !== undefined && typeof options.destinationId !== "string") ||
-        (options.filenameTemplate !== undefined && typeof options.filenameTemplate !== "string") ||
-        (options.streamIndexes !== undefined &&
-          (!Array.isArray(options.streamIndexes) ||
-            options.streamIndexes.some(
-              (index: unknown) =>
-                typeof index !== "number" || !Number.isSafeInteger(index) || index < 0,
-            )))
-      )
+      if (!interchangeExportOptions.validate(item.exportOptions))
         throw new Error("Project export options are invalid.");
-      if (
-        item.editorState &&
-        (!Number.isFinite(item.editorState.playheadMs) ||
-          !Number.isFinite(item.editorState.zoom) ||
-          item.editorState.zoom < 1 ||
-          typeof item.editorState.muted !== "boolean")
-      )
+      if (item.editorState && !interchangeEditorState.validate(item.editorState))
         throw new Error("Project editor state is invalid.");
     }
-    return object;
-  }
-  if (
-    typeof object.mediaId !== "string" ||
-    !Array.isArray(object.segments) ||
-    !object.uiState ||
-    typeof object.uiState !== "object"
-  )
+  } else if (!legacyProject.validate(value)) {
     throw new Error("Project shape is invalid.");
-  return object;
+  }
+  return value;
 };

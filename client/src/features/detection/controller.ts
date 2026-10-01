@@ -1,10 +1,12 @@
-import { createEffect, createSignal, type Accessor } from "solid-js";
-import { createMutation, useQuery, type QueryClient } from "@tanstack/solid-query";
-import { readApiError, type ApiClient } from "../../api";
+import { createEffect, createSignal, type Accessor, type Setter } from "solid-js";
+import { useAtomValue } from "@effect/atom-solid";
+import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
+import * as AsyncResult from "effect/reactivity/AsyncResult";
+import * as Atom from "effect/reactivity/Atom";
+import { ApiFailure, apiJson, apiRequest, runEffect } from "../../api";
+import { pollAtom, readServerAtom, type ServerState } from "../app/server";
 import type { components } from "../../generated/api";
-import { cancellationIsCurrent } from "../queue/cancellation";
-import { cancelJobLifecycle } from "../queue/queryLifecycle";
-import { jobPollInterval } from "../queue/jobPolling";
 import {
   acceptCandidates,
   type Candidate,
@@ -17,10 +19,6 @@ import type { Segment } from "../preview/model";
 type Media = components["schemas"]["Media"];
 type Project = components["schemas"]["Project"];
 type DetectionJob = components["schemas"]["DetectionJob"];
-type DetectionCancellation = {
-  jobId: string;
-  request: number;
-};
 
 type DetectionReview = {
   jobId: string;
@@ -35,6 +33,15 @@ type DetectionReview = {
   invalidated: boolean;
 };
 
+type SubmittedDetection = {
+  jobId: string;
+  projectId: string;
+  mediaId: string;
+  activeItemId: string | undefined;
+  sourceFingerprint: string | undefined;
+  editorVersion: number;
+};
+
 type DetectionDependencies = {
   selected: Accessor<Media | undefined>;
   activeItemId: Accessor<string | undefined>;
@@ -47,22 +54,42 @@ type DetectionDependencies = {
   updateSegments: (segments: Segment[]) => void;
 };
 
+export interface DetectionController {
+  detectionJob: Accessor<DetectionJob | undefined>;
+  setDetectionJob: Setter<DetectionJob | undefined>;
+  detectionStatus: Accessor<string>;
+  setDetectionStatus: Setter<string>;
+  detectionCandidates: Accessor<Candidate[]>;
+  setDetectionCandidates: Setter<Candidate[]>;
+  detectionLoading: Accessor<boolean>;
+  detectionQueryError: Accessor<string>;
+  clearDetectionContext: () => void;
+  startDetection: (
+    kind: DetectionKind,
+    options?: Pick<
+      components["schemas"]["DetectionInput"],
+      "noiseDb" | "minDurationMs" | "sceneThreshold"
+    >,
+  ) => Promise<void>;
+  cancelDetection: () => Promise<void>;
+  acceptDetection: (candidate: Candidate) => CandidateAcceptance;
+  rejectDetection: (candidate: Candidate) => boolean;
+  bulkAcceptDetection: () => CandidateAcceptance;
+}
+
 export function createDetectionController(
-  api: ApiClient,
-  queryClient: QueryClient,
+  server: ServerState,
   dependencies: DetectionDependencies,
-) {
+): DetectionController {
+  const { api, registry, runtime } = server;
   const [detectionJob, setDetectionJob] = createSignal<DetectionJob>();
   const [detectionStatus, setDetectionStatus] = createSignal("");
   const [detectionCandidates, setDetectionCandidates] = createSignal<Candidate[]>([]);
-  let detectionRequest = 0;
-  let detectionController: AbortController | undefined;
-  let detectionCancellationController: AbortController | undefined;
-  let localCancellation: DetectionCancellation | undefined;
-  const invalidatedTerminalJobs = new Set<string>();
+  let operation = 0;
+  const [localCancellation, setLocalCancellation] = createSignal<string>();
   const reviewedCandidateIDs = new Set<string>();
   let detectionReview: DetectionReview | undefined;
-  let failedCancellation: DetectionCancellation | undefined;
+  let submittedDetection: SubmittedDetection | undefined;
   let applyingDetectionEdit = false;
   const invalidateDetectionReview = () => {
     if (detectionReview) {
@@ -100,21 +127,29 @@ export function createDetectionController(
     if (detectionReview?.jobId === job.id) return;
     const selected = dependencies.selected();
     const currentRevision = dependencies.revision();
+    const submitted = submittedDetection?.jobId === job.id ? submittedDetection : undefined;
     detectionReview = {
       jobId: job.id,
-      projectId: dependencies.projectId(),
+      projectId: submitted?.projectId ?? dependencies.projectId(),
       mediaId: job.mediaId,
-      activeItemId: dependencies.activeItemId(),
-      sourceFingerprint: selected?.etag,
+      activeItemId: submitted ? submitted.activeItemId : dependencies.activeItemId(),
+      sourceFingerprint: submitted ? submitted.sourceFingerprint : selected?.etag,
       baselineRevision: job.projectRevision,
       currentRevision,
-      editorVersion: dependencies.editorVersion(),
+      editorVersion: submitted?.editorVersion ?? dependencies.editorVersion(),
       pendingLocalSave: false,
       invalidated:
         !selected ||
         selected.id !== job.mediaId ||
         currentRevision !== job.projectRevision ||
-        dependencies.saveConflict(),
+        dependencies.saveConflict() ||
+        (submitted !== undefined &&
+          (dependencies.projectId() !== submitted.projectId ||
+            job.projectId !== submitted.projectId ||
+            job.mediaId !== submitted.mediaId ||
+            dependencies.activeItemId() !== submitted.activeItemId ||
+            selected.etag !== submitted.sourceFingerprint ||
+            dependencies.editorVersion() !== submitted.editorVersion)),
     };
   };
   const staleAcceptance = (candidates: Candidate[]): CandidateAcceptance => ({
@@ -132,23 +167,59 @@ export function createDetectionController(
     if (applyingDetectionEdit) return;
     synchronizeDetectionReview();
   });
-  const cancelJobMutation = createMutation(() => ({
-    mutationFn: ({ id, signal }: { id: string; signal: AbortSignal }) =>
-      api.request(`jobs/${encodeURIComponent(id)}`, { method: "DELETE", signal }),
-  }));
-  const detectionStatusQuery = useQuery(() => ({
-    queryKey: ["job", "detection", detectionJob()?.id ?? null],
-    enabled: Boolean(detectionJob()?.id),
-    queryFn: async ({ signal }) => {
-      const id = detectionJob()?.id;
-      if (!id) throw new Error("Detection job ID is missing.");
-      const response = await api.request(`jobs/${encodeURIComponent(id)}`, { signal });
-      if (!response.ok) throw new Error("Detection status could not be updated.");
-      return (await response.json()) as DetectionJob;
-    },
-    refetchInterval: (query: { state: { data?: DetectionJob } }) =>
-      jobPollInterval(query.state.data ?? detectionJob(), 500),
-  }));
+  const submit = runtime.fn(
+    (input: {
+      projectId: string;
+      mediaId: string;
+      projectItemId: string | undefined;
+      projectRevision: number;
+      kind: DetectionKind;
+      sourceFingerprint: string | undefined;
+      options: Pick<
+        components["schemas"]["DetectionInput"],
+        "noiseDb" | "minDurationMs" | "sceneThreshold"
+      >;
+    }) =>
+      apiJson<DetectionJob>(api, `projects/${encodeURIComponent(input.projectId)}/detections`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          mediaId: input.mediaId,
+          projectItemId: input.projectItemId,
+          projectRevision: input.projectRevision,
+          kind: input.kind,
+          sourceFingerprint: input.sourceFingerprint,
+          ...input.options,
+        }),
+      }),
+  );
+  const cancel = runtime.fn((id: string) =>
+    Effect.flatMap(
+      apiRequest(api, `jobs/${encodeURIComponent(id)}`, { method: "DELETE" }),
+      (response) =>
+        response.ok
+          ? Effect.succeed(undefined)
+          : Effect.fail(new Error("Job could not be cancelled. Try again.")),
+    ),
+  );
+  const statuses = Atom.family((id: string) =>
+    pollAtom(
+      runtime,
+      apiJson<DetectionJob>(api, `jobs/${encodeURIComponent(id)}`),
+      (job) => job.state === "queued" || job.state === "running",
+      500,
+    ),
+  );
+  const emptyStatus = Atom.make(AsyncResult.initial<DetectionJob, Error>());
+  const status = useAtomValue(() => {
+    const job = detectionJob();
+    return job &&
+      (job.state === "queued" || job.state === "running") &&
+      localCancellation() !== job.id
+      ? statuses(job.id)
+      : emptyStatus;
+  });
+  let failedCancellation: string | undefined;
   const setDetectionResult = (candidates: Candidate[]) => {
     const job = detectionJob();
     if (job?.state === "succeeded") createDetectionReview(job);
@@ -158,40 +229,17 @@ export function createDetectionController(
     if (!reviewedCandidateIDs.size)
       setDetectionStatus(`${candidates.length} candidates found. Review each before accepting.`);
   };
-  createEffect(() => {
-    const error = detectionStatusQuery.error;
+  const receiveDetectionJob = (next: DetectionJob) => {
     const current = detectionJob();
-    const cancellationFailure =
-      failedCancellation &&
-      failedCancellation.jobId === current?.id &&
-      failedCancellation.request === detectionRequest;
-    if (
-      error &&
-      current &&
-      (current.state === "queued" || current.state === "running") &&
-      !localCancellation &&
-      !cancellationFailure
-    ) {
-      setDetectionStatus(
-        error instanceof Error ? error.message : "Detection status could not be updated.",
-      );
-    }
-  });
-  createEffect(() => {
-    const next = detectionStatusQuery.data;
-    const cancellation = localCancellation;
-    if (!next || next.id !== detectionJob()?.id) return;
-    if (
-      (next.state === "queued" || next.state === "running") &&
-      cancellation?.jobId === next.id &&
-      cancellation.request === detectionRequest
-    )
-      return;
+    if (next.id !== current?.id || localCancellation() === next.id) return;
+    if (current.state === "cancelled") return;
+    if (current.state === next.state && current === next) return;
     setDetectionJob(next);
-    if (next.state === "succeeded") {
-      setDetectionResult(next.candidates ?? []);
-    } else if (next.state === "queued" || next.state === "running") {
-      setDetectionStatus(next.state === "queued" ? "Detection queued." : "Detection running.");
+    if (next.state === "succeeded") setDetectionResult(next.candidates ?? []);
+    else if (next.state === "queued" || next.state === "running") {
+      if (failedCancellation !== next.id) {
+        setDetectionStatus(next.state === "queued" ? "Detection queued." : "Detection running.");
+      }
     } else {
       setDetectionStatus(
         next.state === "cancelled"
@@ -200,25 +248,36 @@ export function createDetectionController(
       );
     }
     if (
-      ["succeeded", "failed", "cancelled"].includes(next.state) &&
-      !invalidatedTerminalJobs.has(next.id)
+      (next.state === "succeeded" || next.state === "failed" || next.state === "cancelled") &&
+      (current.state === "queued" || current.state === "running")
     ) {
-      invalidatedTerminalJobs.add(next.id);
-      void queryClient.invalidateQueries({ queryKey: ["job", "detection", next.id] });
-      void queryClient.invalidateQueries({ queryKey: ["project", dependencies.projectId()] });
-      void queryClient.invalidateQueries({ queryKey: ["media"] });
+      server.refreshMedia();
     }
+  };
+  createEffect(() => {
+    const result = status();
+    const job = detectionJob();
+    if (!job || localCancellation() === job.id) return;
+    const error = Option.getOrUndefined(AsyncResult.error(result));
+    if (
+      error &&
+      (job.state === "queued" || job.state === "running") &&
+      failedCancellation !== job.id
+    ) {
+      setDetectionStatus(error.message);
+    }
+    const next = AsyncResult.isSuccess(result) && !result.waiting ? result.value : undefined;
+    if (next) receiveDetectionJob(next);
   });
 
   const clearDetectionContext = () => {
-    detectionController?.abort();
-    detectionController = undefined;
-    detectionCancellationController?.abort();
-    detectionCancellationController = undefined;
-    localCancellation = undefined;
+    operation++;
+    registry.set(submit, Atom.Interrupt);
+    registry.set(cancel, Atom.Interrupt);
+    setLocalCancellation();
     failedCancellation = undefined;
     detectionReview = undefined;
-    detectionRequest++;
+    submittedDetection = undefined;
     setDetectionJob();
     reviewedCandidateIDs.clear();
     setDetectionCandidates([]);
@@ -231,126 +290,115 @@ export function createDetectionController(
       "noiseDb" | "minDurationMs" | "sceneThreshold"
     > = {},
   ) => {
-    const request = ++detectionRequest;
-    detectionController?.abort();
-    detectionController = undefined;
-    detectionCancellationController?.abort();
-    detectionCancellationController = undefined;
-    localCancellation = undefined;
-    failedCancellation = undefined;
-    detectionReview = undefined;
-    reviewedCandidateIDs.clear();
-    setDetectionJob();
-    setDetectionCandidates([]);
+    clearDetectionContext();
+    const currentOperation = operation;
+    const selectedBeforeSave = dependencies.selected();
+    const projectBeforeSave = dependencies.projectId();
+    const itemBeforeSave = dependencies.activeItemId();
+    const editorBeforeSave = dependencies.editorVersion();
     setDetectionStatus("Saving project before detection…");
-    const saved = await dependencies.saveProject();
-    if (request !== detectionRequest) return;
-    const selected = dependencies.selected();
-    if (!saved || !selected) {
-      setDetectionStatus(
-        "Detection was not started. Save from the project header and resolve any reported errors.",
-      );
-      return;
-    }
-    const controller = new AbortController();
-    detectionController = controller;
-    setDetectionCandidates([]);
-    setDetectionStatus(`Starting ${kind} detection…`);
     try {
-      const response = await api.request(`projects/${encodeURIComponent(saved.id)}/detections`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          mediaId: selected.id,
-          projectItemId: dependencies.activeItemId(),
-          projectRevision: saved.revision,
-          kind,
-          sourceFingerprint: selected.etag,
-          ...options,
-        }),
-        signal: controller.signal,
-      });
-      if (controller.signal.aborted || request !== detectionRequest) return;
-      if (!response.ok) {
-        const error = await readApiError(response);
-        if (controller.signal.aborted || request !== detectionRequest) return;
+      const saved = await dependencies.saveProject();
+      if (currentOperation !== operation) return;
+      const selected = dependencies.selected();
+      if (!saved || !selected) {
         setDetectionStatus(
-          error.code === "stale_project"
+          "Detection was not started. Save from the project header and resolve any reported errors.",
+        );
+        return;
+      }
+      if (
+        saved.id !== projectBeforeSave ||
+        dependencies.projectId() !== projectBeforeSave ||
+        selected.id !== selectedBeforeSave?.id ||
+        selected.etag !== selectedBeforeSave.etag ||
+        dependencies.activeItemId() !== itemBeforeSave ||
+        dependencies.editorVersion() !== editorBeforeSave
+      ) {
+        setDetectionStatus("Detection is stale; save or reload the project.");
+        return;
+      }
+      setDetectionStatus(`Starting ${kind} detection…`);
+      const input = {
+        projectId: saved.id,
+        mediaId: selected.id,
+        projectItemId: itemBeforeSave,
+        projectRevision: saved.revision,
+        kind,
+        sourceFingerprint: selected.etag,
+        options,
+      };
+      registry.set(submit, input);
+      const job = await runEffect(readServerAtom(server, submit));
+      if (currentOperation !== operation) return;
+      if (
+        dependencies.projectId() !== saved.id ||
+        dependencies.selected()?.id !== selected.id ||
+        dependencies.selected()?.etag !== selected.etag ||
+        dependencies.activeItemId() !== itemBeforeSave ||
+        dependencies.editorVersion() !== editorBeforeSave
+      )
+        return;
+      submittedDetection = {
+        jobId: job.id,
+        projectId: saved.id,
+        mediaId: selected.id,
+        activeItemId: itemBeforeSave,
+        sourceFingerprint: selected.etag,
+        editorVersion: editorBeforeSave,
+      };
+      setDetectionJob(job);
+      if (job.state === "succeeded") setDetectionResult(job.candidates ?? []);
+      else if (job.state === "cancelled") setDetectionStatus("Detection cancelled.");
+      else if (job.state === "queued" || job.state === "running")
+        setDetectionStatus(job.state === "queued" ? "Detection queued." : "Detection running.");
+      else setDetectionStatus(`Detection failed${job.errorCode ? `: ${job.errorCode}.` : "."}`);
+      if (job.state !== "queued" && job.state !== "running") {
+        server.refreshMedia();
+      }
+    } catch (error) {
+      if (currentOperation !== operation) return;
+      setDetectionStatus(
+        error instanceof ApiFailure
+          ? error.code === "stale_project"
             ? "Detection is stale; save or reload the project."
             : error.code === "detection_busy"
               ? "Detection capacity is busy. Try again shortly."
               : error.code === "invalid_detection"
                 ? "Detection settings were rejected. Check the sensitivity values."
-                : "Detection could not be started.",
-        );
-        return;
-      }
-      const job = (await response.json()) as DetectionJob;
-      if (controller.signal.aborted || request !== detectionRequest) return;
-      setDetectionJob(job);
-      if (job.state === "succeeded") {
-        setDetectionResult(job.candidates ?? []);
-      } else if (job.state === "cancelled") setDetectionStatus("Detection cancelled.");
-      else if (job.state === "queued" || job.state === "running")
-        setDetectionStatus(job.state === "queued" ? "Detection queued." : "Detection running.");
-      else setDetectionStatus(`Detection failed${job.errorCode ? `: ${job.errorCode}.` : "."}`);
-    } catch (error) {
-      if (controller.signal.aborted || request !== detectionRequest) return;
-      setDetectionStatus(
-        error instanceof Error ? error.message : "Detection could not be started.",
+                : "Detection could not be started."
+          : error instanceof Error
+            ? error.message
+            : "Detection could not be started.",
       );
     }
   };
   const cancelDetection = async () => {
     const job = detectionJob();
-    if (!job || (job.state !== "queued" && job.state !== "running")) return;
-    const request = ++detectionRequest;
-    detectionController?.abort();
-    detectionController = undefined;
-    detectionCancellationController?.abort();
-    const controller = new AbortController();
-    detectionCancellationController = controller;
-    localCancellation = { jobId: job.id, request };
+    if (
+      !job ||
+      (job.state !== "queued" && job.state !== "running") ||
+      localCancellation() === job.id
+    )
+      return;
+    const currentOperation = ++operation;
+    registry.set(submit, Atom.Interrupt);
+    setLocalCancellation(job.id);
     failedCancellation = undefined;
     try {
-      await cancelJobLifecycle({
-        jobId: job.id,
-        signal: controller.signal,
-        cancel: (id, signal) => cancelJobMutation.mutateAsync({ id, signal }),
-        cancelQueries: (options) => queryClient.cancelQueries(options),
-        invalidateQueries: (options) =>
-          queryClient.invalidateQueries({ ...options, refetchType: "none" }),
-        jobQueryKey: ["job", "detection", job.id],
-        projectQueryKey: ["project", dependencies.projectId()],
-      });
-      const currentJob = detectionJob();
-      if (
-        !currentJob ||
-        currentJob.id !== job.id ||
-        (currentJob.state !== "queued" && currentJob.state !== "running") ||
-        !cancellationIsCurrent(controller, detectionCancellationController)
-      )
-        return;
-      failedCancellation = undefined;
+      registry.set(cancel, job.id);
+      await runEffect(readServerAtom(server, cancel));
+      if (currentOperation !== operation || detectionJob()?.id !== job.id) return;
       setDetectionJob({ ...job, state: "cancelled" });
       setDetectionStatus("Detection cancelled.");
+      server.refreshMedia();
     } catch (error) {
-      const currentJob = detectionJob();
-      if (
-        request === detectionRequest &&
-        currentJob?.id === job.id &&
-        !controller.signal.aborted &&
-        (currentJob.state === "queued" || currentJob.state === "running")
-      ) {
-        localCancellation = undefined;
-        failedCancellation = { jobId: job.id, request };
-        setDetectionStatus(
-          error instanceof Error ? error.message : "Detection could not be cancelled. Try again.",
-        );
-      }
-    } finally {
-      if (detectionCancellationController === controller)
-        detectionCancellationController = undefined;
+      if (currentOperation !== operation || detectionJob()?.id !== job.id) return;
+      failedCancellation = job.id;
+      setDetectionStatus(
+        error instanceof Error ? error.message : "Detection could not be cancelled. Try again.",
+      );
+      setLocalCancellation();
     }
   };
   const recordLocalDetectionEdit = () => {
@@ -440,12 +488,19 @@ export function createDetectionController(
     setDetectionStatus,
     detectionCandidates,
     setDetectionCandidates,
-    detectionLoading: () => Boolean(detectionJob()?.id) && detectionStatusQuery.isFetching,
-    detectionQueryError: () => {
-      const error = detectionStatusQuery.error;
+    detectionLoading: () => {
       const job = detectionJob();
-      if (!error || job?.state === "cancelled" || localCancellation?.jobId === job?.id) return "";
-      return error instanceof Error ? error.message : "Detection status could not be updated.";
+      return Boolean(
+        job &&
+        (job.state === "queued" || job.state === "running") &&
+        localCancellation() !== job.id &&
+        status().waiting,
+      );
+    },
+    detectionQueryError: () => {
+      const job = detectionJob();
+      if (!job || job.state === "cancelled" || localCancellation() === job.id) return "";
+      return Option.getOrUndefined(AsyncResult.error(status()))?.message ?? "";
     },
     clearDetectionContext,
     startDetection,

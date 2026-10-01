@@ -1,7 +1,8 @@
-import { QueryClient } from "@tanstack/solid-query";
+import * as AtomRegistry from "effect/reactivity/AtomRegistry";
 import { createSignal } from "solid-js";
 import { describe, expect, it } from "vitest";
 import type { ApiClient } from "../src/api";
+import { createServerState } from "../src/features/app/server";
 import { createTimelineHistory } from "../src/features/editor/timeline";
 import { createProjectsController } from "../src/features/projects/controller";
 import type { EditableProjectItem } from "../src/features/projects/model";
@@ -74,9 +75,9 @@ describe("projects controller", () => {
       const [, setFilenameTemplate] = createSignal(defaultSettings.filenameTemplate);
       let editorVersion = 0;
       let editorContext = 0;
+      const registry = AtomRegistry.make();
       const controller = createProjectsController({
-        api,
-        queryClient: new QueryClient(),
+        server: createServerState(api, registry),
         selected,
         projectId,
         setProjectId,
@@ -151,6 +152,7 @@ describe("projects controller", () => {
       expect(knownMedia()).toEqual([]);
       expect(timeline().present.segments).toEqual([]);
       controller.dispose();
+      registry.dispose();
     },
   );
 
@@ -235,9 +237,9 @@ describe("projects controller", () => {
     const [, setExportContainer] = createSignal<"mkv" | "mp4" | "mov">("mkv");
     const [, setDestinationId] = createSignal("download");
     const [, setFilenameTemplate] = createSignal(defaultSettings.filenameTemplate);
+    const registry = AtomRegistry.make();
     const controller = createProjectsController({
-      api,
-      queryClient: new QueryClient(),
+      server: createServerState(api, registry),
       selected,
       projectId,
       setProjectId,
@@ -284,6 +286,7 @@ describe("projects controller", () => {
     expect(projectName()).toBe("Remote project");
     expect(timeline().present.segments[0]?.startMs).toBe(200);
     controller.dispose();
+    registry.dispose();
   });
 
   it("debounces saves, keeps recovery, and ignores recents storage failures", async () => {
@@ -326,33 +329,48 @@ describe("projects controller", () => {
     const [, setCutStrategy] = createSignal(defaultSettings.cutStrategy);
     const [, setDestinationId] = createSignal("download");
     const [, setFilenameTemplate] = createSignal(defaultSettings.filenameTemplate);
-    const editorVersion = 1;
+    let editorVersion = 1;
     const [, setExportContainer] = createSignal<"mkv" | "mp4" | "mov">("mkv");
     let requests = 0;
+    const submitted: Array<{ revision: number; name: string }> = [];
+    let resolveDelayedSave!: (response: Response) => void;
+    let signalDelayedSave!: () => void;
+    const delayedSaveStarted = new Promise<void>((resolve) => {
+      signalDelayedSave = resolve;
+    });
+    let signalContextSave!: () => void;
+    const contextSaveStarted = new Promise<void>((resolve) => {
+      signalContextSave = resolve;
+    });
     const api: ApiClient = {
       url: (path) => path,
       request: (path, init) => {
         if (path.startsWith("projects/") && init?.method === "PUT") {
           requests += 1;
           const body = JSON.parse(String(init.body));
-          return Promise.resolve(
-            Response.json({
-              ...body,
-              id: projectId(),
-              revision: 1,
-              updatedAt: "2026-01-01T00:00:00Z",
-            }),
-          );
+          submitted.push({ revision: body.revision, name: body.name });
+          const response = Response.json({
+            ...body,
+            id: projectId(),
+            revision: requests,
+            updatedAt: "2026-01-01T00:00:00Z",
+          });
+          if (requests === 2 || requests === 4) {
+            if (requests === 2) signalDelayedSave();
+            else signalContextSave();
+            return new Promise<Response>((resolve) => {
+              resolveDelayedSave = resolve;
+            });
+          }
+          return Promise.resolve(response);
         }
         return Promise.resolve(Response.json(media));
       },
       assetRequest: () => Promise.resolve(Response.json({})),
     };
-    const queryClient = new QueryClient();
-    queryClient.invalidateQueries = () => Promise.reject(new Error("cache refresh failed"));
+    const registry = AtomRegistry.make();
     const controller = createProjectsController({
-      api,
-      queryClient,
+      server: createServerState(api, registry),
       selected,
       projectId,
       setProjectId,
@@ -403,29 +421,55 @@ describe("projects controller", () => {
     expect(controller.saveError()).toBe("");
     expect(dirty()).toBe(false);
     expect(controller.recovery()).toBeUndefined();
-    // A new editor context must win even if the old PUT has committed and its cache refresh is pending.
-    let finishRefresh!: () => void;
-    let refreshStarted!: () => void;
-    const refreshing = new Promise<void>((resolve) => {
-      refreshStarted = resolve;
-    });
-    queryClient.invalidateQueries = () =>
-      new Promise<void>((resolve) => {
-        finishRefresh = resolve;
-        refreshStarted();
-      });
+    // A later edit waits for the in-flight PUT and uses its returned revision.
     const saving = controller.saveProject();
-    await refreshing;
+    await delayedSaveStarted;
+    setProjectName("Newer edit");
+    editorVersion++;
+    setDirty(true);
+    controller.scheduleAutosave();
+    expect(requests).toBe(2);
+    resolveDelayedSave(
+      Response.json({
+        id: "p_autosave123456",
+        revision: 2,
+        updatedAt: "2026-01-01T00:00:00Z",
+        schemaVersion: 2,
+        name: "Editing",
+        items: [],
+      }),
+    );
+    await saving;
+    expect(submitted).toEqual([
+      { revision: 0, name: "Editing" },
+      { revision: 1, name: "Editing" },
+      { revision: 2, name: "Newer edit" },
+    ]);
+    expect(controller.saveState()).toBe("saved");
+    expect(dirty()).toBe(false);
+    // A late PUT response from the previous context must not overwrite the new project.
+    const staleSave = controller.saveProject();
+    await contextSaveStarted;
     controller.newProject();
     const newID = projectId();
-    finishRefresh();
-    await saving;
+    resolveDelayedSave(
+      Response.json({
+        id: "p_autosave123456",
+        revision: 4,
+        updatedAt: "2026-01-01T00:00:00Z",
+        schemaVersion: 2,
+        name: "Newer edit",
+        items: [],
+      }),
+    );
+    await staleSave;
     expect(projectId()).toBe(newID);
     expect(projectItems()).toEqual([]);
     expect(revision()).toBe(0);
     expect(controller.saveState()).toBe("unsaved");
     expect(localStorage.getItem("videocutlist.active-project.v2")).toBeNull();
     controller.dispose();
+    registry.dispose();
     void setProjectName;
     void setRevision;
     void knownMedia;

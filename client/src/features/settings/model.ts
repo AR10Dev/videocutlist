@@ -1,31 +1,29 @@
+import { z } from "zod";
 import type { components } from "../../generated/api";
 
 type RuntimeSettings = components["schemas"]["RuntimeSettings"];
 type RuntimeSettingsInput = components["schemas"]["SettingsUpdate"]["settings"];
 
+const positiveLimit = z.number().int().positive();
+const runtimeSettingsInput = z
+  .object({
+    exportLimit: positiveLimit.max(64),
+    cacheMaxBytes: positiveLimit,
+    previewGlobalLimit: positiveLimit.max(64),
+    previewBeforeMs: positiveLimit,
+    previewAfterMs: positiveLimit,
+    previewMaxMs: positiveLimit,
+    previewGridMs: positiveLimit,
+    mediaMaxFiles: positiveLimit,
+    mediaMaxDepth: positiveLimit,
+    mcpEnabled: z.boolean(),
+  })
+  .refine((value) => value.previewBeforeMs + value.previewAfterMs <= value.previewMaxMs);
+
 export function validRuntimeSettingsInput(
   value: Partial<RuntimeSettings>,
 ): value is RuntimeSettingsInput {
-  const limits = [
-    value.exportLimit,
-    value.cacheMaxBytes,
-    value.previewGlobalLimit,
-    value.previewBeforeMs,
-    value.previewAfterMs,
-    value.previewMaxMs,
-    value.previewGridMs,
-    value.mediaMaxFiles,
-    value.mediaMaxDepth,
-  ];
-  return (
-    limits.every(
-      (limit) => typeof limit === "number" && Number.isSafeInteger(limit) && limit > 0,
-    ) &&
-    typeof value.mcpEnabled === "boolean" &&
-    value.exportLimit! <= 64 &&
-    value.previewGlobalLimit! <= 64 &&
-    value.previewBeforeMs! + value.previewAfterMs! <= value.previewMaxMs!
-  );
+  return runtimeSettingsInput.validate(value);
 }
 
 export const appearances = [
@@ -88,8 +86,6 @@ export const defaultSettings: AppSettings = {
   appearance: "system",
 };
 
-const validAppearances = new Set<Appearance>(appearances);
-
 export function resolveAppearance(appearance: Appearance, prefersDark: boolean): Appearance {
   return appearance === "system" ? (prefersDark ? "dark" : "light") : appearance;
 }
@@ -98,29 +94,21 @@ export function applyAppearance(appearance: Appearance, prefersDark = false): vo
   document.documentElement.dataset.theme = resolveAppearance(appearance, prefersDark);
 }
 
-const strategies = new Set<AppSettings["cutStrategy"]>([
-  "stream_copy_preferred",
-  "precise_reencode",
-  "hybrid_smart_cut",
-]);
+const browserSettings = z.object({
+  filenameTemplate: z
+    .string()
+    .refine(validFilenameTemplateLength)
+    .catch(defaultSettings.filenameTemplate),
+  cutStrategy: z
+    .enum(["stream_copy_preferred", "precise_reencode", "hybrid_smart_cut"])
+    .catch(defaultSettings.cutStrategy),
+  muted: z.boolean().catch(defaultSettings.muted),
+  appearance: z.enum(appearances).catch(defaultSettings.appearance),
+});
 
 export function loadSettings(value: unknown): AppSettings {
-  if (!value || typeof value !== "object") return defaultSettings;
-  const settings = value as Partial<AppSettings>;
-  return {
-    filenameTemplate:
-      typeof settings.filenameTemplate === "string" &&
-      validFilenameTemplateLength(settings.filenameTemplate)
-        ? settings.filenameTemplate
-        : defaultSettings.filenameTemplate,
-    cutStrategy: strategies.has(settings.cutStrategy ?? defaultSettings.cutStrategy)
-      ? (settings.cutStrategy ?? defaultSettings.cutStrategy)
-      : defaultSettings.cutStrategy,
-    muted: typeof settings.muted === "boolean" ? settings.muted : defaultSettings.muted,
-    appearance: validAppearances.has(settings.appearance ?? defaultSettings.appearance)
-      ? (settings.appearance ?? defaultSettings.appearance)
-      : defaultSettings.appearance,
-  };
+  const parsed = browserSettings.safeParse(value);
+  return parsed.success ? parsed.data : defaultSettings;
 }
 
 export function storedSettings(): AppSettings {

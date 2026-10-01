@@ -51,6 +51,8 @@ test("export cancellation is isolated from a changed media context", async ({ pa
     type: "export",
     state: "queued",
     progress: 0,
+    createdAt: "2026-01-01T00:00:00Z",
+    updatedAt: "2026-01-01T00:00:00Z",
   };
   const cancelledJob = { ...queuedJob, state: "cancelled", progress: 1 };
   const queuedBatch = {
@@ -118,7 +120,7 @@ test("export cancellation is isolated from a changed media context", async ({ pa
       return route.fulfill({
         json: {
           batchId: "b_test",
-          jobs: [{ id: "job_test", type: "export", state: "queued", progress: 0 }],
+          jobs: [queuedJob],
         },
       });
     if (request.method() === "DELETE" && url.pathname === "/api/v1/batches/b_test") {

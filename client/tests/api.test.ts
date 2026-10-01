@@ -1,9 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   authenticationRequiredEvent,
+  apiJson,
+  ApiFailure,
   createApiClient,
   MAX_INTERCHANGE_FILE_BYTES,
   readApiError,
+  runEffect,
   validInterchangeFileSize,
 } from "../src/api";
 
@@ -26,6 +29,32 @@ describe("client API boundary", () => {
         ),
       ).toEqual({ code: "http_error", message: "Try again.", requestId: "r-2" });
     }
+  });
+  it("preserves public failure details across the Effect execution seam", async () => {
+    const client = createApiClient(
+      { serverBaseUrl: "https://example.test", authentication: { type: "none" } },
+      async () =>
+        Response.json(
+          {
+            error: {
+              code: "revision_conflict",
+              message: "Reload before saving.",
+              requestId: "r-conflict",
+            },
+          },
+          { status: 409 },
+        ),
+    );
+    const failure = await runEffect(apiJson(client, "projects/p_current")).catch(
+      (error: unknown) => error,
+    );
+    expect(failure).toBeInstanceOf(ApiFailure);
+    expect(failure).toMatchObject({
+      status: 409,
+      code: "revision_conflict",
+      message: "Reload before saving.",
+      requestId: "r-conflict",
+    });
   });
   it("bounds interchange files before reading them", () => {
     expect(validInterchangeFileSize(MAX_INTERCHANGE_FILE_BYTES)).toBe(true);

@@ -129,18 +129,40 @@ test("settings keeps the media trigger reachable after a persisted panel prefere
   await expect(page.getByRole("heading", { name: "Settings", exact: true })).toBeVisible();
 });
 
-test("current media metadata failures remain visible", async ({ page }) => {
-  await page.route(`${origin}/api/v1/media/${media.id}`, (route) => route.fulfill({ status: 503 }));
+test("metadata retries are bounded, report HTTP status, and permit an explicit retry", async ({
+  page,
+}) => {
+  let attempts = 0;
+  await page.route(`${origin}/api/v1/media/${media.id}`, (route) => {
+    attempts++;
+    return route.fulfill({ status: 503 });
+  });
   await page.goto("/");
   await page.getByRole("button", { name: "Select camera.mp4" }).click();
-  // Metadata queries retry transient failures before exposing the final error.
-  await expect(page.getByText("Metadata request failed (503).", { exact: true })).toBeVisible({
-    timeout: 10_000,
-  });
-  await expect(page.getByText("Metadata request failed (503).", { exact: true })).toHaveCount(1);
+  const timeline = page.getByRole("region", { name: "Timeline", exact: true });
+  const error = timeline.getByRole("alert");
+  await expect(error).toBeVisible({ timeout: 10_000 });
+  expect(attempts).toBe(4);
+  await expect(error).toContainText("503");
+  await expect(page.getByLabel("Timeline playhead")).toBeVisible();
   await page.route(`${origin}/api/v1/media/${media.id}`, (route) => route.fulfill({ json: media }));
   await page.getByRole("button", { name: "Retry metadata" }).click();
-  await expect(page.getByText("Metadata request failed (503).", { exact: true })).toHaveCount(0);
+  await expect(error).toHaveCount(0);
+});
+
+test("metadata recovers from a transient failure without an explicit retry", async ({ page }) => {
+  let attempts = 0;
+  await page.route(`${origin}/api/v1/media/${media.id}`, (route) => {
+    attempts++;
+    return attempts === 1
+      ? route.fulfill({ status: 503 })
+      : route.fulfill({ json: { ...media, name: "recovered-camera.mp4" } });
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Select camera.mp4" }).click();
+  const timeline = page.getByRole("region", { name: "Timeline", exact: true });
+  await expect(timeline.getByText("recovered-camera.mp4", { exact: true })).toBeVisible();
+  await expect(timeline.getByRole("alert")).toHaveCount(0);
 });
 
 test("pressing Start again creates a second segment without overwriting the first", async ({

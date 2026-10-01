@@ -1,15 +1,15 @@
 import { For, Show, createEffect, createSignal, onCleanup, onMount } from "solid-js";
 import { ChevronDown, Film, Folder, FolderOpen, LoaderCircle, RefreshCw } from "lucide-solid";
+import { Effect, Fiber } from "effect";
 import type { components } from "../../generated/api";
-import { createApiClient, resolveBrowserConfiguration } from "../../api";
+import { createApiClient, resolveBrowserConfiguration, type ApiClient } from "../../api";
 import { useWorkspace } from "../app/WorkspaceContext";
 import { formatLibraryDuration, mediaSummary } from "./model";
 import { createThumbnailObjectURL } from "./thumbnail";
 
 type Media = components["schemas"]["Media"];
-const api = createApiClient(resolveBrowserConfiguration());
 
-function MediaThumbnail(props: { item: Media }) {
+function MediaThumbnail(props: { item: Media; api: ApiClient }) {
   const [source, setSource] = createSignal<string>();
   const [visible, setVisible] = createSignal(false);
   let thumbnail!: HTMLSpanElement;
@@ -24,31 +24,47 @@ function MediaThumbnail(props: { item: Media }) {
   });
   createEffect(() => {
     if (!visible()) return;
-    const controller = new AbortController();
-    let objectURL: string | undefined;
+    const item = props.item;
     setSource();
-    void api
-      .assetRequest(
-        props.item.id,
-        "thumbnails",
-        {
-          startMs: 0,
-          durationMs: Math.max(1, Math.min(props.item.durationMs, 120_000)),
-          count: 1,
-          width: 240,
-        },
-        { signal: controller.signal },
-      )
-      .then(async (response) => {
-        const url = await createThumbnailObjectURL(response, controller.signal);
-        if (!url) return;
-        objectURL = url;
-        setSource(url);
-      })
-      .catch(() => undefined);
+    const fiber = Effect.runFork(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const urls = yield* Effect.acquireRelease(
+            Effect.sync(() => new Set<string>()),
+            (urls) =>
+              Effect.sync(() => {
+                for (const url of urls) URL.revokeObjectURL(url);
+              }),
+          );
+          const url = yield* Effect.tryPromise({
+            try: async (signal) => {
+              const response = await props.api.assetRequest(
+                item.id,
+                "thumbnails",
+                {
+                  startMs: 0,
+                  durationMs: Math.max(1, Math.min(item.durationMs, 120_000)),
+                  count: 1,
+                  width: 240,
+                },
+                { signal },
+              );
+              const url = await createThumbnailObjectURL(response, signal);
+              if (url) {
+                if (signal.aborted) URL.revokeObjectURL(url);
+                else urls.add(url);
+              }
+              return signal.aborted ? undefined : url;
+            },
+            catch: () => new Error("Thumbnail unavailable."),
+          });
+          setSource(url);
+          yield* Effect.never;
+        }),
+      ).pipe(Effect.catch(() => Effect.void)),
+    );
     onCleanup(() => {
-      controller.abort();
-      if (objectURL) URL.revokeObjectURL(objectURL);
+      void Effect.runFork(Fiber.interrupt(fiber));
     });
   });
   return (
@@ -61,6 +77,7 @@ function MediaThumbnail(props: { item: Media }) {
 }
 
 export function LibraryView() {
+  const api = createApiClient(resolveBrowserConfiguration());
   const [explorerOpen, setExplorerOpen] = createSignal(false);
   const {
     library,
@@ -217,7 +234,7 @@ export function LibraryView() {
                       setExplorerOpen(false);
                     }}
                   >
-                    <MediaThumbnail item={item} />
+                    <MediaThumbnail item={item} api={api} />
                     <span class="media-file-copy">
                       <strong>{item.name}</strong>
                       <span>{formatLibraryDuration(item.durationMs)}</span>

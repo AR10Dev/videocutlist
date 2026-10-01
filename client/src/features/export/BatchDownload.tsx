@@ -2,10 +2,10 @@ import { Show } from "solid-js";
 import { createApiClient, resolveBrowserConfiguration } from "../../api";
 import { createExportDownload, downloadExport } from "./download";
 
-const configuration = resolveBrowserConfiguration();
-const api = createApiClient(configuration);
 /** Prepare one authenticated archive without exposing server paths. */
 export function BatchDownload(props: { batchId: string; outputCount: number }) {
+  const configuration = resolveBrowserConfiguration();
+  const api = createApiClient(configuration);
   const { pending, error, download, cancel } = createExportDownload((signal) =>
     downloadExport(
       api,

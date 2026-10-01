@@ -315,7 +315,88 @@ describe("preview streaming", () => {
     expect(abortErrors).not.toHaveBeenCalled();
   });
 
-  it.each(["before response", "from diagnostics", "failed response"])(
+  it("silently cancels a body returned by an uncooperative request after teardown", async () => {
+    const sources: EventTarget[] = [];
+    const sourceBuffer = new EventTarget();
+    class FakeMediaSource extends EventTarget {
+      constructor() {
+        super();
+        sources.push(this);
+      }
+      addSourceBuffer() {
+        return sourceBuffer as SourceBuffer;
+      }
+    }
+    vi.stubGlobal("MediaSource", FakeMediaSource);
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal("URL", {
+      createObjectURL: vi.fn(() => "blob:preview"),
+      revokeObjectURL,
+    });
+    const video = {
+      src: "",
+      load: vi.fn(),
+      removeAttribute: vi.fn(),
+    } as unknown as HTMLVideoElement;
+    let release!: (response: Response) => void;
+    const request = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const cancel = vi.fn();
+    const diagnostics = vi.fn();
+    const errors = vi.fn();
+    const stop = streamPreview(video, request, diagnostics, errors);
+    sources[0].dispatchEvent(new Event("sourceopen"));
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    stop();
+    release(new Response(new ReadableStream<Uint8Array>({ cancel })));
+    await vi.waitFor(() => {
+      expect(cancel).toHaveBeenCalledOnce();
+      expect(revokeObjectURL).toHaveBeenCalledWith("blob:preview");
+    });
+    expect(diagnostics).not.toHaveBeenCalled();
+    expect(errors).not.toHaveBeenCalled();
+  });
+
+  it("does not detach a newer preview when an old media scope finishes cleanup", async () => {
+    class FakeMediaSource extends EventTarget {}
+    vi.stubGlobal("MediaSource", FakeMediaSource);
+    let sequence = 0;
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal("URL", {
+      createObjectURL: vi.fn(() => `blob:preview-${++sequence}`),
+      revokeObjectURL,
+    });
+    const video = {
+      src: "",
+      load: vi.fn(),
+      removeAttribute: vi.fn(),
+    } as unknown as HTMLVideoElement;
+    const stopFirst = streamPreview(
+      video,
+      () => Promise.resolve(new Response(null)),
+      vi.fn(),
+      vi.fn(),
+    );
+    const stopSecond = streamPreview(
+      video,
+      () => Promise.resolve(new Response(null)),
+      vi.fn(),
+      vi.fn(),
+    );
+    stopFirst();
+    await vi.waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith("blob:preview-1"));
+    expect(video.src).toBe("blob:preview-2");
+    expect(video.removeAttribute).not.toHaveBeenCalled();
+    stopSecond();
+    await vi.waitFor(() => expect(revokeObjectURL).toHaveBeenCalledWith("blob:preview-2"));
+    expect(video.removeAttribute).toHaveBeenCalledWith("src");
+  });
+
+  it.each(["from diagnostics", "failed response"])(
     "releases response bodies when teardown happens %s",
     async (scenario) => {
       const sources: EventTarget[] = [];
@@ -347,12 +428,8 @@ describe("preview streaming", () => {
       });
       const stop = streamPreview(video, () => response, diagnostics, errors);
       sources[0].dispatchEvent(new Event("sourceopen"));
-      if (scenario === "before response") stop();
-      // Even a fulfilled request yields before its continuation reads the body.
-      await response;
-      await Promise.resolve();
 
-      expect(cancel).toHaveBeenCalledOnce();
+      await vi.waitFor(() => expect(cancel).toHaveBeenCalledOnce());
       expect(diagnostics).toHaveBeenCalledTimes(scenario === "from diagnostics" ? 1 : 0);
       if (scenario === "failed response") {
         expect(errors).toHaveBeenCalledWith(

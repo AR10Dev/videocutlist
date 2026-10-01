@@ -96,7 +96,16 @@ test.beforeEach(async ({ page }) => {
         status: 202,
         json: {
           batchId: "b_membership01",
-          jobs: [{ id: "j_membership01", type: "export", state: "queued", progress: 0 }],
+          jobs: [
+            {
+              id: "j_membership01",
+              type: "export",
+              state: "queued",
+              progress: 0,
+              createdAt: "2026-01-01T00:00:00Z",
+              updatedAt: "2026-01-01T00:00:00Z",
+            },
+          ],
         },
       });
     if (/\/projects\/[^/]+$/.test(path) && request.method() === "PUT") {

@@ -1,6 +1,11 @@
 import { expect, test, type Page } from "@playwright/test";
 import type { components } from "../src/generated/api";
 
+const jobTimestamps = {
+  createdAt: "2026-08-20T12:00:00Z",
+  updatedAt: "2026-08-20T12:00:00Z",
+} satisfies Pick<components["schemas"]["Job"], "createdAt" | "updatedAt">;
+
 const media = {
   id: "m_0123456789012345678901234567890123456789012",
   name: "camera.mp4",
@@ -768,6 +773,7 @@ test("edits independent project items and submits a durable batch", async ({ pag
         mediaId: media.id,
         mediaLabel: "camera.mp4",
         type: "export",
+        ...jobTimestamps,
         state: "queued",
         progress: 0,
       },
@@ -778,6 +784,7 @@ test("edits independent project items and submits a durable batch", async ({ pag
         mediaId: secondMedia.id,
         mediaLabel: "second.mp4",
         type: "export",
+        ...jobTimestamps,
         state: "queued",
         progress: 0,
       },
@@ -898,6 +905,7 @@ test("restores the durable queue and retries a failed child as a new job", async
         projectItemId: itemId,
         mediaLabel: "camera.mp4",
         type: "export",
+        ...jobTimestamps,
         state: "failed",
         progress: 1,
         errorCode: "source_changed",
@@ -961,6 +969,7 @@ test("child retry exposes pending state, rejects visibly, and ignores duplicate 
     projectItemId: itemId,
     mediaLabel: "camera.mp4",
     type: "export",
+    ...jobTimestamps,
     state: "failed",
     progress: 1,
     errorCode: "source_changed",
@@ -1036,6 +1045,7 @@ test("reload restores the active project and permits child and batch cancellatio
         projectItemId: itemId,
         mediaLabel: "camera.mp4",
         type: "export",
+        ...jobTimestamps,
         state: "queued",
         progress: 0,
       },
@@ -1890,7 +1900,7 @@ test("exports the saved segments, polls to a safe result, and shows warnings", a
     await route.fulfill({
       json: {
         batchId: "b_export000001",
-        jobs: [{ id: "j_export", type: "export", state: "queued", progress: 0 }],
+        jobs: [{ id: "j_export", type: "export", ...jobTimestamps, state: "queued", progress: 0 }],
       },
     });
   });
@@ -1899,10 +1909,11 @@ test("exports the saved segments, polls to a safe result, and shows warnings", a
     await route.fulfill({
       json:
         polls === 1
-          ? { id: "j_export", type: "export", state: "running", progress: 0.5 }
+          ? { id: "j_export", type: "export", ...jobTimestamps, state: "running", progress: 0.5 }
           : {
               id: "j_export",
               type: "export",
+              ...jobTimestamps,
               state: "succeeded",
               progress: 1,
               result: {
@@ -1920,12 +1931,13 @@ test("exports the saved segments, polls to a safe result, and shows warnings", a
   await page.route(`${apiOrigin}/api/v1/batches/b_export000001`, async (route) => {
     const job =
       polls < 1
-        ? { id: "j_export", type: "export", state: "queued", progress: 0 }
+        ? { id: "j_export", type: "export", ...jobTimestamps, state: "queued", progress: 0 }
         : polls === 1
-          ? { id: "j_export", type: "export", state: "running", progress: 0.5 }
+          ? { id: "j_export", type: "export", ...jobTimestamps, state: "running", progress: 0.5 }
           : {
               id: "j_export",
               type: "export",
+              ...jobTimestamps,
               state: "succeeded",
               progress: 1,
               result: {
@@ -2047,7 +2059,7 @@ test("shows stable failed and capacity messages and permits retry", async ({ pag
     return route.fulfill({
       json: {
         batchId: "b_failed000001",
-        jobs: [{ id: "j_failed", type: "export", state: "queued", progress: 0 }],
+        jobs: [{ id: "j_failed", type: "export", ...jobTimestamps, state: "queued", progress: 0 }],
       },
     });
   });
@@ -2056,6 +2068,7 @@ test("shows stable failed and capacity messages and permits retry", async ({ pag
       json: {
         id: "j_failed",
         type: "export",
+        ...jobTimestamps,
         state: "failed",
         progress: 1,
         errorCode: "interrupted_by_restart",
@@ -2134,6 +2147,7 @@ test("cancels an active export without showing a path", async ({ page }) => {
     projectItemId: itemId,
     mediaLabel: "camera.mp4",
     type: "export",
+    ...jobTimestamps,
     state: "queued",
     progress: 0,
   };
@@ -2143,6 +2157,7 @@ test("cancels an active export without showing a path", async ({ page }) => {
     projectItemId: "i_second-item",
     mediaLabel: "second.mp4",
     type: "export",
+    ...jobTimestamps,
     state: "succeeded",
     progress: 1,
     result: {
@@ -2251,6 +2266,7 @@ test("failed export cancellation restores the active job for retry", async ({ pa
     projectItemId: itemId,
     mediaLabel: "camera.mp4",
     type: "export",
+    ...jobTimestamps,
     state: "queued",
     progress: 0,
   };
@@ -2313,6 +2329,7 @@ test("completion winning batch cancellation keeps canonical output", async ({ pa
     projectItemId: itemId,
     mediaLabel: "camera.mp4",
     type: "export",
+    ...jobTimestamps,
     state: "queued",
     progress: 0,
   };
@@ -2385,6 +2402,7 @@ test("QueueView cancellation keeps a completion-winning batch canonical", async 
     projectItemId: itemId,
     mediaLabel: "current.mp4",
     type: "export",
+    ...jobTimestamps,
     state: "running",
     progress: 0.5,
   };
@@ -2394,6 +2412,7 @@ test("QueueView cancellation keeps a completion-winning batch canonical", async 
     projectItemId: itemId,
     mediaLabel: "camera.mp4",
     type: "export",
+    ...jobTimestamps,
     state: "queued",
     progress: 0,
   };
@@ -2484,6 +2503,7 @@ test("mixed batch keeps a later active child selected and preserves output order
     projectItemId: itemId,
     mediaLabel: "first.mp4",
     type: "export",
+    ...jobTimestamps,
     state: "succeeded",
     progress: 1,
     result: {
@@ -2500,6 +2520,7 @@ test("mixed batch keeps a later active child selected and preserves output order
     projectItemId: "i_second-item",
     mediaLabel: "second.mp4",
     type: "export",
+    ...jobTimestamps,
     state: "running",
     progress: 0.5,
   };
@@ -2622,12 +2643,14 @@ test("delayed saves stay dirty and cannot launch obsolete exports", async ({ pag
     return route.fulfill({
       json: {
         batchId: "b_newexport001",
-        jobs: [{ id: "j_new", type: "export", state: "queued", progress: 0 }],
+        jobs: [{ id: "j_new", type: "export", ...jobTimestamps, state: "queued", progress: 0 }],
       },
     });
   });
   await page.route(`${apiOrigin}/api/v1/jobs/j_new`, (route) =>
-    route.fulfill({ json: { id: "j_new", type: "export", state: "queued", progress: 0 } }),
+    route.fulfill({
+      json: { id: "j_new", type: "export", ...jobTimestamps, state: "queued", progress: 0 },
+    }),
   );
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
@@ -2884,17 +2907,19 @@ test("delayed cancellation cannot overwrite a replacement export", async ({ page
     return route.fulfill({
       json: {
         batchId: exports === 1 ? "b_oldexport001" : "b_newexport001",
-        jobs: [{ id, type: "export", state: "queued", progress: 0 }],
+        jobs: [{ id, type: "export", ...jobTimestamps, state: "queued", progress: 0 }],
       },
     });
   });
   await page.route(`${apiOrigin}/api/v1/jobs/j_old`, (route) =>
     route.fulfill({
-      json: { id: "j_old", type: "export", state: "queued", progress: 0 },
+      json: { id: "j_old", type: "export", ...jobTimestamps, state: "queued", progress: 0 },
     }),
   );
   await page.route(`${apiOrigin}/api/v1/jobs/j_new`, (route) =>
-    route.fulfill({ json: { id: "j_new", type: "export", state: "queued", progress: 0 } }),
+    route.fulfill({
+      json: { id: "j_new", type: "export", ...jobTimestamps, state: "queued", progress: 0 },
+    }),
   );
   await page.route(`${apiOrigin}/api/v1/batches/b_oldexport001`, async (route) => {
     await delayed;
@@ -3132,13 +3157,27 @@ test("covers the responsive workspace and keyboard editing workflow", async ({ p
     route.fulfill({
       json: {
         batchId: "b_keyboard-flow01",
-        jobs: [{ id: "j_keyboard-flow01", type: "export", state: "queued", progress: 0 }],
+        jobs: [
+          {
+            id: "j_keyboard-flow01",
+            type: "export",
+            ...jobTimestamps,
+            state: "queued",
+            progress: 0,
+          },
+        ],
       },
     }),
   );
   await page.route(`${apiOrigin}/api/v1/jobs/j_keyboard-flow01`, (route) =>
     route.fulfill({
-      json: { id: "j_keyboard-flow01", type: "export", state: "queued", progress: 0 },
+      json: {
+        id: "j_keyboard-flow01",
+        type: "export",
+        ...jobTimestamps,
+        state: "queued",
+        progress: 0,
+      },
     }),
   );
   for (const viewport of [

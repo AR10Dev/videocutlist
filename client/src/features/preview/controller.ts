@@ -1,5 +1,6 @@
 import { createEffect, createSignal, onCleanup, type Accessor } from "solid-js";
-import type { ApiClient } from "../../api";
+import { Effect } from "effect";
+import { apiRequest, type ApiClient } from "../../api";
 import type { components } from "../../generated/api";
 import {
   normalizePeaks,
@@ -50,14 +51,17 @@ function loadThumbnail(url: string, signal: AbortSignal): Promise<HTMLImageEleme
     const image = new Image();
     const finish = (value?: HTMLImageElement) => {
       signal.removeEventListener("abort", abort);
+      image.onload = null;
+      image.onerror = null;
+      if (signal.aborted) image.src = "";
       resolve(value);
     };
     const abort = () => finish();
     image.onload = () => finish(image);
     image.onerror = () => finish();
     signal.addEventListener("abort", abort, { once: true });
-    if (signal.aborted) return finish();
-    image.src = url;
+    if (signal.aborted) finish();
+    else image.src = url;
   });
 }
 
@@ -65,7 +69,7 @@ async function composeThumbnailStrip(
   results: ThumbnailRequestResult[],
   signal: AbortSignal,
   viewport: AssetRange,
-): Promise<string | undefined> {
+): Promise<Blob | undefined> {
   const images = await Promise.all(
     results.map(({ thumbnailURL }) =>
       thumbnailURL ? loadThumbnail(thumbnailURL, signal) : Promise.resolve(undefined),
@@ -86,8 +90,7 @@ async function composeThumbnailStrip(
     if (image) context.drawImage(image, left, 0, width, tileHeight);
   });
   const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/png"));
-  if (!blob || signal.aborted) return undefined;
-  return URL.createObjectURL(blob);
+  return signal.aborted ? undefined : (blob ?? undefined);
 }
 
 export function createPreviewController(
@@ -121,13 +124,6 @@ export function createPreviewController(
   const [diagnostics, setDiagnostics] = createSignal<PreviewDiagnostics>();
   const [video, setVideo] = createSignal<HTMLVideoElement>();
   // Settings unmounts the player; a new element must trigger preview attachment.
-  let waveformRequest: AbortController | undefined;
-  let assetRequest: AbortController | undefined;
-  let previewRequest: AbortController | undefined;
-  let cleanupPreview: (() => void) | undefined;
-  let thumbnailObjectURL: string | undefined;
-  let thumbnailTileURLs: string[] = [];
-  let assetGeneration = 0;
   let previewGeneration = 0;
   let renewalGeneration = -1;
   let selectedMediaId: string | undefined;
@@ -155,96 +151,115 @@ export function createPreviewController(
     const item = dependencies.selected();
     const viewport = dependencies.visibleRange();
     assetReload();
-    assetRequest?.abort();
-    thumbnailTileURLs.forEach((url) => URL.revokeObjectURL(url));
-    thumbnailTileURLs = [];
-    if (thumbnailObjectURL) URL.revokeObjectURL(thumbnailObjectURL);
-    thumbnailObjectURL = undefined;
     setThumbnailURL();
     setAssetRange();
     setThumbnailFailed(false);
-    const generation = ++assetGeneration;
     if (!item) return;
+    const lifetime = new AbortController();
+    const fullRange = normalizedAssetViewport(viewport, item.durationMs);
     const ranges = visibleAssetRanges(viewport, item.durationMs);
-    const controller = new AbortController();
-    assetRequest = controller;
-    const current = () => !controller.signal.aborted && generation === assetGeneration;
-    const requests = ranges.map(async (range): Promise<ThumbnailRequestResult> => {
-      try {
-        const response = await api.assetRequest(
-          item.id,
-          "thumbnails",
-          { startMs: range.startMs, durationMs: range.durationMs, count: 16, width: 320 },
-          { signal: controller.signal },
+    const program = Effect.scoped(
+      Effect.gen(function* () {
+        const urls = yield* Effect.acquireRelease(
+          Effect.sync(() => new Set<string>()),
+          (urls) => Effect.sync(() => urls.forEach((url) => URL.revokeObjectURL(url))),
         );
-        if (!response.ok) throw new Error();
-        return {
-          range,
-          thumbnailURL: URL.createObjectURL(await response.blob()),
-          thumbnailFailed: false,
-        };
-      } catch {
-        return { range, thumbnailFailed: true };
-      }
-    });
-    void Promise.all(requests).then(async (results) => {
-      if (!current()) {
-        results.forEach(
-          (result) => result.thumbnailURL && URL.revokeObjectURL(result.thumbnailURL),
+        const results = yield* Effect.all(
+          ranges.map((range) =>
+            Effect.gen(function* () {
+              const params = new URLSearchParams({
+                startMs: String(range.startMs),
+                durationMs: String(range.durationMs),
+                count: "16",
+                width: "320",
+              });
+              const response = yield* apiRequest(
+                api,
+                `media/${encodeURIComponent(item.id)}/thumbnails?${params}`,
+                { signal: lifetime.signal },
+              );
+              if (!response.ok) return yield* Effect.fail(new Error("Thumbnail request failed."));
+              const blob = yield* Effect.tryPromise(() => response.blob());
+              const thumbnailURL = yield* Effect.try({
+                try: () => {
+                  const url = URL.createObjectURL(blob);
+                  urls.add(url);
+                  return url;
+                },
+                catch: () => new Error("Thumbnail could not be shown."),
+              });
+              return { range, thumbnailURL, thumbnailFailed: false };
+            }).pipe(
+              Effect.catch(() =>
+                Effect.succeed<ThumbnailRequestResult>({ range, thumbnailFailed: true }),
+              ),
+            ),
+          ),
+          { concurrency: "unbounded" },
         );
-        return;
-      }
-      const thumbnailURLs = results.map((result) => result.thumbnailURL);
-      const fullRange = normalizedAssetViewport(viewport, item.durationMs);
-      const combinedThumbnail = await composeThumbnailStrip(results, controller.signal, fullRange);
-      if (!current()) {
-        thumbnailURLs.forEach((url) => url && URL.revokeObjectURL(url));
-        if (combinedThumbnail && combinedThumbnail !== thumbnailURLs.find(Boolean))
-          URL.revokeObjectURL(combinedThumbnail);
-        return;
-      }
-      thumbnailTileURLs = thumbnailURLs.filter((url): url is string => Boolean(url));
-      thumbnailObjectURL =
-        combinedThumbnail && combinedThumbnail !== thumbnailURLs.find(Boolean)
-          ? combinedThumbnail
-          : undefined;
-      setThumbnailURL(combinedThumbnail);
-      setAssetRange(fullRange);
-      setThumbnailFailed(results.some((result) => result.thumbnailFailed));
-    });
-    onCleanup(() => controller.abort());
+        const combinedBlob = yield* Effect.tryPromise((signal) =>
+          composeThumbnailStrip(results, signal, fullRange),
+        ).pipe(Effect.catch(() => Effect.succeed(undefined)));
+        const combinedThumbnail = yield* Effect.try({
+          try: () => {
+            if (combinedBlob) {
+              const url = URL.createObjectURL(combinedBlob);
+              urls.add(url);
+              return url;
+            }
+            return results.find((result) => result.thumbnailURL)?.thumbnailURL;
+          },
+          catch: () => new Error("Thumbnail strip could not be shown."),
+        }).pipe(
+          Effect.catch(() =>
+            Effect.succeed(results.find((result) => result.thumbnailURL)?.thumbnailURL),
+          ),
+        );
+        setThumbnailURL(combinedThumbnail);
+        setAssetRange(fullRange);
+        setThumbnailFailed(results.some((result) => result.thumbnailFailed));
+        return yield* Effect.never;
+      }),
+    );
+    void Effect.runFork(program, { signal: lifetime.signal });
+    onCleanup(() => lifetime.abort());
   });
   createEffect(() => {
     const item = dependencies.selected();
     const viewport = dependencies.visibleRange();
     const visible = waveformVisible();
     assetReload();
-    waveformRequest?.abort();
     setWaveform([]);
     setWaveformFailed(false);
     if (!item || !visible) return;
+    const lifetime = new AbortController();
     const ranges = visibleAssetRanges(viewport, item.durationMs);
     const fullRange = normalizedAssetViewport(viewport, item.durationMs);
-    const controller = new AbortController();
-    waveformRequest = controller;
-    void Promise.all(
-      ranges.map(async (range) => {
-        try {
-          const response = await api.assetRequest(
-            item.id,
-            "waveform",
-            { startMs: range.startMs, durationMs: range.durationMs, samples: 256 },
-            { signal: controller.signal },
-          );
-          if (!response.ok) throw new Error();
-          const value = (await response.json()) as { peaks?: unknown };
-          return { range, peaks: normalizePeaks(value.peaks), failed: false };
-        } catch {
-          return { range, peaks: [] as number[], failed: true };
-        }
-      }),
-    ).then((results) => {
-      if (controller.signal.aborted) return;
+    const program = Effect.gen(function* () {
+      const results = yield* Effect.all(
+        ranges.map((range) =>
+          Effect.gen(function* () {
+            const params = new URLSearchParams({
+              startMs: String(range.startMs),
+              durationMs: String(range.durationMs),
+              samples: "256",
+            });
+            const response = yield* apiRequest(
+              api,
+              `media/${encodeURIComponent(item.id)}/waveform?${params}`,
+              { signal: lifetime.signal },
+            );
+            if (!response.ok) return yield* Effect.fail(new Error("Waveform request failed."));
+            const value = yield* Effect.tryPromise(
+              () => response.json() as Promise<{ peaks?: unknown }>,
+            );
+            return { range, peaks: normalizePeaks(value.peaks), failed: false };
+          }).pipe(
+            Effect.catch(() => Effect.succeed({ range, peaks: [] as number[], failed: true })),
+          ),
+        ),
+        { concurrency: "unbounded" },
+      );
       const peaks = new Array<number>(2048).fill(0);
       for (const result of results) {
         const first = Math.ceil(
@@ -268,68 +283,59 @@ export function createPreviewController(
       setWaveform(peaks);
       setWaveformFailed(results.some((result) => result.failed));
     });
-    onCleanup(() => controller.abort());
+    void Effect.runFork(program, { signal: lifetime.signal });
+    onCleanup(() => lifetime.abort());
   });
   createEffect(() => {
     const item = dependencies.selected();
     const position = previewCenterMs();
     previewReload();
     const generation = ++previewGeneration;
-    cleanupPreview?.();
-    cleanupPreview = undefined;
-    previewRequest?.abort();
     setDiagnostics();
     renewalGeneration = -1;
     const player = video();
     if (!item || !player || !canStreamPreview()) return;
-    const timer = window.setTimeout(() => {
-      const request = new AbortController();
-      previewRequest = request;
-      const current = () => !request.signal.aborted && generation === previewGeneration;
-      const params = new URLSearchParams({
-        centerMs: String(Math.round(position)),
-        beforeMs: "2000",
-        afterMs: "6000",
-      });
-      setPreviewStatus("Loading preview…");
-      cleanupPreview = streamPreview(
-        player,
-        () =>
-          api.request(`media/${encodeURIComponent(item.id)}/preview?${params}`, {
-            signal: request.signal,
-          }),
-        (value) => {
-          if (current()) {
-            setDiagnostics(value);
-            setPreviewStatus("");
-          }
-        },
-        (error) => {
-          if (current()) {
-            setPlaybackIntent(false);
-            setPreviewStatus(error.message);
-          }
-        },
-        () => current() && playbackIntent(),
-      );
-    }, 200);
-    onCleanup(() => {
-      window.clearTimeout(timer);
-      previewRequest?.abort();
-      cleanupPreview?.();
-      cleanupPreview = undefined;
+    const lifetime = new AbortController();
+    const current = () => !lifetime.signal.aborted && generation === previewGeneration;
+    const params = new URLSearchParams({
+      centerMs: String(Math.round(position)),
+      beforeMs: "2000",
+      afterMs: "6000",
     });
+    const program = Effect.scoped(
+      Effect.gen(function* () {
+        yield* Effect.sleep(200);
+        setPreviewStatus("Loading preview…");
+        yield* Effect.acquireRelease(
+          Effect.sync(() =>
+            streamPreview(
+              player,
+              (signal) =>
+                api.request(`media/${encodeURIComponent(item.id)}/preview?${params}`, { signal }),
+              (value) => {
+                if (current()) {
+                  setDiagnostics(value);
+                  setPreviewStatus("");
+                }
+              },
+              (error) => {
+                if (current()) {
+                  setPlaybackIntent(false);
+                  setPreviewStatus(error.message);
+                }
+              },
+              () => current() && playbackIntent(),
+            ),
+          ),
+          (stop) => Effect.sync(stop),
+        );
+        return yield* Effect.never;
+      }),
+    );
+    void Effect.runFork(program, { signal: lifetime.signal });
+    onCleanup(() => lifetime.abort());
   });
-  onCleanup(() => {
-    setPlaybackIntent(false);
-    assetGeneration += 1;
-    waveformRequest?.abort();
-    previewRequest?.abort();
-    cleanupPreview?.();
-    thumbnailTileURLs.forEach((url) => URL.revokeObjectURL(url));
-    thumbnailTileURLs = [];
-    if (thumbnailObjectURL) URL.revokeObjectURL(thumbnailObjectURL);
-  });
+  onCleanup(() => setPlaybackIntent(false));
 
   const watchedPosition = () => dependencies.playheadMs();
   const orderedSegments = () => dependencies.segments().filter(segmentIncluded).slice();

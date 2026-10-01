@@ -11,12 +11,15 @@ importers:
 
   .:
     dependencies:
+      '@effect/atom-solid':
+        specifier: 4.0.0-rc.118
+        version: 4.0.0-rc.118(effect@4.0.0-rc.118)(solid-js@1.9.15)
       '@kobalte/core':
         specifier: 0.13.14
         version: 0.13.14(solid-js@1.9.15)
-      '@tanstack/solid-query':
-        specifier: 5.104.0
-        version: 5.104.0(solid-js@1.9.15)
+      effect:
+        specifier: 4.0.0-rc.118
+        version: 4.0.0-rc.118
       lucide-solid:
         specifier: 1.48.0
         version: 1.48.0(solid-js@1.9.15)
@@ -26,7 +29,13 @@ importers:
       solid-js:
         specifier: 1.9.15
         version: 1.9.15
+      zod:
+        specifier: 4.6.5
+        version: 4.6.5
     devDependencies:
+      '@effect/vitest':
+        specifier: 4.0.0-rc.118
+        version: 4.0.0-rc.118(effect@4.0.0-rc.118)(vitest@5.0.2(@types/node@26.6.3)(vite@8.3.1(@types/node@26.6.3)(jiti@2.7.0)))
       '@playwright/test':
         specifier: 1.63.0
         version: 1.63.0
@@ -151,6 +160,18 @@ packages:
     resolution: {integrity: sha512-Ox2kYyxy7NoXdKWdHeDEjZxClwzO4SKM8plAaVwmAJPxHMqA0rLOoAsa+hBDwRLpctf+ZRnAd/ykguuJidnaTA==}
     peerDependencies:
       solid-js: ^1.8
+
+  '@effect/atom-solid@4.0.0-rc.118':
+    resolution: {integrity: sha512-GiT2t3t93pWzUl1jSCXKJYW3kKgFqT5oaQbYkmX5C3XwT0MBVyjmOdmC6bmIw0feMxDK1ctXVy2V2ln3oAEeDA==}
+    peerDependencies:
+      effect: ^4.0.0-rc.118
+      solid-js: '>=1.9.14 <2.0.0'
+
+  '@effect/vitest@4.0.0-rc.118':
+    resolution: {integrity: sha512-O0CPgtFVhkB+pyFtjP4up2XF4uVWsPgUmlv4hMjq8ARLOPKYix+uu3AUFIUKRHjzzQpx+JPce6KPhD6Flkrfag==}
+    peerDependencies:
+      effect: ^4.0.0-rc.118
+      vitest: '>=5.0.0 <6.0.0'
 
   '@floating-ui/core@1.8.0':
     resolution: {integrity: sha512-0CIZ5itps/8x7BG8dEIhs53BvCUH2PCoogtakwRTut+Arm58sJooJ0AuZhLw2HJYIR5cMLNPBSS728sPho2khQ==}
@@ -706,14 +727,6 @@ packages:
     peerDependencies:
       vite: ^5.2.0 || ^6 || ^7 || ^8
 
-  '@tanstack/query-core@5.104.0':
-    resolution: {integrity: sha512-JrC2r/JQlXt7khBSdUpsgxNvybzOg+aITa+ARRMlP2AFo93Y8vIqz077rp+e61mJetSZ0T6AJbwW1JHer1vrPQ==}
-
-  '@tanstack/solid-query@5.104.0':
-    resolution: {integrity: sha512-kQ+SFieGCve1up0Z4wHPXT2q2cu7AKFLtzRzViBoFwUQ8PMFd2DSjE38LnsbV0+3+O4N8RiS3xYkXM2hvJI49Q==}
-    peerDependencies:
-      solid-js: ^1.6.0
-
   '@types/babel__core@7.20.5':
     resolution: {integrity: sha512-qoQprZvz5wQFJwMDqeseRXWv3rqMvhgpbXFfVyWhbx9X47POIA6i/+dXefEmZKoAgOaTdaIgNSMqMIU61yRyzA==}
 
@@ -831,6 +844,9 @@ packages:
   detect-libc@2.1.2:
     resolution: {integrity: sha512-Btj2BOOO83o3WyH59e8MgXsxEQVcarkUOpEYrubB0urwnN10yQ364rsiByU11nZlqWYZm05i/of7io4mzihBtQ==}
     engines: {node: '>=8'}
+
+  effect@4.0.0-rc.118:
+    resolution: {integrity: sha512-hxhpCd+swzrtu9lnyPpEFre2ODQzJ9qxgyL1oHIEY8NKnW4PxTbM1XzplMZXiAsLD62HO+KJc41Nqxr9T791ZQ==}
 
   electron-to-chromium@1.5.411:
     resolution: {integrity: sha512-gglkxzokjHfawpGxq75XdBV2/l3BAPzrsMs70qgaZdTW5rpV1tC4MdgJVP9fN126bODA4ZJQkn1wryEzJyQXIg==}
@@ -1418,6 +1434,9 @@ packages:
     resolution: {integrity: sha512-tVpsJW7DdjecAiFpbIB1e3qxIQsE6NoPc5/eTdrbbIC4h0LVsWhnoa3g+m2HclBIujHzsxZ4VJVA+GUuc2/LBw==}
     engines: {node: '>=12'}
 
+  zod@4.6.5:
+    resolution: {integrity: sha512-v5l/aFXZQeai4awLbOpSoHecE9UiMrnfx75tEXLjNonXVARxQ5mOeipTjROUchszUNCqnE+hqAMujRsRHsut2Q==}
+
 snapshots:
 
   '@babel/code-frame@7.29.7':
@@ -1535,6 +1554,16 @@ snapshots:
     dependencies:
       '@floating-ui/dom': 1.8.0
       solid-js: 1.9.15
+
+  '@effect/atom-solid@4.0.0-rc.118(effect@4.0.0-rc.118)(solid-js@1.9.15)':
+    dependencies:
+      effect: 4.0.0-rc.118
+      solid-js: 1.9.15
+
+  '@effect/vitest@4.0.0-rc.118(effect@4.0.0-rc.118)(vitest@5.0.2(@types/node@26.6.3)(vite@8.3.1(@types/node@26.6.3)(jiti@2.7.0)))':
+    dependencies:
+      effect: 4.0.0-rc.118
+      vitest: 5.0.2(@types/node@26.6.3)(vite@8.3.1(@types/node@26.6.3)(jiti@2.7.0))
 
   '@floating-ui/core@1.8.0':
     dependencies:
@@ -1915,13 +1944,6 @@ snapshots:
       tailwindcss: 4.3.3
       vite: 8.3.1(@types/node@26.6.3)(jiti@2.7.0)
 
-  '@tanstack/query-core@5.104.0': {}
-
-  '@tanstack/solid-query@5.104.0(solid-js@1.9.15)':
-    dependencies:
-      '@tanstack/query-core': 5.104.0
-      solid-js: 1.9.15
-
   '@types/babel__core@7.20.5':
     dependencies:
       '@babel/parser': 7.29.8
@@ -2028,6 +2050,8 @@ snapshots:
       supports-color: 10.2.2
 
   detect-libc@2.1.2: {}
+
+  effect@4.0.0-rc.118: {}
 
   electron-to-chromium@1.5.411: {}
 
@@ -2471,3 +2495,5 @@ snapshots:
   yaml-ast-parser@0.0.43: {}
 
   yargs-parser@21.1.1: {}
+
+  zod@4.6.5: {}

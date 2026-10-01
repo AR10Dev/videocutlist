@@ -1,3 +1,4 @@
+import { Cause, Effect, Fiber } from "effect";
 import type { components } from "../../generated/api";
 
 export type Media = components["schemas"]["Media"];
@@ -192,139 +193,172 @@ const headersToDiagnostics = (headers: Headers, elapsedMs: number): PreviewDiagn
   elapsedMs,
 });
 
+/** A media element owns this fiber. Disposing it releases the reader, MSE listeners and URL. */
 export function streamPreview(
   video: HTMLVideoElement,
-  request: () => Promise<Response>,
+  request: (signal: AbortSignal) => Promise<Response>,
   onDiagnostics: (diagnostics: PreviewDiagnostics) => void,
   onError: (error: Error) => void,
   shouldPlay: () => boolean = () => true,
 ): () => void {
-  let mediaSource: MediaSource;
-  try {
-    mediaSource = new MediaSource();
-  } catch {
-    onError(new Error("Preview is not supported by this browser."));
-    return () => undefined;
-  }
-  let objectURL: string;
-  try {
-    objectURL = URL.createObjectURL(mediaSource);
-  } catch {
-    onError(new Error("Preview could not be started. Try again."));
-    return () => undefined;
-  }
-  let sourceBuffer: SourceBuffer | undefined;
-  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
-  let disposed = false;
-  let completed = false;
-  let seekApplied = false;
-  let failed = false;
-  let previewOffsetMs = 0;
-  const queued: Uint8Array[] = [];
-  const clean = () => {
-    if (disposed) return;
-    disposed = true;
-    // Fetch abort may already have errored the stream. Own the cancellation
-    // promise as part of teardown; the read loop handles active stream failures.
-    void reader?.cancel().catch(() => undefined);
-    mediaSource.removeEventListener("sourceopen", open);
-    sourceBuffer?.removeEventListener("updateend", updateEnd);
-    sourceBuffer?.removeEventListener("error", sourceError);
-    video.removeAttribute("src");
-    video.load();
-    URL.revokeObjectURL(objectURL);
-  };
-  const fail = (message: string) => {
-    if (disposed || failed) return;
-    failed = true;
-    onError(
-      new Error(
-        message.includes("not supported")
-          ? message
-          : `${message} Timeline markers remain available for editing.`,
-      ),
+  const failure = (message: string) =>
+    new Error(
+      message.includes("not supported")
+        ? message
+        : `${message} Timeline markers remain available for editing.`,
     );
-    clean();
-  };
-  const sourceError = () => fail("Preview data could not be played. Try again.");
-  const appendNext = () => {
-    if (disposed || !sourceBuffer || sourceBuffer.updating) return;
-    if (queued.length === 0) {
-      if (completed && mediaSource.readyState === "open") {
+  let disposed = false;
+  const program = Effect.scoped(
+    Effect.gen(function* () {
+      const mediaSource = yield* Effect.try({
+        try: () => new MediaSource(),
+        catch: () => failure("Preview is not supported by this browser."),
+      });
+      const objectURL = yield* Effect.acquireRelease(
+        Effect.try({
+          try: () => URL.createObjectURL(mediaSource),
+          catch: () => failure("Preview could not be started. Try again."),
+        }),
+        (objectURL) =>
+          Effect.sync(() => {
+            if (video.src === objectURL) {
+              video.removeAttribute("src");
+              video.load();
+            }
+            URL.revokeObjectURL(objectURL);
+          }),
+      );
+      yield* Effect.try({
+        try: () => {
+          video.src = objectURL;
+        },
+        catch: () => failure("Preview could not be started. Try again."),
+      });
+      const sourceBuffer = yield* Effect.callback<SourceBuffer, Error>((resume) => {
+        const open = () => {
+          try {
+            resume(Effect.succeed(mediaSource.addSourceBuffer(previewMime)));
+          } catch {
+            resume(Effect.fail(failure("Preview is not supported by this browser.")));
+          }
+        };
+        mediaSource.addEventListener("sourceopen", open, { once: true });
+        return Effect.sync(() => mediaSource.removeEventListener("sourceopen", open));
+      });
+      let completed = false;
+      let seekApplied = false;
+      let previewOffsetMs = 0;
+      const queued: Uint8Array<ArrayBuffer>[] = [];
+      let signalFailure: (message: string) => void = () => undefined;
+      const appendNext = () => {
+        if (disposed || sourceBuffer.updating) return;
+        if (queued.length === 0) {
+          if (completed && mediaSource.readyState === "open") {
+            try {
+              mediaSource.endOfStream();
+            } catch {
+              signalFailure("Preview could not be completed. Try again.");
+            }
+          }
+          return;
+        }
         try {
-          mediaSource.endOfStream();
+          sourceBuffer.appendBuffer(queued.shift()!);
         } catch {
-          fail("Preview could not be completed. Try again.");
+          signalFailure("Preview data could not be played. Try again.");
         }
-      }
-      return;
-    }
-    try {
-      sourceBuffer.appendBuffer(new Uint8Array(queued.shift()!).buffer);
-    } catch {
-      fail("Preview data could not be played. Try again.");
-    }
-  };
-  const updateEnd = () => {
-    if (!disposed && !seekApplied && sourceBuffer) {
-      const target = previewOffsetMs / 1000;
-      const buffered = sourceBuffer.buffered;
-      for (let index = 0; !buffered || index < buffered.length; index += 1) {
-        if (!buffered || (buffered.start(index) <= target && target <= buffered.end(index))) {
-          seekApplied = true;
-          video.currentTime = target;
-          if (shouldPlay()) void video.play().catch(() => undefined);
-          break;
+      };
+      const updateEnd = () => {
+        if (disposed) return;
+        if (!seekApplied) {
+          const target = previewOffsetMs / 1000;
+          const buffered = sourceBuffer.buffered;
+          for (let index = 0; !buffered || index < buffered.length; index += 1) {
+            if (!buffered || (buffered.start(index) <= target && target <= buffered.end(index))) {
+              seekApplied = true;
+              video.currentTime = target;
+              if (shouldPlay()) void video.play().catch(() => undefined);
+              break;
+            }
+          }
         }
-      }
-    }
-    appendNext();
-  };
-  const open = async () => {
-    try {
-      sourceBuffer = mediaSource.addSourceBuffer(previewMime);
-      sourceBuffer.addEventListener("updateend", updateEnd);
-      sourceBuffer.addEventListener("error", sourceError);
-      const started = performance.now();
-      const response = await request();
-      // Own the body before callbacks or errors can trigger teardown. A response
-      // may arrive after cleanup has already run and must still be cancelled.
-      reader = response.body?.getReader();
-      if (disposed) {
-        await reader?.cancel();
-        return;
-      }
-      if (!response.ok) {
-        fail("Preview request failed. Try again.");
-        return;
-      }
-      if (!reader) {
-        fail("Preview returned no playable data. Try again.");
-        return;
-      }
-      const diagnostics = headersToDiagnostics(
-        response.headers,
-        Math.round(performance.now() - started),
-      );
-      onDiagnostics(diagnostics);
-      previewOffsetMs = diagnostics.offsetMs;
-      while (!disposed) {
-        const next = await reader.read();
-        if (next.done || disposed) break;
-        queued.push(next.value);
         appendNext();
-      }
-      completed = true;
-      appendNext();
-    } catch {
-      fail(
-        sourceBuffer
-          ? "Preview data could not be read. Try again."
-          : "Preview is not supported by this browser.",
+      };
+      yield* Effect.acquireRelease(
+        Effect.sync(() => {
+          sourceBuffer.addEventListener("updateend", updateEnd);
+          sourceBuffer.addEventListener("error", sourceError);
+        }),
+        () =>
+          Effect.sync(() => {
+            sourceBuffer.removeEventListener("updateend", updateEnd);
+            sourceBuffer.removeEventListener("error", sourceError);
+          }),
       );
-    }
+      function sourceError() {
+        signalFailure("Preview data could not be played. Try again.");
+      }
+      const streaming = Effect.gen(function* () {
+        const started = performance.now();
+        // Some request implementations ignore abortion. Their late bodies still need disposal.
+        const response = yield* Effect.tryPromise({
+          try: async (signal) => {
+            const response = await request(signal);
+            if (disposed || signal.aborted) await response.body?.cancel().catch(() => undefined);
+            return response;
+          },
+          catch: () => failure("Preview data could not be read. Try again."),
+        });
+        const reader = yield* Effect.acquireRelease(
+          Effect.sync(() => response.body?.getReader()),
+          (reader) =>
+            Effect.promise(() => reader?.cancel().catch(() => undefined) ?? Promise.resolve()),
+        );
+        if (!response.ok) return yield* Effect.fail(failure("Preview request failed. Try again."));
+        if (!reader)
+          return yield* Effect.fail(failure("Preview returned no playable data. Try again."));
+        const diagnostics = headersToDiagnostics(
+          response.headers,
+          Math.round(performance.now() - started),
+        );
+        previewOffsetMs = diagnostics.offsetMs;
+        if (!disposed) onDiagnostics(diagnostics);
+        while (true) {
+          const next = yield* Effect.tryPromise({
+            try: () => reader.read(),
+            catch: () => failure("Preview data could not be read. Try again."),
+          });
+          if (next.done) break;
+          queued.push(next.value);
+          appendNext();
+        }
+        completed = true;
+        appendNext();
+        return yield* Effect.never;
+      });
+      const failureEvents = Effect.callback<never, Error>((resume) => {
+        signalFailure = (message) => resume(Effect.fail(failure(message)));
+        return Effect.sync(() => {
+          signalFailure = () => undefined;
+        });
+      });
+      return yield* Effect.raceFirst(streaming, failureEvents);
+    }),
+  ).pipe(
+    Effect.catchCause((cause) =>
+      Effect.sync(() => {
+        if (!disposed && !Cause.hasInterrupts(cause)) {
+          const error = Cause.squash(cause);
+          onError(
+            error instanceof Error ? error : failure("Preview data could not be read. Try again."),
+          );
+        }
+      }),
+    ),
+  );
+  const fiber = Effect.runFork(program);
+  return () => {
+    disposed = true;
+    void Effect.runFork(Fiber.interrupt(fiber));
   };
-  video.src = objectURL;
-  mediaSource.addEventListener("sourceopen", open, { once: true });
-  return clean;
 }

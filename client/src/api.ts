@@ -1,4 +1,14 @@
+import { Cause, Effect, Exit } from "effect";
+import { z } from "zod";
 import type { components } from "./generated/api";
+
+const errorEnvelope = z.object({
+  error: z.object({
+    code: z.string().min(1),
+    message: z.string(),
+    requestId: z.string(),
+  }),
+});
 
 /** Decode only the public error envelope; malformed/proxy errors retain a safe fallback. */
 export async function readApiError(
@@ -6,21 +16,8 @@ export async function readApiError(
   fallback = "Request could not be completed.",
 ): Promise<components["schemas"]["Error"]["error"]> {
   const body: unknown = await response.json().catch(() => undefined);
-  if (body && typeof body === "object" && "error" in body) {
-    const error = body.error;
-    if (
-      error &&
-      typeof error === "object" &&
-      "code" in error &&
-      typeof error.code === "string" &&
-      error.code &&
-      "message" in error &&
-      typeof error.message === "string" &&
-      "requestId" in error &&
-      typeof error.requestId === "string"
-    )
-      return { code: error.code, message: error.message, requestId: error.requestId };
-  }
+  const decoded = errorEnvelope.safeParse(body);
+  if (decoded.success) return decoded.data.error;
   return {
     code: "http_error",
     message: fallback,
@@ -196,4 +193,68 @@ export function createApiClient(
     return request(`media/${encodeURIComponent(mediaId)}/${kind}?${query}`, init);
   };
   return { url, request, assetRequest, reportUnauthorized };
+}
+
+/** Public server failures retain their stable code and correlation ID. */
+export class ApiFailure extends Error {
+  readonly _tag = "ApiFailure";
+  readonly code: string;
+  readonly requestId: string;
+
+  constructor(
+    readonly status: number,
+    error: components["schemas"]["Error"]["error"],
+  ) {
+    super(error.message);
+    this.name = "ApiFailure";
+    this.code = error.code;
+    this.requestId = error.requestId;
+  }
+}
+
+/** The fiber's lifetime reaches fetch, including callers' explicit cancellation. */
+export function apiRequest(
+  api: ApiClient,
+  path: string,
+  init: RequestInit = {},
+): Effect.Effect<Response, Error> {
+  return Effect.tryPromise({
+    try: (signal) =>
+      api.request(path, {
+        ...init,
+        signal: init.signal ? AbortSignal.any([signal, init.signal]) : signal,
+      }),
+    catch: (cause) =>
+      cause instanceof Error ? cause : new Error("Request could not be completed."),
+  });
+}
+
+/** Keep fetch and body consumption in the same interruptible operation. */
+export function apiJson<A>(
+  api: ApiClient,
+  path: string,
+  init: RequestInit = {},
+): Effect.Effect<A, Error> {
+  return Effect.tryPromise({
+    try: async (signal) => {
+      const response = await api.request(path, {
+        ...init,
+        signal: init.signal ? AbortSignal.any([signal, init.signal]) : signal,
+      });
+      if (!response.ok) throw new ApiFailure(response.status, await readApiError(response));
+      return (await response.json()) as A;
+    },
+    catch: (cause) =>
+      cause instanceof Error ? cause : new Error("Request could not be completed."),
+  });
+}
+
+/** Promise consumers receive the original public failure, never a FiberFailure string. */
+export async function runEffect<A, E>(
+  effect: Effect.Effect<A, E>,
+  signal?: AbortSignal,
+): Promise<A> {
+  const exit = await Effect.runPromiseExit(effect, { signal });
+  if (Exit.isSuccess(exit)) return exit.value;
+  throw Cause.squash(exit.cause);
 }

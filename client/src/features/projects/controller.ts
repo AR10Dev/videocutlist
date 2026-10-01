@@ -1,6 +1,9 @@
 import { createSignal, type Accessor, type Setter } from "solid-js";
-import type { QueryClient } from "@tanstack/solid-query";
-import { readApiError, type ApiClient } from "../../api";
+import { Cause, Effect, Exit, Fiber } from "effect";
+import type { Fiber as FiberHandle } from "effect/Fiber";
+import { z } from "zod";
+import { apiJson, ApiFailure } from "../../api";
+import type { ServerState } from "../app/server";
 import type { components } from "../../generated/api";
 import {
   confirmDiscard,
@@ -9,6 +12,7 @@ import {
   recentProjectsKey,
   validProjectId,
   parseProjectJson,
+  type RecentProject,
 } from "./lifecycle";
 import {
   restoreProjectItem,
@@ -34,40 +38,29 @@ export type ProjectRecovery = {
 };
 
 const recoveryKey = "videocutlist.project-recovery.v1";
+const recoveryDocument = z.object({
+  version: z.literal(1),
+  projectId: z.string().refine(validProjectId),
+  revision: z.number().int().nonnegative(),
+  schemaVersion: z.literal(2),
+  name: z.string().refine((name) => Boolean(name.trim())),
+  items: z.array(z.unknown()).min(1),
+  savedAt: z.number().int().nonnegative(),
+});
 
 const readRecovery = (): ProjectRecovery | undefined => {
   try {
     const value: unknown = JSON.parse(localStorage.getItem(recoveryKey) ?? "null");
-    if (!value || typeof value !== "object") return;
-    const candidate = value as Partial<ProjectRecovery>;
-    if (
-      candidate.version !== 1 ||
-      !validProjectId(candidate.projectId) ||
-      typeof candidate.revision !== "number" ||
-      !Number.isSafeInteger(candidate.revision) ||
-      candidate.revision < 0 ||
-      candidate.schemaVersion !== 2 ||
-      typeof candidate.name !== "string" ||
-      !candidate.name.trim() ||
-      !Array.isArray(candidate.items) ||
-      !candidate.items.length ||
-      typeof candidate.savedAt !== "number" ||
-      !Number.isSafeInteger(candidate.savedAt) ||
-      candidate.savedAt < 0
-    )
-      return;
-    parseProjectJson(
-      JSON.stringify({ schemaVersion: 2, name: candidate.name, items: candidate.items }),
-    );
-    return candidate as ProjectRecovery;
+    if (!recoveryDocument.validate(value)) return;
+    parseProjectJson(JSON.stringify(value));
+    return value as ProjectRecovery;
   } catch {
     return;
   }
 };
 
 export type ProjectsControllerDeps = {
-  api: ApiClient;
-  queryClient: QueryClient;
+  server: ServerState;
   selected: Accessor<Media | undefined>;
   projectId: Accessor<string>;
   setProjectId: Setter<string>;
@@ -105,13 +98,12 @@ export type ProjectsControllerDeps = {
 };
 
 export function createProjectsController(deps: ProjectsControllerDeps) {
-  let projectRequest: AbortController | undefined;
+  let loadFiber: FiberHandle<void, never> | undefined;
+  let saveFiber: FiberHandle<Project | undefined, never> | undefined;
+  let autosaveFiber: FiberHandle<void, never> | undefined;
   let projectRequestVersion = 0;
-  let saveRequest: AbortController | undefined;
   let contextVersion = 0;
-  let autosaveTimer: ReturnType<typeof setTimeout> | undefined;
   let pendingSave: "auto" | "explicit" | undefined;
-  let saveLoop: Promise<Project | undefined> | undefined;
   let disposed = false;
   const [saveState, setSaveState] = createSignal<SaveState>(
     deps.revision() > 0 && !deps.dirty() ? "saved" : "unsaved",
@@ -125,7 +117,7 @@ export function createProjectsController(deps: ProjectsControllerDeps) {
   };
   const [recovery, setRecovery] = createSignal<ProjectRecovery | undefined>(readRecovery());
   const remember = (id: string, label: string) => {
-    let recent: ReturnType<typeof recentProjects> = [];
+    let recent: RecentProject[] = [];
     try {
       recent = recentProjects(JSON.parse(localStorage.getItem(recentProjectsKey) ?? "[]"));
     } catch {
@@ -133,7 +125,7 @@ export function createProjectsController(deps: ProjectsControllerDeps) {
     }
     const next = [
       { id, label, lastOpened: Date.now() },
-      ...recent.filter((item) => (item as { id?: string }).id !== id),
+      ...recent.filter((item) => item.id !== id),
     ].slice(0, 20);
     deps.setRecent(next);
     try {
@@ -173,13 +165,17 @@ export function createProjectsController(deps: ProjectsControllerDeps) {
     }
     setRecovery();
   };
-  const cancelAutosave = () => {
-    if (autosaveTimer !== undefined) clearTimeout(autosaveTimer);
-    autosaveTimer = undefined;
-    pendingSave = undefined;
-    saveRequest?.abort();
+  const interrupt = (fiber: FiberHandle<unknown, never> | undefined) => {
+    if (fiber) void Effect.runFork(Fiber.interrupt(fiber));
   };
-  const performSave = async (): Promise<Project | undefined> => {
+  const cancelAutosave = () => {
+    interrupt(autosaveFiber);
+    autosaveFiber = undefined;
+    pendingSave = undefined;
+    interrupt(saveFiber);
+    saveFiber = undefined;
+  };
+  const performSave = Effect.gen(function* () {
     const snapshot = {
       project: deps.projectId(),
       media: deps.selected()?.id,
@@ -196,151 +192,139 @@ export function createProjectsController(deps: ProjectsControllerDeps) {
       const error = validateSegments(item.timeline.present.segments, item.media.durationMs);
       if (error) return void failSave(`${item.media.name}: ${error}`);
     }
-    const serializedItems = snapshot.items.map(serializeProjectItem);
-    const controller = new AbortController();
-    saveRequest = controller;
+    const sameProject = () =>
+      !disposed && snapshot.context === contextVersion && snapshot.project === deps.projectId();
     setSaveState("saving");
-    try {
-      const response = await deps.api.request(`projects/${encodeURIComponent(snapshot.project)}`, {
+    const result = yield* Effect.exit(
+      apiJson<Project>(deps.server.api, `projects/${encodeURIComponent(snapshot.project)}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        signal: controller.signal,
         body: JSON.stringify({
           revision: snapshot.revision,
           schemaVersion: 2,
           name: snapshot.name,
-          items: serializedItems,
+          items: snapshot.items.map(serializeProjectItem),
         }),
-      });
-      if (controller.signal.aborted || disposed) return;
-      const sameProject = () =>
-        !controller.signal.aborted &&
-        !disposed &&
-        snapshot.context === contextVersion &&
-        snapshot.project === deps.projectId();
-      const error = response.ok ? undefined : await readApiError(response);
-      if (error?.code === "revision_conflict") {
-        if (sameProject()) {
-          pendingSave = undefined;
-          setSaveConflict(true);
-          failSave(
-            "Project changed on another client. Reload it or save local work as a new project.",
-          );
-        }
-        return;
-      }
-      if (!response.ok) {
-        if (sameProject())
-          failSave(
-            error?.code === "invalid_project"
-              ? error.message
-              : `Project save failed (${response.status}). Retry when ready.`,
-          );
-        return;
-      }
-      const project = (await response.json()) as Project;
-      if (!sameProject()) return;
-      deps.setRevision(project.revision);
-      // A successful PUT is the source of truth. A cache refresh can fail when a
-      // project query is stale or the media endpoint is briefly unavailable; that
-      // must not turn a persisted project into a false "Save failed" state.
-      try {
-        await deps.queryClient.invalidateQueries({ queryKey: ["project", project.id] });
-      } catch {
-        // Keep the saved response and let the next explicit load refresh the cache.
-      }
-      if (!sameProject()) return;
-      const current =
-        snapshot.editorVersion === deps.editorVersion() && snapshot.media === deps.selected()?.id;
-      if (current) {
-        deps.setProjectItems(snapshot.items);
-        deps.setDirty(false);
-        setSaveConflict(false);
-        setSaveState("saved");
-        clearRecovery(snapshot.project);
-        remember(project.id, project.name);
-        deps.setStatus(`Project saved (revision ${project.revision}).`);
-      } else {
-        deps.setDirty(true);
-        setSaveState("unsaved");
-        captureRecovery();
-        pendingSave = pendingSave ?? "auto";
-        deps.setStatus("Project saved; newer edits remain unsaved.");
-      }
-      return project;
-    } catch (error) {
-      if (!controller.signal.aborted && !disposed && snapshot.context === contextVersion) {
+      }),
+    );
+    if (!sameProject()) return;
+    if (Exit.isFailure(result)) {
+      const failure = Cause.squash(result.cause);
+      if (failure instanceof ApiFailure && failure.code === "revision_conflict") {
+        pendingSave = undefined;
+        setSaveConflict(true);
         failSave(
-          error instanceof Error
-            ? `${error.message} Retry when ready.`
-            : "Project save failed. Retry when ready.",
+          "Project changed on another client. Reload it or save local work as a new project.",
+        );
+      } else {
+        failSave(
+          failure instanceof ApiFailure
+            ? failure.code === "invalid_project"
+              ? failure.message
+              : `Project save failed (${failure.status}). Retry when ready.`
+            : failure instanceof Error
+              ? `${failure.message} Retry when ready.`
+              : "Project save failed. Retry when ready.",
         );
       }
-    } finally {
-      if (saveRequest === controller) saveRequest = undefined;
+      return;
     }
-  };
-  const runSaveLoop = async (): Promise<Project | undefined> => {
-    let latest: Project | undefined;
-    while (pendingSave && !disposed) {
-      pendingSave = undefined;
-      const result = await performSave();
-      if (result) {
-        latest = result;
-        continue;
-      }
-      if (pendingSave !== "explicit") pendingSave = undefined;
-      break;
+    const project = result.value;
+    deps.setRevision(project.revision);
+    if (!sameProject()) return;
+    if (snapshot.editorVersion === deps.editorVersion() && snapshot.media === deps.selected()?.id) {
+      deps.setProjectItems(snapshot.items);
+      deps.setDirty(false);
+      setSaveConflict(false);
+      setSaveState("saved");
+      clearRecovery(snapshot.project);
+      remember(project.id, project.name);
+      deps.setStatus(`Project saved (revision ${project.revision}).`);
+    } else {
+      deps.setDirty(true);
+      setSaveState("unsaved");
+      captureRecovery();
+      pendingSave = pendingSave ?? "auto";
+      deps.setStatus("Project saved; newer edits remain unsaved.");
     }
-    return latest;
-  };
-  const requestSave = (kind: "auto" | "explicit") => {
+    return project;
+  });
+  const requestSave = (kind: "auto" | "explicit"): Promise<Project | undefined> => {
     if (disposed || (kind === "auto" && saveConflict())) return Promise.resolve(undefined);
     pendingSave = kind === "explicit" ? "explicit" : (pendingSave ?? "auto");
-    if (saveLoop) return saveLoop;
-    const loop = runSaveLoop();
-    saveLoop = loop;
-    void loop.then(
-      () => {
-        if (saveLoop === loop) saveLoop = undefined;
-      },
-      () => {
-        if (saveLoop === loop) saveLoop = undefined;
-      },
+    if (!saveFiber) {
+      const fiber: FiberHandle<Project | undefined, never> = Effect.runFork(
+        Effect.gen(function* () {
+          yield* Effect.yieldNow;
+          let latest: Project | undefined;
+          while (pendingSave && !disposed) {
+            pendingSave = undefined;
+            const saved = yield* performSave;
+            if (saved) {
+              latest = saved;
+            } else {
+              if (pendingSave !== "explicit") pendingSave = undefined;
+              break;
+            }
+          }
+          return latest;
+        }).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              if (saveFiber === fiber) saveFiber = undefined;
+            }),
+          ),
+        ),
+      );
+      saveFiber = fiber;
+    }
+    return Effect.runPromise(Fiber.await(saveFiber)).then((exit) =>
+      Exit.isSuccess(exit) ? exit.value : undefined,
     );
-    return loop;
   };
   const scheduleAutosave = () => {
+    if (disposed) return;
     captureRecovery();
     if (saveConflict()) return;
     setSaveState("unsaved");
-    if (autosaveTimer !== undefined) clearTimeout(autosaveTimer);
-    autosaveTimer = setTimeout(() => {
-      autosaveTimer = undefined;
-      void requestSave("auto");
-    }, 750);
+    interrupt(autosaveFiber);
+    const fiber: FiberHandle<void, never> = Effect.runFork(
+      Effect.sleep(750).pipe(
+        Effect.tap(() =>
+          Effect.sync(() => {
+            void requestSave("auto");
+          }),
+        ),
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (autosaveFiber === fiber) autosaveFiber = undefined;
+          }),
+        ),
+      ),
+    );
+    autosaveFiber = fiber;
   };
   const saveProject = () => {
-    if (autosaveTimer !== undefined) clearTimeout(autosaveTimer);
-    autosaveTimer = undefined;
+    interrupt(autosaveFiber);
+    autosaveFiber = undefined;
     captureRecovery();
     return requestSave("explicit");
   };
-  const retrySave = () => {
-    if (saveConflict()) return Promise.resolve(undefined);
-    return saveProject();
-  };
-  const loadProject = async (
+  const retrySave = () => (saveConflict() ? Promise.resolve(undefined) : saveProject());
+  const loadProject = (
     id = deps.projectId(),
     imported?: Project,
     skipDiscardConfirmation = false,
-  ) => {
-    if (!validProjectId(id)) return void deps.setStatus("Project ID is invalid.");
+  ): Promise<void> => {
+    if (!validProjectId(id)) {
+      deps.setStatus("Project ID is invalid.");
+      return Promise.resolve();
+    }
     if (
       !skipDiscardConfirmation &&
       !confirmDiscard(deps.dirty(), () => window.confirm("Discard unsaved changes?"))
     )
-      return;
+      return Promise.resolve();
     cancelAutosave();
     contextVersion++;
     const preserveConflict = !imported && id === deps.projectId() && saveConflict();
@@ -350,87 +334,95 @@ export function createProjectsController(deps: ProjectsControllerDeps) {
     const snapshotContext = deps.contextKey();
     deps.clearDetectionContext();
     deps.setDiagnostics();
-    projectRequest?.abort();
-    const controller = new AbortController();
-    projectRequest = controller;
+    interrupt(loadFiber);
     const request = ++projectRequestVersion;
-    try {
-      let project = imported;
-      if (!project) {
-        const response = await deps.api.request(`projects/${encodeURIComponent(id)}`, {
-          signal: controller.signal,
-        });
-        if (!response.ok) throw new Error(`Project load failed (${response.status}).`);
-        project = (await response.json()) as Project;
-      }
-      const restored = await Promise.all(
-        project.items.map(async (entry) => {
-          const mediaResponse = await deps.api.request(
-            `media/${encodeURIComponent(entry.mediaId)}`,
-            { signal: controller.signal },
-          );
-          if (!mediaResponse.ok) throw new Error(`Media request failed (${mediaResponse.status}).`);
-          const media = (await mediaResponse.json()) as Media;
-          const error = validateSegments(entry.segments, media.durationMs);
-          if (error) throw new Error(error);
-          return restoreProjectItem(entry, media);
-        }),
-      );
-      if (
-        controller.signal.aborted ||
-        request !== projectRequestVersion ||
-        snapshotEditorVersion !== deps.editorVersion() ||
-        snapshotProject !== deps.projectId() ||
-        snapshotContext !== deps.contextKey() ||
-        !restored.length
-      )
-        return;
-      const first = restored[0];
-      deps.resetEditorContext?.();
-      deps.setProjectId(project.id);
-      deps.setProjectName(project.name);
-      deps.setRevision(project.revision);
-      deps.setProjectItems(restored);
-      const exportableItems = restored
-        .filter(
-          (item) =>
-            item.timeline.present.segments.length > 0 &&
-            !validateSegments(item.timeline.present.segments, item.media.durationMs),
+    const fiber: FiberHandle<void, never> = Effect.runFork(
+      Effect.gen(function* () {
+        yield* Effect.yieldNow;
+        const project =
+          imported ??
+          (yield* apiJson<Project>(deps.server.api, `projects/${encodeURIComponent(id)}`));
+        const restored = yield* Effect.forEach(
+          project.items,
+          (entry) =>
+            Effect.gen(function* () {
+              const media = yield* apiJson<Media>(
+                deps.server.api,
+                `media/${encodeURIComponent(entry.mediaId)}`,
+              );
+              const error = validateSegments(entry.segments, media.durationMs);
+              if (error) return yield* Effect.fail(new Error(error));
+              return restoreProjectItem(entry, media);
+            }),
+          { concurrency: "unbounded" },
+        );
+        if (
+          disposed ||
+          request !== projectRequestVersion ||
+          snapshotEditorVersion !== deps.editorVersion() ||
+          snapshotProject !== deps.projectId() ||
+          snapshotContext !== deps.contextKey() ||
+          !restored.length
         )
-        .map((item) => item.id);
-      deps.setSelectedExportItems(exportableItems.length ? exportableItems : [first.id]);
-      deps.setActiveItemId(first.id);
-      deps.setSelected(first.media);
-      deps.setTimeline(first.timeline);
-      deps.setPreviewCenterMs(first.timeline.present.playheadMs);
-      setSaveConflict(false);
-      deps.setMuted(first.muted);
-      deps.setExportMode(first.exportOptions.mode ?? "merge");
-      deps.setExportSelection(first.exportOptions.selection ?? "segments");
-      deps.setStreamIndexes(first.exportOptions.streamIndexes ?? []);
-      deps.setCutStrategy(first.exportOptions.cutStrategy ?? deps.settings().cutStrategy);
-      deps.setExportContainer(first.exportOptions.container ?? "mkv");
-      deps.setDestinationId(first.exportOptions.destinationId ?? "download");
-      deps.setFilenameTemplate(
-        first.exportOptions.filenameTemplate ?? deps.settings().filenameTemplate,
-      );
-      deps.setMedia((known) => [
-        ...known,
-        ...restored.map((x) => x.media).filter((x) => !known.some((k) => k.id === x.id)),
-      ]);
-      deps.setDirty(Boolean(imported));
-      setSaveState(imported ? "unsaved" : "saved");
-      if (!imported) {
-        clearRecovery(project.id);
-        remember(project.id, project.name);
-      } else captureRecovery();
-      deps.setStatus(
-        imported ? "Cut list imported. Save the project to keep it." : "Project loaded.",
-      );
-    } catch (error) {
-      if (!controller.signal.aborted && request === projectRequestVersion)
-        deps.setStatus(error instanceof Error ? error.message : "Project load failed.");
-    }
+          return;
+        const first = restored[0];
+        deps.resetEditorContext?.();
+        deps.setProjectId(project.id);
+        deps.setProjectName(project.name);
+        deps.setRevision(project.revision);
+        deps.setProjectItems(restored);
+        const exportableItems = restored
+          .filter(
+            (item) =>
+              item.timeline.present.segments.length > 0 &&
+              !validateSegments(item.timeline.present.segments, item.media.durationMs),
+          )
+          .map((item) => item.id);
+        deps.setSelectedExportItems(exportableItems.length ? exportableItems : [first.id]);
+        deps.setActiveItemId(first.id);
+        deps.setSelected(first.media);
+        deps.setTimeline(first.timeline);
+        deps.setPreviewCenterMs(first.timeline.present.playheadMs);
+        setSaveConflict(false);
+        deps.setMuted(first.muted);
+        deps.setExportMode(first.exportOptions.mode ?? "merge");
+        deps.setExportSelection(first.exportOptions.selection ?? "segments");
+        deps.setStreamIndexes(first.exportOptions.streamIndexes ?? []);
+        deps.setCutStrategy(first.exportOptions.cutStrategy ?? deps.settings().cutStrategy);
+        deps.setExportContainer(first.exportOptions.container ?? "mkv");
+        deps.setDestinationId(first.exportOptions.destinationId ?? "download");
+        deps.setFilenameTemplate(
+          first.exportOptions.filenameTemplate ?? deps.settings().filenameTemplate,
+        );
+        deps.setMedia((known) => [
+          ...known,
+          ...restored.map((x) => x.media).filter((x) => !known.some((k) => k.id === x.id)),
+        ]);
+        deps.setDirty(Boolean(imported));
+        setSaveState(imported ? "unsaved" : "saved");
+        if (!imported) {
+          clearRecovery(project.id);
+          remember(project.id, project.name);
+        } else captureRecovery();
+        deps.setStatus(
+          imported ? "Cut list imported. Save the project to keep it." : "Project loaded.",
+        );
+      }).pipe(
+        Effect.catch((error) =>
+          Effect.sync(() => {
+            if (!disposed && request === projectRequestVersion)
+              deps.setStatus(error instanceof Error ? error.message : "Project load failed.");
+          }),
+        ),
+        Effect.ensuring(
+          Effect.sync(() => {
+            if (loadFiber === fiber) loadFiber = undefined;
+          }),
+        ),
+      ),
+    );
+    loadFiber = fiber;
+    return Effect.runPromise(Fiber.await(fiber)).then(() => undefined);
   };
   const newProject = () => {
     if (!confirmDiscard(deps.dirty(), () => window.confirm("Discard unsaved changes?"))) return;
@@ -439,7 +431,8 @@ export function createProjectsController(deps: ProjectsControllerDeps) {
     deps.resetEditorContext?.();
     setSaveConflict(false);
     deps.clearDetectionContext();
-    projectRequest?.abort();
+    interrupt(loadFiber);
+    loadFiber = undefined;
     ++projectRequestVersion;
     deps.setProjectId(newProjectId());
     deps.setProjectName("Untitled project");
@@ -486,6 +479,9 @@ export function createProjectsController(deps: ProjectsControllerDeps) {
     cancelAutosave();
     contextVersion++;
     deps.resetEditorContext?.();
+    interrupt(loadFiber);
+    loadFiber = undefined;
+    ++projectRequestVersion;
     setSaveConflict(false);
     deps.setProjectId(newProjectId());
     deps.setRevision(0);
@@ -502,7 +498,9 @@ export function createProjectsController(deps: ProjectsControllerDeps) {
     // Browser storage may deny reads without affecting projects.
   }
   if (!recovery() && validProjectId(rememberedProject))
-    queueMicrotask(() => void loadProject(rememberedProject));
+    queueMicrotask(() => {
+      if (!disposed) void loadProject(rememberedProject);
+    });
 
   return {
     saveProject,
@@ -526,7 +524,8 @@ export function createProjectsController(deps: ProjectsControllerDeps) {
     dispose: () => {
       disposed = true;
       cancelAutosave();
-      projectRequest?.abort();
+      interrupt(loadFiber);
+      loadFiber = undefined;
       ++projectRequestVersion;
       contextVersion++;
     },

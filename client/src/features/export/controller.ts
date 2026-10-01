@@ -1,13 +1,29 @@
-import { createEffect, createSignal, onCleanup, type Accessor, type Setter } from "solid-js";
-import { useQuery, type QueryClient } from "@tanstack/solid-query";
-import { readApiError, type ApiClient } from "../../api";
+import {
+  createEffect,
+  createSignal,
+  onCleanup,
+  untrack,
+  type Accessor,
+  type Setter,
+} from "solid-js";
+import { useAtomSet, useAtomValue } from "@effect/atom-solid";
+import { Cause, Effect, Exit } from "effect";
+import * as AsyncResult from "effect/reactivity/AsyncResult";
+import * as Atom from "effect/reactivity/Atom";
+import {
+  ApiFailure,
+  apiJson,
+  apiRequest,
+  readApiError,
+  runEffect,
+  type ApiClient,
+} from "../../api";
+import { pollAtom, readServerAtom, useServerAtom, type ServerState } from "../app/server";
 import type { components } from "../../generated/api";
 import type { EditableProjectItem, ExportContainer } from "../projects/model";
 import type { Segment } from "../preview/model";
 import { validFilenameTemplateLength, type AppSettings } from "../settings/model";
-import { abortAndClear, cancellationIsCurrent } from "../queue/cancellation";
 import { exportFailureMessage } from "../queue/jobUi";
-import { jobPollInterval } from "../queue/jobPolling";
 import {
   isBatchActive,
   isJobActive,
@@ -20,19 +36,9 @@ type Media = components["schemas"]["Media"];
 type Destination = components["schemas"]["Destination"];
 type ExportJob = components["schemas"]["Job"];
 type Batch = components["schemas"]["Batch"];
-type QuerySnapshot<T> = {
-  value: T;
-  generation: number;
-};
 type ExportCancellation = {
   batchId: string;
   jobId: string;
-  phase: "requested" | "confirmed";
-  generation: number;
-};
-type ChildJobAction = {
-  token: number;
-  controller: AbortController;
 };
 type ChildJobContext = {
   projectId: string;
@@ -58,7 +64,7 @@ export type ExportScope = "active" | "selected";
 
 export function createExportController(deps: {
   api: ApiClient;
-  queryClient: QueryClient;
+  server: ServerState;
   selected: Accessor<Media | undefined>;
   projectId: Accessor<string>;
   revision: Accessor<number>;
@@ -84,10 +90,23 @@ export function createExportController(deps: {
     const currentItem = deps.projectItems().find((entry) => entry.media.id === deps.selected()?.id);
     return currentItem ? [currentItem.id] : [];
   };
-  const [batches, setBatches] = createSignal<Batch[]>([]);
-  const [exportJob, setExportJob] = createSignal<ExportJob>();
-  const [batchJobs, setBatchJobs] = createSignal<ExportJob[]>([]);
-  const [batchId, setBatchId] = createSignal<string>();
+  const registry = deps.server.registry;
+  const runtime = deps.server.runtime;
+  const batchesAtom = Atom.make<Batch[]>([]);
+  const exportJobAtom = Atom.make<ExportJob | undefined>(undefined);
+  const batchJobsAtom = Atom.make<ExportJob[]>([]);
+  const batchIdAtom = Atom.make<string | undefined>(undefined);
+  const batches = useAtomValue(() => batchesAtom);
+  const exportJob = useAtomValue(() => exportJobAtom);
+  const batchJobs = useAtomValue(() => batchJobsAtom);
+  const batchId = useAtomValue(() => batchIdAtom);
+  const setBatches = (value: Batch[] | ((current: Batch[]) => Batch[])) => {
+    if (typeof value === "function") registry.update(batchesAtom, value);
+    else registry.set(batchesAtom, value);
+  };
+  const setExportJob = (value?: ExportJob) => registry.set(exportJobAtom, value);
+  const setBatchJobs = (value: ExportJob[]) => registry.set(batchJobsAtom, value);
+  const setBatchId = (value?: string) => registry.set(batchIdAtom, value);
   const [exportRevision, setExportRevision] = createSignal<number>();
   const [exportStatus, setExportStatus] = createSignal("");
   const [exportMode, setExportMode] = createSignal<"merge" | "separate">("merge");
@@ -130,10 +149,15 @@ export function createExportController(deps: {
     return ids;
   };
   const [streamIndexes, setStreamIndexes] = createSignal<number[]>([]);
-  const [destinations, setDestinations] = createSignal<Destination[]>([]);
-  const [destinationCapabilities, setDestinationCapabilities] = createSignal<
-    components["schemas"]["DestinationCapabilities"]
-  >({ saveBesideSource: false });
+  const destinationsAtom = Atom.make<Destination[]>([]);
+  const destinationCapabilitiesAtom = Atom.make<components["schemas"]["DestinationCapabilities"]>({
+    saveBesideSource: false,
+  });
+  const destinations = useAtomValue(() => destinationsAtom);
+  const destinationCapabilities = useAtomValue(() => destinationCapabilitiesAtom);
+  const setDestinations = (value: Destination[]) => registry.set(destinationsAtom, value);
+  const setDestinationCapabilities = (value: components["schemas"]["DestinationCapabilities"]) =>
+    registry.set(destinationCapabilitiesAtom, value);
   const [preflightError, setPreflightError] = createSignal("");
   const [destinationId, setDestinationId] = createSignal(lastDestinationId() ?? "download");
   const [destinationStatus, setDestinationStatus] = createSignal("");
@@ -141,29 +165,21 @@ export function createExportController(deps: {
   const [preflight, setPreflight] = createSignal<components["schemas"]["ExportPreflight"]>();
   const [preflightPending, setPreflightPending] = createSignal(false);
   const [exportPending, setExportPending] = createSignal(false);
-  let exportTimer: number | undefined;
-  let exportRequest = 0;
-  let workflowRequest = 0;
   let workflowActive = false;
   let preflightVersion = 0;
-  let preflightController: AbortController | undefined;
-  let workflowController: AbortController | undefined;
-  let exportController: AbortController | undefined;
-  let exportCancellationController: AbortController | undefined;
+  let workflowGeneration = 0;
+  let workflowCommand: Atom.AtomResultFn<void, void, Error> | undefined;
+  let cancellationGeneration = 0;
   const invalidatedTerminalJobs = new Set<string>();
-  const [queryGeneration, setQueryGeneration] = createSignal(0);
   const [exportCancellation, setExportCancellation] = createSignal<ExportCancellation>();
   const [exportCancellationPending, setExportCancellationPending] = createSignal(false);
   const [pendingChildJobs, setPendingChildJobs] = createSignal<ReadonlySet<string>>(new Set());
-  const childJobActions = new Map<string, ChildJobAction>();
+  const pendingBatchCancellations = new Set<string>();
   let childJobContextGeneration = 0;
-  let nextChildJobActionToken = 0;
-  let nextQueryGeneration = 0;
   const cancellationResponseIsStale = (
     kind: "batch" | "job",
     id: string,
     state: ExportJob["state"],
-    generation: number,
   ) => {
     const cancellation = exportCancellation();
     if (
@@ -171,40 +187,100 @@ export function createExportController(deps: {
       (kind === "batch" ? cancellation.batchId !== id : cancellation.jobId !== id)
     )
       return false;
-    if (cancellation.phase === "requested") return state === "queued" || state === "running";
-    return generation < cancellation.generation;
+    return state === "queued" || state === "running";
   };
+  const preflightCommand = runtime.fn(
+    (request: { projectId: string; input: components["schemas"]["ExportInput"] }) =>
+      Effect.andThen(
+        Effect.sleep(250),
+        apiJson<components["schemas"]["ExportPreflight"]>(
+          deps.api,
+          `projects/${encodeURIComponent(request.projectId)}/exports/preflight`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(request.input),
+          },
+        ),
+      ),
+  );
+  const runPreflight = useAtomSet(() => preflightCommand, { mode: "promise" });
   const cancelPreflight = () => {
-    preflightController?.abort();
-    preflightController = undefined;
-    if (exportTimer) window.clearTimeout(exportTimer);
-    exportTimer = undefined;
+    registry.set(preflightCommand, Atom.Interrupt);
     preflightVersion++;
   };
 
-  const batchProgressQuery = useBatchQuery(deps.api, batchId, queryGeneration);
-  const batchListQuery = useBatchListQuery(deps.api);
-  const exportStatusQuery = useExportJobQuery(deps.api, exportJob, queryGeneration);
-  const destinationsQuery = useDestinationsQuery(deps.api);
-  const reconcileBatchQueries = async (id: string, jobs: readonly ExportJob[]) => {
-    const jobIds = [...new Set(jobs.map((job) => job.id))];
-    await Promise.all([
-      deps.queryClient.invalidateQueries({ queryKey: ["batches"] }),
-      deps.queryClient.invalidateQueries({ queryKey: ["batch", id] }),
-      ...jobIds.map((jobId) =>
-        deps.queryClient.invalidateQueries({ queryKey: ["job", "export", jobId] }),
+  const batchListAtom = pollAtom(
+    runtime,
+    apiJson<components["schemas"]["BatchPage"]>(deps.api, "batches?limit=50"),
+    (page) => page.items?.some(isBatchActive) ?? false,
+    1000,
+  );
+  const batchList = useServerAtom(() => batchListAtom);
+  const batchProgressAtoms = Atom.family((id: string) =>
+    pollAtom(
+      runtime,
+      apiJson<Batch>(deps.api, `batches/${encodeURIComponent(id)}`),
+      isBatchActive,
+      1000,
+    ),
+  );
+  const jobStatusAtoms = Atom.family((id: string) =>
+    pollAtom(
+      runtime,
+      apiJson<ExportJob>(deps.api, `jobs/${encodeURIComponent(id)}`),
+      isJobActive,
+      1000,
+    ),
+  );
+  const emptyBatch = Atom.make(AsyncResult.initial<Batch, Error>());
+  const emptyJob = Atom.make(AsyncResult.initial<ExportJob, Error>());
+  const batchProgress = useServerAtom(() =>
+    batchId() ? batchProgressAtoms(batchId()!) : emptyBatch,
+  );
+  const exportStatusResult = useServerAtom(() =>
+    exportJob()?.id ? jobStatusAtoms(exportJob()!.id) : emptyJob,
+  );
+  const destinationAtom = runtime.atom(apiJson<DestinationResponse>(deps.api, "destinations"));
+  const destinationResult = useServerAtom(() => destinationAtom);
+  const cancelBatchCommands = Atom.family((id: string) =>
+    runtime.fn(() =>
+      Effect.flatMap(
+        apiRequest(deps.api, `batches/${encodeURIComponent(id)}`, { method: "DELETE" }),
+        (response) =>
+          response.ok
+            ? Effect.succeed(undefined)
+            : Effect.fail(new Error("Export batch could not be cancelled.")),
       ),
-    ]);
-    await Promise.all([
-      deps.queryClient.refetchQueries({ queryKey: ["batches"], type: "active" }),
-      deps.queryClient.refetchQueries({ queryKey: ["batch", id], type: "active" }),
-      ...jobIds.map((jobId) =>
-        deps.queryClient.refetchQueries({
-          queryKey: ["job", "export", jobId],
-          type: "active",
-        }),
-      ),
-    ]);
+    ),
+  );
+  const cancelChildCommands = Atom.family((id: string) =>
+    runtime.fn(() =>
+      Effect.gen(function* () {
+        const response = yield* apiRequest(deps.api, `jobs/${encodeURIComponent(id)}`, {
+          method: "DELETE",
+        });
+        if (!response.ok) {
+          const error = yield* Effect.tryPromise({
+            try: () => readApiError(response, "Export job could not be cancelled. Try again."),
+            catch: (cause) =>
+              cause instanceof Error ? cause : new Error("Export job could not be cancelled."),
+          });
+          return yield* Effect.fail(new Error(error.message));
+        }
+      }),
+    ),
+  );
+  const retryChildCommands = Atom.family((id: string) =>
+    runtime.fn(() =>
+      apiJson<Batch>(deps.api, `jobs/${encodeURIComponent(id)}/retry`, { method: "POST" }),
+    ),
+  );
+  const refreshBatches = () => registry.refresh(batchListAtom);
+  const refreshQueue = (id?: string, jobId?: string) => {
+    refreshBatches();
+    if (id && id === batchId()) registry.refresh(batchProgressAtoms(id));
+    if (jobId && jobId === exportJob()?.id) registry.refresh(jobStatusAtoms(jobId));
   };
   const markChildJobPending = (id: string, pending: boolean) => {
     setPendingChildJobs((current) => {
@@ -215,105 +291,63 @@ export function createExportController(deps: {
     });
   };
   const beginChildJobAction = (id: string) => {
-    if (childJobActions.has(id)) return;
-    const action: ChildJobAction = {
-      token: ++nextChildJobActionToken,
-      controller: new AbortController(),
-    };
-    childJobActions.set(id, action);
+    if (pendingChildJobs().has(id)) return false;
     markChildJobPending(id, true);
-    return action;
+    return true;
   };
-  const finishChildJobAction = (id: string, action: ChildJobAction) => {
-    if (childJobActions.get(id) !== action) return;
-    childJobActions.delete(id);
-    markChildJobPending(id, false);
-  };
-  const childJobActionIsCurrent = (id: string, action: ChildJobAction, context: ChildJobContext) =>
-    childJobActions.get(id)?.token === action.token &&
+  const childJobActionIsCurrent = (id: string, context: ChildJobContext) =>
+    pendingChildJobs().has(id) &&
     context.generation === childJobContextGeneration &&
     context.projectId === deps.projectId() &&
     context.mediaId === deps.selected()?.id &&
     context.revision === deps.revision() &&
     context.editorVersion === deps.editorVersion();
-  const activeExportContextIsCurrent = (
-    id: string,
-    action: ChildJobAction,
-    context: ChildJobContext,
-  ) =>
-    childJobActionIsCurrent(id, action, context) &&
+  const activeExportContextIsCurrent = (id: string, context: ChildJobContext) =>
+    childJobActionIsCurrent(id, context) &&
     context.batchId === batchId() &&
     (exportJob()?.id === undefined || exportJob()?.id === (context.exportJobId ?? id));
-  const childJobDetails = (id: string, requestedBatchId?: string) => {
-    const activeBatchID = batchId();
-    const activeJobs = batchJobs();
-    const activeJob =
-      requestedBatchId === undefined || requestedBatchId === activeBatchID
-        ? activeJobs.find((job) => job.id === id)
-        : undefined;
-    const listedBatch =
-      (requestedBatchId
-        ? batches().find((batch) => batch.batchId === requestedBatchId)
-        : batches().find((batch) => batch.jobs.some((job) => job.id === id))) ?? undefined;
-    const currentExportJob = exportJob();
-    const job =
-      listedBatch?.jobs.find((item) => item.id === id) ??
-      activeJob ??
-      (currentExportJob?.id === id ? currentExportJob : undefined);
-    const resolvedBatchID =
-      listedBatch?.batchId ??
-      requestedBatchId ??
-      activeJob?.batchId ??
-      (currentExportJob?.id === id ? activeBatchID : undefined);
-    const jobs =
-      listedBatch?.jobs ?? (resolvedBatchID === activeBatchID ? activeJobs : job ? [job] : []);
+  const childJobBatchId = (id: string, requestedBatchId?: string) =>
+    batches().find(
+      (batch) =>
+        batch.batchId === requestedBatchId ||
+        (!requestedBatchId && batch.jobs.some((job) => job.id === id)),
+    )?.batchId ??
+    requestedBatchId ??
+    (batchJobs().some((job) => job.id === id) || exportJob()?.id === id ? batchId() : undefined);
+  const cancelledBatches = new Set<string>();
+  const cancelledChildJobs = new Set<string>();
+  const protectCancellation = (batch: Batch): Batch => {
+    const locallyCancelled = cancelledBatches.has(batch.batchId);
+    if (!locallyCancelled && !batch.jobs.some((job) => cancelledChildJobs.has(job.id)))
+      return batch;
+    const jobs = batch.jobs.map((job) =>
+      isJobActive(job) && (locallyCancelled || cancelledChildJobs.has(job.id))
+        ? { ...job, state: "cancelled" as const }
+        : job,
+    );
     return {
-      batchId: resolvedBatchID,
-      jobIds: [...new Set([id, ...jobs.map((item) => item.id)])],
+      ...batch,
+      state:
+        locallyCancelled && (batch.state === "queued" || batch.state === "running")
+          ? "cancelled"
+          : batch.state,
+      jobs,
     };
   };
-  const childJobQueryKeys = (
-    jobIds: readonly string[],
-    batchIds: readonly (string | undefined)[],
-  ) => {
-    const uniqueJobIDs = [...new Set(jobIds)];
-    const uniqueBatchIDs = [...new Set(batchIds.filter((id): id is string => Boolean(id)))];
-    return [
-      ["batches"] as const,
-      ...uniqueBatchIDs.map((id) => ["batch", id] as const),
-      ...uniqueJobIDs.map((id) => ["job", "export", id] as const),
-    ];
-  };
-  const cancelChildJobQueries = async (
-    jobIds: readonly string[],
-    batchIds: readonly (string | undefined)[],
-  ) => {
-    const queryKeys = childJobQueryKeys(jobIds, batchIds);
-    await Promise.allSettled(
-      queryKeys.map((queryKey) => deps.queryClient.cancelQueries({ queryKey })),
-    );
-  };
-  const reconcileChildJobQueries = async (
-    jobIds: readonly string[],
-    batchIds: readonly (string | undefined)[],
-  ) => {
-    const queryKeys = childJobQueryKeys(jobIds, batchIds);
-    await Promise.allSettled(
-      queryKeys.map((queryKey) => deps.queryClient.invalidateQueries({ queryKey })),
-    );
-    await Promise.allSettled(
-      queryKeys.map((queryKey) => deps.queryClient.refetchQueries({ queryKey, type: "active" })),
-    );
-  };
   createEffect(() => {
-    const page = batchListQuery.data;
+    const page = batchList.value();
     if (!page) return;
     const items = Array.isArray(page.items)
-      ? page.items.filter(
-          (batch): batch is Batch =>
-            typeof batch?.batchId === "string" && Array.isArray(batch.jobs),
-        )
+      ? page.items
+          .filter(
+            (batch): batch is Batch =>
+              typeof batch?.batchId === "string" && Array.isArray(batch.jobs),
+          )
+          .map(protectCancellation)
       : [];
+    const current = untrack(batches);
+    const pending = current.find((batch) => batch.batchId === untrack(batchId));
+    if (pending && !items.some((item) => item.batchId === pending.batchId)) items.unshift(pending);
     setBatches(items);
     if (!batchId()) {
       const active = items.find(isBatchActive);
@@ -321,32 +355,33 @@ export function createExportController(deps: {
     }
   });
   createEffect(() => {
-    const snapshot = batchProgressQuery.data;
-    if (!snapshot) return;
-    const next = snapshot.value;
+    const next = batchProgress.value();
     if (
+      !next ||
       next.batchId !== batchId() ||
-      cancellationResponseIsStale("batch", next.batchId, next.state, snapshot.generation)
+      cancellationResponseIsStale("batch", next.batchId, next.state)
     )
       return;
-    setBatchJobs(next.jobs);
-    setExportRevision(next.projectRevision);
-    setExportJob(selectBatchJob(next.jobs));
-    setBatches((items) => [next, ...items.filter((batch) => batch.batchId !== next.batchId)]);
-    if (next.state === "queued") setExportStatus("Export batch queued.");
-    else if (next.state === "running")
-      setExportStatus(`Export batch running (${Math.round(next.progress * 100)}%).`);
-    else if (next.state === "succeeded") setExportStatus("Export batch complete.");
-    else if (next.state === "cancelled") setExportStatus("Export batch cancelled.");
-    else if (next.state === "failed") setExportStatus("Export batch failed.");
+    const guarded = protectCancellation(next);
+    setBatchJobs(guarded.jobs);
+    setExportRevision(guarded.projectRevision);
+    setExportJob(selectBatchJob(guarded.jobs));
+    setBatches((items) => [guarded, ...items.filter((batch) => batch.batchId !== guarded.batchId)]);
+    if (guarded.state === "queued") setExportStatus("Export batch queued.");
+    else if (guarded.state === "running")
+      setExportStatus(`Export batch running (${Math.round(guarded.progress * 100)}%).`);
+    else if (guarded.state === "succeeded") setExportStatus("Export batch complete.");
+    else if (guarded.state === "cancelled") setExportStatus("Export batch cancelled.");
+    else if (guarded.state === "failed") setExportStatus("Export batch failed.");
   });
   createEffect(() => {
-    const snapshot = exportStatusQuery.data;
-    if (!snapshot) return;
-    const next = snapshot.value;
+    const next = exportStatusResult.value();
     if (
+      !next ||
       next.id !== exportJob()?.id ||
-      cancellationResponseIsStale("job", next.id, next.state, snapshot.generation)
+      cancellationResponseIsStale("job", next.id, next.state) ||
+      (isJobActive(next) &&
+        (cancelledChildJobs.has(next.id) || cancelledBatches.has(batchId() ?? "")))
     )
       return;
     setExportJob(next);
@@ -366,13 +401,12 @@ export function createExportController(deps: {
       !invalidatedTerminalJobs.has(next.id)
     ) {
       invalidatedTerminalJobs.add(next.id);
-      void deps.queryClient.invalidateQueries({ queryKey: ["job", "export", next.id] });
-      void deps.queryClient.invalidateQueries({ queryKey: ["project", deps.projectId()] });
-      void deps.queryClient.invalidateQueries({ queryKey: ["media"] });
+      deps.server.refreshMedia();
+      refreshBatches();
     }
   });
   createEffect(() => {
-    const value = destinationsQuery.data;
+    const value = destinationResult.value();
     if (!value) return;
     const configured = Array.isArray(value.destinations) ? value.destinations : [];
     setDestinations(configured);
@@ -438,53 +472,49 @@ export function createExportController(deps: {
     cancelPreflight();
     setPreflightPending(true);
     const version = preflightVersion;
-    const controller = new AbortController();
-    preflightController = controller;
-    exportTimer = window.setTimeout(async () => {
-      try {
-        const response = await preflightRequest(
-          deps.api,
-          currentProjectID,
-          input,
-          controller.signal,
-        );
-        if (version !== preflightVersion) return;
-        if (!response.ok) {
-          setPreflight();
-          setPreflightError(`Export preflight failed (${response.status}). Try again.`);
-          setExportStatus("Export preflight failed. Try again.");
-        } else {
-          setPreflight((await response.json()) as components["schemas"]["ExportPreflight"]);
+    void runPreflight({ projectId: currentProjectID, input })
+      .then(
+        (fresh) => {
+          if (version !== preflightVersion) return;
+          setPreflight(fresh);
           setPreflightError("");
-        }
-      } catch {
-        if (version === preflightVersion && !controller.signal.aborted) {
+        },
+        (error: unknown) => {
+          if (version !== preflightVersion) return;
           setPreflight();
-          setPreflightError("Export preflight could not be reached. Try again.");
+          setPreflightError(
+            error instanceof ApiFailure
+              ? `Export preflight failed (${error.status}). Try again.`
+              : "Export preflight could not be reached. Try again.",
+          );
           setExportStatus("Export preflight failed. Try again.");
-        }
-      }
-      if (version === preflightVersion) {
-        setPreflightPending(false);
-        if (preflightController === controller) preflightController = undefined;
-      }
-    }, 250);
+        },
+      )
+      .finally(() => {
+        if (version === preflightVersion) setPreflightPending(false);
+      });
   });
 
   const clearExportContext = () => {
-    workflowController?.abort();
-    workflowController = undefined;
-    workflowRequest++;
+    workflowGeneration++;
+    cancellationGeneration++;
+    if (workflowCommand) registry.set(workflowCommand, Atom.Interrupt);
+    workflowCommand = undefined;
     workflowActive = false;
     setExportPending(false);
     cancelPreflight();
-    exportController = abortAndClear(exportController);
-    exportCancellationController = abortAndClear(exportCancellationController);
+    const cancelling = exportCancellation()?.batchId;
+    if (cancelling) registry.set(cancelBatchCommands(cancelling), Atom.Interrupt);
     childJobContextGeneration++;
-    for (const action of childJobActions.values()) action.controller.abort();
-    childJobActions.clear();
+    for (const id of pendingBatchCancellations) {
+      registry.set(cancelBatchCommands(id), Atom.Interrupt);
+    }
+    pendingBatchCancellations.clear();
+    for (const id of pendingChildJobs()) {
+      registry.set(cancelChildCommands(id), Atom.Interrupt);
+      registry.set(retryChildCommands(id), Atom.Interrupt);
+    }
     setPendingChildJobs(new Set<string>());
-    exportRequest++;
     setExportCancellation();
     setExportCancellationPending(false);
     setExportJob();
@@ -507,8 +537,9 @@ export function createExportController(deps: {
     )
       return;
     if (cancellationPending) {
-      exportCancellationController?.abort();
-      exportCancellationController = undefined;
+      cancellationGeneration++;
+      const id = exportCancellation()?.batchId;
+      if (id) registry.set(cancelBatchCommands(id), Atom.Interrupt);
       setExportCancellation();
       setExportCancellationPending(false);
     }
@@ -531,10 +562,7 @@ export function createExportController(deps: {
       );
 
     workflowActive = true;
-    const request = ++workflowRequest;
-    const submissionRequest = ++exportRequest;
-    const controller = new AbortController();
-    workflowController = controller;
+    const generation = ++workflowGeneration;
     const context = {
       projectId: deps.projectId(),
       mediaId: deps.selected()?.id,
@@ -557,215 +585,200 @@ export function createExportController(deps: {
             : itemIDs,
       },
     };
+    let expectedRevision = context.revision;
     const editorContextCurrent = () =>
       context.projectId === deps.projectId() &&
+      expectedRevision === deps.revision() &&
       context.mediaId === deps.selected()?.id &&
       context.editorVersion === deps.editorVersion() &&
       context.scope === exportScope() &&
       context.itemIDs.length === exportItemIDs().length &&
       context.itemIDs.every((id, index) => exportItemIDs()[index] === id);
-    const workflowCurrent = () =>
-      request === workflowRequest &&
-      submissionRequest === exportRequest &&
-      !controller.signal.aborted &&
-      editorContextCurrent();
+    const workflowCurrent = () => generation === workflowGeneration && editorContextCurrent();
     const stopForStaleContext = () => {
-      if (request === workflowRequest && !controller.signal.aborted)
+      if (generation === workflowGeneration)
         setExportStatus("Create clips stopped because the project changed. Save again and retry.");
     };
     let savedRevision = context.revision;
-    let submitted = false;
     cancelPreflight();
     setPreflight();
     setPreflightError("");
     setPreflightPending(true);
     setExportPending(true);
     setExportStatus(deps.dirty() ? "Saving project…" : "Checking export requirements…");
-    try {
-      if (deps.dirty()) {
-        const saved = await deps.saveProject();
-        if (!saved) {
-          if (workflowCurrent())
-            setExportStatus(deps.status() || "Project could not be saved. Try again.");
-          else stopForStaleContext();
+    const command = runtime.fn(() =>
+      Effect.gen(function* () {
+        if (deps.dirty()) {
+          const saved = yield* Effect.tryPromise({
+            try: () => deps.saveProject(),
+            catch: (error) =>
+              error instanceof Error ? error : new Error("Project could not be saved."),
+          });
+          if (!saved) {
+            if (workflowCurrent())
+              setExportStatus(deps.status() || "Project could not be saved. Try again.");
+            else stopForStaleContext();
+            return;
+          }
+          expectedRevision = saved.revision;
+          if (!workflowCurrent()) {
+            stopForStaleContext();
+            return;
+          }
+          savedRevision = saved.revision;
+        }
+        if (!workflowCurrent()) {
+          stopForStaleContext();
+          return;
+        }
+        setExportStatus("Checking export requirements…");
+        const checked = yield* Effect.exit(
+          apiJson<components["schemas"]["ExportPreflight"]>(
+            deps.api,
+            `projects/${encodeURIComponent(context.projectId)}/exports/preflight`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ ...context.input, itemIds: [...itemIDs] }),
+            },
+          ),
+        );
+        if (!workflowCurrent()) {
+          stopForStaleContext();
+          return;
+        }
+        if (Exit.isFailure(checked)) {
+          const failure = Cause.squash(checked.cause);
+          setPreflight();
+          setPreflightError(
+            failure instanceof ApiFailure
+              ? `Export preflight failed (${failure.status}). Try again.`
+              : "Export preflight could not be reached. Try again.",
+          );
+          setExportStatus("Export preflight failed. Try again.");
+          return;
+        }
+        const fresh = checked.value;
+        setPreflight(fresh);
+        setPreflightError("");
+        if (!fresh.allowed) {
+          setExportStatus("");
           return;
         }
         if (!workflowCurrent()) {
           stopForStaleContext();
           return;
         }
-        savedRevision = saved.revision;
-      }
-      if (!workflowCurrent()) {
-        stopForStaleContext();
-        return;
-      }
-      setExportStatus("Checking export requirements…");
-      const preflightResponse = await preflightRequest(
-        deps.api,
-        context.projectId,
-        { ...context.input, itemIds: [...itemIDs] },
-        controller.signal,
-      );
-      if (!workflowCurrent()) {
-        stopForStaleContext();
-        return;
-      }
-      if (!preflightResponse.ok) {
-        setPreflight();
-        setPreflightError(`Export preflight failed (${preflightResponse.status}). Try again.`);
-        setExportStatus("Export preflight failed. Try again.");
-        return;
-      }
-      const fresh = (await preflightResponse.json()) as components["schemas"]["ExportPreflight"];
-      if (!workflowCurrent()) {
-        stopForStaleContext();
-        return;
-      }
-      setPreflight(fresh);
-      setPreflightError("");
-      if (!fresh.allowed) {
-        setExportStatus("");
-        return;
-      }
-
-      if (!workflowCurrent()) {
-        stopForStaleContext();
-        return;
-      }
-      setExportStatus("Creating clips…");
-      exportController = controller;
-      const response = await deps.api.request(
-        `projects/${encodeURIComponent(context.projectId)}/exports`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ itemIds: context.input.itemIds }),
-          signal: controller.signal,
-        },
-      );
-      if (!workflowCurrent()) {
-        stopForStaleContext();
-        return;
-      }
-      if (!response.ok) {
-        const error = await readApiError(response);
-        if (!workflowCurrent()) return;
-        setExportStatus(
-          error.code === "export_busy"
-            ? "Export capacity is busy. Try again shortly."
-            : "Export could not be started. Try again.",
+        setExportStatus("Creating clips…");
+        const response = yield* Effect.exit(
+          apiJson<unknown>(deps.api, `projects/${encodeURIComponent(context.projectId)}/exports`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ itemIds: context.input.itemIds }),
+          }),
         );
-        return;
-      }
-      const submission = parseBatchExportSubmission(await response.json());
-      if (!workflowCurrent()) {
-        stopForStaleContext();
-        return;
-      }
-      setBatchId(submission.batchId);
-      setExportRevision(savedRevision);
-      setBatchJobs(submission.jobs);
-      setBatches((current) => [
-        {
-          batchId: submission.batchId,
-          projectId: context.projectId,
-          projectRevision: savedRevision,
-          state: "queued",
-          progress: 0,
-          jobs: submission.jobs,
-        },
-        ...current.filter((batch) => batch.batchId !== submission.batchId),
-      ]);
-      void deps.queryClient.invalidateQueries({ queryKey: ["batches"] });
-      const job = selectBatchJob(submission.jobs);
-      if (job) setExportJob(job);
-      setExportStatus(
-        job?.state === "queued"
-          ? "Export queued."
-          : job?.state === "running"
-            ? "Export running."
-            : "Export complete.",
-      );
-      submitted = true;
+        if (!workflowCurrent()) {
+          stopForStaleContext();
+          return;
+        }
+        if (Exit.isFailure(response)) {
+          const failure = Cause.squash(response.cause);
+          if (failure instanceof ApiFailure) {
+            setExportStatus(
+              failure.code === "export_busy"
+                ? "Export capacity is busy. Try again shortly."
+                : "Export could not be started. Try again.",
+            );
+            return;
+          }
+          yield* Effect.fail(
+            failure instanceof Error ? failure : new Error("Export could not be started."),
+          );
+          return;
+        }
+        const submission = parseBatchExportSubmission(response.value);
+        if (!workflowCurrent()) {
+          stopForStaleContext();
+          return;
+        }
+        setBatchId(submission.batchId);
+        setExportRevision(savedRevision);
+        setBatchJobs(submission.jobs);
+        setBatches((current) => [
+          {
+            batchId: submission.batchId,
+            projectId: context.projectId,
+            projectRevision: savedRevision,
+            state: "queued",
+            progress: 0,
+            jobs: submission.jobs,
+          },
+          ...current.filter((batch) => batch.batchId !== submission.batchId),
+        ]);
+        refreshBatches();
+        const job = selectBatchJob(submission.jobs);
+        if (job) setExportJob(job);
+        setExportStatus(
+          job?.state === "queued"
+            ? "Export queued."
+            : job?.state === "running"
+              ? "Export running."
+              : "Export complete.",
+        );
+      }),
+    );
+    workflowCommand = command;
+    registry.set(command, undefined);
+    try {
+      await runEffect(readServerAtom(deps.server, command));
     } catch (error) {
-      if (!controller.signal.aborted && request === workflowRequest)
+      if (workflowCurrent())
         setExportStatus(
           error instanceof Error ? error.message : "Export could not be started. Try again.",
         );
     } finally {
-      if (request === workflowRequest) {
+      if (workflowCommand === command) {
         workflowActive = false;
-        workflowController = undefined;
+        workflowCommand = undefined;
         setExportPending(false);
         setPreflightPending(false);
-        if (!submitted && exportController === controller) exportController = undefined;
       }
     }
   };
   const cancelExport = async () => {
     const currentBatchId = batchId();
     const currentBatch = batches().find((batch) => batch.batchId === currentBatchId);
-    const jobs = [...batchJobs(), ...(currentBatch?.jobs ?? [])];
-    const job = jobs.find(isJobActive) ?? exportJob();
-    const jobsToReconcile = [...jobs, ...(job ? [job] : [])];
-    if (!job || !currentBatchId || !isJobActive(job)) return;
-    exportCancellationController?.abort();
-    const controller = new AbortController();
-    exportCancellationController = controller;
+    const job = [...batchJobs(), ...(currentBatch?.jobs ?? [])].find(isJobActive) ?? exportJob();
+    if (!job || !currentBatchId || !isJobActive(job) || exportCancellationPending()) return;
+    const generation = ++cancellationGeneration;
+    const command = cancelBatchCommands(currentBatchId);
+    registry.set(command, undefined);
     setExportCancellationPending(true);
-    const generation = ++nextQueryGeneration;
-    setExportCancellation({
-      batchId: currentBatchId,
-      jobId: job.id,
-      phase: "requested",
-      generation,
-    });
+    setExportCancellation({ batchId: currentBatchId, jobId: job.id });
     setExportStatus("Export batch cancellation requested.");
     try {
-      const jobIds = [...new Set(jobsToReconcile.map((item) => item.id))];
-      await Promise.all([
-        deps.queryClient.cancelQueries({ queryKey: ["batches"] }),
-        deps.queryClient.cancelQueries({ queryKey: ["batch", currentBatchId] }),
-        ...jobIds.map((jobId) =>
-          deps.queryClient.cancelQueries({ queryKey: ["job", "export", jobId] }),
-        ),
-      ]);
-      if (!cancellationIsCurrent(controller, exportCancellationController)) return;
-      const response = await deps.api.request(`batches/${encodeURIComponent(currentBatchId)}`, {
-        method: "DELETE",
-        signal: controller.signal,
-      });
-      if (!response.ok) throw new Error("Export batch could not be cancelled.");
-      if (!cancellationIsCurrent(controller, exportCancellationController)) return;
-      setExportCancellation({
-        batchId: currentBatchId,
-        jobId: job.id,
-        phase: "confirmed",
-        generation,
-      });
-      setQueryGeneration(generation);
-      exportController?.abort();
-      exportController = undefined;
+      await runEffect(readServerAtom(deps.server, command));
+      if (generation !== cancellationGeneration) return;
+      cancelledBatches.add(currentBatchId);
+      setBatches((items) => items.map((batch) => protectCancellation(batch)));
+      setBatchJobs(
+        batchJobs().map((item) => (isJobActive(item) ? { ...item, state: "cancelled" } : item)),
+      );
+      const currentJob = exportJob();
+      if (currentJob && isJobActive(currentJob))
+        setExportJob({ ...currentJob, state: "cancelled" });
       setExportStatus("Export batch cancellation requested.");
-      await reconcileBatchQueries(currentBatchId, jobsToReconcile);
+      refreshQueue(currentBatchId, job.id);
     } catch (error) {
-      if (
-        !controller.signal.aborted &&
-        cancellationIsCurrent(controller, exportCancellationController)
-      ) {
+      if (generation === cancellationGeneration) {
         setExportCancellation();
-        await reconcileBatchQueries(currentBatchId, jobsToReconcile);
-        if (cancellationIsCurrent(controller, exportCancellationController))
-          setExportStatus(
-            error instanceof Error ? error.message : "Export could not be cancelled. Try again.",
-          );
+        refreshQueue(currentBatchId, job.id);
+        setExportStatus(
+          error instanceof Error ? error.message : "Export could not be cancelled. Try again.",
+        );
       }
     } finally {
-      if (exportCancellationController === controller) {
-        exportCancellationController = undefined;
-        setExportCancellationPending(false);
-      }
+      if (generation === cancellationGeneration) setExportCancellationPending(false);
     }
   };
   const cancelBatch = async (id: string) => {
@@ -777,26 +790,26 @@ export function createExportController(deps: {
         isJobActive(exportJob()))
     )
       return cancelExport();
-    const jobs = currentBatch?.jobs ?? [];
-    const jobIds = [...new Set(jobs.map((job) => job.id))];
+    if (pendingBatchCancellations.has(id)) return;
+    pendingBatchCancellations.add(id);
+    const generation = childJobContextGeneration;
     try {
-      await Promise.all([
-        deps.queryClient.cancelQueries({ queryKey: ["batches"] }),
-        deps.queryClient.cancelQueries({ queryKey: ["batch", id] }),
-        ...jobIds.map((jobId) =>
-          deps.queryClient.cancelQueries({ queryKey: ["job", "export", jobId] }),
-        ),
-      ]);
-      const response = await deps.api.request(`batches/${encodeURIComponent(id)}`, {
-        method: "DELETE",
-      });
-      if (!response.ok) throw new Error("Export batch could not be cancelled.");
-      await reconcileBatchQueries(id, jobs);
+      const command = cancelBatchCommands(id);
+      registry.set(command, undefined);
+      await runEffect(readServerAtom(deps.server, command));
+      if (generation !== childJobContextGeneration) return;
+      cancelledBatches.add(id);
+      setBatches((items) => items.map((batch) => protectCancellation(batch)));
     } catch (error) {
-      await reconcileBatchQueries(id, jobs);
-      setExportStatus(
-        error instanceof Error ? error.message : "Export batch could not be cancelled.",
-      );
+      if (generation === childJobContextGeneration)
+        setExportStatus(
+          error instanceof Error ? error.message : "Export batch could not be cancelled.",
+        );
+    } finally {
+      if (generation === childJobContextGeneration) {
+        pendingBatchCancellations.delete(id);
+        refreshQueue(id);
+      }
     }
   };
   const childJobContext = (): ChildJobContext => ({
@@ -809,60 +822,53 @@ export function createExportController(deps: {
     generation: childJobContextGeneration,
   });
   const cancelChildJob = async (id: string, requestedBatchId?: string) => {
-    const action = beginChildJobAction(id);
-    if (!action) return;
-    const details = childJobDetails(id, requestedBatchId);
+    if (!beginChildJobAction(id)) return;
+    const jobBatchId = childJobBatchId(id, requestedBatchId);
     const context = childJobContext();
     try {
-      await cancelChildJobQueries(details.jobIds, [details.batchId]);
-      if (!childJobActionIsCurrent(id, action, context)) return;
-      const response = await deps.api.request(`jobs/${encodeURIComponent(id)}`, {
-        method: "DELETE",
-        signal: action.controller.signal,
-      });
-      if (!response.ok) {
-        const error = await readApiError(response, "Export job could not be cancelled. Try again.");
-        throw new Error(error.message);
+      const command = cancelChildCommands(id);
+      registry.set(command, undefined);
+      await runEffect(readServerAtom(deps.server, command));
+      if (!childJobActionIsCurrent(id, context)) return;
+      cancelledChildJobs.add(id);
+      setBatches((items) => items.map((batch) => protectCancellation(batch)));
+      if (jobBatchId === batchId()) {
+        setBatchJobs(
+          batchJobs().map((job) =>
+            job.id === id && isJobActive(job) ? { ...job, state: "cancelled" } : job,
+          ),
+        );
+        const job = exportJob();
+        if (job?.id === id && isJobActive(job)) setExportJob({ ...job, state: "cancelled" });
       }
-      if (childJobActionIsCurrent(id, action, context))
-        setExportStatus("Export job cancellation requested.");
+      setExportStatus("Export job cancellation requested.");
     } catch (error) {
-      if (childJobActionIsCurrent(id, action, context))
+      if (childJobActionIsCurrent(id, context))
         setExportStatus(
           error instanceof Error ? error.message : "Export job could not be cancelled. Try again.",
         );
     } finally {
-      if (childJobActionIsCurrent(id, action, context))
-        void reconcileChildJobQueries(details.jobIds, [details.batchId]);
-      finishChildJobAction(id, action);
+      if (childJobActionIsCurrent(id, context)) refreshQueue(jobBatchId, id);
+      if (context.generation === childJobContextGeneration) markChildJobPending(id, false);
     }
   };
   const retryChildJob = async (id: string, requestedBatchId?: string) => {
-    const action = beginChildJobAction(id);
-    if (!action) return;
-    const details = childJobDetails(id, requestedBatchId);
+    if (!beginChildJobAction(id)) return;
+    const jobBatchId = childJobBatchId(id, requestedBatchId);
     const context = childJobContext();
     let retriedBatch: Batch | undefined;
     try {
-      await cancelChildJobQueries(details.jobIds, [details.batchId]);
-      if (!childJobActionIsCurrent(id, action, context)) return;
-      const response = await deps.api.request(`jobs/${encodeURIComponent(id)}/retry`, {
-        method: "POST",
-        signal: action.controller.signal,
-      });
-      if (!response.ok) {
-        const error = await readApiError(response, "Export job could not be retried. Try again.");
-        throw new Error(error.message);
-      }
-      retriedBatch = (await response.json()) as Batch;
-      if (!childJobActionIsCurrent(id, action, context)) return;
+      const command = retryChildCommands(id);
+      registry.set(command, undefined);
+      retriedBatch = await runEffect(readServerAtom(deps.server, command));
+      if (!childJobActionIsCurrent(id, context)) return;
       setBatches((items) => [
         retriedBatch!,
         ...items.filter((batch) => batch.batchId !== retriedBatch!.batchId),
       ]);
       const updatesActiveContext =
-        activeExportContextIsCurrent(id, action, context) &&
-        (details.batchId === context.batchId || context.exportJobId === id);
+        activeExportContextIsCurrent(id, context) &&
+        (jobBatchId === context.batchId || context.exportJobId === id);
       if (updatesActiveContext) {
         setBatchId(retriedBatch.batchId);
         setBatchJobs(retriedBatch.jobs);
@@ -871,17 +877,13 @@ export function createExportController(deps: {
       }
       setExportStatus("Export retry queued as a new job.");
     } catch (error) {
-      if (childJobActionIsCurrent(id, action, context))
+      if (childJobActionIsCurrent(id, context))
         setExportStatus(
           error instanceof Error ? error.message : "Export job could not be retried. Try again.",
         );
     } finally {
-      if (childJobActionIsCurrent(id, action, context))
-        void reconcileChildJobQueries(
-          [...details.jobIds, ...(retriedBatch?.jobs.map((job) => job.id) ?? [])],
-          [details.batchId, retriedBatch?.batchId],
-        );
-      finishChildJobAction(id, action);
+      if (childJobActionIsCurrent(id, context)) refreshQueue(jobBatchId, id);
+      if (context.generation === childJobContextGeneration) markChildJobPending(id, false);
     }
   };
   onCleanup(clearExportContext);
@@ -920,37 +922,17 @@ export function createExportController(deps: {
     exportPending,
     exportCancellationPending,
     childJobPending: (id: string) => pendingChildJobs().has(id),
-    destinationsLoading: () => destinationsQuery.isPending || destinationsQuery.isFetching,
-    destinationsError: () =>
-      destinationsQuery.error instanceof Error
-        ? destinationsQuery.error.message
-        : destinationsQuery.error
-          ? "Destinations could not be loaded."
-          : "",
-    retryDestinations: () => void destinationsQuery.refetch(),
-    batchesLoading: () => batchListQuery.isPending,
-    batchesRefreshing: () => batchListQuery.isFetching,
-    batchesError: () =>
-      batchListQuery.error instanceof Error
-        ? batchListQuery.error.message
-        : batchListQuery.error
-          ? "Export queue could not be loaded."
-          : "",
-    refreshBatches: () => void batchListQuery.refetch(),
-    batchLoading: () => Boolean(batchId()) && batchProgressQuery.isFetching,
-    batchError: () =>
-      batchProgressQuery.error instanceof Error
-        ? batchProgressQuery.error.message
-        : batchProgressQuery.error
-          ? "Export batch status could not be updated."
-          : "",
-    exportJobLoading: () => Boolean(exportJob()?.id) && exportStatusQuery.isFetching,
-    exportJobError: () =>
-      exportStatusQuery.error instanceof Error
-        ? exportStatusQuery.error.message
-        : exportStatusQuery.error
-          ? "Export status could not be updated."
-          : "",
+    destinationsLoading: () => destinationResult.waiting(),
+    destinationsError: () => destinationResult.error()?.message ?? "",
+    retryDestinations: () => registry.refresh(destinationAtom),
+    batchesLoading: () => batchList.waiting() && !batchList.value(),
+    batchesRefreshing: () => batchList.waiting(),
+    batchesError: () => batchList.error()?.message ?? "",
+    refreshBatches,
+    batchLoading: () => Boolean(batchId()) && batchProgress.waiting(),
+    batchError: () => batchProgress.error()?.message ?? "",
+    exportJobLoading: () => Boolean(exportJob()?.id) && exportStatusResult.waiting(),
+    exportJobError: () => exportStatusResult.error()?.message ?? "",
     destinationStatus,
     clearExportContext,
     exportProject,
@@ -1017,81 +999,4 @@ export function createExportController(deps: {
       deps.setDirty(true);
     },
   };
-}
-
-function useDestinationsQuery(api: ApiClient) {
-  return useQuery(() => ({
-    queryKey: ["destinations"],
-    queryFn: async ({ signal }: { signal: AbortSignal }) => {
-      const response = await api.request("destinations", { signal });
-      if (!response.ok) throw new Error(`Destinations could not be loaded (${response.status}).`);
-      return (await response.json()) as DestinationResponse;
-    },
-  }));
-}
-
-function preflightRequest(
-  api: ApiClient,
-  projectId: string,
-  input: components["schemas"]["ExportInput"],
-  signal?: AbortSignal,
-) {
-  return api.request(`projects/${encodeURIComponent(projectId)}/exports/preflight`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input),
-    signal,
-  });
-}
-function useBatchQuery(
-  api: ApiClient,
-  batchId: Accessor<string | undefined>,
-  generation: Accessor<number>,
-) {
-  return useQuery(() => ({
-    queryKey: ["batch", batchId() ?? null, generation()],
-    enabled: Boolean(batchId()),
-    queryFn: async ({ signal }: { signal: AbortSignal }) => {
-      const requestGeneration = generation();
-      const id = batchId();
-      if (!id) throw new Error("Batch ID is missing.");
-      const response = await api.request(`batches/${encodeURIComponent(id)}`, { signal });
-      if (!response.ok) throw new Error("Batch status could not be updated.");
-      return { value: (await response.json()) as Batch, generation: requestGeneration };
-    },
-    refetchInterval: (query: { state: { data?: QuerySnapshot<Batch> } }) =>
-      isBatchActive(query.state.data?.value) ? 1000 : false,
-  }));
-}
-function useBatchListQuery(api: ApiClient) {
-  return useQuery(() => ({
-    queryKey: ["batches"],
-    queryFn: async ({ signal }: { signal: AbortSignal }) => {
-      const response = await api.request("batches?limit=50", { signal });
-      if (!response.ok) throw new Error("Export queue could not be loaded.");
-      return (await response.json()) as components["schemas"]["BatchPage"];
-    },
-    refetchInterval: (query: { state: { data?: components["schemas"]["BatchPage"] } }) =>
-      query.state.data?.items?.some(isBatchActive) ? 1000 : false,
-  }));
-}
-function useExportJobQuery(
-  api: ApiClient,
-  exportJob: Accessor<ExportJob | undefined>,
-  generation: Accessor<number>,
-) {
-  return useQuery(() => ({
-    queryKey: ["job", "export", exportJob()?.id ?? null, generation()],
-    enabled: Boolean(exportJob()?.id),
-    queryFn: async ({ signal }: { signal: AbortSignal }) => {
-      const requestGeneration = generation();
-      const id = exportJob()?.id;
-      if (!id) throw new Error("Export job ID is missing.");
-      const response = await api.request(`jobs/${encodeURIComponent(id)}`, { signal });
-      if (!response.ok) throw new Error("Export status could not be updated. Try again.");
-      return { value: (await response.json()) as ExportJob, generation: requestGeneration };
-    },
-    refetchInterval: (query: { state: { data?: QuerySnapshot<ExportJob> } }) =>
-      jobPollInterval(query.state.data?.value, 1000),
-  }));
 }

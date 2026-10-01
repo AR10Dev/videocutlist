@@ -14,13 +14,16 @@
     "test:e2e": "playwright test"
   },
   "dependencies": {
+    "@effect/atom-solid": "4.0.0-rc.118",
     "@kobalte/core": "0.13.14",
-    "@tanstack/solid-query": "5.104.0",
+    "effect": "4.0.0-rc.118",
     "lucide-solid": "1.48.0",
     "motion": "13.4.4",
-    "solid-js": "1.9.15"
+    "solid-js": "1.9.15",
+    "zod": "4.6.5"
   },
   "devDependencies": {
+    "@effect/vitest": "4.0.0-rc.118",
     "@playwright/test": "1.63.0",
     "@tailwindcss/vite": "4.3.3",
     "@types/node": "26.6.3",

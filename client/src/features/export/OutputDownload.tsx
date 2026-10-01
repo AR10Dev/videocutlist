@@ -2,11 +2,10 @@ import { Show } from "solid-js";
 import { createApiClient, resolveBrowserConfiguration } from "../../api";
 import { createExportDownload, downloadExport } from "./download";
 
-const configuration = resolveBrowserConfiguration();
-const api = createApiClient(configuration);
-
 /** Stream a protected output without making its API URL a navigable link. */
 export function OutputDownload(props: { jobId: string; position: number; name: string }) {
+  const configuration = resolveBrowserConfiguration();
+  const api = createApiClient(configuration);
   const { pending, error, download, cancel } = createExportDownload((signal) =>
     downloadExport(
       api,

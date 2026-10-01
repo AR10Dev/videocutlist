@@ -1,35 +1,50 @@
-import { createSignal, For, Show } from "solid-js";
-import { createApiClient, resolveBrowserConfiguration } from "../../api";
+import { createSignal, For, Show, onCleanup, useContext } from "solid-js";
+import { RegistryContext, useAtomSet } from "@effect/atom-solid";
+import { Effect } from "effect";
+import * as Atom from "effect/reactivity/Atom";
+import { apiJson, createApiClient, resolveBrowserConfiguration } from "../../api";
+import { useServerAtom } from "../app/server";
 import type { components } from "../../generated/api";
 import { useWorkspace } from "../app/WorkspaceContext";
 
-const api = createApiClient(resolveBrowserConfiguration());
-
 export function ProjectBrowser() {
   const { projects } = useWorkspace();
+  const api = createApiClient(resolveBrowserConfiguration());
+  const registry = useContext(RegistryContext);
+  const page = Atom.fn((next: string | undefined) =>
+    apiJson<components["schemas"]["ProjectPage"]>(
+      api,
+      `projects?limit=50${next ? `&cursor=${encodeURIComponent(next)}` : ""}`,
+    ).pipe(
+      Effect.mapError(() => new Error("Saved projects could not be loaded. Try Refresh projects.")),
+    ),
+  );
+  const fetchPage = useAtomSet(() => page, { mode: "promise" });
+  const state = useServerAtom(() => page);
+  const pending = state.waiting;
+  let disposed = false;
+  onCleanup(() => {
+    disposed = true;
+    registry.set(page, Atom.Interrupt);
+  });
   const [items, setItems] = createSignal<components["schemas"]["ProjectSummary"][]>([]);
   const [cursor, setCursor] = createSignal<string | null>(null);
-  const [pending, setPending] = createSignal(false);
   const [message, setMessage] = createSignal("");
   const load = async (next?: string) => {
     if (pending()) return;
-    setPending(true);
-    setMessage("");
     try {
-      const response = await api.request(
-        `projects?limit=50${next ? `&cursor=${encodeURIComponent(next)}` : ""}`,
+      const result = await fetchPage(next);
+      if (disposed) return;
+      setItems((previous) => (next ? [...previous, ...result.items] : result.items));
+      setCursor(result.nextCursor);
+      setMessage(
+        !result.items.length && !next
+          ? "No saved projects yet. Choose media and save your first project."
+          : "",
       );
-      if (!response.ok)
-        throw new Error("Saved projects could not be loaded. Try Refresh projects.");
-      const page = (await response.json()) as components["schemas"]["ProjectPage"];
-      setItems((previous) => (next ? [...previous, ...page.items] : page.items));
-      setCursor(page.nextCursor);
-      if (!page.items.length && !next)
-        setMessage("No saved projects yet. Choose media and save your first project.");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Saved projects could not be loaded.");
-    } finally {
-      setPending(false);
+      if (!disposed)
+        setMessage(error instanceof Error ? error.message : "Saved projects could not be loaded.");
     }
   };
   return (
