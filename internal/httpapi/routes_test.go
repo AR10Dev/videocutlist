@@ -157,6 +157,7 @@ func TestRouteCoverageInventory(t *testing.T) {
 		{http.MethodGet, "/media/v2/projects/" + project + "/interchange/chapters", routeExportInterchange},
 		{http.MethodPost, "/api/v2/projects/" + project + "/detections", routeCreateDetection},
 		{http.MethodGet, "/api/v2/jobs/" + job, routeGetJob},
+		{http.MethodGet, "/api/v2/jobs/" + job + "/events", routeStreamJob},
 		{http.MethodDelete, "/api/v2/jobs/" + job, routeCancelJob},
 		{http.MethodPost, "/api/v2/jobs/" + job + "/retry", routeRetryJob},
 		{http.MethodGet, "/media/v2/jobs/" + job + "/outputs/0", routeDownloadOutput},

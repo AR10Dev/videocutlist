@@ -4,6 +4,7 @@ package projects
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"time"
 
@@ -112,6 +113,7 @@ type Job struct {
 	MediaLabel      string                       `json:"mediaLabel,omitempty"`
 	Type            string                       `json:"type"`
 	State           string                       `json:"state"`
+	Revision        int64                        `json:"revision"`
 	Progress        float64                      `json:"progress"`
 	Result          *JobResult                   `json:"result,omitempty"`
 	Warnings        []string                     `json:"warnings,omitempty"`
@@ -133,6 +135,10 @@ type Job struct {
 	Candidates      []model.Candidate            `json:"candidates,omitempty"`
 	RootResults     map[string]RootLibraryStatus `json:"rootResults,omitempty"`
 }
+
+// SnapshotCursor returns a resource-scoped identifier for a persisted job revision.
+func (job Job) SnapshotCursor() string { return fmt.Sprintf("%s:%d", job.ID, job.Revision) }
+
 type Batch struct {
 	BatchID         string  `json:"batchId"`
 	ProjectID       string  `json:"projectId,omitempty"`

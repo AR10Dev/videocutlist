@@ -165,6 +165,7 @@ test.beforeEach(async ({ page }) => {
     id: "j_create-clips01",
     type: "export",
     state: "queued",
+    revision: 1,
     progress: 0,
     createdAt: "2026-01-01T00:00:00Z",
     updatedAt: "2026-01-01T00:00:00Z",

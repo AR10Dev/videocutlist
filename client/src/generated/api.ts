@@ -1163,6 +1163,7 @@ export interface components {
       type: "export" | "detection" | "library_scan";
       /** @enum {string} */
       state: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+      revision: number;
       progress?: number;
       /** @description Present only when an export job succeeded. */
       result?: {

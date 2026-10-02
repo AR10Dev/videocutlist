@@ -2364,6 +2364,7 @@ components:
         - id
         - type
         - state
+        - revision
         - createdAt
         - updatedAt
       properties:
@@ -2397,6 +2398,9 @@ components:
             - succeeded
             - failed
             - cancelled
+        revision:
+          type: integer
+          minimum: 1
         progress:
           type: number
           minimum: 0
