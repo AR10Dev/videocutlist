@@ -1,5 +1,6 @@
 import {
   createEffect,
+  createMemo,
   createSignal,
   onCleanup,
   untrack,
@@ -8,18 +9,15 @@ import {
 } from "solid-js";
 import { useAtomSet, useAtomValue } from "@effect/atom-solid";
 import { Cause, Effect, Exit } from "effect";
+import * as Schema from "effect/Schema";
 import * as AsyncResult from "effect/reactivity/AsyncResult";
 import * as Atom from "effect/reactivity/Atom";
-import {
-  ApiFailure,
-  apiJson,
-  apiRequest,
-  readApiError,
-  runEffect,
-  type ApiClient,
-} from "../../api";
-import { pollAtom, readServerAtom, useServerAtom, type ServerState } from "../app/server";
+import * as AtomRegistry from "effect/reactivity/AtomRegistry";
+import { ApiFailure, apiJson, runEffect, type ApiClient } from "../../api";
+import { readServerAtom, useServerAtom, type ServerState } from "../app/server";
 import type { components } from "../../generated/api";
+import { Batch as BatchSchema } from "../../generated/effect-api";
+import type { Batch as ObservedBatch } from "../../generated/effect-api";
 import type { EditableProjectItem, ExportContainer } from "../projects/model";
 import type { Segment } from "../preview/model";
 import { validFilenameTemplateLength, type AppSettings } from "../settings/model";
@@ -27,6 +25,7 @@ import { exportFailureMessage } from "../queue/jobUi";
 import {
   isBatchActive,
   isJobActive,
+  idempotencyKeyForAttempt,
   parseBatchExportSubmission,
   selectBatchJob,
 } from "./queueResponse";
@@ -92,22 +91,69 @@ export function createExportController(deps: {
   };
   const registry = deps.server.registry;
   const runtime = deps.server.runtime;
-  const batchesAtom = Atom.make<Batch[]>([]);
-  const exportJobAtom = Atom.make<ExportJob | undefined>(undefined);
-  const batchJobsAtom = Atom.make<ExportJob[]>([]);
-  const batchIdAtom = Atom.make<string | undefined>(undefined);
-  const batches = useAtomValue(() => batchesAtom);
-  const exportJob = useAtomValue(() => exportJobAtom);
-  const batchJobs = useAtomValue(() => batchJobsAtom);
-  const batchId = useAtomValue(() => batchIdAtom);
-  const setBatches = (value: Batch[] | ((current: Batch[]) => Batch[])) => {
-    if (typeof value === "function") registry.update(batchesAtom, value);
-    else registry.set(batchesAtom, value);
+  const [batchIDs, setBatchIDs] = createSignal<string[]>([]);
+  const [batchId, setBatchId] = createSignal<string>();
+  const [cancelledBatchIDs, setCancelledBatchIDs] = createSignal<ReadonlySet<string>>(new Set());
+  const [cancelledChildJobIDs, setCancelledChildJobIDs] = createSignal<ReadonlySet<string>>(
+    new Set(),
+  );
+  const projectCancellation = (batch: Batch): Batch => {
+    const locallyCancelled = cancelledBatchIDs().has(batch.batchId);
+    if (!locallyCancelled && !batch.jobs.some((job) => cancelledChildJobIDs().has(job.id)))
+      return batch;
+    const jobs = batch.jobs.map((job) =>
+      isJobActive(job) && (locallyCancelled || cancelledChildJobIDs().has(job.id))
+        ? { ...job, state: "cancelled" as const }
+        : job,
+    );
+    return {
+      ...batch,
+      state:
+        locallyCancelled && (batch.state === "queued" || batch.state === "running")
+          ? "cancelled"
+          : batch.state,
+      jobs,
+    };
   };
-  const setExportJob = (value?: ExportJob) => registry.set(exportJobAtom, value);
-  const setBatchJobs = (value: ExportJob[]) => registry.set(batchJobsAtom, value);
-  const setBatchId = (value?: string) => registry.set(batchIdAtom, value);
-  const [exportRevision, setExportRevision] = createSignal<number>();
+  const batchSnapshotAccessors = new Map<
+    string,
+    Accessor<AsyncResult.AsyncResult<ObservedBatch, Error>>
+  >();
+  const batchSnapshotUnsubscribers = new Set<() => void>();
+  const observeBatchSnapshot = (id: string, initial?: ObservedBatch) => {
+    const atom = deps.server.observeBatch(id, initial);
+    let snapshot = batchSnapshotAccessors.get(id);
+    if (!snapshot) {
+      const [value, setValue] = createSignal(registry.get(atom));
+      const unsubscribe = registry.subscribe(atom, setValue, { immediate: true });
+      batchSnapshotAccessors.set(id, value);
+      batchSnapshotUnsubscribers.add(unsubscribe);
+      snapshot = value;
+    }
+    return snapshot;
+  };
+  const batchSnapshot = (id: string) => observeBatchSnapshot(id)();
+  const emptyBatchSnapshot = AsyncResult.initial<ObservedBatch, Error>();
+  const currentBatchResult = createMemo(() =>
+    batchId() ? batchSnapshot(batchId()!) : emptyBatchSnapshot,
+  );
+  const currentBatch = createMemo(() => {
+    const result = currentBatchResult();
+    if (!AsyncResult.isSuccess(result)) return;
+    // SAFETY: The workspace owner schema-validated this readonly snapshot; this is a read-only UI projection.
+    return projectCancellation(result.value as unknown as Batch);
+  });
+  const batches = createMemo(() =>
+    batchIDs().flatMap((id) => {
+      const result = batchSnapshot(id);
+      if (!AsyncResult.isSuccess(result)) return [];
+      // SAFETY: The workspace owner schema-validated this readonly snapshot; this is a read-only UI projection.
+      return [projectCancellation(result.value as unknown as Batch)];
+    }),
+  );
+  const exportJob = createMemo(() => selectBatchJob(currentBatch()?.jobs ?? []));
+  const batchJobs = createMemo(() => currentBatch()?.jobs ?? []);
+  const exportRevision = createMemo(() => currentBatch()?.projectRevision);
   const [exportStatus, setExportStatus] = createSignal("");
   const [exportMode, setExportMode] = createSignal<"merge" | "separate">("merge");
   const [exportSelection, setExportSelection] = createSignal<"segments" | "gaps">("segments");
@@ -210,78 +256,76 @@ export function createExportController(deps: {
     preflightVersion++;
   };
 
-  const batchListAtom = pollAtom(
-    runtime,
+  const batchListAtom = runtime.atom(
     apiJson<components["schemas"]["BatchPage"]>(deps.api, "batches?limit=50"),
-    (page) => page.items?.some(isBatchActive) ?? false,
-    1000,
   );
   const batchList = useServerAtom(() => batchListAtom);
-  const batchProgressAtoms = Atom.family((id: string) =>
-    pollAtom(
-      runtime,
-      apiJson<Batch>(deps.api, `batches/${encodeURIComponent(id)}`),
-      isBatchActive,
-      1000,
-    ),
-  );
-  const jobStatusAtoms = Atom.family((id: string) =>
-    pollAtom(
-      runtime,
-      apiJson<ExportJob>(deps.api, `jobs/${encodeURIComponent(id)}`),
-      isJobActive,
-      1000,
-    ),
-  );
-  const emptyBatch = Atom.make(AsyncResult.initial<Batch, Error>());
-  const emptyJob = Atom.make(AsyncResult.initial<ExportJob, Error>());
-  const batchProgress = useServerAtom(() =>
-    batchId() ? batchProgressAtoms(batchId()!) : emptyBatch,
-  );
-  const exportStatusResult = useServerAtom(() =>
-    exportJob()?.id ? jobStatusAtoms(exportJob()!.id) : emptyJob,
-  );
   const destinationAtom = runtime.atom(apiJson<DestinationResponse>(deps.api, "destinations"));
   const destinationResult = useServerAtom(() => destinationAtom);
+  const generatedMutation = <Arg, A, E>(
+    atom: Atom.AtomResultFn<Arg, A, E>,
+    argument: Arg,
+  ): Effect.Effect<A, E> =>
+    Effect.acquireUseRelease(
+      Effect.sync(() => registry.mount(atom)),
+      () => {
+        registry.set(atom, argument);
+        return AtomRegistry.getResult(registry, atom, { suspendOnWaiting: true });
+      },
+      (release) =>
+        Effect.sync(() => {
+          registry.set(atom, Atom.Reset);
+          release();
+        }),
+    );
   const cancelBatchCommands = Atom.family((id: string) =>
-    runtime.fn(() =>
-      Effect.flatMap(
-        apiRequest(deps.api, `batches/${encodeURIComponent(id)}`, { method: "DELETE" }),
-        (response) =>
-          response.ok
-            ? Effect.succeed(undefined)
-            : Effect.fail(new Error("Export batch could not be cancelled.")),
-      ),
-    ),
+    runtime.fn(() => {
+      const cancel = deps.server.generatedApi?.mutation("default", "cancelBatch");
+      return cancel
+        ? generatedMutation(cancel, { params: { batchId: id } }).pipe(
+            Effect.mapError(() => new Error("Export batch could not be cancelled.")),
+          )
+        : Effect.fail(new Error("Generated export API is not configured."));
+    }),
   );
   const cancelChildCommands = Atom.family((id: string) =>
-    runtime.fn(() =>
-      Effect.gen(function* () {
-        const response = yield* apiRequest(deps.api, `jobs/${encodeURIComponent(id)}`, {
-          method: "DELETE",
-        });
-        if (!response.ok) {
-          const error = yield* Effect.tryPromise({
-            try: () => readApiError(response, "Export job could not be cancelled. Try again."),
-            catch: (cause) =>
-              cause instanceof Error ? cause : new Error("Export job could not be cancelled."),
-          });
-          return yield* Effect.fail(new Error(error.message));
-        }
-      }),
-    ),
+    runtime.fn(() => {
+      const cancel = deps.server.generatedApi?.mutation("default", "cancelJob");
+      return cancel
+        ? generatedMutation(cancel, { params: { jobId: id } }).pipe(
+            Effect.mapError(() => new Error("Export job could not be cancelled. Try again.")),
+          )
+        : Effect.fail(new Error("Generated export API is not configured."));
+    }),
   );
-  const retryChildCommands = Atom.family((id: string) =>
-    runtime.fn(() =>
-      apiJson<Batch>(deps.api, `jobs/${encodeURIComponent(id)}/retry`, { method: "POST" }),
-    ),
-  );
-  const refreshBatches = () => registry.refresh(batchListAtom);
-  const refreshQueue = (id?: string, jobId?: string) => {
-    refreshBatches();
-    if (id && id === batchId()) registry.refresh(batchProgressAtoms(id));
-    if (jobId && jobId === exportJob()?.id) registry.refresh(jobStatusAtoms(jobId));
+  const uncertainRetries = new Map<string, { key: string; body: { jobId: string } }>();
+  let uncertainExport:
+    | {
+        key: string;
+        body: components["schemas"]["ExportSubmissionInput"];
+      }
+    | undefined;
+  const isUncertainCommandFailure = (error: unknown): boolean => {
+    if (!error || typeof error !== "object") return true;
+    if ("status" in error && typeof error.status === "number") return error.status >= 500;
+    if ("error" in error && error.error && typeof error.error === "object") {
+      const envelope = error.error;
+      if ("code" in envelope && typeof envelope.code === "string")
+        return envelope.code === "internal_error";
+    }
+    if ("code" in error && typeof error.code === "string") return error.code === "internal_error";
+    if ("reason" in error && error.reason && typeof error.reason === "object") {
+      const reason = error.reason;
+      if ("response" in reason && reason.response && typeof reason.response === "object") {
+        const response = reason.response;
+        if ("status" in response && typeof response.status === "number")
+          return response.status >= 500;
+      }
+    }
+    return true;
   };
+  const refreshBatches = () => registry.refresh(batchListAtom);
+  const refreshQueue = () => refreshBatches();
   const markChildJobPending = (id: string, pending: boolean) => {
     setPendingChildJobs((current) => {
       const next = new Set(current);
@@ -314,93 +358,79 @@ export function createExportController(deps: {
     )?.batchId ??
     requestedBatchId ??
     (batchJobs().some((job) => job.id === id) || exportJob()?.id === id ? batchId() : undefined);
-  const cancelledBatches = new Set<string>();
-  const cancelledChildJobs = new Set<string>();
-  const protectCancellation = (batch: Batch): Batch => {
-    const locallyCancelled = cancelledBatches.has(batch.batchId);
-    if (!locallyCancelled && !batch.jobs.some((job) => cancelledChildJobs.has(job.id)))
-      return batch;
-    const jobs = batch.jobs.map((job) =>
-      isJobActive(job) && (locallyCancelled || cancelledChildJobs.has(job.id))
-        ? { ...job, state: "cancelled" as const }
-        : job,
-    );
-    return {
-      ...batch,
-      state:
-        locallyCancelled && (batch.state === "queued" || batch.state === "running")
-          ? "cancelled"
-          : batch.state,
-      jobs,
-    };
+  const markLocallyCancelledBatch = (id: string, cancelled: boolean) => {
+    setCancelledBatchIDs((current) => {
+      const next = new Set(current);
+      if (cancelled) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  };
+  const markLocallyCancelledJob = (id: string, cancelled: boolean) => {
+    setCancelledChildJobIDs((current) => {
+      const next = new Set(current);
+      if (cancelled) next.add(id);
+      else next.delete(id);
+      return next;
+    });
   };
   createEffect(() => {
     const page = batchList.value();
     if (!page) return;
-    const items = Array.isArray(page.items)
-      ? page.items
-          .filter(
-            (batch): batch is Batch =>
-              typeof batch?.batchId === "string" && Array.isArray(batch.jobs),
-          )
-          .map(protectCancellation)
-      : [];
-    const current = untrack(batches);
-    const pending = current.find((batch) => batch.batchId === untrack(batchId));
-    if (pending && !items.some((item) => item.batchId === pending.batchId)) items.unshift(pending);
-    setBatches(items);
-    if (!batchId()) {
-      const active = items.find(isBatchActive);
+    const snapshots: ObservedBatch[] = [];
+    const entries = Array.isArray(page.items) ? page.items : [];
+    for (const entry of entries) {
+      try {
+        const snapshot = Schema.decodeUnknownSync(BatchSchema)(entry);
+        observeBatchSnapshot(snapshot.batchId, snapshot);
+        snapshots.push(snapshot);
+      } catch {
+        // Ignore malformed page entries rather than seeding an owner atom from unvalidated data.
+      }
+    }
+    const ids = snapshots.map((snapshot) => snapshot.batchId);
+    const activeID = untrack(batchId);
+    const retained = activeID && !ids.includes(activeID) ? [activeID] : [];
+    setBatchIDs([...new Set([...retained, ...ids])]);
+    if (!activeID) {
+      const active = snapshots.find((snapshot) => {
+        const result = untrack(() => batchSnapshot(snapshot.batchId));
+        if (!AsyncResult.isSuccess(result)) return false;
+        // SAFETY: ServerState decoded this owner snapshot with BatchSchema before publishing it.
+        return isBatchActive(result.value as unknown as Batch);
+      });
       if (active) setBatchId(active.batchId);
     }
   });
   createEffect(() => {
-    const next = batchProgress.value();
+    const result = currentBatchResult();
+    if (!AsyncResult.isSuccess(result)) return;
+    const next = result.value;
     if (
-      !next ||
       next.batchId !== batchId() ||
       cancellationResponseIsStale("batch", next.batchId, next.state)
     )
       return;
-    const guarded = protectCancellation(next);
-    setBatchJobs(guarded.jobs);
-    setExportRevision(guarded.projectRevision);
-    setExportJob(selectBatchJob(guarded.jobs));
-    setBatches((items) => [guarded, ...items.filter((batch) => batch.batchId !== guarded.batchId)]);
-    if (guarded.state === "queued") setExportStatus("Export batch queued.");
-    else if (guarded.state === "running")
-      setExportStatus(`Export batch running (${Math.round(guarded.progress * 100)}%).`);
-    else if (guarded.state === "succeeded") setExportStatus("Export batch complete.");
-    else if (guarded.state === "cancelled") setExportStatus("Export batch cancelled.");
-    else if (guarded.state === "failed") setExportStatus("Export batch failed.");
-  });
-  createEffect(() => {
-    const next = exportStatusResult.value();
-    if (
-      !next ||
-      next.id !== exportJob()?.id ||
-      cancellationResponseIsStale("job", next.id, next.state) ||
-      (isJobActive(next) &&
-        (cancelledChildJobs.has(next.id) || cancelledBatches.has(batchId() ?? "")))
-    )
-      return;
-    setExportJob(next);
-    setExportStatus(
-      next.state === "queued"
-        ? "Export queued."
-        : next.state === "running"
-          ? "Export running."
-          : next.state === "succeeded"
-            ? "Export complete."
-            : next.state === "cancelled"
-              ? "Export cancelled."
-              : exportFailureMessage(next.errorCode),
+    // SAFETY: ServerState decoded this owner snapshot with BatchSchema before publishing it.
+    const displayed = projectCancellation(next as unknown as Batch);
+    if (displayed.state === "queued") setExportStatus("Export queued.");
+    else if (displayed.state === "running")
+      setExportStatus(`Export batch running (${Math.round(displayed.progress * 100)}%).`);
+    else if (displayed.state === "succeeded") setExportStatus("Export complete.");
+    else if (displayed.state === "cancelled") setExportStatus("Export cancelled.");
+    else {
+      const failedJob = displayed.jobs.find((job) => job.state === "failed");
+      setExportStatus(
+        failedJob ? exportFailureMessage(failedJob.errorCode) : "Export batch failed.",
+      );
+    }
+    const newTerminalJobs = next.jobs.filter(
+      (job) =>
+        ["succeeded", "failed", "cancelled"].includes(job.state) &&
+        !invalidatedTerminalJobs.has(job.id),
     );
-    if (
-      ["succeeded", "failed", "cancelled"].includes(next.state) &&
-      !invalidatedTerminalJobs.has(next.id)
-    ) {
-      invalidatedTerminalJobs.add(next.id);
+    if (newTerminalJobs.length) {
+      for (const job of newTerminalJobs) invalidatedTerminalJobs.add(job.id);
       deps.server.refreshMedia();
       refreshBatches();
     }
@@ -512,15 +542,11 @@ export function createExportController(deps: {
     pendingBatchCancellations.clear();
     for (const id of pendingChildJobs()) {
       registry.set(cancelChildCommands(id), Atom.Interrupt);
-      registry.set(retryChildCommands(id), Atom.Interrupt);
     }
     setPendingChildJobs(new Set<string>());
     setExportCancellation();
     setExportCancellationPending(false);
-    setExportJob();
-    setBatchJobs([]);
-    setBatchId();
-    setExportRevision();
+    setBatchId(undefined);
     setExportStatus("");
   };
   const exportProject = async () => {
@@ -670,17 +696,30 @@ export function createExportController(deps: {
           return;
         }
         setExportStatus("Creating clips…");
-        const response = yield* Effect.exit(
-          apiJson<unknown>(deps.api, `projects/${encodeURIComponent(context.projectId)}/exports`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ itemIds: context.input.itemIds }),
-          }),
+        const submissionBody: components["schemas"]["ExportSubmissionInput"] = {
+          projectRevision: savedRevision,
+          ...(context.input.itemIds ? { itemIds: context.input.itemIds } : {}),
+        };
+        const key = idempotencyKeyForAttempt(uncertainExport, submissionBody, () =>
+          globalThis.crypto.randomUUID(),
         );
-        if (!workflowCurrent()) {
-          stopForStaleContext();
-          return;
-        }
+        const create = deps.server.generatedApi?.mutation("default", "createExport");
+        const response = yield* Effect.exit(
+          create
+            ? generatedMutation(create, {
+                params: { projectId: context.projectId },
+                headers: { "Idempotency-Key": key },
+                payload: submissionBody,
+              }).pipe(
+                Effect.mapError((error) => {
+                  uncertainExport = isUncertainCommandFailure(error)
+                    ? { key, body: submissionBody }
+                    : undefined;
+                  return error instanceof Error ? error : new Error("Export request failed.");
+                }),
+              )
+            : Effect.fail(new Error("Generated export API is not configured.")),
+        );
         if (Exit.isFailure(response)) {
           const failure = Cause.squash(response.cause);
           if (failure instanceof ApiFailure) {
@@ -697,27 +736,27 @@ export function createExportController(deps: {
           return;
         }
         const submission = parseBatchExportSubmission(response.value);
+        uncertainExport = undefined;
         if (!workflowCurrent()) {
           stopForStaleContext();
           return;
         }
-        setBatchId(submission.batchId);
-        setExportRevision(savedRevision);
-        setBatchJobs(submission.jobs);
-        setBatches((current) => [
-          {
-            batchId: submission.batchId,
-            projectId: context.projectId,
-            projectRevision: savedRevision,
-            state: "queued",
-            progress: 0,
-            jobs: submission.jobs,
-          },
-          ...current.filter((batch) => batch.batchId !== submission.batchId),
+        const initialBatch = Schema.decodeUnknownSync(BatchSchema)({
+          batchId: submission.batchId,
+          projectId: context.projectId,
+          projectRevision: savedRevision,
+          state: "queued",
+          progress: 0,
+          jobs: submission.jobs,
+        });
+        observeBatchSnapshot(initialBatch.batchId, initialBatch);
+        setBatchIDs((ids) => [
+          initialBatch.batchId,
+          ...ids.filter((id) => id !== initialBatch.batchId),
         ]);
+        setBatchId(initialBatch.batchId);
         refreshBatches();
         const job = selectBatchJob(submission.jobs);
-        if (job) setExportJob(job);
         setExportStatus(
           job?.state === "queued"
             ? "Export queued."
@@ -751,6 +790,8 @@ export function createExportController(deps: {
     const job = [...batchJobs(), ...(currentBatch?.jobs ?? [])].find(isJobActive) ?? exportJob();
     if (!job || !currentBatchId || !isJobActive(job) || exportCancellationPending()) return;
     const generation = ++cancellationGeneration;
+    markLocallyCancelledBatch(currentBatchId, true);
+    deps.server.setBatchLocallyCancelled(currentBatchId, true);
     const command = cancelBatchCommands(currentBatchId);
     registry.set(command, undefined);
     setExportCancellationPending(true);
@@ -759,20 +800,15 @@ export function createExportController(deps: {
     try {
       await runEffect(readServerAtom(deps.server, command));
       if (generation !== cancellationGeneration) return;
-      cancelledBatches.add(currentBatchId);
-      setBatches((items) => items.map((batch) => protectCancellation(batch)));
-      setBatchJobs(
-        batchJobs().map((item) => (isJobActive(item) ? { ...item, state: "cancelled" } : item)),
-      );
-      const currentJob = exportJob();
-      if (currentJob && isJobActive(currentJob))
-        setExportJob({ ...currentJob, state: "cancelled" });
+      markLocallyCancelledBatch(currentBatchId, true);
       setExportStatus("Export batch cancellation requested.");
-      refreshQueue(currentBatchId, job.id);
+      refreshQueue();
     } catch (error) {
+      markLocallyCancelledBatch(currentBatchId, false);
+      deps.server.setBatchLocallyCancelled(currentBatchId, false);
       if (generation === cancellationGeneration) {
         setExportCancellation();
-        refreshQueue(currentBatchId, job.id);
+        refreshQueue();
         setExportStatus(
           error instanceof Error ? error.message : "Export could not be cancelled. Try again.",
         );
@@ -793,14 +829,17 @@ export function createExportController(deps: {
     if (pendingBatchCancellations.has(id)) return;
     pendingBatchCancellations.add(id);
     const generation = childJobContextGeneration;
+    markLocallyCancelledBatch(id, true);
+    deps.server.setBatchLocallyCancelled(id, true);
     try {
       const command = cancelBatchCommands(id);
       registry.set(command, undefined);
       await runEffect(readServerAtom(deps.server, command));
       if (generation !== childJobContextGeneration) return;
-      cancelledBatches.add(id);
-      setBatches((items) => items.map((batch) => protectCancellation(batch)));
+      markLocallyCancelledBatch(id, true);
     } catch (error) {
+      markLocallyCancelledBatch(id, false);
+      deps.server.setBatchLocallyCancelled(id, false);
       if (generation === childJobContextGeneration)
         setExportStatus(
           error instanceof Error ? error.message : "Export batch could not be cancelled.",
@@ -808,9 +847,15 @@ export function createExportController(deps: {
     } finally {
       if (generation === childJobContextGeneration) {
         pendingBatchCancellations.delete(id);
-        refreshQueue(id);
+        refreshQueue();
       }
     }
+  };
+  const currentBatchError = () => {
+    const result = currentBatchResult();
+    if (!AsyncResult.isFailure(result)) return "";
+    const cause = Cause.squash(result.cause);
+    return cause instanceof Error ? cause.message : "Request could not be completed.";
   };
   const childJobContext = (): ChildJobContext => ({
     projectId: deps.projectId(),
@@ -821,34 +866,27 @@ export function createExportController(deps: {
     editorVersion: deps.editorVersion(),
     generation: childJobContextGeneration,
   });
-  const cancelChildJob = async (id: string, requestedBatchId?: string) => {
+  const cancelChildJob = async (id: string, _requestedBatchId?: string) => {
     if (!beginChildJobAction(id)) return;
-    const jobBatchId = childJobBatchId(id, requestedBatchId);
     const context = childJobContext();
+    markLocallyCancelledJob(id, true);
+    deps.server.setJobLocallyCancelled(id, true);
     try {
       const command = cancelChildCommands(id);
       registry.set(command, undefined);
       await runEffect(readServerAtom(deps.server, command));
       if (!childJobActionIsCurrent(id, context)) return;
-      cancelledChildJobs.add(id);
-      setBatches((items) => items.map((batch) => protectCancellation(batch)));
-      if (jobBatchId === batchId()) {
-        setBatchJobs(
-          batchJobs().map((job) =>
-            job.id === id && isJobActive(job) ? { ...job, state: "cancelled" } : job,
-          ),
-        );
-        const job = exportJob();
-        if (job?.id === id && isJobActive(job)) setExportJob({ ...job, state: "cancelled" });
-      }
+      markLocallyCancelledJob(id, true);
       setExportStatus("Export job cancellation requested.");
     } catch (error) {
+      markLocallyCancelledJob(id, false);
+      deps.server.setJobLocallyCancelled(id, false);
       if (childJobActionIsCurrent(id, context))
         setExportStatus(
           error instanceof Error ? error.message : "Export job could not be cancelled. Try again.",
         );
     } finally {
-      if (childJobActionIsCurrent(id, context)) refreshQueue(jobBatchId, id);
+      if (childJobActionIsCurrent(id, context)) refreshQueue();
       if (context.generation === childJobContextGeneration) markChildJobPending(id, false);
     }
   };
@@ -856,24 +894,38 @@ export function createExportController(deps: {
     if (!beginChildJobAction(id)) return;
     const jobBatchId = childJobBatchId(id, requestedBatchId);
     const context = childJobContext();
-    let retriedBatch: Batch | undefined;
     try {
-      const command = retryChildCommands(id);
-      registry.set(command, undefined);
-      retriedBatch = await runEffect(readServerAtom(deps.server, command));
+      const body = { jobId: id };
+      const key = idempotencyKeyForAttempt(uncertainRetries.get(id), body, () =>
+        globalThis.crypto.randomUUID(),
+      );
+      const retry = deps.server.generatedApi?.mutation("default", "retryJob");
+      if (!retry) throw new Error("Generated export API is not configured.");
+      const result = await runEffect(
+        generatedMutation(retry, {
+          params: { jobId: id },
+          headers: { "Idempotency-Key": key },
+        }).pipe(
+          Effect.mapError((error) => {
+            if (isUncertainCommandFailure(error)) uncertainRetries.set(id, { key, body });
+            else uncertainRetries.delete(id);
+            return error instanceof Error ? error : new Error("Export retry failed.");
+          }),
+        ),
+      );
+      const validatedBatch = Schema.decodeUnknownSync(BatchSchema)(result);
+      uncertainRetries.delete(id);
+      observeBatchSnapshot(validatedBatch.batchId, validatedBatch);
       if (!childJobActionIsCurrent(id, context)) return;
-      setBatches((items) => [
-        retriedBatch!,
-        ...items.filter((batch) => batch.batchId !== retriedBatch!.batchId),
+      setBatchIDs((ids) => [
+        validatedBatch.batchId,
+        ...ids.filter((batchID) => batchID !== validatedBatch.batchId),
       ]);
       const updatesActiveContext =
         activeExportContextIsCurrent(id, context) &&
         (jobBatchId === context.batchId || context.exportJobId === id);
       if (updatesActiveContext) {
-        setBatchId(retriedBatch.batchId);
-        setBatchJobs(retriedBatch.jobs);
-        setExportRevision(retriedBatch.projectRevision);
-        setExportJob(selectBatchJob(retriedBatch.jobs));
+        setBatchId(validatedBatch.batchId);
       }
       setExportStatus("Export retry queued as a new job.");
     } catch (error) {
@@ -882,11 +934,14 @@ export function createExportController(deps: {
           error instanceof Error ? error.message : "Export job could not be retried. Try again.",
         );
     } finally {
-      if (childJobActionIsCurrent(id, context)) refreshQueue(jobBatchId, id);
+      if (childJobActionIsCurrent(id, context)) refreshQueue();
       if (context.generation === childJobContextGeneration) markChildJobPending(id, false);
     }
   };
-  onCleanup(clearExportContext);
+  onCleanup(() => {
+    clearExportContext();
+    for (const unsubscribe of batchSnapshotUnsubscribers) unsubscribe();
+  });
   return {
     selectedExportItems,
     setSelectedExportItems,
@@ -929,10 +984,10 @@ export function createExportController(deps: {
     batchesRefreshing: () => batchList.waiting(),
     batchesError: () => batchList.error()?.message ?? "",
     refreshBatches,
-    batchLoading: () => Boolean(batchId()) && batchProgress.waiting(),
-    batchError: () => batchProgress.error()?.message ?? "",
-    exportJobLoading: () => Boolean(exportJob()?.id) && exportStatusResult.waiting(),
-    exportJobError: () => exportStatusResult.error()?.message ?? "",
+    batchLoading: () => Boolean(batchId()) && currentBatchResult().waiting,
+    batchError: currentBatchError,
+    exportJobLoading: () => Boolean(exportJob()?.id) && currentBatchResult().waiting,
+    exportJobError: currentBatchError,
     destinationStatus,
     clearExportContext,
     exportProject,
