@@ -49,23 +49,29 @@ export function createExportDownload(start: (signal: AbortSignal) => Promise<voi
   };
 }
 
-const scope = "/download-stream/";
-let registration: Promise<ServiceWorkerRegistration> | undefined;
+let registration: { rootPath: string; promise: Promise<ServiceWorkerRegistration> } | undefined;
 
-function downloadWorker(): Effect.Effect<ServiceWorker, Error> {
+function downloadWorker(rootPath: string): Effect.Effect<ServiceWorker, Error> {
   return Effect.gen(function* () {
     if (!("serviceWorker" in navigator) || !window.isSecureContext)
       return yield* Effect.fail(
         new Error("Downloads require a secure browser context (HTTPS or localhost)."),
       );
-    registration ??= navigator.serviceWorker
-      .register("/download-sw.js", { scope, updateViaCache: "none" })
-      .catch((error: unknown) => {
-        registration = undefined;
-        throw error;
-      });
+    const scope = `${rootPath}download-stream/`;
+    if (!registration || registration.rootPath !== rootPath) {
+      const state: { rootPath: string; promise: Promise<ServiceWorkerRegistration> } = {
+        rootPath,
+        promise: navigator.serviceWorker
+          .register(`${rootPath}download-sw.js`, { scope, updateViaCache: "none" })
+          .catch((error: unknown) => {
+            if (registration === state) registration = undefined;
+            throw error;
+          }),
+      };
+      registration = state;
+    }
     const installed = yield* Effect.tryPromise({
-      try: () => registration!,
+      try: () => registration!.promise,
       catch: (cause) =>
         cause instanceof Error
           ? cause
@@ -96,9 +102,12 @@ function downloadWorker(): Effect.Effect<ServiceWorker, Error> {
 }
 
 type DownloadMessage = { type: string; message?: string; status?: number };
+type DownloadApi = Pick<StreamingApiClient, "reportUnauthorized"> & {
+  mediaUrl(relativePath: string): string;
+};
 
 function streamDownload(
-  api: StreamingApiClient,
+  api: DownloadApi,
   url: string,
   name: string,
   authentication: Authentication,
@@ -106,16 +115,22 @@ function streamDownload(
 ): Effect.Effect<void, Error> {
   return Effect.scoped(
     Effect.gen(function* () {
-      const worker = yield* downloadWorker();
+      const mediaBase = new URL(api.mediaUrl(""));
+      const mediaMarker = "/media/v2/";
+      const mediaRoot = mediaBase.pathname.lastIndexOf(mediaMarker);
+      if (mediaRoot < 0 || mediaBase.pathname.slice(mediaRoot) !== mediaMarker)
+        return yield* Effect.fail(new Error("Could not determine the configured download root."));
+      const rootPath = mediaBase.pathname.slice(0, mediaRoot + 1);
+      const worker = yield* downloadWorker(rootPath);
       const fiberSignal = yield* Effect.abortSignal;
       const messages = yield* Queue.unbounded<DownloadMessage>();
       const id = crypto.randomUUID();
-      const downloadUrl = new URL(`${scope}${id}`, window.location.origin).href;
+      const downloadUrl = new URL(`${rootPath}download-stream/${id}`, window.location.origin).href;
       let posted = false;
       let completed = false;
       const channel = yield* Effect.acquireRelease(
         Effect.sync(() => new MessageChannel()),
-        (channel) =>
+        (channel: MessageChannel) =>
           Effect.sync(() => {
             // A failed or interrupted page fiber must stop the worker's upstream fetch.
             if (posted && !completed) {
@@ -184,14 +199,14 @@ function streamDownload(
 
 /** Stream an authenticated export through a same-origin download-only service worker. */
 export async function downloadExport(
-  api: StreamingApiClient,
+  api: DownloadApi,
   path: string,
   name: string,
   authentication: Authentication,
   signal?: AbortSignal,
 ): Promise<void> {
   if (signal?.aborted) throw new DOMException("Download cancelled.", "AbortError");
-  const url = api.url(path);
+  const url = api.mediaUrl(path);
   try {
     await runEffect(streamDownload(api, url, name, authentication, signal), signal);
   } catch (cause) {

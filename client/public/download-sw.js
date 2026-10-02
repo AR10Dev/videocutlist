@@ -1,33 +1,75 @@
-// This worker controls only /download-stream/, never the application or API.
+// This worker controls only its registered deployment-root download path.
 // Credentials and upstream URLs remain transient and never enter navigation URLs or storage.
-const prefix = new URL("/download-stream/", self.location.origin).href;
+const prefix = new URL(self.registration.scope);
 const downloads = new Map();
 
 self.addEventListener("install", (event) => event.waitUntil(self.skipWaiting()));
 
 self.addEventListener("message", (event) => {
   const request = event.data;
-  const port = event.ports[0];
+  const port = event.ports.length === 1 ? event.ports[0] : undefined;
   if (
     !port ||
-    request?.type !== "download" ||
-    typeof request.id !== "string" ||
-    !/^[0-9a-f-]{36}$/.test(request.id) ||
+    event.source?.url == null ||
+    !request ||
+    Object.keys(request).sort().join(",") !== "authentication,id,name,type,url" ||
+    request.type !== "download" ||
     typeof request.url !== "string" ||
+    typeof request.id !== "string" ||
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(request.id) ||
     typeof request.name !== "string" ||
-    !["none", "cookie", "bearer"].includes(request.authentication?.type)
-  )
-    return;
-
-  let url;
-  try {
-    url = new URL(request.url);
-    if (url.protocol !== "https:" && url.protocol !== "http:") return;
-  } catch {
+    request.name.length > 255 ||
+    !request.name ||
+    /[\\/\\"\x00-\x1f\x7f]/.test(request.name) ||
+    !request.authentication ||
+    !["none", "cookie", "bearer"].includes(request.authentication.type) ||
+    (request.authentication.type === "bearer" &&
+      (typeof request.authentication.token !== "string" ||
+        !request.authentication.token ||
+        /[\x00-\x1f\x7f]/.test(request.authentication.token))) ||
+    (request.authentication.type === "bearer" &&
+      Object.keys(request.authentication).sort().join(",") !== "token,type") ||
+    (request.authentication.type !== "bearer" &&
+      Object.keys(request.authentication).join(",") !== "type")
+  ) {
+    port?.close();
     return;
   }
 
-  const key = `${prefix}${request.id}`;
+  let url;
+  try {
+    const source = new URL(event.source.url);
+    if (
+      source.origin !== self.location.origin ||
+      !source.pathname.startsWith(
+        prefix.pathname.slice(0, prefix.pathname.lastIndexOf("download-stream/")),
+      )
+    ) {
+      port.close();
+      return;
+    }
+    url = new URL(request.url);
+    const mediaPath = url.pathname.slice(url.pathname.lastIndexOf("/media/v2/"));
+    if (
+      (url.protocol !== "https:" && url.protocol !== "http:") ||
+      url.username ||
+      url.password ||
+      url.search ||
+      url.hash ||
+      !/^\/media\/v2\/(jobs\/[A-Za-z0-9_-]+\/outputs\/[0-9]+|batches\/[A-Za-z0-9_-]+\/download)$/.test(
+        mediaPath,
+      ) ||
+      decodeURIComponent(url.pathname) !== url.pathname
+    ) {
+      port.close();
+      return;
+    }
+  } catch {
+    port.close();
+    return;
+  }
+
+  const key = `${prefix.href}${request.id}`;
   const controller = new AbortController();
   let finish;
   const lifetime = new Promise((resolve) => {
@@ -36,6 +78,7 @@ self.addEventListener("message", (event) => {
   let stopped = false;
   const record = {
     response: null,
+    reader: null,
     name: request.name,
     controller,
     port,
@@ -51,6 +94,11 @@ self.addEventListener("message", (event) => {
     if (downloads.get(key) === record) downloads.delete(key);
     clearTimeout(record.expiry);
     controller.abort();
+    if (record.reader)
+      void record.reader
+        .cancel()
+        .catch(() => {})
+        .finally(() => record.reader.releaseLock());
     if (message) port.postMessage({ type: "error", message, status });
     port.close();
     finish();
@@ -70,6 +118,7 @@ self.addEventListener("message", (event) => {
         headers,
         credentials: request.authentication.type === "cookie" ? "include" : "omit",
         cache: "no-store",
+        redirect: "error",
         signal: controller.signal,
       });
       if (controller.signal.aborted) return;
@@ -95,7 +144,14 @@ self.addEventListener("message", (event) => {
 });
 
 self.addEventListener("fetch", (event) => {
-  if (!event.request.url.startsWith(prefix)) return;
+  const destination = new URL(event.request.url);
+  if (
+    destination.origin !== prefix.origin ||
+    !destination.pathname.startsWith(prefix.pathname) ||
+    destination.search ||
+    destination.hash
+  )
+    return;
   const record = downloads.get(event.request.url);
   if (!record || !record.response || event.request.method !== "GET") {
     event.respondWith(
@@ -111,6 +167,7 @@ self.addEventListener("fetch", (event) => {
 function streamDownload(record) {
   const { port, name, stop, response } = record;
   const reader = response.body.getReader();
+  record.reader = reader;
   const body = new ReadableStream({
     async pull(destination) {
       try {
@@ -143,7 +200,7 @@ function streamDownload(record) {
     (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
   );
   const headers = new Headers({
-    "Content-Type": "application/octet-stream",
+    "Content-Type": response.headers.get("Content-Type") || "application/octet-stream",
     "Content-Disposition": `attachment; filename="${asciiName}"; filename*=UTF-8''${encodedName}`,
     "Cache-Control": "no-store",
     "X-Content-Type-Options": "nosniff",

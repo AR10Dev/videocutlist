@@ -118,8 +118,9 @@ describe("service worker transfer", () => {
     const workerPort = { close: vi.fn() };
     worker.postMessage.mockClear();
     const reportUnauthorized = vi.fn();
-    const api: StreamingApiClient = {
-      url: (path) => `https://server.example/api/v1/${path}`,
+    const api: StreamingApiClient & { mediaUrl(relativePath: string): string } = {
+      url: (path) => `https://server.example/deploy/api/v2/${path}`,
+      mediaUrl: (path) => `https://server.example/deploy/media/v2/${path}`,
       request: vi.fn(),
       assetRequest: vi.fn(),
       reportUnauthorized,
@@ -152,13 +153,20 @@ describe("service worker transfer", () => {
     const [message] = worker.postMessage.mock.calls[0] as unknown as [
       { url: string; authentication: typeof authentication; id: string },
     ];
-    expect(message.url).toBe("https://server.example/api/v1/jobs/1/outputs/0");
+    expect(message.url).toBe("https://server.example/deploy/media/v2/jobs/1/outputs/0");
+    expect(worker.postMessage).toHaveBeenCalledWith(expect.objectContaining({ url: message.url }), [
+      expect.any(Object),
+    ]);
+    expect(navigator.serviceWorker.register).toHaveBeenCalledWith("/deploy/download-sw.js", {
+      scope: "/deploy/download-stream/",
+      updateViaCache: "none",
+    });
     expect(message.authentication).toBe(authentication);
     send("ready");
     send("done");
     await transfer;
     expect(link.click).toHaveBeenCalledOnce();
-    expect(link.href).toBe(`https://app.example/download-stream/${message.id}`);
+    expect(link.href).toBe(`https://app.example/deploy/download-stream/${message.id}`);
     expect(link.href).not.toContain(authentication.token);
     expect(link.referrerPolicy).toBe("no-referrer");
     expect(pagePort.postMessage).not.toHaveBeenCalled();

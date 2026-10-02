@@ -8,14 +8,14 @@ const token = "test-only-download-token";
 async function exportServer(onResponse: (response: ServerResponse) => void) {
   let authorized = 0;
   const server = createServer((request, response) => {
-    response.setHeader("Access-Control-Allow-Origin", "http://127.0.0.1:5173");
+    response.setHeader("Access-Control-Allow-Origin", "http://127.0.0.1:5199");
     response.setHeader("Access-Control-Allow-Headers", "Authorization");
     if (request.method === "OPTIONS") {
       response.writeHead(204).end();
       return;
     }
     if (
-      request.url !== "/api/v1/jobs/job_123/outputs/0" ||
+      request.url !== "/media/v2/jobs/job_123/outputs/0" ||
       request.headers.authorization !== `Bearer ${token}`
     ) {
       response.writeHead(401).end();
@@ -105,7 +105,7 @@ test("first-use cross-origin bearer download saves streamed bytes without a page
     const download = await arriving;
     // Chromium sanitizes '*' in the on-disk name even when filename* is valid.
     expect(download.suggestedFilename()).toBe("director's-cut_.mkv");
-    expect(download.url()).toMatch(/^http:\/\/127\.0\.0\.1:5173\/download-stream\/[0-9a-f-]{36}$/);
+    expect(download.url()).toMatch(/^http:\/\/127\.0\.0\.1:5199\/download-stream\/[0-9a-f-]{36}$/);
     const path = testInfo.outputPath(download.suggestedFilename());
     await download.saveAs(path);
     await transfer;
