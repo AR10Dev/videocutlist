@@ -1,6 +1,6 @@
-import { Effect, Stream } from "effect";
+import { Effect, Fiber, Stream } from "effect";
 import { describe, expect, it, vi } from "vitest";
-import { createApiClient } from "../src/api";
+import { ApiFailure, createApiClient } from "../src/api";
 import { Job } from "../src/generated/effect-api";
 import type { Job as JobSnapshot } from "../src/generated/effect-api";
 import { observeSnapshots } from "../src/features/queue/jobStream";
@@ -21,7 +21,11 @@ describe("job snapshot stream", () => {
     const eventData = encoder.encode(snapshot(1, "running"));
     const splitAt = eventData.findIndex((byte) => byte >= 0xf0);
     const chunks = [
-      encoder.encode(": keepalive\r\n\r\nevent: snapshot\r\nid: bad\ndata: {broken}\n\n"),
+      encoder.encode(
+        ": keepalive\r\n\r\nevent: snapshot\r\nid: bad\ndata: {broken}\n\nevent: snapshot\nid: bad-schema\ndata: " +
+          JSON.stringify({ state: "unknown" }) +
+          "\n\n",
+      ),
       encoder.encode("event: snapshot\r\nid: cursor-1\r\ndata: "),
       eventData.slice(0, splitAt + 2),
       eventData.slice(splitAt + 2),
@@ -82,6 +86,179 @@ describe("job snapshot stream", () => {
     expect(String(fetch.mock.calls[0][0])).toBe(
       "https://video.example.test/videocutlist/api/v2/jobs/j_demo/events",
     );
+  });
+
+  it("backs off after transient fetch failure, reconnects with auth and cursor, then emits the next snapshot", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const encoder = new TextEncoder();
+    const job = (revision: number, state: "running" | "succeeded") =>
+      JSON.stringify({
+        id: "j_demo",
+        type: "export",
+        state,
+        revision,
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:01Z",
+      });
+    const response = (event: string, id: string, data: string) =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(encoder.encode(`event: ${event}\nid: ${id}\ndata: ${data}\n\n`));
+            controller.close();
+          },
+        }),
+        { headers: { "Content-Type": "text/event-stream" } },
+      );
+    let resolveFirst!: () => void;
+    let resolveSecond!: () => void;
+    let resolveThird!: () => void;
+    let resolveTerminal!: () => void;
+    const firstSnapshot = new Promise<void>((resolve) => (resolveFirst = resolve));
+    const secondRequest = new Promise<void>((resolve) => (resolveSecond = resolve));
+    const thirdRequest = new Promise<void>((resolve) => (resolveThird = resolve));
+    const terminalSnapshot = new Promise<void>((resolve) => (resolveTerminal = resolve));
+    let requests = 0;
+    const fetch = vi.fn<typeof globalThis.fetch>((_input, init) => {
+      const requestNumber = requests++;
+      expect(new Headers(init?.headers).get("authorization")).toBe("Bearer private");
+      if (requestNumber === 0)
+        return Promise.resolve(response("snapshot", "cursor-1", job(1, "running")));
+      expect(new Headers(init?.headers).get("Last-Event-ID")).toBe("cursor-1");
+      if (requestNumber === 1) {
+        resolveSecond();
+        return Promise.reject(new TypeError("temporary network failure"));
+      }
+      resolveThird();
+      return Promise.resolve(response("snapshot", "cursor-2", job(2, "succeeded")));
+    });
+    const api = createApiClient(
+      {
+        serverBaseUrl: "https://video.example.test",
+        authentication: { type: "bearer", token: "private" },
+      },
+      fetch,
+    );
+    const snapshots: JobSnapshot[] = [];
+    const fiber = Effect.runFork(
+      Stream.runForEach(
+        observeSnapshots<JobSnapshot, JobSnapshot>(api, "jobs/j_demo/events", Job),
+        (snapshot) =>
+          Effect.sync(() => {
+            snapshots.push(snapshot);
+            if (snapshot.revision === 1) resolveFirst();
+            if (snapshot.revision === 2) resolveTerminal();
+          }),
+      ),
+    );
+
+    try {
+      await firstSnapshot;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetch).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(249);
+      expect(fetch).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await secondRequest;
+      await vi.advanceTimersByTimeAsync(0);
+      expect(fetch).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(499);
+      expect(fetch).toHaveBeenCalledTimes(2);
+      await vi.advanceTimersByTimeAsync(1);
+      await thirdRequest;
+      await terminalSnapshot;
+      await Effect.runPromise(Fiber.interrupt(fiber));
+
+      expect(snapshots.map(({ revision, state }) => [revision, state])).toEqual([
+        [1, "running"],
+        [2, "succeeded"],
+      ]);
+      expect(fetch).toHaveBeenCalledTimes(3);
+      expect(String(fetch.mock.calls[0][0])).not.toContain("private");
+    } finally {
+      await Effect.runPromise(Fiber.interrupt(fiber));
+      vi.useRealTimers();
+    }
+  });
+
+  it("interrupts reconnect backoff and leaves no active reader or retry timer", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const encoder = new TextEncoder();
+    let readerBody: ReadableStream<Uint8Array> | undefined;
+    let requestSignal: AbortSignal | undefined;
+    let snapshotSeen!: () => void;
+    const seen = new Promise<void>((resolve) => (snapshotSeen = resolve));
+    const fetch = vi.fn<typeof globalThis.fetch>((_input, init) => {
+      requestSignal = init?.signal ?? undefined;
+      readerBody = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(
+            encoder.encode(
+              `event: snapshot\nid: cursor-1\ndata: ${JSON.stringify({
+                id: "j_demo",
+                type: "export",
+                state: "running",
+                revision: 1,
+                createdAt: "2026-01-01T00:00:00Z",
+                updatedAt: "2026-01-01T00:00:01Z",
+              })}\n\n`,
+            ),
+          );
+          controller.close();
+        },
+      });
+      return Promise.resolve(
+        new Response(readerBody, { headers: { "Content-Type": "text/event-stream" } }),
+      );
+    });
+    const api = createApiClient(
+      { serverBaseUrl: "https://video.example.test", authentication: { type: "none" } },
+      fetch,
+    );
+    const fiber = Effect.runFork(
+      Stream.runForEach(
+        observeSnapshots<JobSnapshot, JobSnapshot>(api, "jobs/j_demo/events", Job),
+        () => Effect.sync(snapshotSeen),
+      ),
+    );
+
+    try {
+      await seen;
+      await vi.advanceTimersByTimeAsync(0);
+      for (let turn = 0; turn < 10 && vi.getTimerCount() === 0; turn++) await Promise.resolve();
+      expect(vi.getTimerCount()).toBe(1);
+      expect(readerBody?.locked).toBe(false);
+      await Effect.runPromise(Fiber.interrupt(fiber));
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(requestSignal?.aborted).toBe(true);
+      expect(fetch).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      await Effect.runPromise(Fiber.interrupt(fiber));
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not retry unauthorized streams", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(() =>
+      Promise.resolve(
+        Response.json(
+          { error: { code: "unauthorized", message: "Denied", requestId: "r1" } },
+          { status: 401 },
+        ),
+      ),
+    );
+    const api = createApiClient(
+      { serverBaseUrl: "https://video.example.test", authentication: { type: "none" } },
+      fetch,
+    );
+
+    const failure = await Effect.runPromise(
+      Stream.runCollect(observeSnapshots<JobSnapshot, JobSnapshot>(api, "jobs/j_demo/events", Job)),
+    ).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(ApiFailure);
+    expect(failure).toMatchObject({ status: 401 });
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 
   it("aborts fetch and releases the stream reader when observation is interrupted", async () => {

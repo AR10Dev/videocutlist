@@ -1,4 +1,4 @@
-import { Effect, Stream } from "effect";
+import { Effect, Queue, Stream } from "effect";
 import * as Schema from "effect/Schema";
 import type { ApiClient } from "../../api";
 import { ApiFailure, readApiError } from "../../api";
@@ -10,8 +10,13 @@ interface SnapshotFrame {
 }
 
 /** Decode SSE frames across arbitrary UTF-8 chunk and line boundaries. */
-async function* readFrames(body: ReadableStream<Uint8Array>): AsyncGenerator<SnapshotFrame> {
+async function* readFrames(
+  body: ReadableStream<Uint8Array>,
+  signal: AbortSignal,
+): AsyncGenerator<SnapshotFrame> {
   const reader = body.getReader();
+  const cancelReader = () => void reader.cancel().catch(() => undefined);
+  signal.addEventListener("abort", cancelReader, { once: true });
   const decoder = new TextDecoder();
   let buffer = "";
   let event = "message";
@@ -53,6 +58,7 @@ async function* readFrames(body: ReadableStream<Uint8Array>): AsyncGenerator<Sna
     const frame = line("");
     if (frame) yield frame;
   } finally {
+    signal.removeEventListener("abort", cancelReader);
     await reader.cancel().catch(() => undefined);
     reader.releaseLock();
   }
@@ -111,7 +117,7 @@ export function observeSnapshots<A extends { readonly state: string }, I>(
 
       let terminal = false;
       try {
-        for await (const frame of readFrames(response.body)) {
+        for await (const frame of readFrames(response.body, signal)) {
           if (frame.id !== undefined) cursor = frame.id;
           if (frame.event !== "snapshot" && frame.event !== "resync") continue;
           let value: A;
@@ -135,18 +141,19 @@ export function observeSnapshots<A extends { readonly state: string }, I>(
     }
   };
 
-  return Stream.scoped(
-    Stream.unwrap(
-      Effect.acquireRelease(
-        Effect.sync(() => new AbortController()),
-        (controller) => Effect.sync(() => controller.abort()),
-      ).pipe(
-        Effect.map((controller) =>
-          Stream.fromAsyncIterable(snapshots(controller.signal), (cause) =>
-            cause instanceof Error ? cause : new Error("Job observation failed."),
-          ),
-        ),
-      ),
+  return Stream.callback<A, Error>((queue) =>
+    Effect.tryPromise({
+      try: async (signal) => {
+        for await (const snapshot of snapshots(signal)) {
+          if (!Queue.offerUnsafe(queue, snapshot)) return;
+        }
+      },
+      catch: (cause) => (cause instanceof Error ? cause : new Error("Job observation failed.")),
+    }).pipe(
+      Effect.matchEffect({
+        onFailure: (error) => Queue.fail(queue, error),
+        onSuccess: () => Queue.end(queue),
+      }),
     ),
   );
 }
