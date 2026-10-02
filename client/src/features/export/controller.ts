@@ -413,19 +413,17 @@ export function createExportController(deps: {
       return;
     // SAFETY: ServerState decoded this owner snapshot with BatchSchema before publishing it.
     const displayed = projectCancellation(next as unknown as Batch);
-    const selectedJob = selectBatchJob(displayed.jobs);
-    if (selectedJob?.state === "queued") setExportStatus("Export queued.");
-    else if (selectedJob?.state === "running") setExportStatus("Export running.");
-    else if (selectedJob?.state === "succeeded") setExportStatus("Export complete.");
-    else if (selectedJob?.state === "cancelled") setExportStatus("Export cancelled.");
-    else if (selectedJob?.state === "failed")
-      setExportStatus(exportFailureMessage(selectedJob.errorCode));
-    else if (displayed.state === "queued") setExportStatus("Export batch queued.");
+    if (displayed.state === "queued") setExportStatus("Export queued.");
     else if (displayed.state === "running")
       setExportStatus(`Export batch running (${Math.round(displayed.progress * 100)}%).`);
-    else if (displayed.state === "succeeded") setExportStatus("Export batch complete.");
-    else if (displayed.state === "cancelled") setExportStatus("Export batch cancelled.");
-    else if (displayed.state === "failed") setExportStatus("Export batch failed.");
+    else if (displayed.state === "succeeded") setExportStatus("Export complete.");
+    else if (displayed.state === "cancelled") setExportStatus("Export cancelled.");
+    else {
+      const failedJob = displayed.jobs.find((job) => job.state === "failed");
+      setExportStatus(
+        failedJob ? exportFailureMessage(failedJob.errorCode) : "Export batch failed.",
+      );
+    }
     const newTerminalJobs = next.jobs.filter(
       (job) =>
         ["succeeded", "failed", "cancelled"].includes(job.state) &&
