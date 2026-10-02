@@ -47,7 +47,7 @@ CI mode selects system Chrome instead. If your local shell exports `CI`, use
 Use the focused package or feature checks while iterating. For an HTTP contract
 change, edit `docs/contracts/api.openapi.yaml`, regenerate with
 `pnpm --dir client run api:generate`, and include the resulting
-`client/src/generated/api.ts`; that file is generated but checked in.
+`client/src/generated/effect-api.ts`; that file is generated but checked in.
 
 ## Build output and local state
 

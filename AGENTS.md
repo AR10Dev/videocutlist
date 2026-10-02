@@ -50,9 +50,10 @@ interaction and reactivity. Tailwind CSS and daisyUI own presentation.
   unexpected failures. Document deliberate exceptions in the API contract.
 - Keep request/response types independent of database models where needed to
   prevent schema changes from accidentally changing JSON responses.
-- Update `docs/contracts/api.openapi.yaml` with API changes, regenerate TypeScript
-  via `pnpm --dir client run api:generate`, and commit the generated result in
-  `client/src/generated/api.ts`. Do not hand-edit generated types.
+- Update `docs/contracts/api.openapi.yaml` with API changes and regenerate the
+  Effect HttpApi in `client/src/generated/effect-api.ts` via
+  `pnpm --dir client run api:generate` (the Effect generator alias). Do not
+  hand-edit generated types.
 - Use reviewed, checked-in migrations for every database schema change; include
   relevant migration checks and avoid undocumented manual schema changes.
 - Load backend configuration from the environment and validate it at startup.
