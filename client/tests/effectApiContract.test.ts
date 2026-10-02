@@ -14,6 +14,7 @@ import {
   ProjectPage,
   PutProjectRequestJson,
   VideoCutListApi,
+  Waveform,
 } from "../src/generated/effect-api";
 
 const project = {
@@ -46,6 +47,12 @@ const completedJob = {
 };
 
 describe("generated Effect response codecs", () => {
+  it("decodes the native waveform contract without adding its route to JSON HttpApi", () => {
+    const waveform = { startMs: 0, durationMs: 1000, peaks: Array(16).fill(0.5) };
+    expect(Schema.decodeUnknownSync(Waveform)(waveform)).toEqual(waveform);
+    expect(() => Schema.decodeUnknownSync(Waveform)({ ...waveform, peaks: "malformed" })).toThrow();
+    expect(VideoCutListApi).not.toHaveProperty("getWaveform");
+  });
   it("decodes actual-shaped project and credential fixtures and rejects malformed data", () => {
     expect(Schema.decodeUnknownSync(Project)(project)).toEqual(project);
     expect(Schema.decodeUnknownSync(ExportSubmissionInput)({ projectRevision: 3 })).toEqual({

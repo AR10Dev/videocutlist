@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createRoot, createSignal } from "solid-js";
+import { createPreviewController } from "../src/features/preview/controller";
 import {
   canStreamPreview,
   formatTime,
@@ -125,6 +127,60 @@ describe("preview positions", () => {
   it("maps watched preview time to media time and clamps it", () => {
     expect(watchedMediaPosition(1_000, 0.5, 2_000)).toBe(1_500);
     expect(watchedMediaPosition(1_000, 9, 2_000)).toBe(2_000);
+  });
+});
+
+describe("preview waveform responses", () => {
+  it("degrades malformed successful responses to the existing unavailable state", async () => {
+    let controller!: ReturnType<typeof createPreviewController>;
+    let dispose!: () => void;
+    const [selected] = createSignal({
+      id: "m_fixture",
+      name: "fixture.mp4",
+      durationMs: 10_000,
+      sizeBytes: 1,
+      container: "mp4",
+      streams: {},
+      etag: "fixture",
+    });
+    const [playhead] = createSignal(0);
+    const [visibleRange] = createSignal({ startMs: 0, endMs: 10_000 });
+    const api = {
+      assetRequest: vi.fn((_id: string, kind: string) =>
+        Promise.resolve(
+          kind === "waveform"
+            ? Response.json({ startMs: 0, durationMs: 10_000, peaks: "malformed" })
+            : new Response(null, { status: 404 }),
+        ),
+      ),
+      mediaRequest: vi.fn(),
+    };
+    createRoot((disposeRoot) => {
+      dispose = disposeRoot;
+      controller = createPreviewController(api as never, {
+        selected,
+        playheadMs: playhead,
+        activeSegment: () => undefined,
+        segments: () => [],
+        visibleRange,
+        updatePlaybackPosition: () => {},
+      });
+    });
+
+    await vi.waitFor(() =>
+      expect(controller.assetStatus()).toBe(
+        "Thumbnails unavailable; Waveform unavailable; editing remains available.",
+      ),
+    );
+    expect(controller.waveform()).toHaveLength(2048);
+    expect(controller.waveform().every((peak) => peak === 0)).toBe(true);
+    expect(api.assetRequest).toHaveBeenCalledWith(
+      "m_fixture",
+      "waveform",
+      expect.any(Object),
+      expect.any(Object),
+    );
+    dispose();
   });
 });
 

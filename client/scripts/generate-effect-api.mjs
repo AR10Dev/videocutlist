@@ -31,6 +31,8 @@ const nativeOperationIds = new Set([
 ]);
 
 const spec = YAML.parse(await readFile(sourcePath, "utf8"));
+const waveformSchema = spec.components?.schemas?.Waveform;
+if (!waveformSchema) throw new Error("Missing native Waveform component schema");
 const operationIds = new Set(
   Object.values(spec.paths).flatMap((pathItem) =>
     Object.values(pathItem)
@@ -95,27 +97,51 @@ for (const native of nativeOperationIds) {
 }
 
 const temporaryDirectory = await mkdtemp(resolve(tmpdir(), "videocutlist-openapi-"));
-const selectedSpecPath = resolve(temporaryDirectory, "selected.openapi.yaml");
-try {
-  await writeFile(selectedSpecPath, YAML.stringify(spec));
-  let generated = execFileSync(
+const generate = async (specification, name, filename) => {
+  const path = resolve(temporaryDirectory, filename);
+  await writeFile(path, YAML.stringify(specification));
+  return execFileSync(
     "pnpm",
-    [
-      "exec",
-      "openapigen",
-      "--spec",
-      selectedSpecPath,
-      "--format",
-      "httpapi",
-      "--name",
-      "VideoCutListApi",
-    ],
-    {
-      cwd: clientRoot,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "inherit"],
-    },
+    ["exec", "openapigen", "--spec", path, "--format", "httpapi", "--name", name],
+    { cwd: clientRoot, encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] },
   );
+};
+try {
+  let generated = await generate(spec, "VideoCutListApi", "selected.openapi.yaml");
+  const waveformOutput = await generate(
+    {
+      openapi: "3.1.0",
+      info: spec.info,
+      paths: {
+        "/native-schema/waveform": {
+          get: {
+            operationId: "nativeWaveformSchemaOnly",
+            responses: {
+              200: {
+                description: "Native waveform schema",
+                content: {
+                  "application/json": { schema: { $ref: "#/components/schemas/Waveform" } },
+                },
+              },
+            },
+          },
+        },
+      },
+      components: { schemas: { Waveform: waveformSchema } },
+    },
+    "NativeWaveformSchema",
+    "waveform.openapi.yaml",
+  );
+  const waveformStart = waveformOutput.indexOf("export type Waveform = ");
+  const waveformEnd = waveformOutput.indexOf("\n// schemas", waveformStart);
+  if (waveformStart < 0 || waveformEnd < 0)
+    throw new Error("Unexpected generator output; refusing to omit native Waveform schema");
+  const waveformCodec = waveformOutput.slice(waveformStart, waveformEnd).trim();
+  if (generated.includes("export type Waveform = "))
+    throw new Error("Waveform unexpectedly entered the JSON API generation");
+  const importEnd = generated.indexOf("\n// non-recursive definitions");
+  if (importEnd < 0) throw new Error("Unexpected HttpApi output; refusing to add Waveform codec");
+  generated = `${generated.slice(0, importEnd)}\n// Native media component codec; its route remains outside the JSON API.\n${waveformCodec}\n${generated.slice(importEnd)}`;
   // Effect Struct decoders ignore extra keys by default; preserve OpenAPI closed-object rules.
   const generatedApiClose = ".add(DefaultGroup) {}";
   if (generated.split(generatedApiClose).length !== 2) {

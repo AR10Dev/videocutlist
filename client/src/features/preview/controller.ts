@@ -1,6 +1,8 @@
 import { createEffect, createSignal, onCleanup, type Accessor } from "solid-js";
 import { Effect } from "effect";
+import * as Schema from "effect/Schema";
 import { type NativeMediaApiClient } from "../../api";
+import { Waveform as WaveformSchema } from "../../generated/effect-api";
 import type { components } from "../../generated/api";
 import {
   normalizePeaks,
@@ -258,8 +260,8 @@ export function createPreviewController(
               catch: () => new Error("Waveform request failed."),
             });
             if (!response.ok) return yield* Effect.fail(new Error("Waveform request failed."));
-            const value = yield* Effect.tryPromise(
-              () => response.json() as Promise<components["schemas"]["Waveform"]>,
+            const value = yield* Effect.tryPromise(async () =>
+              Schema.decodeUnknownSync(WaveformSchema)(await response.json()),
             );
             return { range, peaks: normalizePeaks(value.peaks), failed: false };
           }).pipe(

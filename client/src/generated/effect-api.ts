@@ -8,6 +8,47 @@ import {
   HttpApiSecurity,
   OpenApi,
 } from "effect/http-api";
+// Native media component codec; its route remains outside the JSON API.
+export type Waveform = {
+  readonly startMs: number;
+  readonly durationMs: number;
+  readonly peaks: ReadonlyArray<number>;
+} & { readonly [x: string]: Schema.Json };
+export const Waveform = Schema.StructWithRest(
+  Schema.Struct({
+    startMs: Schema.Number.check(Schema.isInt().annotate({ expected: "an integer" })).check(
+      Schema.isGreaterThanOrEqualTo(0).annotate({ expected: "a value greater than or equal to 0" }),
+    ),
+    durationMs: Schema.Number.check(Schema.isInt().annotate({ expected: "an integer" }))
+      .check(
+        Schema.isGreaterThanOrEqualTo(1).annotate({
+          expected: "a value greater than or equal to 1",
+        }),
+      )
+      .check(
+        Schema.isLessThanOrEqualTo(120000).annotate({
+          expected: "a value less than or equal to 120000",
+        }),
+      ),
+    peaks: Schema.Array(
+      Schema.Number.check(Schema.isFinite().annotate({ expected: "a finite number" }))
+        .check(
+          Schema.isGreaterThanOrEqualTo(0).annotate({
+            expected: "a value greater than or equal to 0",
+          }),
+        )
+        .check(
+          Schema.isLessThanOrEqualTo(1).annotate({ expected: "a value less than or equal to 1" }),
+        ),
+    )
+      .check(Schema.isMinLength(16).annotate({ expected: "a value with a length of at least 16" }))
+      .check(
+        Schema.isMaxLength(4096).annotate({ expected: "a value with a length of at most 4096" }),
+      ),
+  }),
+  [Schema.Record(Schema.String, Schema.Json.annotate({ expected: "JSON value" }))],
+).annotate({ identifier: "Waveform" });
+
 // non-recursive definitions
 export type MediaPage = {
   readonly items: ReadonlyArray<
