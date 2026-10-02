@@ -58,6 +58,7 @@ const (
 	routeGetMCPSettings
 	routeCreateMCPCredential
 	routeRevokeMCPCredential
+	routeStreamBatch
 )
 
 type route struct {
@@ -75,7 +76,7 @@ func RouteCoverageKinds() []string {
 		"import_interchange", "export_interchange", "create_detection", "get_job", "stream_job", "cancel_job",
 		"automation", "list_destinations", "get_settings", "put_settings", "refresh_settings",
 		"download_output", "download_batch", "list_batches", "get_batch", "cancel_batch", "retry_job",
-		"get_export_proposal", "approve_export_proposal", "get_mcp_settings", "create_mcp_credential", "revoke_mcp_credential",
+		"get_export_proposal", "approve_export_proposal", "get_mcp_settings", "create_mcp_credential", "revoke_mcp_credential", "stream_batch",
 	}
 }
 
@@ -205,6 +206,8 @@ func parseRouteParts(method string, parts []string) route {
 		return route{kind: routeRetryJob, id: parts[1]}
 	case len(parts) == 1 && parts[0] == "batches" && method == http.MethodGet:
 		return route{kind: routeListBatches}
+	case len(parts) == 3 && parts[0] == "batches" && validBatchID(parts[1]) && parts[2] == "events" && method == http.MethodGet:
+		return route{kind: routeStreamBatch, id: parts[1]}
 	case len(parts) == 2 && parts[0] == "batches" && validBatchID(parts[1]) && method == http.MethodGet:
 		return route{kind: routeGetBatch, id: parts[1]}
 	case len(parts) == 2 && parts[0] == "batches" && validBatchID(parts[1]) && method == http.MethodDelete:

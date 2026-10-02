@@ -384,6 +384,9 @@ func (s *Server) dispatch(writer http.ResponseWriter, request *http.Request, id 
 	case routeStreamJob:
 		s.streamJob(writer, request, r.id, id)
 		return "/api/v2/jobs/{jobId}/events", ""
+	case routeStreamBatch:
+		s.streamBatch(writer, request, r.id, id)
+		return "/api/v2/batches/{batchId}/events", ""
 	case routeDownloadOutput:
 		s.downloadOutput(writer, request, r.id, id)
 		return "/media/v2/jobs/{jobId}/outputs/{position}", ""

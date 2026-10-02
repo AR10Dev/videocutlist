@@ -235,6 +235,31 @@ func (b BatchExportUseCase) RunQueuedSnapshot(ctx context.Context, job jobqueue.
 	return nil
 }
 
+func (b BatchExportUseCase) Snapshot(ctx context.Context, batchID string) (Batch, string, error) {
+	if b.Jobs == nil {
+		return Batch{}, "", errors.New("batch export jobs are required")
+	}
+	// ponytail: three retries bound snapshot reads; reconnect if the batch keeps changing.
+	for range 3 {
+		before, err := b.Jobs.BatchCursor(ctx, batchID)
+		if err != nil {
+			return Batch{}, "", err
+		}
+		batch, err := b.Get(ctx, batchID)
+		if err != nil {
+			return Batch{}, "", err
+		}
+		after, err := b.Jobs.BatchCursor(ctx, batchID)
+		if err != nil {
+			return Batch{}, "", err
+		}
+		if before == after {
+			return batch, after, nil
+		}
+	}
+	return Batch{}, "", errors.New("batch changed while reading snapshot")
+}
+
 func (b BatchExportUseCase) Get(ctx context.Context, batchID string) (Batch, error) {
 	jobs, err := b.Jobs.ListByBatch(ctx, batchID)
 	if err != nil {

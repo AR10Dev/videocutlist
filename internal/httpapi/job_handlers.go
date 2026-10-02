@@ -12,6 +12,7 @@ import (
 	"time"
 
 	jobqueue "videocutlist/internal/jobs"
+	"videocutlist/internal/projects"
 )
 
 func (s *Server) getJob(writer http.ResponseWriter, request *http.Request, job string, id string) {
@@ -118,6 +119,102 @@ func (s *Server) streamJob(writer http.ResponseWriter, request *http.Request, jo
 			}
 		}
 	}
+}
+
+type batchSnapshotReader interface {
+	Snapshot(context.Context, string) (projects.Batch, string, error)
+}
+
+func (s *Server) streamBatch(writer http.ResponseWriter, request *http.Request, batchID, requestID string) {
+	if s.config.BatchExports == nil {
+		internalError(writer, requestID)
+		return
+	}
+	snapshotReader, ok := s.config.BatchExports.(batchSnapshotReader)
+	if !ok {
+		internalError(writer, requestID)
+		return
+	}
+	streamContext, cancelStream := context.WithCancel(request.Context())
+	stopShutdown := context.AfterFunc(s.shutdown, cancelStream)
+	defer cancelStream()
+	defer stopShutdown()
+	batch, cursor, err := snapshotReader.Snapshot(streamContext, batchID)
+	if err != nil {
+		resourceError(writer, requestID, err)
+		return
+	}
+	if batch.BatchID != batchID || cursor == "" || len(cursor) > 256 {
+		internalError(writer, requestID)
+		return
+	}
+	resync := false
+	lastEventIDs := request.Header.Values("Last-Event-ID")
+	if len(lastEventIDs) > 0 {
+		resync = len(lastEventIDs) != 1 || lastEventIDs[0] != cursor
+	}
+
+	writer.Header().Set("Content-Type", "text/event-stream")
+	writer.Header().Set("Cache-Control", "no-cache")
+	writer.Header().Set("X-Accel-Buffering", "no")
+	flush := http.NewResponseController(writer).Flush
+	event := "snapshot"
+	if resync {
+		event = "resync"
+	}
+	if !writeBatchEvent(writer, flush, event, cursor, batch) || terminalBatch(batch.State) {
+		return
+	}
+
+	poll := time.NewTicker(jobStreamPollInterval)
+	defer poll.Stop()
+	heartbeat := time.NewTicker(jobStreamHeartbeat)
+	defer heartbeat.Stop()
+	for {
+		select {
+		case <-streamContext.Done():
+			return
+		case <-heartbeat.C:
+			if err := s.config.Authenticator.Authenticate(request); err != nil {
+				return
+			}
+			if _, err := fmt.Fprint(writer, ": keepalive\n\n"); err != nil || flush() != nil {
+				return
+			}
+		case <-poll.C:
+			current, currentCursor, err := snapshotReader.Snapshot(streamContext, batchID)
+			if err == nil && current.BatchID == batchID && currentCursor != "" && len(currentCursor) <= 256 {
+				if currentCursor != cursor {
+					if !writeBatchEvent(writer, flush, "snapshot", currentCursor, current) {
+						return
+					}
+					cursor, batch = currentCursor, current
+					if terminalBatch(batch.State) {
+						return
+					}
+				}
+				continue
+			}
+			_, _ = fmt.Fprint(writer, "event: error\ndata: {\"code\":\"observation_failed\"}\n\n")
+			_ = flush()
+			return
+		}
+	}
+}
+
+func writeBatchEvent(writer http.ResponseWriter, flush func() error, event, cursor string, batch projects.Batch) bool {
+	data, err := json.Marshal(batch)
+	if err != nil {
+		return false
+	}
+	if _, err := fmt.Fprintf(writer, "id: %s\nevent: %s\ndata: %s\n\n", cursor, event, data); err != nil {
+		return false
+	}
+	return flush() == nil
+}
+
+func terminalBatch(state string) bool {
+	return state == "succeeded" || state == "failed" || state == "cancelled"
 }
 
 func parseJobCursor(cursor, jobID string) (string, bool) {

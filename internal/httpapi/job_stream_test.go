@@ -7,7 +7,112 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	jobqueue "videocutlist/internal/jobs"
+	"videocutlist/internal/projects"
 )
+
+func TestBatchEventStreamSendsCurrentSnapshotAndResynchronizesCursor(t *testing.T) {
+	authenticator, err := NewAuthenticator(AuthConfig{Mode: "bearer", BearerToken: "stream-secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := &streamTestBatches{routeTestBatchExports: &routeTestBatchExports{}}
+	server, err := New(Config{
+		Authenticator: authenticator,
+		Media:         &routeTestMedia{}, Preview: routeTestPreview{}, Projects: routeTestProjects{},
+		BatchExports: service, Jobs: &streamTestJobs{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unauthorized := httptest.NewRecorder()
+	server.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, "http://api.test/api/v2/batches/b_aaaaaaaaaaaa/events", nil))
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthenticated batch stream status = %d", unauthorized.Code)
+	}
+	for _, test := range []struct{ name, cursor, event string }{
+		{name: "initial snapshot", event: "snapshot"},
+		{name: "matching reconnect", cursor: "b2_current", event: "snapshot"},
+		{name: "stale cursor", cursor: "b2_stale", event: "resync"},
+		{name: "malformed cursor", cursor: "invalid", event: "resync"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, "http://api.test/api/v2/batches/b_aaaaaaaaaaaa/events", nil)
+			request.Header.Set("Authorization", "Bearer stream-secret")
+			if test.cursor != "" {
+				request.Header.Set("Last-Event-ID", test.cursor)
+			}
+			response := httptest.NewRecorder()
+			server.ServeHTTP(response, request)
+			if response.Code != http.StatusOK || response.Header().Get("Content-Type") != "text/event-stream" {
+				t.Fatalf("status=%d headers=%v body=%s", response.Code, response.Header(), response.Body.String())
+			}
+			body := response.Body.String()
+			if !strings.Contains(body, "id: b2_current\nevent: "+test.event+"\n") || !strings.Contains(body, `"batchId":"b_aaaaaaaaaaaa"`) || !strings.HasSuffix(body, "\n\n") {
+				t.Fatalf("unexpected batch SSE: %q", body)
+			}
+		})
+	}
+}
+
+type streamTestBatches struct{ *routeTestBatchExports }
+
+func (*streamTestBatches) Snapshot(_ context.Context, id string) (projects.Batch, string, error) {
+	if id != "b_aaaaaaaaaaaa" {
+		return projects.Batch{}, "", jobqueue.ErrJobNotFound
+	}
+	return projects.Batch{BatchID: id, State: "succeeded", Jobs: []projects.Job{}}, "b2_current", nil
+}
+
+type changingStreamBatches struct {
+	*routeTestBatchExports
+	state string
+}
+
+func (b *changingStreamBatches) Snapshot(_ context.Context, id string) (projects.Batch, string, error) {
+	return projects.Batch{BatchID: id, State: b.state, Jobs: []projects.Job{}}, "b2_" + b.state, nil
+}
+
+func TestBatchEventStreamPublishesChangedTerminalSnapshot(t *testing.T) {
+	authenticator, err := NewAuthenticator(AuthConfig{Mode: "none"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	batches := &changingStreamBatches{routeTestBatchExports: &routeTestBatchExports{}, state: "running"}
+	server, err := New(Config{
+		Authenticator: authenticator, Media: &routeTestMedia{}, Preview: routeTestPreview{}, Projects: routeTestProjects{},
+		BatchExports: batches, Jobs: &streamTestJobs{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writer := &cancelAfterFlushWriter{ResponseRecorder: httptest.NewRecorder(), afterFlush: func() { batches.state = "succeeded" }}
+	server.ServeHTTP(writer, httptest.NewRequest(http.MethodGet, "http://api.test/api/v2/batches/b_aaaaaaaaaaaa/events", nil))
+	body := writer.Body.String()
+	if !strings.Contains(body, "id: b2_running\nevent: snapshot\n") || !strings.Contains(body, "id: b2_succeeded\nevent: snapshot\n") || !strings.Contains(body, `"state":"succeeded"`) {
+		t.Fatalf("changed terminal snapshot missing: %q", body)
+	}
+}
+
+func TestBatchEventStreamReturnsNotFoundForMissingBatch(t *testing.T) {
+	authenticator, err := NewAuthenticator(AuthConfig{Mode: "none"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := New(Config{
+		Authenticator: authenticator, Media: &routeTestMedia{}, Preview: routeTestPreview{}, Projects: routeTestProjects{},
+		BatchExports: &streamTestBatches{routeTestBatchExports: &routeTestBatchExports{}}, Jobs: &streamTestJobs{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "http://api.test/api/v2/batches/b_bbbbbbbbbbbb/events", nil))
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("missing batch status = %d, body %s", response.Code, response.Body.String())
+	}
+}
 
 func TestJobEventStreamSendsTerminalSnapshotAndResynchronizesInvalidCursor(t *testing.T) {
 	authenticator, err := NewAuthenticator(AuthConfig{Mode: "bearer", BearerToken: "stream-secret"})

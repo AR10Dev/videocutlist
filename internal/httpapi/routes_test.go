@@ -158,6 +158,7 @@ func TestRouteCoverageInventory(t *testing.T) {
 		{http.MethodPost, "/api/v2/projects/" + project + "/detections", routeCreateDetection},
 		{http.MethodGet, "/api/v2/jobs/" + job, routeGetJob},
 		{http.MethodGet, "/api/v2/jobs/" + job + "/events", routeStreamJob},
+		{http.MethodGet, "/api/v2/batches/" + batch + "/events", routeStreamBatch},
 		{http.MethodDelete, "/api/v2/jobs/" + job, routeCancelJob},
 		{http.MethodPost, "/api/v2/jobs/" + job + "/retry", routeRetryJob},
 		{http.MethodGet, "/media/v2/jobs/" + job + "/outputs/0", routeDownloadOutput},
@@ -196,7 +197,7 @@ func TestRouteCoverageInventory(t *testing.T) {
 		}
 		seen[entry.kind] = true
 	}
-	for kind := routeListMedia; kind <= routeRevokeMCPCredential; kind++ {
+	for kind := routeListMedia; kind <= routeStreamBatch; kind++ {
 		if !seen[kind] {
 			t.Errorf("route kind %d is missing from the production route inventory", kind)
 		}
@@ -213,8 +214,8 @@ func TestRouteCoverageInventory(t *testing.T) {
 			t.Errorf("OpenAPI operation missing from production inventory: %s", operation)
 		}
 	}
-	if len(seen) != int(routeRevokeMCPCredential) {
-		t.Fatalf("route inventory accounts for %d kinds, want %d", len(seen), routeRevokeMCPCredential)
+	if len(seen) != int(routeStreamBatch) {
+		t.Fatalf("route inventory accounts for %d kinds, want %d", len(seen), routeStreamBatch)
 	}
 }
 
