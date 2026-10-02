@@ -30,46 +30,54 @@ test.beforeEach(async ({ page }) => {
       authentication: { type: "none" },
     };
   });
-  await page.route(`${origin}/api/v1/**`, async (route) => {
+  await page.route(`${origin}/api/v2/**`, async (route) => {
     const request = route.request();
     const url = new URL(request.url());
-    if (url.pathname === "/api/v1/media/status")
+    if (url.pathname === "/api/v2/media/status")
       return route.fulfill({
         json: { state: "ready_with_media", message: "Library ready." },
       });
-    if (url.pathname === "/api/v1/media/tree")
+    if (url.pathname === "/api/v2/media/tree")
       return route.fulfill({
-        json: { folders: [{ id: "folder-a", label: "Interviews" }], items: [media] },
+        json: {
+          folders: [{ id: "f_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", label: "Interviews" }],
+          items: [media],
+          nextCursor: null,
+        },
       });
-    if (url.pathname === `/api/v1/media/${media.id}`) return route.fulfill({ json: media });
-    if (url.pathname.endsWith("/thumbnails"))
-      return route.fulfill({ headers: { "content-type": "image/png" }, body: "not-a-real-png" });
-    if (url.pathname.endsWith("/waveform"))
-      return route.fulfill({ json: { startMs: 0, durationMs: 10_000, peaks: [0.2, 0.8] } });
-    if (url.pathname === "/api/v1/destinations")
+    if (url.pathname === `/api/v2/media/${media.id}`) return route.fulfill({ json: media });
+    if (url.pathname === "/api/v2/destinations")
       return route.fulfill({
         json: { destinations: [{ id: "download", label: "Browser download", kind: "download" }] },
       });
     if (url.pathname.endsWith("/exports/preflight"))
       return route.fulfill({ json: { allowed: true, selection: [], findings: [] } });
-    if (url.pathname === "/api/v1/batches") return route.fulfill({ json: { items: [] } });
-    if (url.pathname.startsWith("/api/v1/projects/") && request.method() === "PUT")
+    if (url.pathname === "/api/v2/batches")
+      return route.fulfill({ json: { items: [], nextCursor: null } });
+    if (url.pathname.startsWith("/api/v2/projects/") && request.method() === "PUT")
       return route.fulfill({
         json: projectResponse(request.postDataJSON() as Record<string, unknown>),
       });
-    if (url.pathname.startsWith("/api/v1/projects/"))
+    if (url.pathname.startsWith("/api/v2/projects/"))
       return route.fulfill({ json: projectResponse() });
-    if (url.pathname === "/api/v1/media/refresh")
+    if (url.pathname === "/api/v2/media/refresh") {
+      expect(request.headers()["idempotency-key"]).toMatch(/^[A-Za-z0-9_-]{1,128}$/);
       return route.fulfill({
-        status: 200,
-        json: { id: "scan-succeeded", state: "succeeded", progress: 1, indexed: 1 },
+        status: 202,
+        json: { id: "j_scan_succeeded", state: "succeeded", progress: 1, indexed: 1 },
       });
-    if (url.pathname.startsWith("/api/v1/media/import/"))
-      return route.fulfill({
-        json: { id: "scan-succeeded", state: "succeeded", progress: 1, indexed: 1 },
-      });
+    }
     return route.fulfill({ status: 404 });
   });
+});
+
+test.beforeEach(async ({ page }) => {
+  await page.route(`${origin}/media/v2/media/${media.id}/thumbnails**`, (route) =>
+    route.fulfill({ status: 503 }),
+  );
+  await page.route(`${origin}/media/v2/media/${media.id}/waveform**`, (route) =>
+    route.fulfill({ json: { startMs: 0, durationMs: 10_000, peaks: [0.2, 0.8] } }),
+  );
 });
 
 test("workspace uses project controls on the left and keeps tasks focused", async ({ page }) => {
@@ -133,7 +141,7 @@ test("metadata retries are bounded, report HTTP status, and permit an explicit r
   page,
 }) => {
   let attempts = 0;
-  await page.route(`${origin}/api/v1/media/${media.id}`, (route) => {
+  await page.route(`${origin}/api/v2/media/${media.id}`, (route) => {
     attempts++;
     return route.fulfill({ status: 503 });
   });
@@ -145,14 +153,14 @@ test("metadata retries are bounded, report HTTP status, and permit an explicit r
   expect(attempts).toBe(4);
   await expect(error).toContainText("503");
   await expect(page.getByLabel("Timeline playhead")).toBeVisible();
-  await page.route(`${origin}/api/v1/media/${media.id}`, (route) => route.fulfill({ json: media }));
+  await page.route(`${origin}/api/v2/media/${media.id}`, (route) => route.fulfill({ json: media }));
   await page.getByRole("button", { name: "Retry metadata" }).click();
   await expect(error).toHaveCount(0);
 });
 
 test("metadata recovers from a transient failure without an explicit retry", async ({ page }) => {
   let attempts = 0;
-  await page.route(`${origin}/api/v1/media/${media.id}`, (route) => {
+  await page.route(`${origin}/api/v2/media/${media.id}`, (route) => {
     attempts++;
     return attempts === 1
       ? route.fulfill({ status: 503 })

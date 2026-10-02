@@ -26,7 +26,7 @@ const project = {
       id: "i_aaaaaaaaaaaaaaaaaaaaaaaa",
       mediaId: media.id,
       segments: [{ startMs: 1000, endMs: 3000, label: "Opening" }],
-      exportOptions: {},
+      exportOptions: { streamIndexes: [] },
     },
   ],
 };
@@ -81,22 +81,24 @@ test.beforeEach(async ({ page }) => {
     };
     Object.defineProperty(window, "MediaSource", { value: undefined });
   });
-  await page.route(`${origin}/api/v1/**`, async (route) => {
+  await page.route(`${origin}/api/v2/**`, async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
     if (path.endsWith("/media/tree"))
-      return route.fulfill({ json: { folders: [], items: [media] } });
+      return route.fulfill({ json: { folders: [], items: [media], nextCursor: null } });
     if (path.endsWith("/media/status"))
       return route.fulfill({ json: { state: "ready_with_media", message: "Library ready." } });
     if (path.endsWith(`/media/${media.id}`)) return route.fulfill({ json: media });
-    if (path.endsWith("/waveform"))
-      return route.fulfill({ json: { startMs: 0, durationMs: 10000, peaks: [0.2, 0.8] } });
-    if (path.endsWith("/thumbnails")) return route.fulfill({ status: 503 });
     if (path.endsWith("/projects"))
       return route.fulfill({ json: { items: [project], nextCursor: null } });
-    if (path.endsWith("/batches")) return route.fulfill({ json: { items: [] } });
+    if (path.endsWith("/batches")) return route.fulfill({ json: { items: [], nextCursor: null } });
     if (path.endsWith("/destinations"))
-      return route.fulfill({ json: { destinations: settings.settings.destinations } });
+      return route.fulfill({
+        json: {
+          destinations: settings.settings.destinations,
+          capabilities: { saveBesideSource: false },
+        },
+      });
     if (path.endsWith("/settings")) return route.fulfill({ json: settings });
     if (path.endsWith("/exports/preflight"))
       return route.fulfill({ json: { allowed: true, findings: [], selection: [] } });
@@ -104,12 +106,26 @@ test.beforeEach(async ({ page }) => {
       return route.fulfill({
         json:
           request.method() === "PUT"
-            ? { ...request.postDataJSON(), id: path.split("/").pop(), revision: 1 }
+            ? {
+                ...request.postDataJSON(),
+                id: path.split("/").pop(),
+                revision: 1,
+                updatedAt: "2026-01-01T00:00:00Z",
+              }
             : project,
       });
     }
     return route.fulfill({ status: 404 });
   });
+});
+
+test.beforeEach(async ({ page }) => {
+  await page.route(`${origin}/media/v2/media/${media.id}/thumbnails**`, (route) =>
+    route.fulfill({ status: 503 }),
+  );
+  await page.route(`${origin}/media/v2/media/${media.id}/waveform**`, (route) =>
+    route.fulfill({ json: { startMs: 0, durationMs: 10000, peaks: [0.2, 0.8] } }),
+  );
 });
 
 for (const width of [390, 700, 1049, 1050, 1051, 1280, 1717]) {
@@ -214,14 +230,16 @@ test("missing preview assets and audio remain non-blocking for editing", async (
     ...media,
     streams: { tracks: [{ index: 0, type: "video", codec: "h264" }] },
   };
-  await page.route(`${origin}/api/v1/media/tree`, (route) =>
-    route.fulfill({ json: { folders: [], items: [noAudioMedia] } }),
+  await page.route(`${origin}/api/v2/media/tree`, (route) =>
+    route.fulfill({ json: { folders: [], items: [noAudioMedia], nextCursor: null } }),
   );
-  await page.route(`${origin}/api/v1/media/${media.id}`, (route) =>
+  await page.route(`${origin}/api/v2/media/${media.id}`, (route) =>
     route.fulfill({ json: noAudioMedia }),
   );
   await chooseMedia(page);
-  await expect(page.getByText("Thumbnails unavailable; editing remains available.")).toBeVisible();
+  await expect(
+    page.getByRole("status").filter({ hasText: "Thumbnails unavailable" }),
+  ).toContainText("Waveform unavailable; editing remains available.");
   await expect(page.getByLabel("Keyframe snapping availability")).toContainText(
     "Keyframe snapping unavailable",
   );
@@ -313,18 +331,21 @@ test("panel widths persist, desktop sidebars reopen, and narrow drawers stay exc
 test("server projects are browsable without selecting media and support pagination", async ({
   page,
 }) => {
-  await page.route(`${origin}/api/v1/projects?*`, (route) =>
-    route.fulfill({
+  await page.route(`${origin}/api/v2/**`, (route) => {
+    if (!new URL(route.request().url()).pathname.endsWith("/projects")) return route.fallback();
+    return route.fulfill({
       json: {
         items: [
           new URL(route.request().url()).searchParams.has("cursor")
             ? { ...project, id: "p_second-project01", name: "Second project" }
             : project,
         ],
-        nextCursor: new URL(route.request().url()).searchParams.has("cursor") ? null : project.id,
+        nextCursor: new URL(route.request().url()).searchParams.has("cursor")
+          ? null
+          : "cursor-page-2",
       },
-    }),
-  );
+    });
+  });
   await page.goto("/");
   await openProjectTools(page);
   await page.getByText("Browse saved projects", { exact: true }).click();
@@ -340,29 +361,41 @@ test("server projects are browsable without selecting media and support paginati
 
 test("library scans show progress and can be cancelled", async ({ page }) => {
   let cancelled = false;
-  await page.route(`${origin}/api/v1/media/refresh`, (route) =>
-    route.fulfill({
+  let key = "";
+  await page.route(`${origin}/api/v2/media/refresh`, (route) => {
+    key = route.request().headers()["idempotency-key"] ?? "";
+    return route.fulfill({
       status: 202,
-      json: { id: "j_scan123456789", state: "running", progress: 0.2, indexed: 2 },
-    }),
-  );
-  await page.route(`${origin}/api/v1/media/import/*`, (route) => {
+      json: { id: "j_scan123456789", state: "running", revision: 1, progress: 0.2, indexed: 2 },
+    });
+  });
+  await page.route(`${origin}/api/v2/jobs/j_scan123456789`, (route) => {
     if (route.request().method() === "DELETE") {
       cancelled = true;
       return route.fulfill({ status: 204 });
     }
+    return route.fulfill({ status: 404 });
+  });
+  await page.route(`${origin}/api/v2/jobs/j_scan123456789/events`, (route) => {
+    const job = {
+      id: "j_scan123456789",
+      type: "library_scan",
+      state: cancelled ? "cancelled" : "running",
+      revision: cancelled ? 2 : 1,
+      progress: 0.4,
+      indexed: 4,
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-01T00:00:01Z",
+    };
     return route.fulfill({
-      json: {
-        id: "j_scan123456789",
-        state: cancelled ? "cancelled" : "running",
-        progress: 0.4,
-        indexed: 4,
-      },
+      headers: { "content-type": "text/event-stream" },
+      body: `id: ${job.revision}\nevent: snapshot\ndata: ${JSON.stringify(job)}\n\n`,
     });
   });
   await page.goto("/");
   await page.getByRole("button", { name: "Refresh media" }).click();
   await expect(page.getByLabel("Library scan")).toContainText("4 indexed");
+  expect(key).toMatch(/^[A-Za-z0-9_-]{1,128}$/);
   await page.getByRole("button", { name: "Cancel" }).click();
   await expect(page.getByLabel("Library scan")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Refresh media" })).toBeEnabled();
@@ -370,13 +403,44 @@ test("library scans show progress and can be cancelled", async ({ page }) => {
 
 test("detection sends sensitivity settings and rejects invalid values", async ({ page }) => {
   let body: Record<string, unknown> | undefined;
-  await page.route(`${origin}/api/v1/projects/*/detections`, (route) => {
+  let detectionProjectId = "";
+  await page.route(`${origin}/api/v2/projects/*/detections`, (route) => {
     body = route.request().postDataJSON();
+    detectionProjectId = new URL(route.request().url()).pathname.split("/")[4]!;
+    expect(body).toMatchObject({ projectRevision: 1 });
+    expect(route.request().headers()["idempotency-key"]).toMatch(/^[A-Za-z0-9_-]{1,128}$/);
     return route.fulfill({
       status: 202,
-      json: { id: "j_detect123456789", state: "succeeded", candidates: [], type: "detection" },
+      json: {
+        id: "j_detect123456789",
+        type: "detection",
+        state: "queued",
+        revision: 1,
+        projectRevision: 1,
+        mediaId: media.id,
+        projectId: detectionProjectId,
+        kind: "silence",
+      },
     });
   });
+  await page.route(`${origin}/api/v2/jobs/j_detect123456789/events`, (route) =>
+    route.fulfill({
+      headers: { "content-type": "text/event-stream" },
+      body: `id: 2\nevent: snapshot\ndata: ${JSON.stringify({
+        id: "j_detect123456789",
+        type: "detection",
+        state: "succeeded",
+        revision: 2,
+        projectRevision: 1,
+        mediaId: media.id,
+        projectId: detectionProjectId,
+        kind: "silence",
+        candidates: [],
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:01Z",
+      })}\n\n`,
+    }),
+  );
   await chooseMedia(page);
   await page.getByRole("button", { name: "Add to project" }).click();
   await page.getByRole("tab", { name: "Auto-detect" }).click();
@@ -394,7 +458,7 @@ test("detection sends sensitivity settings and rejects invalid values", async ({
 });
 
 test("queue exposes every completed output and batch download controls", async ({ page }) => {
-  await page.route(`${origin}/api/v1/batches?*`, (route) =>
+  await page.route(`${origin}/api/v2/batches**`, (route) =>
     route.fulfill({
       json: {
         items: [
@@ -407,13 +471,29 @@ test("queue exposes every completed output and batch download controls", async (
                 id: "j_output12345678",
                 type: "export",
                 state: "succeeded",
-                result: { destinationKind: "download", outputNames: ["first.mkv"] },
+                revision: 1,
+                createdAt: "2026-01-01T00:00:00Z",
+                updatedAt: "2026-01-01T00:00:01Z",
+                result: {
+                  destinationKind: "download",
+                  outputNames: ["first.mkv"],
+                  sizeBytes: 10,
+                  retainUntil: "2026-01-02T00:00:00Z",
+                },
               },
               {
                 id: "j_output23456789",
                 type: "export",
                 state: "succeeded",
-                result: { destinationKind: "download", outputNames: ["second.mkv"] },
+                revision: 1,
+                createdAt: "2026-01-01T00:00:00Z",
+                updatedAt: "2026-01-01T00:00:01Z",
+                result: {
+                  destinationKind: "download",
+                  outputNames: ["second.mkv"],
+                  sizeBytes: 10,
+                  retainUntil: "2026-01-02T00:00:00Z",
+                },
               },
             ],
           },
@@ -421,9 +501,19 @@ test("queue exposes every completed output and batch download controls", async (
             batchId: "b_oldoutputs12345",
             state: "failed",
             progress: 1,
-            jobs: [{ id: "j_oldoutputs12345", type: "export", state: "failed" }],
+            jobs: [
+              {
+                id: "j_oldoutputs12345",
+                type: "export",
+                state: "failed",
+                revision: 1,
+                createdAt: "2026-01-01T00:00:00Z",
+                updatedAt: "2026-01-01T00:00:01Z",
+              },
+            ],
           },
         ],
+        nextCursor: null,
       },
     }),
   );
@@ -439,7 +529,7 @@ test("queue exposes every completed output and batch download controls", async (
 test("server-folder completion names the safe destination without download actions", async ({
   page,
 }) => {
-  await page.route(`${origin}/api/v1/batches?*`, (route) =>
+  await page.route(`${origin}/api/v2/batches**`, (route) =>
     route.fulfill({
       json: {
         items: [
@@ -452,6 +542,9 @@ test("server-folder completion names the safe destination without download actio
                 id: "j_archive12345678",
                 type: "export",
                 state: "succeeded",
+                revision: 1,
+                createdAt: "2026-01-01T00:00:00Z",
+                updatedAt: "2026-01-01T00:00:01Z",
                 result: {
                   destinationId: "archive",
                   destinationKind: "archive",
@@ -463,15 +556,17 @@ test("server-folder completion names the safe destination without download actio
             ],
           },
         ],
+        nextCursor: null,
       },
     }),
   );
-  await page.route(`${origin}/api/v1/destinations`, (route) =>
+  await page.route(`${origin}/api/v2/destinations`, (route) =>
     route.fulfill({
       json: {
         destinations: [
           { id: "archive", label: "Review archive", kind: "archive", retention: "durable" },
         ],
+        capabilities: { saveBesideSource: false },
       },
     }),
   );
@@ -487,7 +582,7 @@ test("server processing inputs are disabled during saves instead of dropping edi
   page,
 }) => {
   let finish: (() => void) | undefined;
-  await page.route(`${origin}/api/v1/settings`, async (route) => {
+  await page.route(`${origin}/api/v2/settings`, async (route) => {
     if (route.request().method() === "PUT") {
       await new Promise<void>((resolve) => {
         finish = resolve;
@@ -534,13 +629,14 @@ test("cut labels and per-row split work without invisible menu inputs", async ({
 });
 
 test("a multi-item JSON cut list restores as a new unsaved project", async ({ page }) => {
-  await page.route(`${origin}/api/v1/destinations`, (route) =>
+  await page.route(`${origin}/api/v2/destinations`, (route) =>
     route.fulfill({
       json: {
         destinations: [
           { id: "download", label: "Downloads", kind: "download", retention: "24h" },
           { id: "archive", label: "Review archive", kind: "archive", retention: "durable" },
         ],
+        capabilities: { saveBesideSource: false },
       },
     }),
   );

@@ -43,24 +43,24 @@ test.beforeEach(async ({ page }) => {
     };
     Object.defineProperty(window, "MediaSource", { value: undefined });
   });
-  await page.route(`${origin}/api/v1/**`, async (route) => {
+  await page.route(`${origin}/api/v2/**`, async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
     if (path.endsWith("/media/tree"))
-      return route.fulfill({ json: { folders: [], items: [media, secondMedia] } });
+      return route.fulfill({
+        json: { folders: [], items: [media, secondMedia], nextCursor: null },
+      });
     if (path.endsWith("/media/status"))
       return route.fulfill({ json: { state: "ready_with_media", message: "Library ready." } });
     if (path.endsWith(`/media/${media.id}`)) return route.fulfill({ json: media });
     if (path.endsWith(`/media/${secondMedia.id}`)) return route.fulfill({ json: secondMedia });
-    if (path.endsWith("/waveform"))
-      return route.fulfill({ json: { startMs: 0, durationMs: 10_000, peaks: [0.2, 0.8] } });
-    if (path.endsWith("/thumbnails")) return route.fulfill({ status: 503 });
     if (path.endsWith("/destinations"))
       return route.fulfill({
         json: {
           destinations: [
             { id: "download", label: "Browser download", kind: "download", retention: "24h" },
           ],
+          capabilities: { saveBesideSource: false },
         },
       });
     if (path.endsWith("/settings"))
@@ -88,10 +88,14 @@ test.beforeEach(async ({ page }) => {
           },
         },
       });
-    if (path.endsWith("/batches")) return route.fulfill({ json: { items: [] } });
+    if (path.endsWith("/batches")) return route.fulfill({ json: { items: [], nextCursor: null } });
     if (path.endsWith("/exports/preflight"))
       return route.fulfill({ json: { allowed: true, selection: [], findings: [] } });
-    if (/\/projects\/[^/]+\/exports$/.test(path))
+    if (/\/projects\/[^/]+\/exports$/.test(path)) {
+      const projectId = path.split("/")[4]!;
+      const body = request.postDataJSON() as { projectRevision: number; itemIds?: string[] };
+      expect(body.projectRevision).toBe(1);
+      expect(request.headers()["idempotency-key"]).toMatch(/^[A-Za-z0-9_-]{1,128}$/);
       return route.fulfill({
         status: 202,
         json: {
@@ -99,21 +103,48 @@ test.beforeEach(async ({ page }) => {
           jobs: [
             {
               id: "j_membership01",
+              batchId: "b_membership01",
               type: "export",
               state: "queued",
+              revision: 1,
               progress: 0,
+              projectId,
+              projectRevision: body.projectRevision,
               createdAt: "2026-01-01T00:00:00Z",
               updatedAt: "2026-01-01T00:00:00Z",
             },
           ],
         },
       });
+    }
     if (/\/projects\/[^/]+$/.test(path) && request.method() === "PUT") {
       const body = request.postDataJSON();
-      return route.fulfill({ json: { ...body, id: path.split("/").pop(), revision: 1 } });
+      return route.fulfill({
+        json: {
+          ...body,
+          id: path.split("/").pop(),
+          revision: 1,
+          updatedAt: "2026-01-01T00:00:00Z",
+        },
+      });
     }
     return route.fulfill({ status: 404 });
   });
+});
+
+test.beforeEach(async ({ page }) => {
+  await page.route(`${origin}/media/v2/media/${media.id}/thumbnails**`, (route) =>
+    route.fulfill({ status: 503 }),
+  );
+  await page.route(`${origin}/media/v2/media/${media.id}/waveform**`, (route) =>
+    route.fulfill({ json: { startMs: 0, durationMs: 10_000, peaks: [0.2, 0.8] } }),
+  );
+  await page.route(`${origin}/media/v2/media/${secondMedia.id}/thumbnails**`, (route) =>
+    route.fulfill({ status: 503 }),
+  );
+  await page.route(`${origin}/media/v2/media/${secondMedia.id}/waveform**`, (route) =>
+    route.fulfill({ json: { startMs: 0, durationMs: 10_000, peaks: [0.2, 0.8] } }),
+  );
 });
 
 test("browsing stays out of the project until add, then activates without duplication", async ({
