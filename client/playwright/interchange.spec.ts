@@ -108,6 +108,7 @@ test("export cancellation remains effective when the active project item changes
   let deleteCompleted = false;
   let projectId = "";
   let projectItemId = "";
+  let destinationRequests = 0;
   await page.addInitScript(() => {
     window.VIDEOCUTLIST_CONFIG = {
       serverBaseUrl: "http://127.0.0.1:8787",
@@ -138,10 +139,26 @@ test("export cancellation remains effective when the active project item changes
     if (url.pathname === "/api/v2/media/status")
       return route.fulfill({ json: { state: "ready_with_media", message: "Ready" } });
     if (url.pathname === "/api/v2/settings") return route.fulfill({ json: {} });
-    if (url.pathname === "/api/v2/destinations")
+    if (url.pathname === "/api/v2/destinations") {
+      destinationRequests++;
+      if (destinationRequests === 1)
+        return route.fulfill({
+          status: 500,
+          json: {
+            error: {
+              code: "internal_error",
+              message: "Destination lookup is unavailable.",
+              requestId: "r-destinations",
+            },
+          },
+        });
       return route.fulfill({
-        json: { destinations: [{ id: "download", label: "Downloads", kind: "download" }] },
+        json: {
+          destinations: [{ id: "download", label: "Downloads", kind: "download" }],
+          capabilities: { saveBesideSource: false },
+        },
       });
+    }
     if (url.pathname === "/api/v2/batches")
       return route.fulfill({ json: { items: [], nextCursor: null } });
     if (request.method() === "PUT" && /^\/api\/v2\/projects\/p_[^/]+$/.test(url.pathname)) {
@@ -190,9 +207,19 @@ test("export cancellation remains effective when the active project item changes
   await page.getByRole("button", { name: "Set in" }).click();
   await page.getByLabel("Timeline playhead").fill("500");
   await page.getByRole("button", { name: "Set out" }).click();
+  await expect(page.locator(".cut-row[data-segment-id]")).toHaveCount(1);
+  await expect(page.getByRole("button", { name: "Select cut 1" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
   await page.getByRole("button", { name: "Save project from project header", exact: true }).click();
   await expect(page.getByRole("status", { name: "Project status" })).toHaveText("Saved");
   await page.getByRole("tab", { name: "Export", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("Destination lookup is unavailable.");
+  await expect(page.getByRole("button", { name: "Create clips" })).toBeDisabled();
+  await page.getByRole("button", { name: "Retry", exact: true }).click();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Create clips" })).toBeEnabled();
   await page.getByRole("button", { name: "Create clips" }).click();
   await expect(page.getByRole("button", { name: "Cancel export" })).toBeVisible();
   await page.getByRole("button", { name: "Cancel export" }).click();

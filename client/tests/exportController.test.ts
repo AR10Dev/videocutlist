@@ -81,6 +81,8 @@ async function withExportController(
     saveProject?: () => Promise<components["schemas"]["Project"] | undefined>;
     onRequest?: (method: string, path: string) => void;
     preflightFailure?: components["schemas"]["Error"]["error"];
+    batchListResponse?: Promise<Response>;
+    destinationsResponse?: Promise<Response>;
   } = {},
 ) {
   const originalStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
@@ -96,9 +98,17 @@ async function withExportController(
     const method = init?.method ?? (input instanceof Request ? input.method : "GET");
     options.onRequest?.(method, requestUrl.pathname);
     if (requestUrl.pathname === "/api/v2/batches" && method === "GET")
-      return Response.json({ items: [initialBatch], nextCursor: null });
+      return (
+        options.batchListResponse ??
+        Promise.resolve(Response.json({ items: [initialBatch], nextCursor: null }))
+      );
     if (requestUrl.pathname === "/api/v2/destinations")
-      return Response.json({ destinations: [], capabilities: { saveBesideSource: false } });
+      return (
+        options.destinationsResponse ??
+        Promise.resolve(
+          Response.json({ destinations: [], capabilities: { saveBesideSource: false } }),
+        )
+      );
     if (requestUrl.pathname.endsWith("/exports/preflight") && method === "POST")
       return options.preflightFailure
         ? Response.json({ error: options.preflightFailure }, { status: 400 })
@@ -197,6 +207,101 @@ async function waitForStatus(controller: ExportController, expected: string) {
 }
 
 describe("export controller aggregate status", () => {
+  it("keeps read errors empty while generated reads are waiting and after success", async () => {
+    let resolveBatches!: (response: Response) => void;
+    let resolveDestinations!: (response: Response) => void;
+    const batchListResponse = new Promise<Response>((resolve) => (resolveBatches = resolve));
+    const destinationsResponse = new Promise<Response>(
+      (resolve) => (resolveDestinations = resolve),
+    );
+    await withExportController(
+      batch("succeeded", 1, [job("j_exportstatus0001", "succeeded", 2)]),
+      async (controller) => {
+        const deadline = Date.now() + 2_000;
+        while (!controller.destinationsLoading() || !controller.batchesLoading()) {
+          if (Date.now() >= deadline) throw new Error("Generated export reads did not start.");
+          await new Promise((resolve) => setTimeout(resolve, 1));
+        }
+        expect(controller.destinationsError()).toBe("");
+        expect(controller.batchesError()).toBe("");
+        resolveBatches(
+          Response.json({
+            items: [batch("succeeded", 1, [job("j_exportstatus0001", "succeeded", 2)])],
+            nextCursor: null,
+          }),
+        );
+        resolveDestinations(
+          Response.json({
+            destinations: [{ id: "download", label: "Downloads", kind: "download" }],
+            capabilities: { saveBesideSource: false },
+          }),
+        );
+        const settledDeadline = Date.now() + 2_000;
+        while (!controller.destinations().length || !controller.batches().length) {
+          if (Date.now() >= settledDeadline)
+            throw new Error("Generated export reads did not settle.");
+          await new Promise((resolve) => setTimeout(resolve, 1));
+        }
+        expect(controller.destinationsLoading()).toBe(false);
+        expect(controller.batchesLoading()).toBe(false);
+        expect(controller.destinationsError()).toBe("");
+        expect(controller.batchesError()).toBe("");
+        expect(controller.destinations()).toEqual([
+          { id: "download", label: "Downloads", kind: "download" },
+        ]);
+        expect(controller.destinationCapabilities()).toEqual({ saveBesideSource: false });
+      },
+      { batchListResponse, destinationsResponse },
+    );
+  });
+  it("projects generated read errors only after the resource actually fails", async () => {
+    await withExportController(
+      batch("succeeded", 1, [job("j_exportstatus0001", "succeeded", 2)]),
+      async (controller) => {
+        const deadline = Date.now() + 2_000;
+        while (
+          controller.destinationsError() !== "Destination lookup is unavailable." ||
+          controller.batchesError() !== "Batch listing is unavailable."
+        ) {
+          if (Date.now() >= deadline)
+            throw new Error(
+              `Generated read failures did not settle: destinations=${controller.destinationsError()}, batches=${controller.batchesError()}`,
+            );
+          await new Promise((resolve) => setTimeout(resolve, 1));
+        }
+        expect(controller.destinationsLoading()).toBe(false);
+        expect(controller.batchesLoading()).toBe(false);
+        expect(controller.destinationsError()).toBe("Destination lookup is unavailable.");
+        expect(controller.batchesError()).toBe("Batch listing is unavailable.");
+      },
+      {
+        batchListResponse: Promise.resolve(
+          Response.json(
+            {
+              error: {
+                code: "internal_error",
+                message: "Batch listing is unavailable.",
+                requestId: "r-batches",
+              },
+            },
+            { status: 500 },
+          ),
+        ),
+        destinationsResponse: Promise.resolve(
+          Response.json(
+            {
+              error: {
+                code: "internal_error",
+                message: "Destination lookup is unavailable.",
+                requestId: "r-destinations",
+              },
+            },
+            { status: 500 },
+          ),
+        ),
+      },
+    );
+  });
   it("saves before a fresh generated preflight and generated keyed submission", async () => {
     const media: components["schemas"]["Media"] = {
       id: `m_${"m".repeat(43)}`,

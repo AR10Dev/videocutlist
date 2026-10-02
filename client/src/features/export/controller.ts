@@ -73,6 +73,17 @@ const requestErrorMessage = (failure: unknown, fallback: string): string => {
   return publicApiError(failure)?.message ?? fallback;
 };
 
+const resourceErrorMessage = <A, E>(
+  result: AsyncResult.AsyncResult<A, E>,
+  fallback: string,
+): string => {
+  if (!AsyncResult.isFailure(result)) return "";
+  const failure = Cause.squash(result.cause);
+  return (
+    publicApiError(failure)?.message ?? (failure instanceof ApiFailure ? failure.message : fallback)
+  );
+};
+
 const preflightFailureMessage = (failure: unknown): string => {
   if (failure instanceof ApiFailure)
     return `Export preflight failed (${failure.status}). Try again.`;
@@ -994,11 +1005,11 @@ export function createExportController(deps: {
     childJobPending: (id: string) => pendingChildJobs().has(id),
     destinationsLoading: () => destinationResult.waiting(),
     destinationsError: () =>
-      requestErrorMessage(destinationResult.error(), "Request could not be completed."),
+      resourceErrorMessage(destinationResult.result(), "Request could not be completed."),
     retryDestinations: () => registry.refresh(destinationAtom),
     batchesLoading: () => batchList.waiting() && !batchList.value(),
     batchesRefreshing: () => batchList.waiting(),
-    batchesError: () => requestErrorMessage(batchList.error(), "Request could not be completed."),
+    batchesError: () => resourceErrorMessage(batchList.result(), "Request could not be completed."),
     refreshBatches,
     batchLoading: () => Boolean(batchId()) && currentBatchResult().waiting,
     batchError: currentBatchError,
