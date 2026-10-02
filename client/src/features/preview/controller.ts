@@ -1,6 +1,6 @@
 import { createEffect, createSignal, onCleanup, type Accessor } from "solid-js";
 import { Effect } from "effect";
-import { apiRequest, type ApiClient } from "../../api";
+import { type NativeMediaApiClient } from "../../api";
 import type { components } from "../../generated/api";
 import {
   normalizePeaks,
@@ -94,7 +94,7 @@ async function composeThumbnailStrip(
 }
 
 export function createPreviewController(
-  api: ApiClient,
+  api: NativeMediaApiClient,
   dependencies: {
     selected: Accessor<Media | undefined>;
     playheadMs: Accessor<number>;
@@ -167,17 +167,21 @@ export function createPreviewController(
         const results = yield* Effect.all(
           ranges.map((range) =>
             Effect.gen(function* () {
-              const params = new URLSearchParams({
-                startMs: String(range.startMs),
-                durationMs: String(range.durationMs),
-                count: "16",
-                width: "320",
+              const response = yield* Effect.tryPromise({
+                try: (signal) =>
+                  api.assetRequest(
+                    item.id,
+                    "thumbnails",
+                    {
+                      startMs: range.startMs,
+                      durationMs: range.durationMs,
+                      count: 16,
+                      width: 320,
+                    },
+                    { signal: AbortSignal.any([signal, lifetime.signal]) },
+                  ),
+                catch: () => new Error("Thumbnail request failed."),
               });
-              const response = yield* apiRequest(
-                api,
-                `media/${encodeURIComponent(item.id)}/thumbnails?${params}`,
-                { signal: lifetime.signal },
-              );
               if (!response.ok) return yield* Effect.fail(new Error("Thumbnail request failed."));
               const blob = yield* Effect.tryPromise(() => response.blob());
               const thumbnailURL = yield* Effect.try({
@@ -239,19 +243,23 @@ export function createPreviewController(
       const results = yield* Effect.all(
         ranges.map((range) =>
           Effect.gen(function* () {
-            const params = new URLSearchParams({
-              startMs: String(range.startMs),
-              durationMs: String(range.durationMs),
-              samples: "256",
+            const response = yield* Effect.tryPromise({
+              try: (signal) =>
+                api.assetRequest(
+                  item.id,
+                  "waveform",
+                  {
+                    startMs: range.startMs,
+                    durationMs: range.durationMs,
+                    samples: 256,
+                  },
+                  { signal: AbortSignal.any([signal, lifetime.signal]) },
+                ),
+              catch: () => new Error("Waveform request failed."),
             });
-            const response = yield* apiRequest(
-              api,
-              `media/${encodeURIComponent(item.id)}/waveform?${params}`,
-              { signal: lifetime.signal },
-            );
             if (!response.ok) return yield* Effect.fail(new Error("Waveform request failed."));
             const value = yield* Effect.tryPromise(
-              () => response.json() as Promise<{ peaks?: unknown }>,
+              () => response.json() as Promise<components["schemas"]["Waveform"]>,
             );
             return { range, peaks: normalizePeaks(value.peaks), failed: false };
           }).pipe(
@@ -311,7 +319,9 @@ export function createPreviewController(
             streamPreview(
               player,
               (signal) =>
-                api.request(`media/${encodeURIComponent(item.id)}/preview?${params}`, { signal }),
+                api.mediaRequest(`media/${encodeURIComponent(item.id)}/preview?${params}`, {
+                  signal,
+                }),
               (value) => {
                 if (current()) {
                   setDiagnostics(value);

@@ -110,6 +110,32 @@ function validateAuthentication(authentication: Authentication) {
   throw new Error("Invalid authentication configuration.");
 }
 
+function authenticatedFetch(
+  configuration: ClientConfiguration,
+  fetchImplementation: Fetch,
+  input: RequestInfo | URL,
+  init: RequestInit,
+  reportUnauthorized: StreamingApiClient["reportUnauthorized"],
+  redirect?: RequestRedirect,
+) {
+  const authentication = validateAuthentication(configuration.authentication);
+  const headers = new Headers(input instanceof Request ? input.headers : undefined);
+  new Headers(init.headers).forEach((value, key) => headers.set(key, value));
+  headers.delete("Authorization");
+  if (authentication.type === "bearer")
+    headers.set("Authorization", `Bearer ${authentication.token}`);
+  const signal = init.signal ?? (input instanceof Request ? input.signal : undefined);
+  return fetchImplementation(input, {
+    ...init,
+    credentials: authentication.type === "cookie" ? "include" : "omit",
+    headers,
+    ...(redirect ? { redirect } : {}),
+  }).then((response) => {
+    reportUnauthorized(response.status, authentication, signal);
+    return response;
+  });
+}
+
 export function resolveBrowserConfiguration(browser: Window = window): ClientConfiguration {
   const configuration = browser.VIDEOCUTLIST_CONFIG ?? {
     serverBaseUrl: browser.location.origin,
@@ -140,10 +166,14 @@ export interface StreamingApiClient extends ApiClient {
   ): void;
 }
 
+export interface NativeMediaApiClient extends StreamingApiClient {
+  mediaRequest(relativePath: string, init?: RequestInit): Promise<Response>;
+}
+
 export function createApiClient(
   configuration: ClientConfiguration,
   fetchImplementation: Fetch = fetch,
-): StreamingApiClient & { mediaUrl(relativePath: string): string } {
+): NativeMediaApiClient & { mediaUrl(relativePath: string): string } {
   const base = apiBase(configuration.serverBaseUrl);
   validateAuthentication(configuration.authentication);
 
@@ -172,22 +202,24 @@ export function createApiClient(
       window.dispatchEvent(new Event(authenticationRequiredEvent));
   };
 
-  const request = (relativePath: string, init: RequestInit = {}) => {
-    const authentication = validateAuthentication(configuration.authentication);
-    const headers = new Headers(init.headers);
-    headers.delete("Authorization");
-    const credentials = authentication.type === "cookie" ? "include" : "omit";
-    if (authentication.type === "bearer")
-      headers.set("Authorization", `Bearer ${authentication.token}`);
-    return fetchImplementation(url(relativePath), {
-      ...init,
-      credentials,
-      headers,
-    }).then((response) => {
-      reportUnauthorized(response.status, authentication, init.signal);
-      return response;
-    });
-  };
+  const request = (relativePath: string, init: RequestInit = {}) =>
+    authenticatedFetch(
+      configuration,
+      fetchImplementation,
+      url(relativePath),
+      init,
+      reportUnauthorized,
+    );
+
+  const mediaRequest = (relativePath: string, init: RequestInit = {}) =>
+    authenticatedFetch(
+      configuration,
+      fetchImplementation,
+      mediaUrl(relativePath),
+      init,
+      reportUnauthorized,
+      "error",
+    );
 
   const assetRequest = (
     mediaId: string,
@@ -198,21 +230,16 @@ export function createApiClient(
     const query = new URLSearchParams(
       Object.entries(params).map(([key, value]) => [key, String(value)]),
     );
-    const authentication = validateAuthentication(configuration.authentication);
-    const headers = new Headers(init.headers);
-    headers.delete("Authorization");
-    if (authentication.type === "bearer")
-      headers.set("Authorization", `Bearer ${authentication.token}`);
-    return fetchImplementation(mediaUrl(`${encodeURIComponent(mediaId)}/${kind}?${query}`), {
-      ...init,
-      credentials: authentication.type === "cookie" ? "include" : "omit",
-      headers,
-    }).then((response) => {
-      reportUnauthorized(response.status, authentication, init.signal);
-      return response;
-    });
+    return authenticatedFetch(
+      configuration,
+      fetchImplementation,
+      mediaUrl(`media/${encodeURIComponent(mediaId)}/${kind}?${query}`),
+      init,
+      reportUnauthorized,
+      "error",
+    );
   };
-  return { url, mediaUrl, request, assetRequest, reportUnauthorized };
+  return { url, mediaUrl, request, mediaRequest, assetRequest, reportUnauthorized };
 }
 
 /** FetchHttpClient policy for generated JSON and native HTTP requests. */
@@ -271,23 +298,14 @@ export function createNativeHttpClientLayer(
       decodedPath.split(/[\\/]/).some((segment) => segment === "." || segment === "..")
     )
       throw new Error("HTTP request paths must not contain control or traversal segments.");
-    const authentication = validateAuthentication(configuration.authentication);
-    const headers = new Headers(input instanceof Request ? input.headers : undefined);
-    new Headers(init?.headers).forEach((value, key) => headers.set(key, value));
-    headers.delete("Authorization");
-    if (authentication.type === "bearer")
-      headers.set("Authorization", `Bearer ${authentication.token}`);
-    const credentials = authentication.type === "cookie" ? "include" : "omit";
-    const signal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
-    return fetchImplementation(input instanceof Request ? input : target, {
-      ...init,
-      credentials,
-      headers,
-      redirect: "error",
-    }).then((response) => {
-      api.reportUnauthorized(response.status, authentication, signal);
-      return response;
-    });
+    return authenticatedFetch(
+      configuration,
+      fetchImplementation,
+      input instanceof Request ? input : target,
+      init ?? {},
+      api.reportUnauthorized,
+      "error",
+    );
   };
   return FetchHttpClient.layer.pipe(
     Layer.provide(Layer.succeed(FetchHttpClient.Fetch, authorizedFetch)),

@@ -85,6 +85,45 @@ describe("client API boundary", () => {
     expect(() => client.mediaUrl("https://attacker.test/file")).toThrow();
   });
 
+  it("uses the native contract path for bounded media assets", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(() => Promise.resolve(new Response("asset")));
+    const client = createApiClient(
+      { serverBaseUrl: "https://video.example.com", authentication: { type: "none" } },
+      fetch,
+    );
+    await client.assetRequest("m_fixture", "waveform", { startMs: 10, durationMs: 20 });
+    expect(String(fetch.mock.calls[0][0])).toBe(
+      "https://video.example.com/media/v2/media/m_fixture/waveform?startMs=10&durationMs=20",
+    );
+  });
+
+  it("streams authenticated media requests through the configured media root", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(() => Promise.resolve(new Response("stream")));
+    const client = createApiClient(
+      {
+        serverBaseUrl: "https://video.example.com/videocutlist",
+        authentication: { type: "bearer", token: "media-token" },
+      },
+      fetch,
+    );
+    const signal = new AbortController().signal;
+    const response = await client.mediaRequest("media/m_fixture/preview?centerMs=500", {
+      signal,
+      headers: { Authorization: "Basic caller", "X-Trace": "preview" },
+    });
+
+    expect(response.body).toBeDefined();
+    expect(fetch).toHaveBeenCalledWith(
+      "https://video.example.com/videocutlist/media/v2/media/m_fixture/preview?centerMs=500",
+      expect.objectContaining({ signal, credentials: "omit", redirect: "error" }),
+    );
+    const init = fetch.mock.calls[0][1] as RequestInit;
+    expect(new Headers(init.headers).get("authorization")).toBe("Bearer media-token");
+    expect(new Headers(init.headers).get("x-trace")).toBe("preview");
+    expect(() => client.mediaRequest("../api/v2/projects")).toThrow();
+    expect(() => client.mediaRequest("https://attacker.test/file")).toThrow();
+  });
+
   it("normalizes trailing slashes and keeps API paths below a prefix", () => {
     const client = api("https://video.example.com/videocutlist///");
     expect(client.url("media/m_a%2Fb?label=two%20words")).toBe(

@@ -1503,6 +1503,55 @@ test("mutes in the browser without rebuilding the server preview", async ({ page
 });
 
 test("keeps an exact timeline seek while the paused preview settles", async ({ page }) => {
+  await page.route(`${apiOrigin}/api/v2/**`, (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === "/api/v2/settings") return route.fulfill({ json: serverSettings });
+    if (path === "/api/v2/media/status")
+      return route.fulfill({
+        json: { state: "ready_with_media", message: "Media library is ready." },
+      });
+    if (path === "/api/v2/media/tree")
+      return route.fulfill({
+        json: { folders: [], items: [media, secondMedia], nextCursor: null },
+      });
+    if (path === "/api/v2/projects")
+      return route.fulfill({ json: { items: [], nextCursor: null } });
+    if (path === "/api/v2/destinations") return route.fulfill({ json: { destinations: [] } });
+    if (path === `/api/v2/media/${media.id}`) return route.fulfill({ json: media });
+    if (path === `/api/v2/media/${secondMedia.id}`) return route.fulfill({ json: secondMedia });
+    return route.fulfill({
+      status: 404,
+      json: { error: { code: "not_found", message: "Not found", requestId: "v2-fixture" } },
+    });
+  });
+  await page.route(`${apiOrigin}/media/v2/media/${media.id}/thumbnails**`, (route) =>
+    route.fulfill({
+      headers: { "content-type": "image/png" },
+      body: Buffer.from(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jW7kAAAAASUVORK5CYII=",
+        "base64",
+      ),
+    }),
+  );
+  await page.route(`${apiOrigin}/media/v2/media/${media.id}/waveform**`, (route) =>
+    route.fulfill({ json: { startMs: 0, durationMs: 10_000, peaks: [0.1, 0.5, 1] } }),
+  );
+  await page.route(`${apiOrigin}/media/v2/media/${media.id}/preview**`, (route) => {
+    const center = new URL(route.request().url()).searchParams.get("centerMs") ?? "0";
+    return route.fulfill({
+      headers: {
+        "content-type": "video/mp4",
+        "Access-Control-Expose-Headers":
+          "X-Preview-Start, X-Preview-Duration, X-Preview-Offset, X-Preview-Cache, X-Request-ID",
+        "X-Preview-Start": "0",
+        "X-Preview-Duration": "8000",
+        "X-Preview-Offset": center,
+        "X-Preview-Cache": "hit",
+        "X-Request-ID": `preview-${center}`,
+      },
+      body: "fragment",
+    });
+  });
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   const playhead = page.getByLabel("Timeline playhead");
