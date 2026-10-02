@@ -1,4 +1,4 @@
-import { For, Show } from "solid-js";
+import { onMount, For, Show } from "solid-js";
 import { ArrowLeft, Settings2 } from "lucide-solid";
 import { canStreamPreview } from "../preview/model";
 import {
@@ -13,9 +13,19 @@ import { useWorkspace } from "../app/WorkspaceContext";
 import { MCPSettings } from "./MCPSettings";
 
 export function SettingsView(props: { onClose?: () => void } = {}) {
+  let closeButton: HTMLButtonElement | undefined;
+  let returnFocus: HTMLElement | null = null;
+  onMount(() => {
+    returnFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    closeButton?.focus();
+  });
+  const close = () => {
+    if (props.onClose) props.onClose();
+    else setSettingsOpen(false);
+    returnFocus?.focus();
+  };
   const {
     settings,
-    settingsOpen,
     setSettingsOpen,
     appearance,
     setAppearance,
@@ -47,7 +57,8 @@ export function SettingsView(props: { onClose?: () => void } = {}) {
           class="btn btn-ghost btn-sm"
           type="button"
           aria-label="Back to editor"
-          onClick={() => (props.onClose ? props.onClose() : setSettingsOpen(!settingsOpen()))}
+          ref={(element) => (closeButton = element)}
+          onClick={close}
         >
           <ArrowLeft size={15} aria-hidden="true" /> Back to editor
         </button>

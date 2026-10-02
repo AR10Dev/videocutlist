@@ -1,4 +1,4 @@
-import { createSignal, For, Show } from "solid-js";
+import { createEffect, createSignal, For, Show } from "solid-js";
 import { exportRanges } from "../export/summary";
 import { useWorkspace } from "../app/WorkspaceContext";
 
@@ -42,6 +42,13 @@ export function MCPSettings() {
   const [projectScope, setProjectScope] = createSignal("all");
   const [projectIDs, setProjectIDs] = createSignal("");
   const [unattendedExports, setUnattendedExports] = createSignal(false);
+  let secretInput: HTMLInputElement | undefined;
+  createEffect(() => {
+    if (!revealedMCPSecret()) return;
+    requestAnimationFrame(() => {
+      if (secretInput?.isConnected) secretInput.focus();
+    });
+  });
 
   const updatePermission = (permission: string, checked: boolean) => {
     setPermissions((current) => {
@@ -146,6 +153,7 @@ export function MCPSettings() {
                     aria-label="One-time MCP bearer secret"
                     readOnly
                     value={revealedMCPSecret()}
+                    ref={(element) => (secretInput = element)}
                     onFocus={(event) => event.currentTarget.select()}
                   />
                 </div>
