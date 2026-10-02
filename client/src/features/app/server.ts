@@ -1,5 +1,5 @@
 import { useAtomValue } from "@effect/atom-solid";
-import { Cause, Effect, Exit, Layer, Option, Schedule, Stream } from "effect";
+import { Cause, Effect, Layer, Option, Schedule, Stream } from "effect";
 import * as AsyncResult from "effect/reactivity/AsyncResult";
 import * as Atom from "effect/reactivity/Atom";
 import * as AtomRegistry from "effect/reactivity/AtomRegistry";
@@ -316,28 +316,6 @@ export function useServerAtom<A, E = Error>(
     return cause instanceof Error ? cause : new Error("Request could not be completed.");
   });
   return { result, value, error, waiting: () => result().waiting };
-}
-
-/** Polling is an atom-owned Effect: refresh/disposal interrupts fetch and sleep together. */
-export function pollAtom<A, R = never>(
-  runtime: Atom.AtomRuntime<R>,
-  fetch: Effect.Effect<A, Error, R>,
-  active: (value: A) => boolean,
-  intervalMs: number,
-): Atom.Atom<AsyncResult.AsyncResult<A, Error>> {
-  return runtime.atom<A, Error>((get) =>
-    Effect.gen(function* () {
-      while (true) {
-        get.setSelf(AsyncResult.waitingFrom(get.self<AsyncResult.AsyncResult<A, Error>>()));
-        const exit = yield* Effect.exit(fetch);
-        get.setSelf(
-          AsyncResult.fromExitWithPrevious(exit, get.self<AsyncResult.AsyncResult<A, Error>>()),
-        );
-        if (Exit.isSuccess(exit) && !active(exit.value)) return exit.value;
-        yield* Effect.sleep(intervalMs);
-      }
-    }),
-  );
 }
 
 /** Awaiting a resource holds its native registry mount only for that operation. */
