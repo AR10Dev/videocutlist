@@ -84,6 +84,9 @@ async function withExportController(
     batchListResponse?: Promise<Response>;
     destinationsResponse?: Promise<Response>;
     nextDestinationsResponse?: () => Promise<Response>;
+    exportResponses?: Response[];
+    onExportHeaders?: (headers: Headers) => void;
+    onApiRequest?: (path: string) => void;
   } = {},
 ) {
   const originalStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
@@ -118,7 +121,10 @@ async function withExportController(
       return options.preflightFailure
         ? Response.json({ error: options.preflightFailure }, { status: 400 })
         : Response.json({ allowed: true, selection: [], findings: [] });
-    if (requestUrl.pathname.endsWith("/exports") && method === "POST")
+    if (requestUrl.pathname.endsWith("/exports") && method === "POST") {
+      options.onExportHeaders?.(new Headers(init?.headers));
+      const response = options.exportResponses?.shift();
+      if (response) return response;
       return Response.json(
         {
           batchId,
@@ -126,6 +132,7 @@ async function withExportController(
         },
         { status: 202 },
       );
+    }
     throw new Error(`Unexpected generated API request: ${method} ${requestUrl}`);
   };
   Object.defineProperty(globalThis, "localStorage", {
@@ -135,6 +142,7 @@ async function withExportController(
   const api: ApiClient & Pick<NativeMediaApiClient, "mediaRequest"> = {
     url: (path) => path,
     request: async (path, init) => {
+      options.onApiRequest?.(path);
       if (path === `batches/${batchId}/events`) {
         const data = [
           "id: export-status-1",
@@ -433,6 +441,59 @@ describe("export controller aggregate status", () => {
             schemaVersion: 2,
             items: [],
           };
+        },
+      },
+    );
+  });
+  it("preserves generated capacity errors and uses a fresh key for each definite-failure retry", async () => {
+    const media: EffectApiTypes.Media = {
+      id: `m_${"m".repeat(43)}`,
+      name: "clip.mp4",
+      durationMs: 2_000,
+      sizeBytes: 1,
+      container: "mp4",
+      streams: {},
+      etag: "v1",
+    };
+    const keys: string[] = [];
+    const events: string[] = [];
+    await withExportController(
+      batch("succeeded", 1, [job("j_exportstatus0001", "succeeded", 2)]),
+      async (controller) => {
+        const deadline = Date.now() + 2_000;
+        while (events.length === 0) {
+          if (Date.now() >= deadline) throw new Error("Initial batch stream did not start.");
+          await new Promise((resolve) => setTimeout(resolve, 1));
+        }
+        const initialEventRequests = events.length;
+        await controller.exportProject();
+        expect(controller.exportStatus()).toBe("Export capacity is busy. Try again shortly.");
+        expect(controller.exportPending()).toBe(false);
+        await controller.exportProject();
+        expect(controller.exportStatus()).toBe("Export capacity is busy. Try again shortly.");
+        expect(new Set(keys).size).toBe(2);
+        expect(events).toHaveLength(initialEventRequests);
+      },
+      {
+        initialBatch: batch("succeeded", 1, [job("j_exportstatus0001", "succeeded", 1)]),
+        selected: media,
+        projectItems: [exportItem(media)],
+        dirty: false,
+        exportResponses: [1, 2].map(() =>
+          Response.json(
+            {
+              error: {
+                code: "export_busy",
+                message: "Export capacity is full.",
+                requestId: "r-capacity",
+              },
+            },
+            { status: 429 },
+          ),
+        ),
+        onExportHeaders: (headers) => keys.push(headers.get("Idempotency-Key") ?? ""),
+        onApiRequest: (path) => {
+          if (path.endsWith("/events")) events.push(path);
         },
       },
     );

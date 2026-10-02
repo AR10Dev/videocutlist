@@ -344,6 +344,8 @@ export function createExportController(deps: {
   const isUncertainCommandFailure = (error: unknown): boolean => {
     if (!error || typeof error !== "object") return true;
     if ("status" in error && typeof error.status === "number") return error.status >= 500;
+    const envelope = publicApiError(error);
+    if (envelope) return envelope.code === "internal_error";
     if ("error" in error && error.error && typeof error.error === "object") {
       const envelope = error.error;
       if ("code" in envelope && typeof envelope.code === "string")
@@ -727,13 +729,21 @@ export function createExportController(deps: {
                   uncertainExport = isUncertainCommandFailure(error)
                     ? { key, body: submissionBody }
                     : undefined;
-                  return error instanceof Error ? error : new Error("Export request failed.");
+                  if (error instanceof Error) return error;
+                  const envelope = publicApiError(error);
+                  return envelope
+                    ? Object.assign(new Error(envelope.message), { error: envelope })
+                    : new Error("Export request failed.");
                 }),
               )
             : Effect.fail(new Error("Generated export API is not configured.")),
         );
         if (Exit.isFailure(response)) {
           const failure = Cause.squash(response.cause);
+          if (publicApiError(failure)?.code === "export_busy") {
+            setExportStatus("Export capacity is busy. Try again shortly.");
+            return;
+          }
           if (failure instanceof ApiFailure) {
             setExportStatus(
               failure.code === "export_busy"
