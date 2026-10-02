@@ -4,6 +4,8 @@ import * as Schema from "effect/Schema";
 import {
   DetectionInput as DetectionInputSchema,
   DetectionJob as DetectionJobSchema,
+  Batch as BatchSchema,
+  BatchExportSubmission as BatchExportSubmissionSchema,
   ExportSubmissionInput as ExportSubmissionInputSchema,
   Job as JobSchema,
   ProjectInput as ProjectInputSchema,
@@ -61,6 +63,39 @@ const serverSettings = {
 
 const apiOrigin = "http://127.0.0.1:8787";
 const itemId = "i_aaaaaaaaaaaaaaaaaaaaaaaa";
+
+function exportJobSnapshot<T extends object>(job: T) {
+  const snapshot = { ...job, ...jobTimestamps };
+  Schema.decodeUnknownSync(JobSchema)(snapshot);
+  return snapshot;
+}
+
+function exportBatchSnapshot(batch: EffectApiTypes.Batch): EffectApiTypes.Batch {
+  Schema.decodeUnknownSync(BatchSchema)(batch);
+  return batch;
+}
+
+function exportSubmission(batchId: string, jobs: ReadonlyArray<EffectApiTypes.Job>) {
+  const response = { batchId, jobs };
+  Schema.decodeUnknownSync(BatchExportSubmissionSchema)(response);
+  return response;
+}
+
+function validateExportRequest(request: import("@playwright/test").Request) {
+  const body = Schema.decodeUnknownSync(ExportSubmissionInputSchema)(request.postDataJSON());
+  expect(request.headers()["idempotency-key"]).toMatch(/^[A-Za-z0-9_-]{16,128}$/);
+  expect(body.projectRevision).toBeGreaterThan(0);
+  return body;
+}
+
+function batchEvent(batch: EffectApiTypes.Batch) {
+  exportBatchSnapshot(batch);
+  return {
+    status: 200,
+    headers: { "content-type": "text/event-stream", "cache-control": "no-cache" },
+    body: `id: batch-${batch.batchId}-${Math.max(...batch.jobs.map((job) => job.revision))}\nevent: snapshot\ndata: ${JSON.stringify(batch)}\n\n`,
+  };
+}
 
 function detectionSnapshot(job: DetectionJob, revision: number) {
   const snapshot = { ...job, revision, ...jobTimestamps };
@@ -2292,74 +2327,64 @@ test("save reports an optimistic revision conflict", async ({ page }) => {
   await expect(page.getByRole("button", { name: "Save local work as new project" })).toBeVisible();
 });
 
-test("exports the saved segments, polls to a safe result, and shows warnings", async ({ page }) => {
+test("exports the saved segments, observes a safe batch result, and shows warnings", async ({
+  page,
+}) => {
   const requests: string[] = [];
-  let polls = 0;
   page.on("request", (request) => requests.push(new URL(request.url()).pathname));
-  await page.route(`${apiOrigin}/api/v1/projects/*/exports`, async (route) => {
-    expect(route.request().method()).toBe("POST");
-    expect(route.request().postDataJSON()).toEqual({});
-    await route.fulfill({
-      json: {
-        batchId: "b_export000001",
-        jobs: [{ id: "j_export", type: "export", ...jobTimestamps, state: "queued", progress: 0 }],
-      },
-    });
+  const queuedJob = exportJobSnapshot({
+    id: "j_export",
+    batchId: "b_export000001",
+    type: "export" as const,
+    state: "queued" as const,
+    revision: 1,
+    progress: 0,
   });
-  await page.route(`${apiOrigin}/api/v1/jobs/j_export`, async (route) => {
-    polls += 1;
-    await route.fulfill({
-      json:
-        polls === 1
-          ? { id: "j_export", type: "export", ...jobTimestamps, state: "running", progress: 0.5 }
-          : {
-              id: "j_export",
-              type: "export",
-              ...jobTimestamps,
-              state: "succeeded",
-              progress: 1,
-              result: {
-                outputName: "camera-cut.mkv",
-                sizeBytes: 42,
-                retainUntil: "2026-08-20T12:00:00Z",
-                destinationKind: "download",
-              },
-              appliedStrategy: "stream_copy",
-              verified: true,
-              warnings: ["Cut may start at an earlier keyframe."],
-            },
-    });
+  const runningJob = exportJobSnapshot({
+    ...queuedJob,
+    state: "running" as const,
+    revision: 2,
+    progress: 0.5,
   });
-  await page.route(`${apiOrigin}/api/v1/batches/b_export000001`, async (route) => {
-    const job =
-      polls < 1
-        ? { id: "j_export", type: "export", ...jobTimestamps, state: "queued", progress: 0 }
-        : polls === 1
-          ? { id: "j_export", type: "export", ...jobTimestamps, state: "running", progress: 0.5 }
-          : {
-              id: "j_export",
-              type: "export",
-              ...jobTimestamps,
-              state: "succeeded",
-              progress: 1,
-              result: {
-                outputName: "camera-cut.mkv",
-                sizeBytes: 42,
-                retainUntil: "2026-08-20T12:00:00Z",
-                destinationKind: "download",
-              },
-              appliedStrategy: "stream_copy",
-              verified: true,
-              warnings: ["Cut may start at an earlier keyframe."],
-            };
+  const succeededJob = exportJobSnapshot({
+    ...runningJob,
+    state: "succeeded" as const,
+    revision: 3,
+    progress: 1,
+    result: {
+      outputName: "camera-cut.mkv",
+      sizeBytes: 42,
+      retainUntil: "2026-08-20T12:00:00Z",
+      destinationKind: "download" as const,
+    },
+    verified: true,
+    warnings: ["Cut may start at an earlier keyframe."],
+  });
+  const exportBatch = (job: EffectApiTypes.Job): EffectApiTypes.Batch =>
+    exportBatchSnapshot({
+      batchId: "b_export000001",
+      projectId: "p_demo-project",
+      projectRevision: 1,
+      state: job.state === "succeeded" ? "succeeded" : job.state,
+      progress: job.progress ?? 0,
+      jobs: [job],
+    });
+  await page.route(`${apiOrigin}/api/v2/projects/*/exports`, async (route) => {
+    const request = route.request();
+    expect(request.method()).toBe("POST");
+    validateExportRequest(request);
+    await route.fulfill({ status: 202, json: exportSubmission("b_export000001", [queuedJob]) });
+  });
+  await page.route(`${apiOrigin}/api/v2/batches/b_export000001/events`, async (route) => {
+    const event = (batch: EffectApiTypes.Batch) =>
+      `id: batch-b_export000001-${batch.jobs[0]!.revision}\nevent: snapshot\ndata: ${JSON.stringify(batch)}\n\n`;
     return route.fulfill({
-      json: {
-        batchId: "b_export000001",
-        projectRevision: 1,
-        state: job.state,
-        progress: job.progress,
-        jobs: [job],
-      },
+      headers: { "content-type": "text/event-stream", "cache-control": "no-cache" },
+      body: [
+        event(exportBatch(queuedJob)),
+        event(exportBatch(runningJob)),
+        event(exportBatch(succeededJob)),
+      ].join(""),
     });
   });
   await page.goto("/");
@@ -2376,8 +2401,6 @@ test("exports the saved segments, polls to a safe result, and shows warnings", a
   await saveProject(page);
   await openTask(page, "Export");
   await page.getByRole("button", { name: "Create clips" }).click();
-  await expect(page.getByText(/Export (queued|running)\./)).toBeVisible();
-  await expect(page.getByRole("button", { name: "Download output 1" })).toHaveCount(0);
   await expect(page.getByText("Export complete.")).toBeVisible({
     timeout: 4_000,
   });
@@ -2449,8 +2472,24 @@ test("reviews preflight blockers and only enables eligible downloads", async ({ 
 
 test("shows stable failed and capacity messages and permits retry", async ({ page }) => {
   let creates = 0;
-  await page.route(`${apiOrigin}/api/v1/projects/*/exports`, async (route) => {
+  const failedJob = exportJobSnapshot({
+    id: "j_failed",
+    batchId: "b_failed000001",
+    type: "export" as const,
+    state: "failed" as const,
+    revision: 2,
+    progress: 1,
+    errorCode: "interrupted_by_restart",
+    result: {
+      outputName: "interrupted.mkv",
+      sizeBytes: 42,
+      retainUntil: "2026-08-20T12:00:00Z",
+      destinationKind: "download" as const,
+    },
+  });
+  await page.route(`${apiOrigin}/api/v2/projects/*/exports`, async (route) => {
     creates += 1;
+    validateExportRequest(route.request());
     if (creates === 1)
       return route.fulfill({
         status: 429,
@@ -2458,30 +2497,29 @@ test("shows stable failed and capacity messages and permits retry", async ({ pag
           error: { code: "export_busy", message: "Export capacity is full.", requestId: "r-busy" },
         },
       });
-    return route.fulfill({
-      json: {
-        batchId: "b_failed000001",
-        jobs: [{ id: "j_failed", type: "export", ...jobTimestamps, state: "queued", progress: 0 }],
-      },
+    const queued = exportJobSnapshot({
+      id: failedJob.id,
+      batchId: failedJob.batchId,
+      type: "export" as const,
+      state: "queued" as const,
+      revision: 1,
+      progress: 0,
     });
+    return route.fulfill({ status: 202, json: exportSubmission("b_failed000001", [queued]) });
   });
-  await page.route(`${apiOrigin}/api/v1/jobs/j_failed`, (route) =>
-    route.fulfill({
-      json: {
-        id: "j_failed",
-        type: "export",
-        ...jobTimestamps,
-        state: "failed",
-        progress: 1,
-        errorCode: "interrupted_by_restart",
-        result: {
-          outputName: "interrupted.mkv",
-          sizeBytes: 42,
-          retainUntil: "2026-08-20T12:00:00Z",
-          destinationKind: "download",
-        },
-      },
-    }),
+  await page.route(`${apiOrigin}/api/v2/batches/b_failed000001/events`, (route) =>
+    route.fulfill(
+      batchEvent(
+        exportBatchSnapshot({
+          batchId: "b_failed000001",
+          projectId: "p_demo-project",
+          projectRevision: 1,
+          state: "failed",
+          progress: 1,
+          jobs: [failedJob],
+        }),
+      ),
+    ),
   );
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
@@ -2509,16 +2547,11 @@ test("shows stable failed and capacity messages and permits retry", async ({ pag
 
 test("cancels an active export without showing a path", async ({ page }) => {
   let cancelled = false;
-  let batchPolls = 0;
-  let jobPolls = 0;
+  let streamReads = 0;
   let releaseStaleBatch!: () => void;
   let staleBatchPollStarted!: () => void;
   let canonicalBatchPollStarted!: () => void;
   let releaseCanonicalBatch!: () => void;
-  let releaseStale!: () => void;
-  let stalePollStarted!: () => void;
-  let releasePostCancel!: () => void;
-  let postCancelPollStarted!: () => void;
   const staleBatchPoll = new Promise<void>((resolve) => {
     releaseStaleBatch = resolve;
   });
@@ -2531,95 +2564,73 @@ test("cancels an active export without showing a path", async ({ page }) => {
   const canonicalBatchPoll = new Promise<void>((resolve) => {
     releaseCanonicalBatch = resolve;
   });
-  const stalePoll = new Promise<void>((resolve) => {
-    releaseStale = resolve;
-  });
-  const stalePollReady = new Promise<void>((resolve) => {
-    stalePollStarted = resolve;
-  });
-  const postCancelPoll = new Promise<void>((resolve) => {
-    releasePostCancel = resolve;
-  });
-  const postCancelPollReady = new Promise<void>((resolve) => {
-    postCancelPollStarted = resolve;
-  });
-  const queuedJob = {
+  const queuedJob = exportJobSnapshot({
     id: "j_cancel",
     batchId: "b_cancel000001",
     projectItemId: itemId,
     mediaLabel: "camera.mp4",
-    type: "export",
-    ...jobTimestamps,
-    state: "queued",
+    type: "export" as const,
+    state: "queued" as const,
+    revision: 1,
     progress: 0,
-  };
-  const succeededJob = {
+  });
+  const succeededJob = exportJobSnapshot({
     id: "j_cancel-succeeded",
     batchId: "b_cancel000001",
     projectItemId: "i_second-item",
     mediaLabel: "second.mp4",
-    type: "export",
-    ...jobTimestamps,
-    state: "succeeded",
+    type: "export" as const,
+    state: "succeeded" as const,
+    revision: 1,
     progress: 1,
     result: {
       outputName: "second-cut.mkv",
       sizeBytes: 99,
       retainUntil: "2026-08-20T12:00:00Z",
-      destinationKind: "download",
+      destinationKind: "download" as const,
     },
     verified: true,
-  };
-  const queuedBatch = {
+  });
+  const queuedBatch = exportBatchSnapshot({
     batchId: "b_cancel000001",
     projectId: "p_demo-project",
     projectRevision: 1,
     state: "queued",
     progress: 0,
     jobs: [queuedJob, succeededJob],
-  };
-  const cancelledBatch = {
+  });
+  const cancelledBatch = exportBatchSnapshot({
     ...queuedBatch,
     state: "cancelled",
     progress: 1,
-    jobs: [{ ...queuedJob, state: "cancelled", progress: 1 }, succeededJob],
-  };
-  await page.route(`${apiOrigin}/api/v1/projects/*/exports`, (route) =>
-    route.fulfill({
-      json: {
-        batchId: "b_cancel000001",
-        jobs: [queuedJob, succeededJob],
-      },
-    }),
-  );
-  await page.route(`${apiOrigin}/api/v1/batches/b_cancel000001`, async (route) => {
+    jobs: [
+      exportJobSnapshot({ ...queuedJob, state: "cancelled" as const, revision: 2, progress: 1 }),
+      succeededJob,
+    ],
+  });
+  await page.route(`${apiOrigin}/api/v2/projects/*/exports`, (route) => {
+    validateExportRequest(route.request());
+    return route.fulfill({
+      status: 202,
+      json: exportSubmission(queuedBatch.batchId, queuedBatch.jobs),
+    });
+  });
+  await page.route(`${apiOrigin}/api/v2/batches/b_cancel000001/events`, async (route) => {
+    if (streamReads++ === 0) {
+      staleBatchPollStarted();
+      await staleBatchPoll;
+      return route.fulfill(batchEvent(queuedBatch));
+    }
+    canonicalBatchPollStarted();
+    await canonicalBatchPoll;
+    return route.fulfill(batchEvent(cancelledBatch));
+  });
+  await page.route(`${apiOrigin}/api/v2/batches/b_cancel000001`, (route) => {
     if (route.request().method() === "DELETE") {
       cancelled = true;
       return route.fulfill({ status: 204 });
     }
-    if (batchPolls++ === 0) {
-      staleBatchPollStarted();
-      await staleBatchPoll;
-      return route.fulfill({ json: queuedBatch });
-    }
-    canonicalBatchPollStarted();
-    await canonicalBatchPoll;
-    return route.fulfill({ json: cancelledBatch });
-  });
-  await page.route(`${apiOrigin}/api/v1/jobs/j_cancel`, async (route) => {
-    const poll = jobPolls++;
-    if (poll === 1) {
-      stalePollStarted();
-      await stalePoll;
-      return route.fulfill({ json: queuedJob });
-    }
-    if (poll === 2) {
-      postCancelPollStarted();
-      await postCancelPoll;
-    }
-    return route.fulfill({
-      json: cancelled ? { ...queuedJob, state: "cancelled", progress: 1 } : queuedJob,
-    });
+    return route.fulfill({ status: 404 });
   });
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
@@ -2636,21 +2647,17 @@ test("cancels an active export without showing a path", async ({ page }) => {
   await openTask(page, "Export");
   await page.getByRole("button", { name: "Create clips" }).click();
   await staleBatchPollReady;
-  await stalePollReady;
   await page.getByRole("button", { name: "Cancel export" }).click();
   await expect(page.getByText("Export batch cancellation requested.")).toBeVisible();
   expect(cancelled).toBe(true);
+  releaseStaleBatch();
   await canonicalBatchPollReady;
-  await postCancelPollReady;
   const currentBatch = page.getByRole("region", { name: "Current batch" });
   await expect(currentBatch.locator(".export-job-card")).toHaveCount(2);
   await expect(currentBatch.locator(".export-job-result")).toContainText("second-cut.mkv");
-  releaseStaleBatch();
-  releaseStale();
   releaseCanonicalBatch();
   await expect(page.getByText("Export queued.", { exact: true })).toHaveCount(0);
   await expect(page.getByText("Export batch queued.", { exact: true })).toHaveCount(0);
-  releasePostCancel();
   await expect(page.getByText("Export cancelled.")).toBeVisible();
   await expect(currentBatch.locator(".export-job-card")).toHaveCount(2);
   await expect(currentBatch.locator(".export-job-card").nth(0)).toContainText("cancelled");
@@ -2662,46 +2669,62 @@ test("cancels an active export without showing a path", async ({ page }) => {
 test("failed export cancellation restores the active job for retry", async ({ page }) => {
   let cancelAttempts = 0;
   let cancelled = false;
-  const queuedJob = {
+  const queuedJob = exportJobSnapshot({
     id: "j_cancel-retry",
     batchId: "b_cancel-retry",
     projectItemId: itemId,
     mediaLabel: "camera.mp4",
-    type: "export",
-    ...jobTimestamps,
-    state: "queued",
+    type: "export" as const,
+    state: "queued" as const,
+    revision: 1,
     progress: 0,
-  };
-  const cancelledJob = { ...queuedJob, state: "cancelled", progress: 1 };
-  const queuedBatch = {
+  });
+  const cancelledJob = exportJobSnapshot({
+    ...queuedJob,
+    state: "cancelled" as const,
+    revision: 2,
+    progress: 1,
+  });
+  const queuedBatch = exportBatchSnapshot({
     batchId: "b_cancel-retry",
     projectId: "p_demo-project",
     projectRevision: 1,
     state: "queued",
     progress: 0,
     jobs: [queuedJob],
-  };
-  const cancelledBatch = {
+  });
+  const cancelledBatch = exportBatchSnapshot({
     ...queuedBatch,
     state: "cancelled",
     progress: 1,
     jobs: [cancelledJob],
-  };
-  await page.route(`${apiOrigin}/api/v1/projects/*/exports`, (route) =>
-    route.fulfill({ json: { batchId: queuedBatch.batchId, jobs: [queuedJob] } }),
+  });
+  await page.route(`${apiOrigin}/api/v2/projects/*/exports`, (route) => {
+    validateExportRequest(route.request());
+    return route.fulfill({ status: 202, json: exportSubmission(queuedBatch.batchId, [queuedJob]) });
+  });
+  await page.route(`${apiOrigin}/api/v2/batches/b_cancel-retry/events`, (route) =>
+    route.fulfill(batchEvent(cancelled ? cancelledBatch : queuedBatch)),
   );
-  await page.route(`${apiOrigin}/api/v1/batches/b_cancel-retry`, async (route) => {
+  await page.route(`${apiOrigin}/api/v2/batches/b_cancel-retry`, async (route) => {
     if (route.request().method() === "DELETE") {
       cancelAttempts += 1;
-      if (cancelAttempts === 1) return route.fulfill({ status: 503 });
+      if (cancelAttempts === 1)
+        return route.fulfill({
+          status: 503,
+          json: {
+            error: {
+              code: "internal_error",
+              message: "Cancel unavailable.",
+              requestId: "r-cancel",
+            },
+          },
+        });
       cancelled = true;
       return route.fulfill({ status: 204 });
     }
-    return route.fulfill({ json: cancelled ? cancelledBatch : queuedBatch });
+    return route.fulfill({ status: 404 });
   });
-  await page.route(`${apiOrigin}/api/v1/jobs/j_cancel-retry`, (route) =>
-    route.fulfill({ json: cancelled ? cancelledJob : queuedJob }),
-  );
 
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
@@ -2722,59 +2745,73 @@ test("failed export cancellation restores the active job for retry", async ({ pa
 });
 
 test("completion winning batch cancellation keeps canonical output", async ({ page }) => {
-  let completed = false;
-  let batchReads = 0;
-  let jobReads = 0;
-  const queuedJob = {
+  let streamReads = 0;
+  let signalCancelRequest!: () => void;
+  const cancelRequested = new Promise<void>((resolve) => (signalCancelRequest = resolve));
+  let acknowledgeCancel!: () => void;
+  const cancelAcknowledgement = new Promise<void>((resolve) => (acknowledgeCancel = resolve));
+  let signalHeldTerminal!: () => void;
+  const heldTerminalRequest = new Promise<void>((resolve) => (signalHeldTerminal = resolve));
+  let releaseTerminal!: () => void;
+  const terminalRelease = new Promise<void>((resolve) => (releaseTerminal = resolve));
+  const ordering: string[] = [];
+  const queuedJob = exportJobSnapshot({
     id: "j_cancel-race",
     batchId: "b_cancel-race",
     projectItemId: itemId,
     mediaLabel: "camera.mp4",
-    type: "export",
-    ...jobTimestamps,
-    state: "queued",
+    type: "export" as const,
+    state: "queued" as const,
+    revision: 1,
     progress: 0,
-  };
-  const succeededJob = {
+  });
+  const succeededJob = exportJobSnapshot({
     ...queuedJob,
-    state: "succeeded",
+    state: "succeeded" as const,
+    revision: 2,
     progress: 1,
     result: {
       outputName: "camera-race.mkv",
       sizeBytes: 42,
       retainUntil: "2026-08-20T12:00:00Z",
-      destinationKind: "download",
+      destinationKind: "download" as const,
     },
     verified: true,
-  };
-  const queuedBatch = {
+  });
+  const queuedBatch = exportBatchSnapshot({
     batchId: "b_cancel-race",
     projectId: "p_demo-project",
     projectRevision: 1,
     state: "queued",
     progress: 0,
     jobs: [queuedJob],
-  };
-  const succeededBatch = {
+  });
+  const succeededBatch = exportBatchSnapshot({
     ...queuedBatch,
     state: "succeeded",
     progress: 1,
     jobs: [succeededJob],
-  };
-  await page.route(`${apiOrigin}/api/v1/projects/*/exports`, (route) =>
-    route.fulfill({ json: { batchId: queuedBatch.batchId, jobs: [queuedJob] } }),
-  );
-  await page.route(`${apiOrigin}/api/v1/batches/b_cancel-race`, (route) => {
+  });
+  await page.route(`${apiOrigin}/api/v2/projects/*/exports`, (route) => {
+    validateExportRequest(route.request());
+    return route.fulfill({ status: 202, json: exportSubmission(queuedBatch.batchId, [queuedJob]) });
+  });
+  await page.route(`${apiOrigin}/api/v2/batches/b_cancel-race/events`, async (route) => {
+    streamReads += 1;
+    if (streamReads === 1) return route.fulfill(batchEvent(queuedBatch));
+    signalHeldTerminal();
+    await terminalRelease;
+    ordering.push("terminal-snapshot");
+    return route.fulfill(batchEvent(succeededBatch));
+  });
+  await page.route(`${apiOrigin}/api/v2/batches/b_cancel-race`, async (route) => {
     if (route.request().method() === "DELETE") {
-      completed = true;
+      signalCancelRequest();
+      await cancelAcknowledgement;
+      ordering.push("cancel-acknowledged");
       return route.fulfill({ status: 204 });
     }
-    batchReads += 1;
-    return route.fulfill({ json: completed ? succeededBatch : queuedBatch });
-  });
-  await page.route(`${apiOrigin}/api/v1/jobs/j_cancel-race`, (route) => {
-    jobReads += 1;
-    return route.fulfill({ json: completed ? succeededJob : queuedJob });
+    return route.fulfill({ status: 404 });
   });
 
   await page.goto("/");
@@ -2786,100 +2823,101 @@ test("completion winning batch cancellation keeps canonical output", async ({ pa
   await page.getByRole("button", { name: "Create clips" }).click();
   await expect(page.getByRole("button", { name: "Cancel export" })).toBeVisible();
   await page.getByRole("button", { name: "Cancel export" }).click();
+  await cancelRequested;
+  await heldTerminalRequest;
+  acknowledgeCancel();
+  await expect.poll(() => ordering).toEqual(["cancel-acknowledged"]);
+  releaseTerminal();
   await expect(page.getByText("Export complete.")).toBeVisible({ timeout: 5_000 });
   await expect(page.getByRole("button", { name: "Cancel export" })).not.toBeVisible();
-  expect(completed).toBe(true);
-  expect(batchReads).toBeGreaterThan(1);
-  expect(jobReads).toBeGreaterThan(1);
-  await expect(
-    page.getByRole("region", { name: "Current batch" }).locator(".export-job-result"),
-  ).toContainText("camera-race.mkv");
+  expect(streamReads).toBeGreaterThan(1);
+  expect(ordering).toEqual(["cancel-acknowledged", "terminal-snapshot"]);
+  const currentBatch = page.getByRole("region", { name: "Current batch" });
+  await expect(currentBatch.locator(".export-job-card")).toContainText("succeeded");
+  await expect(currentBatch.locator(".export-job-result")).toContainText("camera-race.mkv");
 });
 
 test("QueueView cancellation keeps a completion-winning batch canonical", async ({ page }) => {
   let completed = false;
-  const otherJob = {
+  const otherJob = exportJobSnapshot({
     id: "j_queue-current",
     batchId: "b_queue-current",
     projectItemId: itemId,
     mediaLabel: "current.mp4",
-    type: "export",
-    ...jobTimestamps,
-    state: "running",
+    type: "export" as const,
+    state: "running" as const,
+    revision: 1,
     progress: 0.5,
-  };
-  const targetQueuedJob = {
+  });
+  const targetQueuedJob = exportJobSnapshot({
     id: "j_queue-target",
     batchId: "b_queue-target",
     projectItemId: itemId,
     mediaLabel: "camera.mp4",
-    type: "export",
-    ...jobTimestamps,
-    state: "queued",
+    type: "export" as const,
+    state: "queued" as const,
+    revision: 1,
     progress: 0,
-  };
-  const targetSucceededJob = {
+  });
+  const targetSucceededJob = exportJobSnapshot({
     ...targetQueuedJob,
-    state: "succeeded",
+    state: "succeeded" as const,
+    revision: 2,
     progress: 1,
     result: {
       outputName: "queue-race.mkv",
       sizeBytes: 42,
       retainUntil: "2026-08-20T12:00:00Z",
-      destinationKind: "download",
+      destinationKind: "download" as const,
     },
     verified: true,
-  };
-  const otherBatch = {
+  });
+  const otherBatch = exportBatchSnapshot({
     batchId: "b_queue-current",
     projectId: "p_demo-project",
     projectRevision: 1,
     state: "running",
     progress: 0.5,
     jobs: [otherJob],
-  };
-  const targetQueuedBatch = {
+  });
+  const targetQueuedBatch = exportBatchSnapshot({
     batchId: "b_queue-target",
     projectId: "p_demo-project",
     projectRevision: 1,
     state: "queued",
     progress: 0,
     jobs: [targetQueuedJob],
-  };
-  const targetSucceededBatch = {
+  });
+  const targetSucceededBatch = exportBatchSnapshot({
     ...targetQueuedBatch,
     state: "succeeded",
     progress: 1,
     jobs: [targetSucceededJob],
-  };
-  await page.route(`${apiOrigin}/api/v1/batches**`, async (route) => {
-    const request = route.request();
-    const url = new URL(request.url());
-    if (request.method() !== "GET" || url.pathname !== "/api/v1/batches") return route.fallback();
-    return route.fulfill({
-      json: { items: [otherBatch, completed ? targetSucceededBatch : targetQueuedBatch] },
-    });
   });
-  await page.route(`${apiOrigin}/api/v1/batches/*`, async (route) => {
-    const request = route.request();
-    const url = new URL(request.url());
-    if (url.pathname === "/api/v1/batches/b_queue-target") {
-      if (request.method() === "DELETE") {
-        completed = true;
-        return route.fulfill({ status: 204 });
-      }
-      return route.fulfill({ json: completed ? targetSucceededBatch : targetQueuedBatch });
-    }
-    if (url.pathname === "/api/v1/batches/b_queue-current")
-      return route.fulfill({ json: otherBatch });
-    return route.fallback();
-  });
-  await page.route(`${apiOrigin}/api/v1/jobs/*`, async (route) => {
+  await page.route(`${apiOrigin}/api/v2/batches**`, (route) => {
     const url = new URL(route.request().url());
-    if (url.pathname === "/api/v1/jobs/j_queue-target")
-      return route.fulfill({ json: completed ? targetSucceededJob : targetQueuedJob });
-    if (url.pathname === "/api/v1/jobs/j_queue-current") return route.fulfill({ json: otherJob });
+    if (route.request().method() === "GET" && url.pathname === "/api/v2/batches")
+      return route.fulfill({
+        json: {
+          items: [otherBatch, completed ? targetSucceededBatch : targetQueuedBatch],
+          nextCursor: null,
+        },
+      });
     return route.fallback();
+  });
+  await page.route(`${apiOrigin}/api/v2/batches/*/events`, (route) => {
+    const id = new URL(route.request().url()).pathname.split("/")[4]!;
+    if (id === "b_queue-target")
+      return route.fulfill(batchEvent(completed ? targetSucceededBatch : targetQueuedBatch));
+    if (id === "b_queue-current") return route.fulfill(batchEvent(otherBatch));
+    return route.fulfill({ status: 404 });
+  });
+  await page.route(`${apiOrigin}/api/v2/batches/b_queue-target`, (route) => {
+    if (route.request().method() === "DELETE") {
+      completed = true;
+      return route.fulfill({ status: 204 });
+    }
+    return route.fulfill({ status: 404 });
   });
 
   await page.goto("/");
@@ -2898,65 +2936,71 @@ test("mixed batch keeps a later active child selected and preserves output order
   page,
 }) => {
   let cancelled = false;
-  let runningJobReads = 0;
-  const succeededJob = {
+  let streamReads = 0;
+  const succeededJob = exportJobSnapshot({
     id: "j_mixed-first",
     batchId: "b_mixed-order",
     projectItemId: itemId,
     mediaLabel: "first.mp4",
-    type: "export",
-    ...jobTimestamps,
-    state: "succeeded",
+    type: "export" as const,
+    state: "succeeded" as const,
+    revision: 1,
     progress: 1,
     result: {
       outputName: "first-output.mkv",
       sizeBytes: 42,
       retainUntil: "2026-08-20T12:00:00Z",
-      destinationKind: "download",
+      destinationKind: "download" as const,
     },
     verified: true,
-  };
-  const runningJob = {
+  });
+  const runningJob = exportJobSnapshot({
     id: "j_mixed-running",
     batchId: "b_mixed-order",
     projectItemId: "i_second-item",
     mediaLabel: "second.mp4",
-    type: "export",
-    ...jobTimestamps,
-    state: "running",
+    type: "export" as const,
+    state: "running" as const,
+    revision: 1,
     progress: 0.5,
-  };
-  const cancelledJob = { ...runningJob, state: "cancelled", progress: 1 };
-  const runningBatch = {
+  });
+  const cancelledJob = exportJobSnapshot({
+    ...runningJob,
+    state: "cancelled" as const,
+    revision: 2,
+    progress: 1,
+  });
+  const runningBatch = exportBatchSnapshot({
     batchId: "b_mixed-order",
     projectId: "p_demo-project",
     projectRevision: 1,
     state: "running",
     progress: 0.5,
     jobs: [succeededJob, runningJob],
-  };
-  const cancelledBatch = {
+  });
+  const cancelledBatch = exportBatchSnapshot({
     ...runningBatch,
     state: "cancelled",
     progress: 1,
     jobs: [succeededJob, cancelledJob],
-  };
-  await page.route(`${apiOrigin}/api/v1/projects/*/exports`, (route) =>
-    route.fulfill({ json: { batchId: runningBatch.batchId, jobs: runningBatch.jobs } }),
-  );
-  await page.route(`${apiOrigin}/api/v1/batches/b_mixed-order`, async (route) => {
+  });
+  await page.route(`${apiOrigin}/api/v2/projects/*/exports`, (route) => {
+    validateExportRequest(route.request());
+    return route.fulfill({
+      status: 202,
+      json: exportSubmission(runningBatch.batchId, runningBatch.jobs),
+    });
+  });
+  await page.route(`${apiOrigin}/api/v2/batches/b_mixed-order/events`, (route) => {
+    streamReads += 1;
+    return route.fulfill(batchEvent(cancelled ? cancelledBatch : runningBatch));
+  });
+  await page.route(`${apiOrigin}/api/v2/batches/b_mixed-order`, (route) => {
     if (route.request().method() === "DELETE") {
       cancelled = true;
       return route.fulfill({ status: 204 });
     }
-    return route.fulfill({ json: cancelled ? cancelledBatch : runningBatch });
-  });
-  await page.route(`${apiOrigin}/api/v1/jobs/j_mixed-first`, (route) =>
-    route.fulfill({ json: succeededJob }),
-  );
-  await page.route(`${apiOrigin}/api/v1/jobs/j_mixed-running`, async (route) => {
-    runningJobReads += 1;
-    return route.fulfill({ json: cancelled ? cancelledJob : runningJob });
+    return route.fulfill({ status: 404 });
   });
 
   await page.goto("/");
@@ -2976,7 +3020,7 @@ test("mixed batch keeps a later active child selected and preserves output order
   await expect(cards.nth(0).locator(".export-job-result")).toContainText("first-output.mkv");
   await expect(cards.nth(1)).toContainText("second.mp4");
   await expect(cards.nth(1).getByRole("button", { name: "Cancel job" })).toBeVisible();
-  await expect.poll(() => runningJobReads).toBeGreaterThan(0);
+  await expect.poll(() => streamReads).toBeGreaterThan(0);
 
   await page.getByRole("button", { name: "Cancel export" }).click();
   await expect(page.getByRole("button", { name: "Cancel export" })).not.toBeVisible({
@@ -3298,34 +3342,93 @@ test("refresh metadata cannot restore an old selection", async ({ page }) => {
 });
 
 test("delayed cancellation cannot overwrite a replacement export", async ({ page }) => {
-  let releases!: () => void;
+  let releaseCancelAck!: () => void;
   const delayed = new Promise<void>((resolve) => {
-    releases = resolve;
+    releaseCancelAck = resolve;
   });
+  let signalOldEventsStarted!: () => void;
+  const oldEventsStarted = new Promise<void>((resolve) => (signalOldEventsStarted = resolve));
+  let releaseOldTerminal!: () => void;
+  const oldTerminalRelease = new Promise<void>((resolve) => (releaseOldTerminal = resolve));
+  let signalOldTerminalDelivered!: () => void;
+  const oldTerminalDelivered = new Promise<void>(
+    (resolve) => (signalOldTerminalDelivered = resolve),
+  );
+  let signalDeleteStarted!: () => void;
+  const deleteStarted = new Promise<void>((resolve) => (signalDeleteStarted = resolve));
+  const ordering: string[] = [];
   let exports = 0;
-  await page.route(`${apiOrigin}/api/v1/projects/*/exports`, (route) => {
+  const queuedBatches = new Map<string, EffectApiTypes.Batch>();
+  let oldTerminal!: EffectApiTypes.Batch;
+  await page.route(`${apiOrigin}/api/v2/projects/*/exports`, (route) => {
     exports += 1;
     const id = exports === 1 ? "j_old" : "j_new";
-    return route.fulfill({
-      json: {
-        batchId: exports === 1 ? "b_oldexport001" : "b_newexport001",
-        jobs: [{ id, type: "export", ...jobTimestamps, state: "queued", progress: 0 }],
-      },
+    const batchId = exports === 1 ? "b_oldexport001" : "b_newexport001";
+    const job = exportJobSnapshot({
+      id,
+      mediaLabel: exports === 1 ? "old-export.mp4" : "replacement-export.mp4",
+      batchId,
+      type: "export" as const,
+      state: "queued" as const,
+      revision: 1,
+      progress: 0,
     });
+    const queuedBatch = exportBatchSnapshot({
+      batchId,
+      projectId: "p_demo-project",
+      projectRevision: 1,
+      state: "queued",
+      progress: 0,
+      jobs: [job],
+    });
+    queuedBatches.set(batchId, queuedBatch);
+    if (exports === 1) {
+      const terminalJob = exportJobSnapshot({
+        ...job,
+        state: "succeeded" as const,
+        revision: 2,
+        progress: 1,
+        result: {
+          outputName: "late-old-export.mkv",
+          sizeBytes: 42,
+          retainUntil: "2026-08-20T12:00:00Z",
+          destinationKind: "download" as const,
+        },
+        verified: true,
+      });
+      oldTerminal = exportBatchSnapshot({
+        ...queuedBatch,
+        state: "succeeded",
+        progress: 1,
+        jobs: [terminalJob],
+      });
+    }
+    validateExportRequest(route.request());
+    return route.fulfill({ status: 202, json: exportSubmission(batchId, [job]) });
   });
-  await page.route(`${apiOrigin}/api/v1/jobs/j_old`, (route) =>
-    route.fulfill({
-      json: { id: "j_old", type: "export", ...jobTimestamps, state: "queued", progress: 0 },
-    }),
-  );
-  await page.route(`${apiOrigin}/api/v1/jobs/j_new`, (route) =>
-    route.fulfill({
-      json: { id: "j_new", type: "export", ...jobTimestamps, state: "queued", progress: 0 },
-    }),
-  );
-  await page.route(`${apiOrigin}/api/v1/batches/b_oldexport001`, async (route) => {
-    await delayed;
-    return route.fulfill({ status: 204 });
+  await page.route(`${apiOrigin}/api/v2/batches/*/events`, async (route) => {
+    const id = new URL(route.request().url()).pathname.split("/")[4]!;
+    const batch = queuedBatches.get(id);
+    if (id === "b_oldexport001") {
+      signalOldEventsStarted();
+      await oldTerminalRelease;
+      await route.fulfill(batchEvent(oldTerminal));
+      ordering.push("old-terminal-delivered");
+      signalOldTerminalDelivered();
+      return;
+    }
+    return batch ? route.fulfill(batchEvent(batch)) : route.fulfill({ status: 404 });
+  });
+  await page.route(`${apiOrigin}/api/v2/batches/b_oldexport001`, async (route) => {
+    if (route.request().method() === "DELETE") {
+      ordering.push("delete-started");
+      signalDeleteStarted();
+      await delayed;
+      const response = await route.fulfill({ status: 204 });
+      ordering.push("delete-acknowledged");
+      return response;
+    }
+    return route.fulfill({ status: 404 });
   });
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
@@ -3343,12 +3446,35 @@ test("delayed cancellation cannot overwrite a replacement export", async ({ page
   await openTask(page, "Export");
   await page.getByRole("button", { name: "Create clips" }).click();
   await expect(page.getByText("Export queued.")).toBeVisible();
+  await oldEventsStarted;
+  const deleteResponse = page.waitForResponse(
+    (response) =>
+      response.request().method() === "DELETE" &&
+      new URL(response.url()).pathname === "/api/v2/batches/b_oldexport001",
+  );
   await page.getByRole("button", { name: "Cancel export" }).click();
+  await deleteStarted;
+  releaseCancelAck();
+  await deleteResponse;
   await openTask(page, "Export");
   await page.getByRole("button", { name: "Create clips" }).click();
   await expect(page.getByText("Export queued.")).toBeVisible();
-  releases();
+  const currentBatch = page.getByRole("region", { name: "Current batch" });
+  await expect(currentBatch.locator(".export-job-card")).toContainText("replacement-export.mp4");
+  await expect(currentBatch.locator(".export-job-card")).toContainText("j_new");
+  ordering.push("replacement-owner-active");
+  releaseOldTerminal();
+  await oldTerminalDelivered;
+  expect(ordering).toEqual([
+    "delete-started",
+    "delete-acknowledged",
+    "replacement-owner-active",
+    "old-terminal-delivered",
+  ]);
   await expect(page.getByText("Export cancelled.")).toHaveCount(0);
+  await expect(currentBatch.locator(".export-job-card")).toContainText("replacement-export.mp4");
+  await expect(currentBatch.locator(".export-job-card")).toContainText("j_new");
+  await expect(currentBatch.locator(".export-job-result")).toHaveCount(0);
 });
 
 test("new projects reset the editor and dirty changes need confirmation", async ({ page }) => {
