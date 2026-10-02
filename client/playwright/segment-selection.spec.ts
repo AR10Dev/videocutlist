@@ -3094,13 +3094,12 @@ test("delayed project loads cannot replace a newer editor", async ({ page }) => 
     await delayed;
     await route
       .fulfill({
-        json: {
-          id: "p_race-load012",
-          mediaId: media.id,
-          revision: 1,
-          segments: [],
-          uiState: { playheadMs: 0, zoom: 1, muted: false },
-        },
+        json: projectSnapshot("p_race-load012", 1, {
+          revision: 0,
+          schemaVersion: 2,
+          name: "Race load",
+          items: [{ id: itemId, mediaId: media.id, segments: [], exportOptions: {} }],
+        }),
       })
       .catch(() => {});
   });
@@ -3289,19 +3288,10 @@ test("unmounting a deferred export save cannot start export, poll, or remember a
   });
   await page.route(`${apiOrigin}/api/v2/projects/*`, async (route) => {
     if (route.request().method() !== "PUT") return route.fallback();
+    const input = Schema.decodeUnknownSync(ProjectInputSchema)(route.request().postDataJSON());
     saveStarted();
     await delayed;
-    await route
-      .fulfill({
-        json: {
-          id: "p_unmount-save12",
-          mediaId: media.id,
-          revision: 1,
-          segments: [],
-          uiState: { playheadMs: 0, zoom: 1, muted: false },
-        },
-      })
-      .catch(() => {});
+    await route.fulfill({ json: projectSnapshot("p_unmount-save12", 1, input) }).catch(() => {});
   });
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
@@ -3600,9 +3590,6 @@ test("load fetches project media directly and corrupt recents do not block start
     }),
   );
   let outsideMediaReads = 0;
-  await page.route(`${apiOrigin}/api/v2/media/tree`, (route) =>
-    route.fulfill({ json: { folders: [], items: [media, outsideMedia], nextCursor: null } }),
-  );
   await page.route(`${apiOrigin}/api/v2/media/${outsideMedia.id}`, (route) => {
     outsideMediaReads += 1;
     return route.fulfill({ json: outsideMedia });
@@ -3671,7 +3658,7 @@ test("loads cursor pages once and removes Load more at the end", async ({ page }
 
 test("keeps the first page after a later-page failure and permits retry", async ({ page }) => {
   let attempts = 0;
-  await page.route(`${apiOrigin}/api/v2/media**`, (route) => {
+  await page.route(`${apiOrigin}/api/v2/media/tree**`, (route) => {
     const url = new URL(route.request().url());
     if (route.request().method() !== "GET") return route.fallback();
     if (!url.searchParams.get("cursor"))
