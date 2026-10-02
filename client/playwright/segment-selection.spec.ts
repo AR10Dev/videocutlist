@@ -6,6 +6,7 @@ import {
   ExportSubmissionInput as ExportSubmissionInputSchema,
   Job as JobSchema,
   ProjectInput as ProjectInputSchema,
+  type DetectionInput,
   type DetectionJob,
   type ExportSubmissionInput,
   type ProjectInput,
@@ -1580,6 +1581,127 @@ test("clears detection results when source and active project-item context chang
   await page.getByRole("button", { name: /second.mp4/ }).click();
   await expect(page.getByRole("button", { name: "Cancel detection" })).toHaveCount(0);
   await expect(page.getByText(/candidates found/)).toHaveCount(0);
+});
+
+test("ignores a terminal detection SSE snapshot released after active-item replacement", async ({
+  page,
+}) => {
+  let submission: { body: DetectionInput; projectId: string } | undefined;
+  const itemIds = new Map<string, string>();
+  const jobId = "j_detection-stale-sse01";
+  let eventStartedResolve!: () => void;
+  const eventStarted = new Promise<void>((resolve) => {
+    eventStartedResolve = resolve;
+  });
+  let releaseSnapshotResolve!: () => void;
+  const releaseSnapshot = new Promise<void>((resolve) => {
+    releaseSnapshotResolve = resolve;
+  });
+  let requestFinishedResolve!: () => void;
+  const requestFinished = new Promise<void>((resolve) => {
+    requestFinishedResolve = resolve;
+  });
+  let snapshotServed = false;
+  page.on("request", (request) => {
+    if (
+      request.method() !== "PUT" ||
+      !new URL(request.url()).pathname.startsWith("/api/v2/projects/")
+    )
+      return;
+    const project = Schema.decodeUnknownSync(ProjectInputSchema)(request.postDataJSON());
+    for (const item of project.items) itemIds.set(item.mediaId, item.id);
+  });
+  page.on("requestfinished", (request) => {
+    if (new URL(request.url()).pathname === `/api/v2/jobs/${jobId}/events`)
+      requestFinishedResolve();
+  });
+  await page.route(`${apiOrigin}/api/v2/projects/*/detections`, (route) => {
+    const request = route.request();
+    expect(request.headers()["idempotency-key"]).toMatch(/^[A-Za-z0-9_-]{16,128}$/);
+    const body = Schema.decodeUnknownSync(DetectionInputSchema)(request.postDataJSON());
+    expect(body.mediaId).toBe(media.id);
+    expect(body.projectRevision).toBeGreaterThan(0);
+    expect(body.projectItemId).toMatch(/^i_[A-Za-z0-9_-]{12,64}$/);
+    expect(body.projectItemId).toBe(itemIds.get(media.id));
+    expect(body.sourceFingerprint).toBe(media.etag);
+    expect(body.kind).toBe("silence");
+    const projectId = new URL(request.url()).pathname.split("/")[4];
+    submission = { body, projectId };
+    const acknowledgement = Schema.decodeUnknownSync(DetectionJobSchema)({
+      id: jobId,
+      type: "detection",
+      state: "queued",
+      mediaId: body.mediaId,
+      projectId,
+      projectRevision: body.projectRevision,
+      kind: body.kind,
+    });
+    return route.fulfill({ status: 202, json: acknowledgement });
+  });
+  await page.route(`${apiOrigin}/api/v2/jobs/${jobId}/events`, async (route) => {
+    const request = route.request();
+    expect(request.method()).toBe("GET");
+    expect(request.headers().accept).toContain("text/event-stream");
+    expect(request.headers()["last-event-id"]).toBeUndefined();
+    const accepted = submission;
+    if (!accepted) throw new Error("The detection SSE started before its v2 ACK.");
+    eventStartedResolve();
+    await releaseSnapshot;
+    const snapshot: DetectionJob = {
+      id: jobId,
+      type: "detection",
+      state: "succeeded",
+      mediaId: accepted.body.mediaId,
+      projectId: accepted.projectId,
+      projectRevision: accepted.body.projectRevision,
+      kind: "silence",
+      candidates: [
+        {
+          id: "c_stale-sse01",
+          mediaId: accepted.body.mediaId,
+          projectId: accepted.projectId,
+          projectRevision: accepted.body.projectRevision,
+          startMs: 1000,
+          endMs: 1500,
+          source: "silence",
+        },
+      ],
+    };
+    await route.fulfill(detectionEvent(snapshot, 1));
+    snapshotServed = true;
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await page.getByRole("button", { name: "Add to project" }).click();
+  await page.getByRole("button", { name: /second.mp4/ }).click();
+  await page.getByRole("button", { name: "Add to project" }).click();
+  await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await openTask(page, "Detection");
+  await page.getByRole("button", { name: "Find pauses" }).click();
+  await eventStarted;
+  await page.getByRole("button", { name: /second.mp4/ }).click();
+  expect(itemIds.get(secondMedia.id)).toBeDefined();
+  expect(itemIds.get(secondMedia.id)).not.toBe(submission?.body.projectItemId);
+  const panel = page.getByRole("tabpanel", { name: "Auto-detect" });
+  await expect(panel.getByRole("button", { name: "Cancel detection" })).toHaveCount(0);
+  await expect(panel.locator(".detection-job-state")).toHaveCount(0);
+  await expect(panel.getByText(/candidates found/)).toHaveCount(0);
+
+  releaseSnapshotResolve();
+  await requestFinished;
+  await expect.poll(() => snapshotServed).toBe(true);
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) =>
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve())),
+      ),
+  );
+  await expect(panel.getByLabel("Detection candidates")).toHaveCount(0);
+  await expect(panel.getByText(/candidates found/)).toHaveCount(0);
+  await expect(panel.getByText("Detection complete", { exact: true })).toHaveCount(0);
+  await expect(panel.locator(".detection-job-state")).toHaveCount(0);
+  await expect(panel.getByRole("button", { name: "Cancel detection" })).toHaveCount(0);
 });
 
 test("loads timeline assets for the visible range and keeps editing available on media changes", async ({
