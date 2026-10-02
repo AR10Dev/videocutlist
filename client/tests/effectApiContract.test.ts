@@ -42,6 +42,7 @@ const completedJob = {
   id: "j_123456789012",
   type: "export",
   state: "succeeded",
+  revision: 1,
   createdAt: "2026-10-01T00:00:00Z",
   updatedAt: "2026-10-01T00:00:01Z",
 };
@@ -210,6 +211,7 @@ describe("generated Effect response codecs", () => {
         expect(submissionHeader).toBe("submission-key-01");
         const job = yield* client.getJob({ params: { jobId: completedJob.id } });
         expect(job.state).toBe("succeeded");
+        expect(job.revision).toBe(1);
         expect(requests).toBe(8);
       }),
   );
