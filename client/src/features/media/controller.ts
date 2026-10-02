@@ -188,8 +188,7 @@ export function createLibraryController(server: ServerState, setStatus: Setter<s
 
   let uncertainRefreshKey: string | undefined;
   const refreshCommand = runtime.fn((key: string) => {
-    const mutation = server.generatedApi?.mutation("default", "refreshMedia");
-    if (!mutation) return Effect.fail(new Error("Generated media API is not configured."));
+    const mutation = server.generatedApi.mutation("default", "refreshMedia");
     return generatedMutation(server, mutation, {
       headers: { "Idempotency-Key": key },
     }).pipe(
@@ -210,8 +209,7 @@ export function createLibraryController(server: ServerState, setStatus: Setter<s
   const startRefresh = useAtomSet(() => refreshCommand, { mode: "promise" });
   const refreshing = () => refreshResult().waiting;
   const cancelCommand = runtime.fn((id: string) => {
-    const mutation = server.generatedApi?.mutation("default", "cancelJob");
-    if (!mutation) return Effect.fail(new Error("Generated job API is not configured."));
+    const mutation = server.generatedApi.mutation("default", "cancelJob");
     return generatedMutation(server, mutation, { params: { jobId: id } }).pipe(
       Effect.mapError(() => new Error("Scan could not be cancelled. Try again.")),
     );

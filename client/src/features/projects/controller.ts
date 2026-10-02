@@ -186,8 +186,7 @@ export function createProjectsController(deps: ProjectsControllerDeps) {
     const sameProject = () =>
       !disposed && snapshot.context === contextVersion && snapshot.project === deps.projectId();
     setSaveState("saving");
-    const mutation = deps.server.generatedApi?.mutation("default", "putProject");
-    if (!mutation) return void failSave("Generated project API is not configured.");
+    const mutation = deps.server.generatedApi.mutation("default", "putProject");
     const result = yield* Effect.exit(
       Effect.acquireUseRelease(
         Effect.sync(() => deps.server.registry.mount(mutation)),

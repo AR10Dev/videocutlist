@@ -283,7 +283,6 @@ export function createExportController(deps: {
         }),
     );
   const generatedApi = deps.server.generatedApi;
-  if (!generatedApi) throw new Error("Generated export API is not configured.");
   const preflightMutation = generatedApi.mutation("default", "preflightExport");
   const preflightRequest = (request: { projectId: string; input: EffectApiTypes.ExportInput }) =>
     generatedMutation(preflightMutation, {
@@ -314,24 +313,18 @@ export function createExportController(deps: {
       },
   );
   const cancelBatchCommands = Atom.family((id: string) =>
-    runtime.fn(() => {
-      const cancel = deps.server.generatedApi?.mutation("default", "cancelBatch");
-      return cancel
-        ? generatedMutation(cancel, { params: { batchId: id } }).pipe(
-            Effect.mapError(() => new Error("Export batch could not be cancelled.")),
-          )
-        : Effect.fail(new Error("Generated export API is not configured."));
-    }),
+    runtime.fn(() =>
+      generatedMutation(deps.server.generatedApi.mutation("default", "cancelBatch"), {
+        params: { batchId: id },
+      }).pipe(Effect.mapError(() => new Error("Export batch could not be cancelled."))),
+    ),
   );
   const cancelChildCommands = Atom.family((id: string) =>
-    runtime.fn(() => {
-      const cancel = deps.server.generatedApi?.mutation("default", "cancelJob");
-      return cancel
-        ? generatedMutation(cancel, { params: { jobId: id } }).pipe(
-            Effect.mapError(() => new Error("Export job could not be cancelled. Try again.")),
-          )
-        : Effect.fail(new Error("Generated export API is not configured."));
-    }),
+    runtime.fn(() =>
+      generatedMutation(deps.server.generatedApi.mutation("default", "cancelJob"), {
+        params: { jobId: id },
+      }).pipe(Effect.mapError(() => new Error("Export job could not be cancelled. Try again."))),
+    ),
   );
   const uncertainRetries = new Map<string, { key: string; body: { jobId: string } }>();
   let uncertainExport:
@@ -715,26 +708,24 @@ export function createExportController(deps: {
         const key = idempotencyKeyForAttempt(retry, submissionBody, () =>
           globalThis.crypto.randomUUID(),
         );
-        const create = deps.server.generatedApi?.mutation("default", "createExport");
+        const create = deps.server.generatedApi.mutation("default", "createExport");
         const response = yield* Effect.exit(
-          create
-            ? generatedMutation(create, {
-                params: { projectId: context.projectId },
-                headers: { "Idempotency-Key": key },
-                payload: submissionBody,
-              }).pipe(
-                Effect.mapError((error) => {
-                  uncertainExport = isUncertainExportFailure(error)
-                    ? { key, projectId: context.projectId, body: submissionBody }
-                    : undefined;
-                  if (error instanceof Error) return error;
-                  const envelope = publicApiError(error);
-                  return envelope
-                    ? Object.assign(new Error(envelope.message), { error: envelope })
-                    : new Error("Export request failed.");
-                }),
-              )
-            : Effect.fail(new Error("Generated export API is not configured.")),
+          generatedMutation(create, {
+            params: { projectId: context.projectId },
+            headers: { "Idempotency-Key": key },
+            payload: submissionBody,
+          }).pipe(
+            Effect.mapError((error) => {
+              uncertainExport = isUncertainExportFailure(error)
+                ? { key, projectId: context.projectId, body: submissionBody }
+                : undefined;
+              if (error instanceof Error) return error;
+              const envelope = publicApiError(error);
+              return envelope
+                ? Object.assign(new Error(envelope.message), { error: envelope })
+                : new Error("Export request failed.");
+            }),
+          ),
         );
         if (Exit.isFailure(response)) {
           const failure = Cause.squash(response.cause);
@@ -919,8 +910,7 @@ export function createExportController(deps: {
       const key = idempotencyKeyForAttempt(uncertainRetries.get(id), body, () =>
         globalThis.crypto.randomUUID(),
       );
-      const retry = deps.server.generatedApi?.mutation("default", "retryJob");
-      if (!retry) throw new Error("Generated export API is not configured.");
+      const retry = deps.server.generatedApi.mutation("default", "retryJob");
       const result = await runEffect(
         generatedMutation(retry, {
           params: { jobId: id },
