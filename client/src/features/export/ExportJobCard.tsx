@@ -1,3 +1,4 @@
+import type * as EffectApiTypes from "../../generated/effect-api";
 import { For, Show } from "solid-js";
 import {
   AlertTriangle,
@@ -8,15 +9,18 @@ import {
   RotateCcw,
   X,
 } from "lucide-solid";
-import type { components } from "../../generated/api";
 import { BatchDownload } from "./BatchDownload";
 import { OutputDownload } from "./OutputDownload";
 
-type Job = components["schemas"]["Job"];
-type Destination = components["schemas"]["Destination"];
+type Job = EffectApiTypes.Job;
+type Destination = EffectApiTypes.Destination;
 
 export const jobOutputNames = (job: Job): string[] =>
-  job.result?.outputNames ?? (job.result?.outputName ? [job.result.outputName] : []);
+  job.result?.outputNames
+    ? [...job.result.outputNames]
+    : job.result?.outputName
+      ? [job.result.outputName]
+      : [];
 
 export const formatBytes = (bytes: number) => {
   if (!Number.isFinite(bytes) || bytes < 0) return "—";

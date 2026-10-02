@@ -1,13 +1,13 @@
+import type * as EffectApiTypes from "../../generated/effect-api";
 import { For, Show } from "solid-js";
 import { CircleAlert, LoaderCircle, RefreshCw } from "lucide-solid";
-import type { components } from "../../generated/api";
 import { useWorkspace } from "../app/WorkspaceContext";
 import { ExportJobCard, jobOutputNames } from "../export/ExportJobCard";
 import { BatchDownload } from "../export/BatchDownload";
 import { isBatchActive } from "../export/queueResponse";
 
-type Batch = components["schemas"]["Batch"];
-type Destination = components["schemas"]["Destination"];
+type Batch = EffectApiTypes.Batch;
+type Destination = EffectApiTypes.Destination;
 
 function BatchCard(props: {
   batch: Batch;

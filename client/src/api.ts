@@ -1,15 +1,15 @@
+import type * as EffectApiTypes from "./generated/effect-api";
 import { Cause, Effect, Exit, Layer } from "effect";
 import * as FetchHttpClient from "effect/http/FetchHttpClient";
 import * as HttpClient from "effect/http/HttpClient";
 import * as Schema from "effect/Schema";
-import type { components } from "./generated/api";
 import { Error as ApiErrorSchema } from "./generated/effect-api";
 
 /** Decode only the public error envelope; malformed/proxy errors retain a safe fallback. */
 export async function readApiError(
   response: Response,
   fallback = "Request could not be completed.",
-): Promise<components["schemas"]["Error"]["error"]> {
+): Promise<EffectApiTypes.Error["error"]> {
   const body: unknown = await response.json().catch(() => undefined);
   try {
     return Schema.decodeUnknownSync(ApiErrorSchema)(body).error;
@@ -320,7 +320,7 @@ export class ApiFailure extends Error {
 
   constructor(
     readonly status: number,
-    error: components["schemas"]["Error"]["error"],
+    error: EffectApiTypes.Error["error"],
   ) {
     super(error.message);
     this.name = "ApiFailure";

@@ -1,3 +1,4 @@
+import type * as EffectApiTypes from "../../generated/effect-api";
 import { useAtomValue } from "@effect/atom-solid";
 import { Cause, Effect, Layer, Option, Schedule, Stream } from "effect";
 import * as AsyncResult from "effect/reactivity/AsyncResult";
@@ -14,7 +15,6 @@ import {
   type NativeMediaApiClient,
 } from "../../api";
 import { VideoCutListApi } from "../../generated/effect-api";
-import type { components } from "../../generated/api";
 import {
   Batch as BatchSchema,
   Job as JobSchema,
@@ -27,7 +27,7 @@ import {
 } from "../../generated/effect-api";
 import { observeSnapshots } from "../queue/jobStream";
 
-type Media = components["schemas"]["Media"];
+type Media = EffectApiTypes.Media;
 
 function errorStatus(error: unknown, seen = new Set<object>()): number | undefined {
   if (!error || typeof error !== "object" || seen.has(error)) return;

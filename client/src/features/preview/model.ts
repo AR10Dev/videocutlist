@@ -1,7 +1,7 @@
+import type * as EffectApiTypes from "../../generated/effect-api";
 import { Cause, Effect, Fiber } from "effect";
-import type { components } from "../../generated/api";
 
-export type Media = components["schemas"]["Media"];
+export type Media = EffectApiTypes.Media;
 
 type VideoMetadata = {
   codec?: unknown;
@@ -37,7 +37,7 @@ export const hybridSmartCutKnownIneligible = (media?: Media) => {
   return average !== undefined && nominal !== undefined && average !== nominal;
 };
 
-export type Segment = components["schemas"]["Segment"];
+export type Segment = EffectApiTypes.Project["items"][number]["segments"][number];
 
 export const MAX_SEGMENT_LABEL_CODEPOINTS = 200;
 

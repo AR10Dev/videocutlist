@@ -1,7 +1,7 @@
+import type * as EffectApiTypes from "../../generated/effect-api";
 import { createSignal, For, Show, onCleanup } from "solid-js";
 import { Effect } from "effect";
 import { readServerAtom } from "../app/server";
-import type { components } from "../../generated/api";
 import { useWorkspace } from "../app/WorkspaceContext";
 
 export function ProjectBrowser() {
@@ -13,7 +13,7 @@ export function ProjectBrowser() {
     disposed = true;
     activeRead?.abort();
   });
-  const [items, setItems] = createSignal<components["schemas"]["ProjectSummary"][]>([]);
+  const [items, setItems] = createSignal<EffectApiTypes.ProjectPage["items"][number][]>([]);
   const [cursor, setCursor] = createSignal<string | null>(null);
   const [message, setMessage] = createSignal("");
   const load = async (next?: string) => {

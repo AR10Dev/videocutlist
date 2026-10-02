@@ -1,9 +1,12 @@
-import type { components } from "../../generated/api";
+import type * as EffectApiTypes from "../../generated/effect-api";
 import type { Segment } from "../preview/model";
 
-export type DetectionKind = components["schemas"]["DetectionInput"]["kind"];
-export type RangeCandidate = components["schemas"]["DetectionRangeCandidate"];
-export type Candidate = components["schemas"]["DetectionCandidate"];
+export type DetectionKind = EffectApiTypes.DetectionInput["kind"];
+export type RangeCandidate = Extract<
+  NonNullable<EffectApiTypes.DetectionJob["candidates"]>[number],
+  { source: "silence" | "black" }
+>;
+export type Candidate = NonNullable<EffectApiTypes.DetectionJob["candidates"]>[number];
 export type DetectionProject = {
   id: string;
   mediaId: string;

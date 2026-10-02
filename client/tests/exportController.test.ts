@@ -1,3 +1,4 @@
+import type * as EffectApiTypes from "../src/generated/effect-api";
 import { RegistryContext, RegistryProvider } from "@effect/atom-solid";
 import { createComponent, createRoot, createSignal, untrack, useContext } from "solid-js";
 import { describe, expect, it } from "vitest";
@@ -7,13 +8,12 @@ import { createExportController } from "../src/features/export/controller";
 import { createTimelineHistory } from "../src/features/editor/timeline";
 import type { EditableProjectItem } from "../src/features/projects/model";
 import { defaultSettings } from "../src/features/settings/model";
-import type { components } from "../src/generated/api";
 
 const batchId = "b_exportstatus0001";
 const timestamp = "2026-01-01T00:00:00Z";
 
-type Batch = components["schemas"]["Batch"];
-type Job = components["schemas"]["Job"];
+type Batch = EffectApiTypes.Batch;
+type Job = EffectApiTypes.Job;
 type ExportController = ReturnType<typeof createExportController>;
 
 const job = (id: string, state: Job["state"], revision: number, errorCode?: string): Job => ({
@@ -36,7 +36,7 @@ const batch = (state: Batch["state"], progress: number, jobs: Job[]): Batch => (
   progress,
   jobs,
 });
-const exportItem = (media: components["schemas"]["Media"]): EditableProjectItem => ({
+const exportItem = (media: EffectApiTypes.Media): EditableProjectItem => ({
   id: `i_${"i".repeat(24)}`,
   media,
   timeline: createTimelineHistory({
@@ -74,13 +74,13 @@ async function withExportController(
   exercise: (controller: ExportController) => Promise<void>,
   options: {
     initialBatch?: Batch;
-    selected?: components["schemas"]["Media"];
+    selected?: EffectApiTypes.Media;
     projectItems?: EditableProjectItem[];
     dirty?: boolean;
     revision?: number;
-    saveProject?: () => Promise<components["schemas"]["Project"] | undefined>;
+    saveProject?: () => Promise<EffectApiTypes.Project | undefined>;
     onRequest?: (method: string, path: string) => void;
-    preflightFailure?: components["schemas"]["Error"]["error"];
+    preflightFailure?: EffectApiTypes.Error["error"];
     batchListResponse?: Promise<Response>;
     destinationsResponse?: Promise<Response>;
   } = {},
@@ -303,7 +303,7 @@ describe("export controller aggregate status", () => {
     );
   });
   it("saves before a fresh generated preflight and generated keyed submission", async () => {
-    const media: components["schemas"]["Media"] = {
+    const media: EffectApiTypes.Media = {
       id: `m_${"m".repeat(43)}`,
       name: "clip.mp4",
       durationMs: 2_000,
@@ -351,7 +351,7 @@ describe("export controller aggregate status", () => {
     );
   });
   it("shows a generated preflight error and does not submit the export", async () => {
-    const media: components["schemas"]["Media"] = {
+    const media: EffectApiTypes.Media = {
       id: `m_${"m".repeat(43)}`,
       name: "clip.mp4",
       durationMs: 2_000,

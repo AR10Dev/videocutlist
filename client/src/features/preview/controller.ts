@@ -1,9 +1,9 @@
+import type * as EffectApiTypes from "../../generated/effect-api";
 import { createEffect, createSignal, onCleanup, type Accessor } from "solid-js";
 import { Effect } from "effect";
 import * as Schema from "effect/Schema";
 import { type NativeMediaApiClient } from "../../api";
 import { Waveform as WaveformSchema } from "../../generated/effect-api";
-import type { components } from "../../generated/api";
 import {
   normalizePeaks,
   normalizedAssetViewport,
@@ -23,7 +23,7 @@ import {
   type Segment,
 } from "./model";
 
-type Media = components["schemas"]["Media"];
+type Media = EffectApiTypes.Media;
 
 const waveformPreferenceKey = "videocutlist.waveform-visible.v1";
 const loopPreferenceKey = "videocutlist.loop-selected-segment.v1";

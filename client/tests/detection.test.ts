@@ -1,3 +1,4 @@
+import type * as EffectApiTypes from "../src/generated/effect-api";
 import { RegistryProvider, RegistryContext } from "@effect/atom-solid";
 import { createComponent, createRoot, createSignal, untrack, useContext } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
@@ -16,7 +17,6 @@ import {
   type DetectionController,
 } from "../src/features/detection/controller";
 import { createServerState } from "../src/features/app/server";
-import type { components } from "../src/generated/api";
 
 const candidate = {
   id: "c_1",
@@ -36,7 +36,7 @@ const point = {
   source: "scene" as const,
 };
 const project = { id: "p_1", mediaId: "m_1", revision: 2, segments: [] };
-const detectionMedia: components["schemas"]["Media"] = {
+const detectionMedia: EffectApiTypes.Media = {
   id: "m_detection",
   name: "detection.mp4",
   durationMs: 1_000,
@@ -45,7 +45,7 @@ const detectionMedia: components["schemas"]["Media"] = {
   streams: {},
   etag: "v1",
 };
-const queuedDetectionJob: components["schemas"]["DetectionJob"] = {
+const queuedDetectionJob: EffectApiTypes.DetectionJob = {
   id: "j_012345678901",
   type: "detection",
   state: "queued",
@@ -54,7 +54,7 @@ const queuedDetectionJob: components["schemas"]["DetectionJob"] = {
   projectRevision: 1,
   kind: "silence",
 };
-const jobEvent = (job: components["schemas"]["DetectionJob"], revision = 1) => {
+const jobEvent = (job: EffectApiTypes.DetectionJob, revision = 1) => {
   const snapshot = {
     ...job,
     revision,
@@ -76,9 +76,9 @@ async function withDetection(
     },
   ) => Promise<void>,
   overrides: {
-    selected?: () => components["schemas"]["Media"] | undefined;
+    selected?: () => EffectApiTypes.Media | undefined;
     activeItemId?: () => string | undefined;
-    saveProject?: () => Promise<components["schemas"]["Project"] | undefined>;
+    saveProject?: () => Promise<EffectApiTypes.Project | undefined>;
   } = {},
 ) {
   await new Promise<void>((resolve, reject) => {
@@ -86,7 +86,9 @@ async function withDetection(
       const [revision, setRevision] = createSignal(1);
       const [projectId, setProjectId] = createSignal(queuedDetectionJob.projectId);
       const [editorVersion, setEditorVersion] = createSignal(0);
-      const [segments, setSegments] = createSignal<components["schemas"]["Segment"][]>([]);
+      const [segments, setSegments] = createSignal<
+        EffectApiTypes.Project["items"][number]["segments"][number][]
+      >([]);
       let controller!: DetectionController;
       const configuration = {
         serverBaseUrl: "https://example.test",
@@ -116,7 +118,7 @@ async function withDetection(
                     Promise.resolve({
                       id: projectId(),
                       revision: revision(),
-                    } as components["schemas"]["Project"])),
+                    } as EffectApiTypes.Project)),
                 updateSegments: (value) => {
                   setSegments(value);
                   setEditorVersion((version) => version + 1);
@@ -191,7 +193,7 @@ it("redelivers an uncertain detection submission with its original key and valid
 it("uses a fresh key for an uncertain identical command sent to another project", async () => {
   const secondProjectId = "p_000000000002";
   const submissions: Array<{ key: string | null; target: string; body: string }> = [];
-  let acceptedJob: components["schemas"]["DetectionJob"] | undefined;
+  let acceptedJob: EffectApiTypes.DetectionJob | undefined;
   const api: ApiClient = {
     url: (path) => path,
     request: (path, init) => {
@@ -406,9 +408,9 @@ it("accepts successive candidates across its own saved revisions but rejects ext
 });
 
 it("does not submit detection when the source changes during the required save", async () => {
-  let completeSave!: (project: components["schemas"]["Project"]) => void;
+  let completeSave!: (project: EffectApiTypes.Project) => void;
   const saveProject = () =>
-    new Promise<components["schemas"]["Project"]>((resolve) => {
+    new Promise<EffectApiTypes.Project>((resolve) => {
       completeSave = resolve;
     });
   const [selected, setSelected] = createSignal(detectionMedia);
@@ -431,7 +433,7 @@ it("does not submit detection when the source changes during the required save",
       completeSave({
         id: queuedDetectionJob.projectId,
         revision: 1,
-      } as components["schemas"]["Project"]);
+      } as EffectApiTypes.Project);
       await start;
       expect(submitted).toBe(false);
       expect(controller.detectionJob()).toBeUndefined();

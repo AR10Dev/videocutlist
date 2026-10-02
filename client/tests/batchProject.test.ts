@@ -1,3 +1,4 @@
+import type * as EffectApiTypes from "../src/generated/effect-api";
 import { describe, expect, it } from "vitest";
 import {
   createProjectItem,
@@ -5,9 +6,8 @@ import {
   restoreProjectItem,
   serializeProjectItem,
 } from "../src/features/projects/model";
-import type { components } from "../src/generated/api";
 
-const media = (id: string, name: string): components["schemas"]["Media"] => ({
+const media = (id: string, name: string): EffectApiTypes.Media => ({
   id,
   name,
   durationMs: 10_000,

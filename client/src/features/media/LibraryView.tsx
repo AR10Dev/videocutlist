@@ -1,13 +1,13 @@
+import type * as EffectApiTypes from "../../generated/effect-api";
 import { For, Show, createEffect, createSignal, onCleanup, onMount } from "solid-js";
 import { ChevronDown, Film, Folder, FolderOpen, LoaderCircle, RefreshCw } from "lucide-solid";
 import { Effect, Fiber } from "effect";
-import type { components } from "../../generated/api";
 import { createApiClient, resolveBrowserConfiguration, type ApiClient } from "../../api";
 import { useWorkspace } from "../app/WorkspaceContext";
 import { formatLibraryDuration, mediaSummary } from "./model";
 import { createThumbnailObjectURL } from "./thumbnail";
 
-type Media = components["schemas"]["Media"];
+type Media = EffectApiTypes.Media;
 
 function MediaThumbnail(props: { item: Media; api: ApiClient }) {
   const [source, setSource] = createSignal<string>();

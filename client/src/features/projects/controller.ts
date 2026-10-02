@@ -1,10 +1,10 @@
+import type * as EffectApiTypes from "../../generated/effect-api";
 import { createSignal, type Accessor, type Setter } from "solid-js";
 import { Cause, Effect, Exit, Fiber } from "effect";
 import * as AtomRegistry from "effect/reactivity/AtomRegistry";
 import type { Fiber as FiberHandle } from "effect/Fiber";
 import { ApiFailure } from "../../api";
 import { readServerAtom, type ServerState } from "../app/server";
-import type { components } from "../../generated/api";
 import {
   confirmDiscard,
   newProjectId,
@@ -25,9 +25,9 @@ import { validateSegments } from "../preview/model";
 import type { TimelineHistory } from "../editor/timeline";
 import type { AppSettings } from "../settings/model";
 
-type Project = components["schemas"]["Project"];
+type Project = EffectApiTypes.Project;
 type GeneratedProject = import("../../generated/effect-api").Project;
-type Media = components["schemas"]["Media"];
+type Media = EffectApiTypes.Media;
 export type SaveState = "unsaved" | "saving" | "saved" | "failed";
 const recoveryKey = "videocutlist.project-recovery.v1";
 
@@ -376,7 +376,10 @@ export function createProjectsController(deps: ProjectsControllerDeps) {
           (entry) =>
             Effect.gen(function* () {
               const media = yield* readServerAtom(deps.server, deps.server.media(entry.mediaId));
-              const error = validateSegments(entry.segments, media.durationMs);
+              const error = validateSegments(
+                entry.segments.map((segment) => ({ ...segment })),
+                media.durationMs,
+              );
               if (error) return yield* Effect.fail(new Error(error));
               return restoreProjectItem(entry, media);
             }),
@@ -413,7 +416,7 @@ export function createProjectsController(deps: ProjectsControllerDeps) {
         deps.setMuted(first.muted);
         deps.setExportMode(first.exportOptions.mode ?? "merge");
         deps.setExportSelection(first.exportOptions.selection ?? "segments");
-        deps.setStreamIndexes(first.exportOptions.streamIndexes ?? []);
+        deps.setStreamIndexes([...(first.exportOptions.streamIndexes ?? [])]);
         deps.setCutStrategy(first.exportOptions.cutStrategy ?? deps.settings().cutStrategy);
         deps.setExportContainer(first.exportOptions.container ?? "mkv");
         deps.setDestinationId(first.exportOptions.destinationId ?? "download");
@@ -539,7 +542,7 @@ export function createProjectsController(deps: ProjectsControllerDeps) {
     saveState,
     saveError,
     loadProject,
-    importProject: (document: components["schemas"]["ProjectInput"]) => {
+    importProject: (document: EffectApiTypes.ProjectInput) => {
       const id = newProjectId();
       return loadProject(id, { ...document, id, revision: 0, updatedAt: new Date().toISOString() });
     },

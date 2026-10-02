@@ -1,6 +1,5 @@
+import type * as EffectApiTypes from "../src/generated/effect-api";
 import { expect, test, type Page } from "@playwright/test";
-
-import type { components } from "../src/generated/api";
 
 const origin = "http://127.0.0.1:8787";
 const media = {
@@ -77,7 +76,7 @@ test("rebuilt export recovers from preflight errors and explains empty scope", a
             allowed: true,
             selection: [0],
             findings: [],
-          } satisfies components["schemas"]["ExportPreflight"],
+          } satisfies EffectApiTypes.ExportPreflight,
         });
   });
   page.on("request", (request) => {
@@ -114,13 +113,13 @@ test("rebuilt export recovers from preflight errors and explains empty scope", a
 test("rebuilt detection sends source identity and completes candidate review", async ({
   page,
 }, testInfo) => {
-  let input: components["schemas"]["DetectionInput"] | undefined;
-  let savedSegments: components["schemas"]["Segment"][] = [];
+  let input: EffectApiTypes.DetectionInput | undefined;
+  let savedSegments: EffectApiTypes.Project["items"][number]["segments"][number][] = [];
   page.on("request", (request) => {
     if (request.method() === "PUT" && /\/projects\/[^/]+$/.test(new URL(request.url()).pathname))
       savedSegments = request.postDataJSON().items[0].segments;
   });
-  let detection: components["schemas"]["DetectionJob"];
+  let detection: EffectApiTypes.DetectionJob;
   let detectionKey: string | undefined;
   await page.route(`${origin}/api/v2/jobs/j_0123456789ab/events`, (route) => {
     const terminal = {
@@ -158,7 +157,7 @@ test("rebuilt detection sends source identity and completes candidate review", a
     });
   });
   await page.route(`${origin}/api/v2/projects/*/detections`, (route) => {
-    const request = route.request().postDataJSON() as components["schemas"]["DetectionInput"];
+    const request = route.request().postDataJSON() as EffectApiTypes.DetectionInput;
     input = request;
     detectionKey = route.request().headers()["idempotency-key"];
     const identity = {
@@ -227,7 +226,7 @@ test.beforeEach(async ({ page }) => {
     };
     Object.defineProperty(window, "MediaSource", { value: undefined });
   });
-  const job: components["schemas"]["Job"] = {
+  let job: EffectApiTypes.Job = {
     id: "j_0123456789ab",
     batchId: "b_0123456789ab",
     projectId: "p_0123456789ab",
@@ -239,7 +238,7 @@ test.beforeEach(async ({ page }) => {
     createdAt: "2026-01-01T00:00:00Z",
     updatedAt: "2026-01-01T00:00:00Z",
   };
-  const batch: components["schemas"]["Batch"] = {
+  let batch: EffectApiTypes.Batch = {
     batchId: "b_0123456789ab",
     projectId: "p_0123456789ab",
     projectRevision: 1,
@@ -298,10 +297,10 @@ test.beforeEach(async ({ page }) => {
       });
     if (path === "/batches" && request.method() === "GET")
       return route.fulfill({
-        json: { items: [], nextCursor: null } satisfies components["schemas"]["BatchPage"],
+        json: { items: [], nextCursor: null } satisfies EffectApiTypes.BatchPage,
       });
     if (path === `/batches/${batch.batchId}/events`) {
-      const terminalJob: components["schemas"]["Job"] = {
+      const terminalJob: EffectApiTypes.Job = {
         ...job,
         state: "succeeded",
         revision: 2,
@@ -315,7 +314,7 @@ test.beforeEach(async ({ page }) => {
           destinationId: "download",
         },
       };
-      const terminalBatch: components["schemas"]["Batch"] = {
+      const terminalBatch: EffectApiTypes.Batch = {
         ...batch,
         state: "succeeded",
         progress: 1,
@@ -343,22 +342,24 @@ test.beforeEach(async ({ page }) => {
           allowed: true,
           selection: [],
           findings: [],
-        } satisfies components["schemas"]["ExportPreflight"],
+        } satisfies EffectApiTypes.ExportPreflight,
       });
     if (/^\/projects\/p_[A-Za-z0-9_-]{12,64}\/exports$/.test(path) && request.method() === "POST") {
-      const body = request.postDataJSON() as components["schemas"]["ExportSubmissionInput"];
+      const body = request.postDataJSON() as EffectApiTypes.ExportSubmissionInput;
       expect(body.projectRevision).toBeGreaterThanOrEqual(1);
       expect(request.headers()["idempotency-key"]).toMatch(/^[A-Za-z0-9_-]{1,128}$/);
-      batch.projectId = path.split("/")[2];
-      batch.projectRevision = body.projectRevision;
-      job.projectId = batch.projectId;
-      job.projectRevision = body.projectRevision;
+      batch = {
+        ...batch,
+        projectId: path.split("/")[2]!,
+        projectRevision: body.projectRevision,
+      };
+      job = { ...job, projectId: batch.projectId!, projectRevision: body.projectRevision };
       return route.fulfill({
         status: 202,
         json: {
           batchId: batch.batchId,
           jobs: [job],
-        } satisfies components["schemas"]["BatchExportSubmission"],
+        } satisfies EffectApiTypes.BatchExportSubmission,
       });
     }
     if (/^\/projects\/p_[A-Za-z0-9_-]{12,64}$/.test(path) && request.method() === "PUT") {
@@ -400,7 +401,7 @@ test("Create clips saves a dirty revision before fresh preflight and batch submi
   let projectId: string | undefined;
   const batchId = "b_0123456789ab";
   const jobId = "j_0123456789ab";
-  const job: components["schemas"]["Job"] = {
+  let job: EffectApiTypes.Job = {
     id: jobId,
     batchId,
     type: "export",
@@ -410,7 +411,7 @@ test("Create clips saves a dirty revision before fresh preflight and batch submi
     createdAt: "2026-01-01T00:00:00Z",
     updatedAt: "2026-01-01T00:00:00Z",
   };
-  const terminalJob: components["schemas"]["Job"] = {
+  let terminalJob: EffectApiTypes.Job = {
     ...job,
     state: "succeeded",
     revision: 2,
@@ -443,7 +444,7 @@ test("Create clips saves a dirty revision before fresh preflight and batch submi
   );
   let savedBody: Record<string, unknown> | undefined;
   let savedRevision: number | undefined;
-  let submittedBody: components["schemas"]["ExportSubmissionInput"] | undefined;
+  let submittedBody: EffectApiTypes.ExportSubmissionInput | undefined;
   let idempotencyKey: string | undefined;
   await page.route(`${api}/**`, async (route) => {
     const request = route.request();
@@ -537,14 +538,13 @@ test("Create clips saves a dirty revision before fresh preflight and batch submi
     }
     if (/^\/projects\/p_[A-Za-z0-9_-]{12,64}\/exports$/.test(path) && request.method() === "POST") {
       calls.push("export");
-      submittedBody = request.postDataJSON() as components["schemas"]["ExportSubmissionInput"];
+      submittedBody = request.postDataJSON() as EffectApiTypes.ExportSubmissionInput;
       idempotencyKey = request.headers()["idempotency-key"];
-      job.projectId = projectId!;
-      job.projectRevision = savedRevision!;
+      job = { ...job, projectId: projectId!, projectRevision: savedRevision! };
       return route.fulfill({
         status: 202,
         headers: { "X-Request-ID": "r-create-clips-export" },
-        json: { batchId, jobs: [job] } satisfies components["schemas"]["BatchExportSubmission"],
+        json: { batchId, jobs: [job] } satisfies EffectApiTypes.BatchExportSubmission,
       });
     }
     if (path === `/batches/${batchId}/events`) {
@@ -558,8 +558,11 @@ test("Create clips saves a dirty revision before fresh preflight and batch submi
         progress: 1,
         jobs: [terminalJob],
       };
-      terminalJob.projectId = projectId!;
-      terminalJob.projectRevision = savedRevision!;
+      terminalJob = {
+        ...terminalJob,
+        projectId: projectId!,
+        projectRevision: savedRevision!,
+      };
       return route.fulfill({
         headers: {
           "Content-Type": "text/event-stream",
@@ -857,7 +860,7 @@ test("changing export scope invalidates a prior preflight", async ({ page }) => 
           allowed: true,
           selection: [],
           findings: [],
-        } satisfies components["schemas"]["ExportPreflight"],
+        } satisfies EffectApiTypes.ExportPreflight,
       });
     await new Promise<void>((resolve) => {
       releaseSelected = () => {

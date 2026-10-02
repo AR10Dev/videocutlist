@@ -1,3 +1,4 @@
+import type * as EffectApiTypes from "../src/generated/effect-api";
 import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { createApiClient } from "../src/api";
 import { createServerState } from "../src/features/app/server";
@@ -5,7 +6,6 @@ import * as AsyncResult from "effect/reactivity/AsyncResult";
 import * as AtomRegistry from "effect/reactivity/AtomRegistry";
 import { createSettingsController } from "../src/features/settings/controller";
 import { validRuntimeSettingsInput } from "../src/features/settings/model";
-import type { components } from "../src/generated/api";
 
 const settings = {
   destinations: [{ id: "download", label: "Downloads", kind: "download", retention: "24h" }],
@@ -19,7 +19,7 @@ const settings = {
   mediaMaxFiles: 100,
   mediaMaxDepth: 4,
   mcpEnabled: false,
-} satisfies components["schemas"]["RuntimeSettings"];
+} satisfies EffectApiTypes.SettingsResponse["settings"];
 const document = {
   revision: 1,
   schemaVersion: 1,
@@ -27,7 +27,7 @@ const document = {
   pathsConstrained: false,
   roots: {},
   settings,
-} satisfies components["schemas"]["SettingsResponse"];
+} satisfies EffectApiTypes.SettingsResponse;
 const mcp = {
   enabled: false,
   endpoint: "/mcp",
@@ -38,7 +38,7 @@ const mcp = {
   roots: [],
   credentials: [],
   proposals: [],
-} satisfies components["schemas"]["MCPSettingsResponse"];
+} satisfies EffectApiTypes.MCPSettingsResponse;
 
 const credential = (id: string) => ({
   id,
@@ -110,18 +110,20 @@ describe("preview concurrency settings", () => {
 describe("settings controller", () => {
   it("requires complete mutable settings for GET and PUT", () => {
     expectTypeOf<
-      components["schemas"]["SettingsUpdate"]["settings"]["exportLimit"]
+      EffectApiTypes.SettingsUpdate["settings"]["exportLimit"]
     >().toEqualTypeOf<number>();
     expectTypeOf<
-      components["schemas"]["SettingsUpdate"]["settings"]["previewGlobalLimit"]
+      EffectApiTypes.SettingsUpdate["settings"]["previewGlobalLimit"]
     >().toEqualTypeOf<number>();
-    expectTypeOf<components["schemas"]["RuntimeSettings"]["mcpEnabled"]>().toEqualTypeOf<boolean>();
-    const complete: components["schemas"]["RuntimeSettings"] = settings;
+    expectTypeOf<
+      EffectApiTypes.SettingsResponse["settings"]["mcpEnabled"]
+    >().toEqualTypeOf<boolean>();
+    const complete: EffectApiTypes.SettingsResponse["settings"] = settings;
     expect(complete.mcpEnabled).toBe(false);
     // @ts-expect-error GET responses must contain every mutable setting.
-    const sparse: components["schemas"]["RuntimeSettings"] = {};
+    const sparse: EffectApiTypes.SettingsResponse["settings"] = {};
     const { mcpEnabled: _mcpEnabled, ...withoutMCPEnabled } = settings;
-    const incomplete: components["schemas"]["SettingsUpdate"] = {
+    const incomplete: EffectApiTypes.SettingsUpdate = {
       revision: 1,
       // @ts-expect-error Complete PUTs must include MCP enablement.
       settings: withoutMCPEnabled,

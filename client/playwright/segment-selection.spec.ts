@@ -1,3 +1,4 @@
+import type * as EffectApiTypes from "../src/generated/effect-api";
 import { expect, test, type Page } from "@playwright/test";
 import * as Schema from "effect/Schema";
 import {
@@ -6,14 +7,13 @@ import {
   type ExportSubmissionInput,
   type ProjectInput,
 } from "../src/generated/effect-api";
-import type { components } from "../src/generated/api";
 
 const jobTimestamps = {
   createdAt: "2026-08-20T12:00:00Z",
   updatedAt: "2026-08-20T12:00:00Z",
-} satisfies Pick<components["schemas"]["Job"], "createdAt" | "updatedAt">;
+} satisfies Pick<EffectApiTypes.Job, "createdAt" | "updatedAt">;
 
-const media = {
+const media: EffectApiTypes.Media = {
   id: "m_0123456789012345678901234567890123456789012",
   name: "camera.mp4",
   durationMs: 10_000,
@@ -52,7 +52,7 @@ const serverSettings = {
     mediaMaxDepth: 4,
     mcpEnabled: false,
   },
-} satisfies components["schemas"]["SettingsResponse"];
+} satisfies EffectApiTypes.SettingsResponse;
 
 const apiOrigin = "http://127.0.0.1:8787";
 const itemId = "i_aaaaaaaaaaaaaaaaaaaaaaaa";
@@ -183,7 +183,7 @@ test.beforeEach(async ({ page }) => {
           authentication: "Bearer token",
           remoteAccessGuidance: "Use HTTPS for remote access.",
           clientCompatibility: "Streamable HTTP bearer-token clients only.",
-        } satisfies components["schemas"]["MCPSettingsResponse"],
+        } satisfies EffectApiTypes.MCPSettingsResponse,
       });
     if (url.pathname === "/api/v2/media/status")
       return route.fulfill({
@@ -204,8 +204,8 @@ test.beforeEach(async ({ page }) => {
           ],
           capabilities: { saveBesideSource: false },
         } satisfies {
-          destinations: components["schemas"]["Destination"][];
-          capabilities: components["schemas"]["DestinationCapabilities"];
+          destinations: EffectApiTypes.Destination[];
+          capabilities: EffectApiTypes.DestinationCapabilities;
         },
       });
     if (url.pathname === "/api/v2/media/refresh" && request.method() === "POST")
@@ -245,15 +245,15 @@ test.beforeEach(async ({ page }) => {
         projectId,
         projectRevision: detectionRevision,
         kind,
-      } satisfies components["schemas"]["DetectionJob"];
+      } satisfies EffectApiTypes.DetectionJob;
       return route.fulfill({ status: 202, json: job });
     }
     if (/^\/api\/v2\/jobs\/j_detection-(?:black|silence)-\d+\/events$/.test(url.pathname)) {
       const jobId = url.pathname.split("/")[4];
       expect(request.headers().accept).toContain("text/event-stream");
       const kind = jobId.includes("black") ? "black" : "silence";
-      type DetectionSnapshot = components["schemas"]["DetectionJob"] &
-        Pick<components["schemas"]["Job"], "revision" | "createdAt" | "updatedAt">;
+      type DetectionSnapshot = EffectApiTypes.DetectionJob &
+        Pick<EffectApiTypes.Job, "revision" | "createdAt" | "updatedAt">;
       const snapshots: DetectionSnapshot[] =
         kind === "black"
           ? [
@@ -876,7 +876,7 @@ test("edits independent project items and submits a durable batch", async ({ pag
         progress: 0,
       },
     ],
-  } satisfies components["schemas"]["Batch"];
+  } satisfies EffectApiTypes.Batch;
   await page.route(`${apiOrigin}/api/v2/media/${secondMedia.id}`, (route) =>
     route.fulfill({ json: secondMedia }),
   );
@@ -903,7 +903,7 @@ test("edits independent project items and submits a durable batch", async ({ pag
           ? ({
               items: submitted ? [batch] : [],
               nextCursor: null,
-            } satisfies components["schemas"]["BatchPage"])
+            } satisfies EffectApiTypes.BatchPage)
           : batch,
     });
   });
@@ -3247,7 +3247,7 @@ test("loads cursor pages once and removes Load more at the end", async ({ page }
           folders: [],
           items: [media],
           nextCursor: "next/+=",
-        } satisfies components["schemas"]["FolderPage"],
+        } satisfies EffectApiTypes.FolderPage,
       });
     expect(url.searchParams.get("cursor")).toBe("next/+=");
     return route.fulfill({
@@ -3255,7 +3255,7 @@ test("loads cursor pages once and removes Load more at the end", async ({ page }
         folders: [],
         items: [media, secondMedia],
         nextCursor: null,
-      } satisfies components["schemas"]["FolderPage"],
+      } satisfies EffectApiTypes.FolderPage,
     });
   });
   await page.goto("/");
