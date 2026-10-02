@@ -23,7 +23,11 @@ test("imports text through generated v2 control and downloads native interchange
   page,
 }) => {
   const importRequests: { path: string; contentType: string | undefined; body: string }[] = [];
-  const nativeRequests: string[] = [];
+  const nativeRequests: {
+    path: string;
+    contentType: string | undefined;
+    disposition: string | undefined;
+  }[] = [];
   let savedProject: Record<string, unknown> | undefined;
   await page.addInitScript((base) => {
     window.VIDEOCUTLIST_CONFIG = {
@@ -94,12 +98,34 @@ test("imports text through generated v2 control and downloads native interchange
       return route.fulfill({ json: savedProject });
     }
     if (request.method() === "POST" && /\/interchange\/(csv|chapters)$/.test(url.pathname)) {
+      const body = request.postData() ?? "";
       importRequests.push({
         path: `${url.pathname}${url.search}`,
         contentType: request.headers()["content-type"],
-        body: request.postData() ?? "",
+        body,
       });
-      const body = request.postData() ?? "";
+      if (body === "CONFLICT")
+        return route.fulfill({
+          status: 409,
+          json: {
+            error: {
+              code: "revision_conflict",
+              message: "Project revision changed.",
+              requestId: "browser",
+            },
+          },
+        });
+      if (body.includes("not-a-timestamp"))
+        return route.fulfill({
+          status: 400,
+          json: {
+            error: {
+              code: "invalid_input",
+              message: "Invalid cut-list timestamp.",
+              requestId: "browser",
+            },
+          },
+        });
       const current = savedProject as Record<string, unknown>;
       const items = current.items as Array<Record<string, unknown>>;
       const active = items[0]!;
@@ -113,8 +139,12 @@ test("imports text through generated v2 control and downloads native interchange
     if (request.method() === "GET" && /^\/deploy\/api\/v2\/projects\/[^/]+$/.test(url.pathname))
       return route.fulfill({ json: savedProject });
     if (url.pathname.startsWith("/deploy/media/v2/projects/")) {
-      nativeRequests.push(`${url.pathname}${url.search}`);
       const format = url.pathname.endsWith("/csv") ? "csv" : "chapters";
+      nativeRequests.push({
+        path: `${url.pathname}${url.search}`,
+        contentType: format === "csv" ? "text/csv; charset=utf-8" : "text/plain; charset=utf-8",
+        disposition: `attachment; filename="cutlist.${format}"`,
+      });
       return route.fulfill({
         headers: {
           "Content-Type":
@@ -153,6 +183,36 @@ test("imports text through generated v2 control and downloads native interchange
     body: "start,end,label\n00:00:00.500,00:00:01.500,Opening\n",
   });
 
+  await page.getByLabel("Import cut list", { exact: true }).setInputFiles({
+    name: "chapters.txt",
+    mimeType: "text/plain",
+    buffer: Buffer.from("00:00:00.500 --> 00:00:01.500 Opening\n"),
+  });
+  await expect.poll(() => importRequests.length).toBe(2);
+  expect(importRequests[1]).toMatchObject({
+    path: expect.stringMatching(
+      /^\/deploy\/api\/v2\/projects\/p_[^/]+\/interchange\/chapters\?itemId=i_/,
+    ),
+    contentType: "text/csv",
+    body: "00:00:00.500 --> 00:00:01.500 Opening\n",
+  });
+
+  await page.getByLabel("Import cut list", { exact: true }).setInputFiles({
+    name: "invalid.csv",
+    mimeType: "text/csv",
+    buffer: Buffer.from("start,end,label\nnot-a-timestamp,00:00:01.500,Bad\n"),
+  });
+  await expect.poll(() => importRequests.length).toBe(3);
+  await expect(page.getByText("Cut list import failed.", { exact: true })).toBeVisible();
+  await page.getByLabel("Import cut list", { exact: true }).setInputFiles({
+    name: "conflict.csv",
+    mimeType: "text/csv",
+    buffer: Buffer.from("CONFLICT"),
+  });
+  await expect.poll(() => importRequests.length).toBe(4);
+  await expect(page.getByText("Cut list import failed.", { exact: true })).toBeVisible();
+  expect(savedProject).toMatchObject({ schemaVersion: 2, revision: 3 });
+
   const csvDownload = page.waitForEvent("download");
   await page.getByRole("button", { name: "Download CSV cut list" }).click();
   expect((await csvDownload).suggestedFilename()).toBe("cutlist.csv");
@@ -160,8 +220,15 @@ test("imports text through generated v2 control and downloads native interchange
   await page.getByRole("button", { name: "Download chapters" }).click();
   expect((await chapterDownload).suggestedFilename()).toBe("cutlist.chapters");
   expect(nativeRequests).toHaveLength(2);
-  expect(nativeRequests.every((path) => path.startsWith("/deploy/media/v2/projects/"))).toBe(true);
-  expect(nativeRequests.every((path) => path.includes("?itemId=i_"))).toBe(true);
+  expect(nativeRequests.map(({ path }) => path.startsWith("/deploy/media/v2/projects/"))).toEqual([
+    true,
+    true,
+  ]);
+  expect(nativeRequests.map(({ path }) => path.includes("?itemId=i_"))).toEqual([true, true]);
+  expect(nativeRequests.map(({ contentType, disposition }) => [contentType, disposition])).toEqual([
+    ["text/csv; charset=utf-8", 'attachment; filename="cutlist.csv"'],
+    ["text/plain; charset=utf-8", 'attachment; filename="cutlist.chapters"'],
+  ]);
   await expect.poll(() => page.evaluate(() => window.__interchangeUrls.revoked.length)).toBe(2);
   const urls = await page.evaluate(() => window.__interchangeUrls);
   expect(urls.created).toHaveLength(2);
