@@ -1,8 +1,12 @@
 import { expect, test, type Page } from "@playwright/test";
 import * as Schema from "effect/Schema";
 import {
+  DetectionInput as DetectionInputSchema,
+  DetectionJob as DetectionJobSchema,
   ExportSubmissionInput as ExportSubmissionInputSchema,
+  Job as JobSchema,
   ProjectInput as ProjectInputSchema,
+  type DetectionJob,
   type ExportSubmissionInput,
   type ProjectInput,
 } from "../src/generated/effect-api";
@@ -56,6 +60,21 @@ const serverSettings = {
 
 const apiOrigin = "http://127.0.0.1:8787";
 const itemId = "i_aaaaaaaaaaaaaaaaaaaaaaaa";
+
+function detectionSnapshot(job: DetectionJob, revision: number) {
+  const snapshot = { ...job, revision, ...jobTimestamps };
+  Schema.decodeUnknownSync(DetectionJobSchema)(snapshot);
+  Schema.decodeUnknownSync(JobSchema)(snapshot);
+  return snapshot;
+}
+
+function detectionEvent(job: DetectionJob, revision: number, cursor = "1") {
+  return {
+    status: 200,
+    headers: { "content-type": "text/event-stream" },
+    body: `id: ${cursor}\nevent: snapshot\ndata: ${JSON.stringify(detectionSnapshot(job, revision))}\n\n`,
+  };
+}
 
 async function openProjectControls(page: Page) {
   const mediaToggle = page.getByRole("button", { name: /media library/ }).first();
@@ -1300,15 +1319,45 @@ test("detection observes snapshots, previews, and supports sequential keyboard r
   await expect(page.getByText(/1 selected/)).toBeVisible();
 });
 
-test("detection recovers when the first status request fails", async ({ page }) => {
-  let statusRequests = 0;
-  await page.route(`${apiOrigin}/api/v1/jobs/j_detection-silence-*`, (route) => {
-    if (route.request().method() === "GET" && ++statusRequests === 1)
+test("detection reconnects after the first status stream request fails", async ({ page }) => {
+  const cursors: string[] = [];
+  let streamRequests = 0;
+  await page.route(`${apiOrigin}/api/v2/jobs/j_detection-silence-*/events`, (route) => {
+    const request = route.request();
+    if (request.method() !== "GET") return route.fallback();
+    cursors.push(request.headers()["last-event-id"] ?? "");
+    streamRequests += 1;
+    if (streamRequests === 1)
       return route.fulfill({
         status: 503,
         json: { error: { code: "unavailable", message: "try again", requestId: "r" } },
       });
-    return route.fallback();
+    const jobId = new URL(request.url()).pathname.split("/")[4];
+    const job: DetectionJob = {
+      id: jobId,
+      type: "detection",
+      state: streamRequests === 2 ? "running" : "succeeded",
+      mediaId: media.id,
+      projectId: "p_demo-project",
+      projectRevision: 1,
+      kind: "silence",
+      ...(streamRequests === 2
+        ? {}
+        : {
+            candidates: [
+              {
+                id: "c_reconnect-1",
+                mediaId: media.id,
+                projectId: "p_demo-project",
+                projectRevision: 1,
+                startMs: 1000,
+                endMs: 1500,
+                source: "silence",
+              } as const,
+            ],
+          }),
+    };
+    return route.fulfill(detectionEvent(job, streamRequests, String(streamRequests)));
   });
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
@@ -1318,32 +1367,46 @@ test("detection recovers when the first status request fails", async ({ page }) 
   await expect(
     page.getByText("1 candidates found. Review each before accepting.", { exact: true }),
   ).toBeVisible();
-  expect(statusRequests).toBeGreaterThan(1);
+  await expect.poll(() => cursors).toEqual(["", "", "2"]);
 });
 
 test("bulk detection acceptance skips unsafe candidates and undoes as one edit", async ({
   page,
 }) => {
-  let reviewJob: Record<string, unknown> = {};
-  await page.route(`${apiOrigin}/api/v1/projects/*/detections`, (route) => {
-    const projectId = new URL(route.request().url()).pathname.split("/")[4];
-    const candidate = (id: string, startMs: number, endMs: number, projectRevision = 1) => ({
+  let reviewJob: DetectionJob | undefined;
+  let reviewResult: DetectionJob | undefined;
+  await page.route(`${apiOrigin}/api/v2/projects/*/detections`, (route) => {
+    const request = route.request();
+    expect(request.headers()["idempotency-key"]).toMatch(/^[A-Za-z0-9_-]{16,128}$/);
+    const body = Schema.decodeUnknownSync(DetectionInputSchema)(request.postDataJSON());
+    expect(body.mediaId).toBe(media.id);
+    const projectId = new URL(request.url()).pathname.split("/")[4];
+    const candidate = (
+      id: string,
+      startMs: number,
+      endMs: number,
+      projectRevision = body.projectRevision,
+    ) => ({
       id,
-      mediaId: media.id,
+      mediaId: body.mediaId,
       projectId,
       projectRevision,
       startMs,
       endMs,
-      source: "black",
+      source: "black" as const,
     });
-    reviewJob = {
+    reviewJob = Schema.decodeUnknownSync(DetectionJobSchema)({
       id: "j_detection-review",
       type: "detection",
-      state: "succeeded",
-      mediaId: media.id,
+      state: "queued",
+      mediaId: body.mediaId,
       projectId,
-      projectRevision: 1,
+      projectRevision: body.projectRevision,
       kind: "black",
+    });
+    reviewResult = Schema.decodeUnknownSync(DetectionJobSchema)({
+      ...reviewJob,
+      state: "succeeded",
       candidates: [
         candidate("c_review-valid-1", 1000, 1500),
         candidate("c_review-valid-2", 2000, 2500),
@@ -1351,12 +1414,15 @@ test("bulk detection acceptance skips unsafe candidates and undoes as one edit",
         candidate("c_review-stale", 3000, 3500, 0),
         candidate("c_review-invalid", 4000, 11000),
       ],
-    };
+    });
     return route.fulfill({ status: 202, json: reviewJob });
   });
-  await page.route(`${apiOrigin}/api/v1/jobs/j_detection-review`, (route) =>
-    route.fulfill({ json: reviewJob }),
-  );
+  await page.route(`${apiOrigin}/api/v2/jobs/j_detection-review/events`, (route) => {
+    expect(route.request().headers()["last-event-id"]).toBeUndefined();
+    return reviewResult
+      ? route.fulfill(detectionEvent(reviewResult, 1))
+      : route.fulfill({ status: 500 });
+  });
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   await page.getByRole("button", { name: "Add to project" }).click();
@@ -1381,32 +1447,41 @@ test("bulk detection acceptance skips unsafe candidates and undoes as one edit",
 });
 
 test("scene changes remain points with bounded preview, seek, and dismiss", async ({ page }) => {
-  let sceneJob: Record<string, unknown> = {};
-  await page.route(`${apiOrigin}/api/v1/projects/*/detections`, (route) => {
-    const projectId = new URL(route.request().url()).pathname.split("/")[4];
-    sceneJob = {
+  let sceneJob: DetectionJob | undefined;
+  let sceneResult: DetectionJob | undefined;
+  await page.route(`${apiOrigin}/api/v2/projects/*/detections`, (route) => {
+    const request = route.request();
+    expect(request.headers()["idempotency-key"]).toMatch(/^[A-Za-z0-9_-]{16,128}$/);
+    const body = Schema.decodeUnknownSync(DetectionInputSchema)(request.postDataJSON());
+    expect(body.kind).toBe("scene");
+    const projectId = new URL(request.url()).pathname.split("/")[4];
+    sceneJob = Schema.decodeUnknownSync(DetectionJobSchema)({
       id: "j_detection-scene-point",
       type: "detection",
-      state: "succeeded",
-      mediaId: media.id,
+      state: "queued",
+      mediaId: body.mediaId,
       projectId,
-      projectRevision: 1,
+      projectRevision: body.projectRevision,
       kind: "scene",
+    });
+    sceneResult = Schema.decodeUnknownSync(DetectionJobSchema)({
+      ...sceneJob,
+      state: "succeeded",
       candidates: [
         {
           id: "c_scene-point",
-          mediaId: media.id,
+          mediaId: body.mediaId,
           projectId,
-          projectRevision: 1,
+          projectRevision: body.projectRevision,
           pointMs: 5000,
           source: "scene",
         },
       ],
-    };
+    });
     return route.fulfill({ status: 202, json: sceneJob });
   });
-  await page.route(`${apiOrigin}/api/v1/jobs/j_detection-scene-point`, (route) =>
-    route.fulfill({ json: sceneJob }),
+  await page.route(`${apiOrigin}/api/v2/jobs/j_detection-scene-point/events`, (route) =>
+    sceneResult ? route.fulfill(detectionEvent(sceneResult, 1)) : route.fulfill({ status: 500 }),
   );
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
@@ -1427,7 +1502,29 @@ test("scene changes remain points with bounded preview, seek, and dismiss", asyn
   await expect(page.getByText("All candidates reviewed", { exact: true })).toBeVisible();
 });
 
-test("detection can be cancelled and reports failed jobs", async ({ page }) => {
+test("detection can be cancelled explicitly and reports failed jobs", async ({ page }) => {
+  let cancellationRequests = 0;
+  let cancellationStreams = 0;
+  await page.route(`${apiOrigin}/api/v2/jobs/j_detection-silence-*/events`, (route) => {
+    const id = new URL(route.request().url()).pathname.split("/")[4];
+    const cancelled = cancellationRequests > 0;
+    const job: DetectionJob = {
+      id,
+      type: "detection",
+      state: cancelled ? "cancelled" : "running",
+      mediaId: media.id,
+      projectId: "p_demo-project",
+      projectRevision: 1,
+      kind: "silence",
+    };
+    cancellationStreams += 1;
+    return route.fulfill(detectionEvent(job, cancellationStreams, String(cancellationStreams)));
+  });
+  await page.route(`${apiOrigin}/api/v2/jobs/j_detection-silence-*`, (route) => {
+    if (route.request().method() !== "DELETE") return route.fallback();
+    cancellationRequests += 1;
+    return route.fulfill({ status: 204 });
+  });
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   await page.getByRole("button", { name: "Add to project" }).click();
@@ -1435,59 +1532,53 @@ test("detection can be cancelled and reports failed jobs", async ({ page }) => {
   await page.getByRole("button", { name: "Find pauses" }).click();
   await expect(page.getByRole("button", { name: "Cancel detection" })).toBeVisible();
   await page.getByRole("button", { name: "Cancel detection" }).click();
-  await expect(page.getByText("Detection cancelled.", { exact: true })).toBeVisible();
+  await expect(page.getByText("Detection cancellation requested.", { exact: true })).toBeVisible();
+  expect(cancellationRequests).toBe(1);
   await page.getByRole("button", { name: "Find black sections" }).click();
   await expect(
     page.getByText("Detection failed: detection_failed.", { exact: true }),
   ).toBeVisible();
 });
 
-test("clears detection results when media context changes", async ({ page }) => {
-  let pollStartedResolve!: () => void;
-  const pollStarted = new Promise<void>((resolve) => {
-    pollStartedResolve = resolve;
-  });
-  let releasePollResolve!: () => void;
-  const releasePoll = new Promise<void>((resolve) => {
-    releasePollResolve = resolve;
-  });
-  await page.route(`${apiOrigin}/api/v1/jobs/j_detection-silence-*`, async (route) => {
-    pollStartedResolve();
-    await releasePoll;
-    await route.fulfill({
-      json: {
-        id: "j_detection-silence",
-        type: "detection",
-        state: "succeeded",
-        mediaId: media.id,
-        projectId: "p_demo-project",
-        projectRevision: 0,
-        kind: "silence",
-        candidates: [
-          {
-            id: "stale-candidate",
-            mediaId: media.id,
-            projectId: "p_demo-project",
-            projectRevision: 0,
-            startMs: 1000,
-            endMs: 1500,
-            source: "silence",
-          },
-        ],
-      },
-    });
+test("clears detection results when source and active project-item context changes", async ({
+  page,
+}) => {
+  await page.route(`${apiOrigin}/api/v2/jobs/j_detection-silence-*/events`, (route) => {
+    const job: DetectionJob = {
+      id: new URL(route.request().url()).pathname.split("/")[4],
+      type: "detection",
+      state: "succeeded",
+      mediaId: media.id,
+      projectId: "p_demo-project",
+      projectRevision: 1,
+      kind: "silence",
+      candidates: [
+        {
+          id: "c_context-candidate",
+          mediaId: media.id,
+          projectId: "p_demo-project",
+          projectRevision: 1,
+          startMs: 1000,
+          endMs: 1500,
+          source: "silence",
+        },
+      ],
+    };
+    return route.fulfill(detectionEvent(job, 1));
   });
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   await page.getByRole("button", { name: "Add to project" }).click();
+  await page.getByRole("button", { name: /second.mp4/ }).click();
+  await page.getByRole("button", { name: "Add to project" }).click();
+  await page.getByRole("button", { name: /camera.mp4/ }).click();
   await openTask(page, "Detection");
   await page.getByRole("button", { name: "Find pauses" }).click();
-  await expect(page.getByRole("button", { name: "Cancel detection" })).toBeVisible();
-  await pollStarted;
+  await expect(
+    page.getByText("1 candidates found. Review each before accepting.", { exact: true }),
+  ).toBeVisible();
   await page.getByRole("button", { name: /second.mp4/ }).click();
   await expect(page.getByRole("button", { name: "Cancel detection" })).toHaveCount(0);
-  await expect(page.getByText(/candidates found/)).toHaveCount(0);
-  releasePollResolve();
   await expect(page.getByText(/candidates found/)).toHaveCount(0);
 });
 
