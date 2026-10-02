@@ -4,6 +4,7 @@ package realmedia
 
 import (
 	"archive/zip"
+	"bufio"
 	"bytes"
 	"crypto/sha256"
 	"encoding/json"
@@ -17,6 +18,44 @@ import (
 	"testing"
 	"time"
 )
+
+func assertRealStreamSnapshot(t *testing.T, response *http.Response, resourceField, resourceID string) {
+	t.Helper()
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK || response.Header.Get("Content-Type") != "text/event-stream" || response.Header.Get("X-Request-ID") == "" {
+		body, err := io.ReadAll(response.Body)
+		if err != nil {
+			t.Fatalf("read error response body: %v", err)
+		}
+		t.Fatalf("SSE response status=%d content-type=%q request-id=%q body=%s", response.StatusCode, response.Header.Get("Content-Type"), response.Header.Get("X-Request-ID"), body)
+	}
+	reader := bufio.NewReader(response.Body)
+	var event, data string
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			t.Fatalf("read initial SSE frame: %v", err)
+		}
+		line = strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
+		if line == "" {
+			break
+		}
+		if value, ok := strings.CutPrefix(line, "event: "); ok {
+			event = value
+		}
+		if value, ok := strings.CutPrefix(line, "data: "); ok {
+			data = value
+		}
+	}
+	var snapshot map[string]json.RawMessage
+	if event != "snapshot" || json.Unmarshal([]byte(data), &snapshot) != nil {
+		t.Fatalf("invalid initial SSE snapshot event=%q data=%q", event, data)
+	}
+	var actual string
+	if err := json.Unmarshal(snapshot[resourceField], &actual); err != nil || actual != resourceID {
+		t.Fatalf("SSE snapshot %s=%q, want %q (decode error %v)", resourceField, actual, resourceID, err)
+	}
+}
 
 func assertNoTemporaryArtifacts(t *testing.T, root string) {
 	t.Helper()
@@ -208,6 +247,8 @@ func TestProductionExportsJobsAndOutputs(t *testing.T) {
 		ids := export(base(tc.mode, tc.selection, tc.strategy))
 		batchID, jobID := ids[0], ids[1]
 		suiteSummary.Add("project_id=%s batch_id=%s job_id=%s", projectID, batchID, jobID)
+		assertRealStreamSnapshot(t, p.request(t, http.MethodGet, "/api/v2/jobs/"+jobID+"/events"), "id", jobID)
+		assertRealStreamSnapshot(t, p.request(t, http.MethodGet, "/api/v2/batches/"+batchID+"/events"), "batchId", batchID)
 		var final map[string]any
 		var terminal map[string]any
 		last := -1.0

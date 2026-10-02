@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	jobqueue "videocutlist/internal/jobs"
 	"videocutlist/internal/projects"
@@ -180,6 +182,144 @@ func TestJobEventStreamSendsTerminalSnapshotAndResynchronizesInvalidCursor(t *te
 			}
 		})
 	}
+}
+
+func TestJobAndBatchStreamsShareCapacityAndReleaseOnDisconnectAndShutdown(t *testing.T) {
+	authenticator, err := NewAuthenticator(AuthConfig{Mode: "none"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobs := &capacityTestJobs{}
+	batches := &capacityTestBatches{routeTestBatchExports: &routeTestBatchExports{}}
+	server, err := New(Config{
+		Authenticator: authenticator, Media: &routeTestMedia{}, Preview: routeTestPreview{}, Projects: routeTestProjects{},
+		BatchExports: batches, Jobs: jobs,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready := make(chan struct{}, maxConcurrentObservations+1)
+	active := make([]activeCapacityStream, 0, maxConcurrentObservations+1)
+	start := func(path string) activeCapacityStream {
+		ctx, cancel := context.WithCancel(t.Context())
+		stream := activeCapacityStream{cancel: cancel, done: make(chan struct{})}
+		writer := &capacityFlushWriter{ResponseRecorder: httptest.NewRecorder(), ready: ready}
+		request := httptest.NewRequest(http.MethodGet, "http://api.test"+path, nil).WithContext(ctx)
+		go func() {
+			defer close(stream.done)
+			server.ServeHTTP(writer, request)
+		}()
+		active = append(active, stream)
+		return stream
+	}
+	waitReady := func() {
+		t.Helper()
+		select {
+		case <-ready:
+		case <-time.After(5 * time.Second):
+			t.Fatal("stream did not send its initial snapshot")
+		}
+	}
+	defer func() {
+		server.Shutdown()
+		for _, stream := range active {
+			stream.cancel()
+			<-stream.done
+		}
+	}()
+
+	for i := range maxConcurrentObservations {
+		path := "/api/v2/jobs/j_aaaaaaaaaaaa/events"
+		if i%2 == 1 {
+			path = "/api/v2/batches/b_aaaaaaaaaaaa/events"
+		}
+		start(path)
+		waitReady()
+	}
+	if got := jobs.gets.Load() + batches.snapshots.Load(); got != maxConcurrentObservations {
+		t.Fatalf("initial resource reads = %d, want %d", got, maxConcurrentObservations)
+	}
+
+	overflow := httptest.NewRecorder()
+	server.ServeHTTP(overflow, httptest.NewRequest(http.MethodGet, "http://api.test/api/v2/batches/b_aaaaaaaaaaaa/events", nil))
+	if overflow.Code != http.StatusTooManyRequests {
+		t.Fatalf("over-capacity status = %d, want 429", overflow.Code)
+	}
+	var response struct {
+		Error struct {
+			Code      string `json:"code"`
+			Message   string `json:"message"`
+			RequestID string `json:"requestId"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(overflow.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Error.Code != "observation_capacity" || response.Error.Message == "" || response.Error.RequestID == "" || response.Error.RequestID != overflow.Header().Get("X-Request-ID") {
+		t.Fatalf("unsafe or mismatched capacity error envelope: %#v, X-Request-ID=%q", response.Error, overflow.Header().Get("X-Request-ID"))
+	}
+	if got := jobs.gets.Load() + batches.snapshots.Load(); got != maxConcurrentObservations {
+		t.Fatalf("rejected batch stream performed a resource read: reads=%d", got)
+	}
+	jobOverflow := httptest.NewRecorder()
+	server.ServeHTTP(jobOverflow, httptest.NewRequest(http.MethodGet, "http://api.test/api/v2/jobs/j_aaaaaaaaaaaa/events", nil))
+	if jobOverflow.Code != http.StatusTooManyRequests || jobs.gets.Load() != maxConcurrentObservations/2 {
+		t.Fatalf("rejected job stream status=%d, job reads=%d", jobOverflow.Code, jobs.gets.Load())
+	}
+
+	// Releasing one job stream admits a batch stream, proving the budget is shared.
+	active[0].cancel()
+	<-active[0].done
+	batchReads := batches.snapshots.Load()
+	replacement := start("/api/v2/batches/b_aaaaaaaaaaaa/events")
+	waitReady()
+	if got := batches.snapshots.Load(); got != batchReads+1 {
+		t.Fatalf("replacement batch snapshot reads = %d, want %d", got, batchReads+1)
+	}
+	replacement.cancel()
+	<-replacement.done
+
+	server.Shutdown()
+	for _, stream := range active {
+		stream.cancel()
+		<-stream.done
+	}
+	if got := len(server.observationSlots); got != 0 {
+		t.Fatalf("observation slots retained after shutdown: %d", got)
+	}
+}
+
+type activeCapacityStream struct {
+	cancel context.CancelFunc
+	done   chan struct{}
+}
+
+type capacityFlushWriter struct {
+	*httptest.ResponseRecorder
+	ready chan<- struct{}
+}
+
+func (w *capacityFlushWriter) Flush() {
+	w.ResponseRecorder.Flush()
+	w.ready <- struct{}{}
+}
+
+type capacityTestJobs struct{ gets atomic.Int64 }
+
+func (j *capacityTestJobs) Get(_ context.Context, id string) (Job, error) {
+	j.gets.Add(1)
+	return Job{ID: id, Type: "export", State: "running"}, nil
+}
+func (*capacityTestJobs) Cancel(context.Context, string) error { return nil }
+
+type capacityTestBatches struct {
+	*routeTestBatchExports
+	snapshots atomic.Int64
+}
+
+func (b *capacityTestBatches) Snapshot(_ context.Context, id string) (projects.Batch, string, error) {
+	b.snapshots.Add(1)
+	return projects.Batch{BatchID: id, State: "running", Jobs: []projects.Job{}}, "b2_current", nil
 }
 
 func TestJobEventStreamReleasesObservationOnDisconnectAndShutdown(t *testing.T) {

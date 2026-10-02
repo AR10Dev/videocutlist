@@ -655,7 +655,9 @@ paths:
         clients suppress duplicate revisions. Keepalives are SSE comments.
         Missing or stale cursors receive the current snapshot. Malformed, ahead,
         or resource-mismatched cursors explicitly resync to current state.
-        Observation cadence and concurrent stream reads are server-bounded.
+        Observation cadence is bounded. At most 64 job and batch streams are
+        admitted concurrently per server process; excess streams receive 429
+        observation_capacity before the initial resource snapshot is read.
         Cancellation, shutdown, and heartbeat auth checks are honored.
         Disconnecting never cancels the job.
       responses:
@@ -669,6 +671,7 @@ paths:
         "401": {$ref: "#/components/responses/Error"}
         "403": {$ref: "#/components/responses/Error"}
         "404": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
         "500": {$ref: "#/components/responses/Error"}
   /batches/{batchId}/events:
     parameters:
@@ -690,7 +693,9 @@ paths:
         GET /batches/{batchId}; clients suppress duplicate aggregate revisions.
         Keepalives are SSE comments. Missing/stale cursors receive current
         snapshots. Malformed, ahead, or resource-mismatched cursors explicitly
-        resynchronize to current state. Stream cadence/read rates are bounded.
+        resynchronize to current state. At most 64 job and batch streams are
+        admitted concurrently per server process; excess streams receive 429
+        observation_capacity before the initial resource snapshot is read.
         Cancellation, shutdown, and heartbeat auth checks are honored.
         Disconnecting never cancels child jobs.
       responses:
@@ -704,6 +709,7 @@ paths:
         "401": {$ref: "#/components/responses/Error"}
         "403": {$ref: "#/components/responses/Error"}
         "404": {$ref: "#/components/responses/Error"}
+        "429": {$ref: "#/components/responses/Error"}
         "500": {$ref: "#/components/responses/Error"}
   /jobs/{jobId}:
     parameters:

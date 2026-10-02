@@ -42,6 +42,10 @@ func (s *Server) streamJob(writer http.ResponseWriter, request *http.Request, jo
 		internalError(writer, requestID)
 		return
 	}
+	if !s.admitObservation(writer, requestID) {
+		return
+	}
+	defer s.releaseObservation()
 	streamContext, cancelStream := context.WithCancel(request.Context())
 	stopShutdown := context.AfterFunc(s.shutdown, cancelStream)
 	defer cancelStream()
@@ -125,6 +129,18 @@ type batchSnapshotReader interface {
 	Snapshot(context.Context, string) (projects.Batch, string, error)
 }
 
+func (s *Server) admitObservation(writer http.ResponseWriter, requestID string) bool {
+	select {
+	case s.observationSlots <- struct{}{}:
+		return true
+	default:
+		httpx.Error(writer, http.StatusTooManyRequests, "observation_capacity", "Too many active observations.", requestID)
+		return false
+	}
+}
+
+func (s *Server) releaseObservation() { <-s.observationSlots }
+
 func (s *Server) streamBatch(writer http.ResponseWriter, request *http.Request, batchID, requestID string) {
 	if s.config.BatchExports == nil {
 		internalError(writer, requestID)
@@ -135,6 +151,10 @@ func (s *Server) streamBatch(writer http.ResponseWriter, request *http.Request, 
 		internalError(writer, requestID)
 		return
 	}
+	if !s.admitObservation(writer, requestID) {
+		return
+	}
+	defer s.releaseObservation()
 	streamContext, cancelStream := context.WithCancel(request.Context())
 	stopShutdown := context.AfterFunc(s.shutdown, cancelStream)
 	defer cancelStream()

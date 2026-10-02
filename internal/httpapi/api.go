@@ -160,11 +160,15 @@ type Config struct {
 	RequireAutomationAuth bool
 }
 
+// maxConcurrentObservations caps job and batch SSE handlers together per server.
+const maxConcurrentObservations = 64
+
 type Server struct {
-	config         Config
-	metrics        *Metrics
-	shutdown       context.Context
-	shutdownCancel context.CancelFunc
+	config           Config
+	metrics          *Metrics
+	shutdown         context.Context
+	shutdownCancel   context.CancelFunc
+	observationSlots chan struct{}
 }
 
 func New(config Config) (*Server, error) {
@@ -190,7 +194,7 @@ func New(config Config) (*Server, error) {
 		config.Metrics = NewMetrics()
 	}
 	shutdown, shutdownCancel := context.WithCancel(context.Background())
-	return &Server{config: config, metrics: config.Metrics, shutdown: shutdown, shutdownCancel: shutdownCancel}, nil
+	return &Server{config: config, metrics: config.Metrics, shutdown: shutdown, shutdownCancel: shutdownCancel, observationSlots: make(chan struct{}, maxConcurrentObservations)}, nil
 }
 
 // Shutdown stops long-lived observation handlers when the owning HTTP server shuts down.
