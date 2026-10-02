@@ -1,11 +1,18 @@
 import { createEffect, createSignal, type Accessor, type Setter } from "solid-js";
-import { useAtomValue } from "@effect/atom-solid";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
+import * as Schema from "effect/Schema";
 import * as AsyncResult from "effect/reactivity/AsyncResult";
 import * as Atom from "effect/reactivity/Atom";
-import { ApiFailure, apiJson, apiRequest, runEffect } from "../../api";
-import { pollAtom, readServerAtom, type ServerState } from "../app/server";
+import * as AtomRegistry from "effect/reactivity/AtomRegistry";
+import { ApiFailure, runEffect } from "../../api";
+import {
+  DetectionInput as DetectionInputSchema,
+  DetectionJob as DetectionJobSchema,
+  type DetectionJob as GeneratedDetectionJob,
+  type Job,
+} from "../../generated/effect-api";
+import type { ServerState } from "../app/server";
 import type { components } from "../../generated/api";
 import {
   acceptCandidates,
@@ -19,6 +26,7 @@ import type { Segment } from "../preview/model";
 type Media = components["schemas"]["Media"];
 type Project = components["schemas"]["Project"];
 type DetectionJob = components["schemas"]["DetectionJob"];
+type DetectionInput = components["schemas"]["DetectionInput"];
 
 type DetectionReview = {
   jobId: string;
@@ -42,6 +50,70 @@ type SubmittedDetection = {
   editorVersion: number;
 };
 
+function generatedMutation<Arg, A, E>(
+  registry: AtomRegistry.AtomRegistry,
+  atom: Atom.AtomResultFn<Arg, A, E>,
+  arg: Arg,
+): Effect.Effect<A, E> {
+  return Effect.acquireUseRelease(
+    Effect.sync(() => registry.mount(atom)),
+    () => {
+      registry.set(atom, arg);
+      return AtomRegistry.getResult(registry, atom, { suspendOnWaiting: true });
+    },
+    (release) =>
+      Effect.sync(() => {
+        registry.set(atom, Atom.Reset);
+        release();
+      }),
+  );
+}
+
+function errorStatus(error: unknown): number | undefined {
+  if (!error || typeof error !== "object") return;
+  if ("status" in error && typeof error.status === "number") return error.status;
+  const reason = "reason" in error ? error.reason : undefined;
+  if (reason && typeof reason === "object" && "response" in reason) {
+    const response = reason.response;
+    if (
+      response &&
+      typeof response === "object" &&
+      "status" in response &&
+      typeof response.status === "number"
+    )
+      return response.status;
+  }
+  const cause = "cause" in error ? error.cause : undefined;
+  return cause === error ? undefined : errorStatus(cause);
+}
+
+function errorCode(error: unknown): string | undefined {
+  if (!error || typeof error !== "object") return;
+  if ("code" in error && typeof error.code === "string") return error.code;
+  const nested = "error" in error ? error.error : undefined;
+  if (nested && typeof nested === "object" && "code" in nested && typeof nested.code === "string")
+    return nested.code;
+  const cause = "cause" in error ? error.cause : undefined;
+  return cause === error ? undefined : errorCode(cause);
+}
+
+function mutableDetectionJob(job: GeneratedDetectionJob): DetectionJob {
+  const { candidates, ...fields } = job;
+  return {
+    ...fields,
+    ...(candidates === undefined
+      ? {}
+      : { candidates: candidates.map((candidate) => ({ ...candidate })) }),
+  };
+}
+
+function isUncertainSubmission(error: unknown): boolean {
+  const status = errorStatus(error);
+  return status === undefined
+    ? errorCode(error) === undefined || errorCode(error) === "internal_error"
+    : status >= 500;
+}
+
 type DetectionDependencies = {
   selected: Accessor<Media | undefined>;
   activeItemId: Accessor<string | undefined>;
@@ -56,7 +128,6 @@ type DetectionDependencies = {
 
 export interface DetectionController {
   detectionJob: Accessor<DetectionJob | undefined>;
-  setDetectionJob: Setter<DetectionJob | undefined>;
   detectionStatus: Accessor<string>;
   setDetectionStatus: Setter<string>;
   detectionCandidates: Accessor<Candidate[]>;
@@ -81,11 +152,11 @@ export function createDetectionController(
   server: ServerState,
   dependencies: DetectionDependencies,
 ): DetectionController {
-  const { api, registry, runtime } = server;
-  const [detectionJob, setDetectionJob] = createSignal<DetectionJob>();
+  const { registry, runtime } = server;
   const [detectionStatus, setDetectionStatus] = createSignal("");
   const [detectionCandidates, setDetectionCandidates] = createSignal<Candidate[]>([]);
   let operation = 0;
+  const [activeDetectionID, setActiveDetectionID] = createSignal<string>();
   const [localCancellation, setLocalCancellation] = createSignal<string>();
   const reviewedCandidateIDs = new Set<string>();
   let detectionReview: DetectionReview | undefined;
@@ -167,58 +238,54 @@ export function createDetectionController(
     if (applyingDetectionEdit) return;
     synchronizeDetectionReview();
   });
-  const submit = runtime.fn(
-    (input: {
-      projectId: string;
-      mediaId: string;
-      projectItemId: string | undefined;
-      projectRevision: number;
-      kind: DetectionKind;
-      sourceFingerprint: string | undefined;
-      options: Pick<
-        components["schemas"]["DetectionInput"],
-        "noiseDb" | "minDurationMs" | "sceneThreshold"
-      >;
-    }) =>
-      apiJson<DetectionJob>(api, `projects/${encodeURIComponent(input.projectId)}/detections`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          mediaId: input.mediaId,
-          projectItemId: input.projectItemId,
-          projectRevision: input.projectRevision,
-          kind: input.kind,
-          sourceFingerprint: input.sourceFingerprint,
-          ...input.options,
-        }),
-      }),
-  );
-  const cancel = runtime.fn((id: string) =>
-    Effect.flatMap(
-      apiRequest(api, `jobs/${encodeURIComponent(id)}`, { method: "DELETE" }),
-      (response) =>
-        response.ok
-          ? Effect.succeed(undefined)
-          : Effect.fail(new Error("Job could not be cancelled. Try again.")),
-    ),
-  );
-  const statuses = Atom.family((id: string) =>
-    pollAtom(
-      runtime,
-      apiJson<DetectionJob>(api, `jobs/${encodeURIComponent(id)}`),
-      (job) => job.state === "queued" || job.state === "running",
-      500,
-    ),
-  );
-  const emptyStatus = Atom.make(AsyncResult.initial<DetectionJob, Error>());
-  const status = useAtomValue(() => {
-    const job = detectionJob();
-    return job &&
-      (job.state === "queued" || job.state === "running") &&
-      localCancellation() !== job.id
-      ? statuses(job.id)
-      : emptyStatus;
+  let uncertainSubmission: { key: string; projectId: string; body: DetectionInput } | undefined;
+  const submit = runtime.fn((input: { key: string; projectId: string; body: DetectionInput }) => {
+    const mutation = server.generatedApi?.mutation("default", "createDetection");
+    return mutation
+      ? generatedMutation(registry, mutation, {
+          params: { projectId: input.projectId },
+          headers: { "Idempotency-Key": input.key },
+          payload: input.body,
+        }).pipe(
+          Effect.mapError((error) => new Error("Detection submission failed.", { cause: error })),
+        )
+      : Effect.fail(new Error("Generated detection API is not configured."));
   });
+  const cancel = runtime.fn((id: string) => {
+    const mutation = server.generatedApi?.mutation("default", "cancelJob");
+    return mutation
+      ? generatedMutation(registry, mutation, { params: { jobId: id } }).pipe(
+          Effect.mapError(
+            (error) => new Error("Job could not be cancelled. Try again.", { cause: error }),
+          ),
+        )
+      : Effect.fail(new Error("Generated detection API is not configured."));
+  });
+  const [status, setStatus] = createSignal<AsyncResult.AsyncResult<Job, Error>>(
+    AsyncResult.initial<Job, Error>(),
+  );
+  const detectionJob = (): DetectionJob | undefined => {
+    const id = activeDetectionID();
+    const result = status();
+    if (!id || !AsyncResult.isSuccess(result) || result.value.id !== id) return;
+    try {
+      const job = mutableDetectionJob(Schema.decodeUnknownSync(DetectionJobSchema)(result.value));
+      return localCancellation() === id && (job.state === "queued" || job.state === "running")
+        ? { ...job, state: "cancelled" }
+        : job;
+    } catch {
+      return;
+    }
+  };
+  let unsubscribeStatus: (() => void) | undefined;
+  const observeJob = (id: string) => {
+    unsubscribeStatus?.();
+    const atom = server.observeJob(id);
+    unsubscribeStatus = registry.subscribe(atom, setStatus, { immediate: true });
+    void runEffect(AtomRegistry.getResult(registry, atom, { suspendOnWaiting: true })).catch(
+      () => undefined,
+    );
+  };
   let failedCancellation: string | undefined;
   const setDetectionResult = (candidates: Candidate[]) => {
     const job = detectionJob();
@@ -230,13 +297,16 @@ export function createDetectionController(
       setDetectionStatus(`${candidates.length} candidates found. Review each before accepting.`);
   };
   const receiveDetectionJob = (next: DetectionJob) => {
-    const current = detectionJob();
-    if (next.id !== current?.id || localCancellation() === next.id) return;
-    if (current.state === "cancelled") return;
-    if (current.state === next.state && current === next) return;
-    setDetectionJob(next);
-    if (next.state === "succeeded") setDetectionResult(next.candidates ?? []);
-    else if (next.state === "queued" || next.state === "running") {
+    if (next.id !== activeDetectionID()) return;
+    const optimisticCancellation = localCancellation() === next.id;
+    if (optimisticCancellation) {
+      if (next.state === "queued" || next.state === "running") return;
+      setLocalCancellation();
+      server.setJobLocallyCancelled(next.id, false);
+    }
+    if (next.state === "succeeded") {
+      setDetectionResult(next.candidates ?? []);
+    } else if (next.state === "queued" || next.state === "running") {
       if (failedCancellation !== next.id) {
         setDetectionStatus(next.state === "queued" ? "Detection queued." : "Detection running.");
       }
@@ -247,27 +317,23 @@ export function createDetectionController(
           : `Detection failed${next.errorCode ? `: ${next.errorCode}.` : "."}`,
       );
     }
-    if (
-      (next.state === "succeeded" || next.state === "failed" || next.state === "cancelled") &&
-      (current.state === "queued" || current.state === "running")
-    ) {
+    if (next.state === "succeeded" || next.state === "failed" || next.state === "cancelled")
       server.refreshMedia();
-    }
   };
   createEffect(() => {
     const result = status();
-    const job = detectionJob();
-    if (!job || localCancellation() === job.id) return;
+    const activeID = activeDetectionID();
+    if (!activeID) return;
     const error = Option.getOrUndefined(AsyncResult.error(result));
-    if (
-      error &&
-      (job.state === "queued" || job.state === "running") &&
-      failedCancellation !== job.id
-    ) {
-      setDetectionStatus(error.message);
+    if (error && failedCancellation !== activeID) setDetectionStatus(error.message);
+    const snapshot = AsyncResult.isSuccess(result) ? result.value : undefined;
+    if (!snapshot) return;
+    try {
+      const next = Schema.decodeUnknownSync(DetectionJobSchema)(snapshot);
+      receiveDetectionJob(mutableDetectionJob(next));
+    } catch {
+      // The generated job atom accepts the common job shape; detection details need their own schema.
     }
-    const next = AsyncResult.isSuccess(result) && !result.waiting ? result.value : undefined;
-    if (next) receiveDetectionJob(next);
   });
 
   const clearDetectionContext = () => {
@@ -278,7 +344,10 @@ export function createDetectionController(
     failedCancellation = undefined;
     detectionReview = undefined;
     submittedDetection = undefined;
-    setDetectionJob();
+    setActiveDetectionID();
+    unsubscribeStatus?.();
+    unsubscribeStatus = undefined;
+    setStatus(AsyncResult.initial<Job, Error>());
     reviewedCandidateIDs.clear();
     setDetectionCandidates([]);
     setDetectionStatus("");
@@ -297,6 +366,7 @@ export function createDetectionController(
     const itemBeforeSave = dependencies.activeItemId();
     const editorBeforeSave = dependencies.editorVersion();
     setDetectionStatus("Saving project before detection…");
+    let pendingSubmission: { key: string; projectId: string; body: DetectionInput } | undefined;
     try {
       const saved = await dependencies.saveProject();
       if (currentOperation !== operation) return;
@@ -319,17 +389,25 @@ export function createDetectionController(
         return;
       }
       setDetectionStatus(`Starting ${kind} detection…`);
-      const input = {
-        projectId: saved.id,
+      const body = Schema.decodeUnknownSync(DetectionInputSchema)({
         mediaId: selected.id,
         projectItemId: itemBeforeSave,
         projectRevision: saved.revision,
         kind,
         sourceFingerprint: selected.etag,
-        options,
-      };
-      registry.set(submit, input);
-      const job = await runEffect(readServerAtom(server, submit));
+        ...options,
+      });
+      const key =
+        uncertainSubmission?.projectId === saved.id &&
+        JSON.stringify(uncertainSubmission.body) === JSON.stringify(body)
+          ? uncertainSubmission.key
+          : globalThis.crypto.randomUUID();
+      uncertainSubmission = undefined;
+      pendingSubmission = { key, projectId: saved.id, body };
+      const submittedJob = await runEffect(
+        generatedMutation(registry, submit, { key, projectId: saved.id, body }),
+      );
+      const job = mutableDetectionJob(submittedJob);
       if (currentOperation !== operation) return;
       if (
         dependencies.projectId() !== saved.id ||
@@ -339,6 +417,9 @@ export function createDetectionController(
         dependencies.editorVersion() !== editorBeforeSave
       )
         return;
+      uncertainSubmission = undefined;
+      // The compact submit response is validated; the shared observer owns all job snapshots.
+      const observedSeed = Schema.decodeUnknownSync(DetectionJobSchema)(job);
       submittedDetection = {
         jobId: job.id,
         projectId: saved.id,
@@ -347,17 +428,19 @@ export function createDetectionController(
         sourceFingerprint: selected.etag,
         editorVersion: editorBeforeSave,
       };
-      setDetectionJob(job);
-      if (job.state === "succeeded") setDetectionResult(job.candidates ?? []);
-      else if (job.state === "cancelled") setDetectionStatus("Detection cancelled.");
-      else if (job.state === "queued" || job.state === "running")
-        setDetectionStatus(job.state === "queued" ? "Detection queued." : "Detection running.");
-      else setDetectionStatus(`Detection failed${job.errorCode ? `: ${job.errorCode}.` : "."}`);
-      if (job.state !== "queued" && job.state !== "running") {
-        server.refreshMedia();
-      }
+      setActiveDetectionID(observedSeed.id);
+      observeJob(observedSeed.id);
+      setDetectionStatus(
+        job.state === "queued" || job.state === "running"
+          ? job.state === "queued"
+            ? "Detection queued."
+            : "Detection running."
+          : "Detection status is updating.",
+      );
     } catch (error) {
       if (currentOperation !== operation) return;
+      uncertainSubmission =
+        pendingSubmission && isUncertainSubmission(error) ? pendingSubmission : undefined;
       setDetectionStatus(
         error instanceof ApiFailure
           ? error.code === "stale_project"
@@ -374,31 +457,31 @@ export function createDetectionController(
     }
   };
   const cancelDetection = async () => {
+    const id = activeDetectionID();
     const job = detectionJob();
     if (
-      !job ||
-      (job.state !== "queued" && job.state !== "running") ||
-      localCancellation() === job.id
+      !id ||
+      localCancellation() === id ||
+      (job && job.state !== "queued" && job.state !== "running" && job.state !== "cancelled")
     )
       return;
     const currentOperation = ++operation;
-    registry.set(submit, Atom.Interrupt);
-    setLocalCancellation(job.id);
+    setLocalCancellation(id);
     failedCancellation = undefined;
     try {
-      registry.set(cancel, job.id);
-      await runEffect(readServerAtom(server, cancel));
-      if (currentOperation !== operation || detectionJob()?.id !== job.id) return;
-      setDetectionJob({ ...job, state: "cancelled" });
-      setDetectionStatus("Detection cancelled.");
-      server.refreshMedia();
+      server.setJobLocallyCancelled(id, true);
+      await runEffect(generatedMutation(registry, cancel, id));
+      if (currentOperation !== operation || activeDetectionID() !== id) return;
+      if (localCancellation() !== id) return;
+      setDetectionStatus("Detection cancellation requested.");
     } catch (error) {
-      if (currentOperation !== operation || detectionJob()?.id !== job.id) return;
-      failedCancellation = job.id;
+      if (currentOperation !== operation || activeDetectionID() !== id) return;
+      failedCancellation = id;
       setDetectionStatus(
         error instanceof Error ? error.message : "Detection could not be cancelled. Try again.",
       );
       setLocalCancellation();
+      server.setJobLocallyCancelled(id, false);
     }
   };
   const recordLocalDetectionEdit = () => {
@@ -483,23 +566,21 @@ export function createDetectionController(
 
   return {
     detectionJob,
-    setDetectionJob,
     detectionStatus,
     setDetectionStatus,
     detectionCandidates,
     setDetectionCandidates,
     detectionLoading: () => {
+      const id = activeDetectionID();
+      if (!id) return false;
       const job = detectionJob();
-      return Boolean(
-        job &&
-        (job.state === "queued" || job.state === "running") &&
-        localCancellation() !== job.id &&
-        status().waiting,
+      return (
+        localCancellation() === id || !job || job.state === "queued" || job.state === "running"
       );
     },
     detectionQueryError: () => {
-      const job = detectionJob();
-      if (!job || job.state === "cancelled" || localCancellation() === job.id) return "";
+      const id = activeDetectionID();
+      if (!id || localCancellation() === id) return "";
       return Option.getOrUndefined(AsyncResult.error(status()))?.message ?? "";
     },
     clearDetectionContext,

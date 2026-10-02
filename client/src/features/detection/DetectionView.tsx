@@ -131,6 +131,7 @@ export function DetectionView() {
   };
   const active = () =>
     starting() ||
+    workspace.detectionLoading() ||
     workspace.detectionJob()?.state === "queued" ||
     workspace.detectionJob()?.state === "running";
   const canStart = () => Boolean(workspace.selected() && workspace.activeItemId()) && !active();
@@ -279,7 +280,14 @@ export function DetectionView() {
           </div>
         </div>
 
-        <Show when={jobState() === "queued" || jobState() === "running" || starting()}>
+        <Show
+          when={
+            workspace.detectionLoading() ||
+            jobState() === "queued" ||
+            jobState() === "running" ||
+            starting()
+          }
+        >
           <div class="detection-job-state" aria-busy="true" role="status">
             <div class="detection-job-state-main">
               <LoaderCircle class="spin" size={18} aria-hidden="true" />
@@ -289,7 +297,9 @@ export function DetectionView() {
                     ? "Preparing detection…"
                     : jobState() === "queued"
                       ? "Detection queued"
-                      : "Detection running"}
+                      : jobState() === "running"
+                        ? "Detection running"
+                        : "Updating detection status…"}
                 </strong>
                 <span>
                   {jobKind() ? `${kindLabel[jobKind()!]} · ` : ""}
