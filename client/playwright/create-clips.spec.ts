@@ -57,11 +57,33 @@ test("rebuilt export recovers from preflight errors and explains empty scope", a
   page,
 }, testInfo) => {
   let preflights = 0;
-  await page.route(`${origin}/api/v1/projects/*/exports/preflight`, (route) => {
+  const workflowCalls: string[] = [];
+  await page.route(`${origin}/api/v2/projects/*/exports/preflight`, (route) => {
     preflights++;
     return preflights === 1
-      ? route.fulfill({ status: 503 })
-      : route.fulfill({ json: { allowed: true, selection: [0], findings: [] } });
+      ? route.fulfill({
+          status: 503,
+          headers: { "X-Request-ID": "r-preflight-error" },
+          json: {
+            error: {
+              code: "internal_error",
+              message: "Internal server error.",
+              requestId: "r-preflight-error",
+            },
+          },
+        })
+      : route.fulfill({
+          json: {
+            allowed: true,
+            selection: [0],
+            findings: [],
+          } satisfies components["schemas"]["ExportPreflight"],
+        });
+  });
+  page.on("request", (request) => {
+    const path = new URL(request.url()).pathname;
+    if (path.endsWith("/exports/preflight")) workflowCalls.push("preflight");
+    else if (path.endsWith("/exports")) workflowCalls.push("export");
   });
   await page.goto("/");
   await page.getByRole("button", { name: "Select camera.mp4" }).click();
@@ -74,15 +96,19 @@ test("rebuilt export recovers from preflight errors and explains empty scope", a
   const create = page.getByRole("button", { name: "Create clips" });
   await expect(create).toBeEnabled();
   await page.screenshot({ path: testInfo.outputPath("export.png"), fullPage: true });
+  workflowCalls.length = 0;
   await create.click();
   await expect(
-    page.getByText("Export preflight failed (503). Try again.", { exact: true }),
+    page.getByText("Export preflight could not be reached. Try again.", { exact: true }),
   ).toBeVisible();
+  expect(workflowCalls).not.toContain("export");
   await expect(create).toBeEnabled();
+  workflowCalls.length = 0;
   await create.click();
   await expect(
     page.getByRole("region", { name: "Current batch" }).getByText("succeeded", { exact: true }),
   ).toBeVisible();
+  expect(workflowCalls.slice(-2)).toEqual(["preflight", "export"]);
 });
 
 test("rebuilt detection sends source identity and completes candidate review", async ({
@@ -95,26 +121,63 @@ test("rebuilt detection sends source identity and completes candidate review", a
       savedSegments = request.postDataJSON().items[0].segments;
   });
   let detection: components["schemas"]["DetectionJob"];
-  await page.route(`${origin}/api/v1/jobs/j_detect-review`, (route) =>
-    route.fulfill({ json: detection }),
-  );
-  await page.route(`${origin}/api/v1/projects/*/detections`, (route) => {
+  let detectionKey: string | undefined;
+  await page.route(`${origin}/api/v2/jobs/j_0123456789ab/events`, (route) => {
+    const terminal = {
+      ...detection,
+      state: "succeeded",
+      candidates: [
+        {
+          id: "candidate-1",
+          mediaId: detection.mediaId,
+          projectId: detection.projectId,
+          projectRevision: detection.projectRevision,
+          source: "black",
+          startMs: 100,
+          endMs: 800,
+        },
+      ],
+      revision: 2,
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-01T00:00:01Z",
+    };
+    return route.fulfill({
+      headers: {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        "X-Accel-Buffering": "no",
+        "X-Request-ID": "r-create-clips-detection",
+      },
+      body: [
+        "id: j_0123456789ab:2",
+        "event: snapshot",
+        `data: ${JSON.stringify(terminal)}`,
+        "",
+        "",
+      ].join("\n"),
+    });
+  });
+  await page.route(`${origin}/api/v2/projects/*/detections`, (route) => {
     const request = route.request().postDataJSON() as components["schemas"]["DetectionInput"];
     input = request;
+    detectionKey = route.request().headers()["idempotency-key"];
     const identity = {
       mediaId: request.mediaId,
       projectId: new URL(route.request().url()).pathname.split("/")[4],
       projectRevision: request.projectRevision,
     };
     detection = {
-      id: "j_detect-review",
+      id: "j_0123456789ab",
       type: "detection",
-      state: "succeeded",
+      state: "queued",
       kind: "black",
       ...identity,
-      candidates: [{ id: "candidate-1", ...identity, source: "black", startMs: 100, endMs: 800 }],
     };
-    return route.fulfill({ status: 202, json: detection });
+    return route.fulfill({
+      status: 202,
+      headers: { "X-Request-ID": "r-create-clips-detection-submit" },
+      json: detection,
+    });
   });
   await page.goto("/");
   await page.getByRole("button", { name: "Select camera.mp4" }).click();
@@ -125,7 +188,10 @@ test("rebuilt detection sends source identity and completes candidate review", a
   await page.getByRole("button", { name: "Find black sections", exact: true }).click();
   await expect
     .poll(() => input)
-    .toMatchObject({ kind: "black", minDurationMs: 750, sourceFingerprint: "v1" });
+    .toMatchObject({ kind: "black", minDurationMs: 750, sourceFingerprint: media.etag });
+  expect(input?.projectItemId).toMatch(/^i_[A-Za-z0-9_-]{24}$/);
+  expect(input?.projectRevision).toBeGreaterThanOrEqual(1);
+  expect(detectionKey).toMatch(/^[A-Za-z0-9_-]{1,128}$/);
   await expect(page.getByText("Confidence", { exact: true })).toHaveCount(0);
   await page.screenshot({ path: testInfo.outputPath("detection.png"), fullPage: true });
   await page.getByRole("button", { name: "Add segment", exact: true }).click();
@@ -162,7 +228,10 @@ test.beforeEach(async ({ page }) => {
     Object.defineProperty(window, "MediaSource", { value: undefined });
   });
   const job: components["schemas"]["Job"] = {
-    id: "j_create-clips01",
+    id: "j_0123456789ab",
+    batchId: "b_0123456789ab",
+    projectId: "p_0123456789ab",
+    projectRevision: 1,
     type: "export",
     state: "queued",
     revision: 1,
@@ -171,34 +240,38 @@ test.beforeEach(async ({ page }) => {
     updatedAt: "2026-01-01T00:00:00Z",
   };
   const batch: components["schemas"]["Batch"] = {
-    batchId: "b_create-clips01",
+    batchId: "b_0123456789ab",
+    projectId: "p_0123456789ab",
+    projectRevision: 1,
     state: "queued",
     progress: 0,
     jobs: [job],
   };
-  await page.route(`${origin}/api/v1/**`, async (route) => {
+  await page.route(`${origin}/api/v2/**`, async (route) => {
     const request = route.request();
     const url = new URL(request.url());
-    const path = url.pathname;
-    if (path === "/api/v1/media/status")
+    const path = url.pathname.slice("/api/v2".length);
+    if (path === "/media/status")
       return route.fulfill({ json: { state: "ready_with_media", message: "Library ready." } });
-    if (path === "/api/v1/media/tree")
-      return route.fulfill({ json: { folders: [], items: [media, secondMedia] } });
-    if (path === `/api/v1/media/${media.id}`) return route.fulfill({ json: media });
-    if (path === `/api/v1/media/${secondMedia.id}`) return route.fulfill({ json: secondMedia });
-    if (path.endsWith("/thumbnails")) return route.fulfill({ status: 503 });
-    if (path.endsWith("/waveform"))
-      return route.fulfill({ json: { startMs: 0, durationMs: 10_000, peaks: [0.2, 0.8] } });
-    if (path === "/api/v1/destinations")
+    if (path === "/media/tree")
+      return route.fulfill({
+        json: { folders: [], items: [media, secondMedia], nextCursor: null },
+      });
+    if (path === `/media/${media.id}`) return route.fulfill({ json: media });
+    if (path === `/media/${secondMedia.id}`) return route.fulfill({ json: secondMedia });
+    if (path === "/destinations")
       return route.fulfill({
         json: {
           destinations: [
             { id: "download", label: "Browser download", kind: "download", retention: "24h" },
             { id: "archive", label: "Review archive", kind: "archive", retention: "durable" },
           ],
+          capabilities: { saveBesideSource: false },
         },
       });
-    if (path === "/api/v1/settings")
+    if (path === "/projects" && request.method() === "GET")
+      return route.fulfill({ json: { items: [], nextCursor: null } });
+    if (path === "/settings")
       return route.fulfill({
         json: {
           revision: 1,
@@ -223,31 +296,63 @@ test.beforeEach(async ({ page }) => {
           },
         },
       });
-    if (path === "/api/v1/batches" && request.method() === "GET")
+    if (path === "/batches" && request.method() === "GET")
       return route.fulfill({
         json: { items: [], nextCursor: null } satisfies components["schemas"]["BatchPage"],
       });
-    if (
-      (path === `/api/v1/batches/${batch.batchId}` || path === `/api/v1/jobs/${job.id}`) &&
-      request.method() === "GET"
-    ) {
-      job.state = "succeeded";
-      job.progress = 1;
-      job.result = {
-        outputName: "camera.mkv",
-        container: "mkv",
-        sizeBytes: 100,
-        retainUntil: "2099-01-01T00:00:00Z",
-        destinationKind: "download",
-        destinationId: "download",
+    if (path === `/batches/${batch.batchId}/events`) {
+      const terminalJob: components["schemas"]["Job"] = {
+        ...job,
+        state: "succeeded",
+        revision: 2,
+        progress: 1,
+        result: {
+          outputName: "camera.mkv",
+          container: "mkv",
+          sizeBytes: 100,
+          retainUntil: "2099-01-01T00:00:00Z",
+          destinationKind: "download",
+          destinationId: "download",
+        },
       };
-      batch.state = "succeeded";
-      batch.progress = 1;
-      return route.fulfill({ json: path.includes("/batches/") ? batch : job });
+      const terminalBatch: components["schemas"]["Batch"] = {
+        ...batch,
+        state: "succeeded",
+        progress: 1,
+        jobs: [terminalJob],
+      };
+      return route.fulfill({
+        headers: {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          "X-Accel-Buffering": "no",
+          "X-Request-ID": "r-create-clips-batch",
+        },
+        body: [
+          `id: batch-${batch.batchId}-2`,
+          "event: snapshot",
+          `data: ${JSON.stringify(terminalBatch)}`,
+          "",
+          "",
+        ].join("\n"),
+      });
     }
     if (path.endsWith("/exports/preflight"))
-      return route.fulfill({ json: { allowed: true, selection: [], findings: [] } });
-    if (/^\/api\/v1\/projects\/[^/]+\/exports$/.test(path))
+      return route.fulfill({
+        json: {
+          allowed: true,
+          selection: [],
+          findings: [],
+        } satisfies components["schemas"]["ExportPreflight"],
+      });
+    if (/^\/projects\/p_[A-Za-z0-9_-]{12,64}\/exports$/.test(path) && request.method() === "POST") {
+      const body = request.postDataJSON() as components["schemas"]["ExportSubmissionInput"];
+      expect(body.projectRevision).toBeGreaterThanOrEqual(1);
+      expect(request.headers()["idempotency-key"]).toMatch(/^[A-Za-z0-9_-]{1,128}$/);
+      batch.projectId = path.split("/")[2];
+      batch.projectRevision = body.projectRevision;
+      job.projectId = batch.projectId;
+      job.projectRevision = body.projectRevision;
       return route.fulfill({
         status: 202,
         json: {
@@ -255,15 +360,37 @@ test.beforeEach(async ({ page }) => {
           jobs: [job],
         } satisfies components["schemas"]["BatchExportSubmission"],
       });
-    if (/^\/api\/v1\/projects\/[^/]+$/.test(path)) {
-      if (request.method() === "PUT") {
-        const body = request.postDataJSON();
-        return route.fulfill({ json: { ...body, id: path.split("/").pop(), revision: 1 } });
-      }
-      return route.fulfill({ status: 404 });
     }
-    return route.fulfill({ status: 404 });
+    if (/^\/projects\/p_[A-Za-z0-9_-]{12,64}$/.test(path) && request.method() === "PUT") {
+      const body = request.postDataJSON();
+      const revision = typeof body.revision === "number" ? body.revision + 1 : 1;
+      return route.fulfill({
+        json: {
+          ...body,
+          id: path.split("/").pop(),
+          revision,
+          schemaVersion: 2,
+          updatedAt: "2026-01-01T00:00:00Z",
+        },
+      });
+    }
+    return route.fallback();
   });
+  await page.route(`${origin}/media/v2/**`, (route) =>
+    new URL(route.request().url()).pathname.endsWith("/thumbnails")
+      ? route.fulfill({
+          status: 503,
+          headers: { "X-Request-ID": "r-create-clips-thumbnail" },
+          json: {
+            error: {
+              code: "internal_error",
+              message: "Thumbnail unavailable.",
+              requestId: "r-create-clips-thumbnail",
+            },
+          },
+        })
+      : route.fulfill({ json: { startMs: 0, durationMs: 10_000, peaks: [0.2, 0.8] } }),
+  );
 });
 
 test("Create clips saves a dirty revision before fresh preflight and batch submission", async ({
@@ -273,7 +400,7 @@ test("Create clips saves a dirty revision before fresh preflight and batch submi
   let projectId: string | undefined;
   const batchId = "b_0123456789ab";
   const jobId = "j_0123456789ab";
-  const job = {
+  const job: components["schemas"]["Job"] = {
     id: jobId,
     batchId,
     type: "export",
@@ -283,7 +410,7 @@ test("Create clips saves a dirty revision before fresh preflight and batch submi
     createdAt: "2026-01-01T00:00:00Z",
     updatedAt: "2026-01-01T00:00:00Z",
   };
-  const terminalJob = {
+  const terminalJob: components["schemas"]["Job"] = {
     ...job,
     state: "succeeded",
     revision: 2,
@@ -316,7 +443,7 @@ test("Create clips saves a dirty revision before fresh preflight and batch submi
   );
   let savedBody: Record<string, unknown> | undefined;
   let savedRevision: number | undefined;
-  let submittedBody: Record<string, unknown> | undefined;
+  let submittedBody: components["schemas"]["ExportSubmissionInput"] | undefined;
   let idempotencyKey: string | undefined;
   await page.route(`${api}/**`, async (route) => {
     const request = route.request();
@@ -410,11 +537,14 @@ test("Create clips saves a dirty revision before fresh preflight and batch submi
     }
     if (/^\/projects\/p_[A-Za-z0-9_-]{12,64}\/exports$/.test(path) && request.method() === "POST") {
       calls.push("export");
-      submittedBody = request.postDataJSON();
+      submittedBody = request.postDataJSON() as components["schemas"]["ExportSubmissionInput"];
       idempotencyKey = request.headers()["idempotency-key"];
+      job.projectId = projectId!;
+      job.projectRevision = savedRevision!;
       return route.fulfill({
         status: 202,
-        json: { batchId, jobs: [job] },
+        headers: { "X-Request-ID": "r-create-clips-export" },
+        json: { batchId, jobs: [job] } satisfies components["schemas"]["BatchExportSubmission"],
       });
     }
     if (path === `/batches/${batchId}/events`) {
@@ -423,15 +553,22 @@ test("Create clips saves a dirty revision before fresh preflight and batch submi
       const terminalBatch = {
         batchId,
         projectId: projectId!,
-        projectRevision: 1,
+        projectRevision: savedRevision!,
         state: "succeeded",
         progress: 1,
         jobs: [terminalJob],
       };
+      terminalJob.projectId = projectId!;
+      terminalJob.projectRevision = savedRevision!;
       return route.fulfill({
-        headers: { "Content-Type": "text/event-stream" },
+        headers: {
+          "Content-Type": "text/event-stream",
+          "Cache-Control": "no-cache",
+          "X-Accel-Buffering": "no",
+          "X-Request-ID": "r-create-clips-primary-batch",
+        },
         body: [
-          "id: batch-cursor-2",
+          `id: batch-${batchId}-2`,
           "event: snapshot",
           `data: ${JSON.stringify(terminalBatch)}`,
           "",
@@ -486,7 +623,7 @@ test("batch container choice saves MOV for every selected item and matches the o
   const preflightBodies: unknown[] = [];
   page.on("request", (request) => {
     const path = new URL(request.url()).pathname;
-    if (request.method() === "PUT" && /^\/api\/v1\/projects\/[^/]+$/.test(path))
+    if (request.method() === "PUT" && /^\/api\/v2\/projects\/[^/]+$/.test(path))
       savedBodies.push(request.postDataJSON());
     if (path.endsWith("/exports/preflight")) preflightBodies.push(request.postDataJSON());
   });
@@ -558,7 +695,7 @@ test("multi-item preflight checks every selected item before submission", async 
   let exports = 0;
   page.on("request", (request) => {
     const path = new URL(request.url()).pathname;
-    if (request.method() === "PUT" && /^\/api\/v1\/projects\/[^/]+$/.test(path)) {
+    if (request.method() === "PUT" && /^\/api\/v2\/projects\/[^/]+$/.test(path)) {
       calls.push("save");
     } else if (path.endsWith("/exports/preflight")) {
       calls.push("preflight");
@@ -569,7 +706,7 @@ test("multi-item preflight checks every selected item before submission", async 
       exports += 1;
     }
   });
-  await page.route(`${origin}/api/v1/projects/*/exports/preflight`, (route) =>
+  await page.route(`${origin}/api/v2/projects/*/exports/preflight`, (route) =>
     route.fulfill({
       json: {
         allowed: false,
@@ -609,15 +746,42 @@ test("multi-item preflight checks every selected item before submission", async 
 test("save failures stop Create clips and leave it retryable", async ({ page }) => {
   let saves = 0;
   let exports = 0;
-  await page.route(`${origin}/api/v1/projects/*`, async (route) => {
+  const workflowCalls: string[] = [];
+  await page.route(`${origin}/api/v2/projects/*`, async (route) => {
     if (route.request().method() !== "PUT") return route.fallback();
     saves += 1;
-    if (saves === 1) return route.fulfill({ status: 500 });
+    if (saves === 1)
+      return route.fulfill({
+        status: 500,
+        headers: { "X-Request-ID": "r-save-error" },
+        json: {
+          error: {
+            code: "internal_error",
+            message: "Internal server error.",
+            requestId: "r-save-error",
+          },
+        },
+      });
     const body = route.request().postDataJSON();
-    return route.fulfill({ json: { ...body, id: "p_retry-create01", revision: 1 } });
+    return route.fulfill({
+      json: {
+        ...body,
+        id: "p_retry-create01",
+        revision: 1,
+        schemaVersion: 2,
+        updatedAt: "2026-01-01T00:00:00Z",
+      },
+    });
   });
   page.on("request", (request) => {
-    if (request.url().endsWith("/exports")) exports += 1;
+    const path = new URL(request.url()).pathname;
+    if (request.method() === "PUT" && /^\/api\/v2\/projects\/[^/]+$/.test(path))
+      workflowCalls.push("save");
+    else if (path.endsWith("/exports/preflight")) workflowCalls.push("preflight");
+    else if (path.endsWith("/exports")) {
+      workflowCalls.push("export");
+      exports += 1;
+    }
   });
   await page.goto("/");
   await page.getByRole("button", { name: "Select camera.mp4" }).click();
@@ -625,10 +789,17 @@ test("save failures stop Create clips and leave it retryable", async ({ page }) 
   await addSegment(page);
   await openExport(page);
   const create = page.getByRole("button", { name: "Create clips" });
+  workflowCalls.length = 0;
   await create.click();
   await expect(
-    page.getByRole("region", { name: "Export" }).getByText("Project save failed (500)."),
+    page
+      .getByRole("region", { name: "Export" })
+      .getByText("Project save failed. Retry when ready."),
   ).toBeVisible();
+  expect(workflowCalls).toEqual(["save"]);
+  expect(exports).toBe(0);
+  await expect(page.getByRole("status", { name: "Project status" })).toHaveText("Save failed");
+  await expect(page.getByText("Internal server error.", { exact: true })).toHaveCount(0);
   await expect(create).toBeEnabled();
   await create.click();
   await expect(
@@ -636,15 +807,17 @@ test("save failures stop Create clips and leave it retryable", async ({ page }) 
   ).toBeVisible();
   expect(saves).toBe(2);
   expect(exports).toBe(1);
+  expect(workflowCalls).toEqual(["save", "save", "preflight", "export"]);
 });
 
 test("conflicted saves never submit preflight or export", async ({ page }) => {
   const calls: string[] = [];
-  await page.route(`${origin}/api/v1/projects/*`, async (route) => {
+  await page.route(`${origin}/api/v2/projects/*`, async (route) => {
     if (route.request().method() !== "PUT") return route.fallback();
     calls.push("save");
     return route.fulfill({
       status: 409,
+      headers: { "X-Request-ID": "r-conflict" },
       json: {
         error: {
           code: "revision_conflict",
@@ -674,12 +847,18 @@ test("conflicted saves never submit preflight or export", async ({ page }) => {
 test("changing export scope invalidates a prior preflight", async ({ page }) => {
   const preflightItems: string[][] = [];
   let releaseSelected: (() => void) | undefined;
-  await page.route(`${origin}/api/v1/projects/*/exports/preflight`, async (route) => {
+  await page.route(`${origin}/api/v2/projects/*/exports/preflight`, async (route) => {
     const body = route.request().postDataJSON() as { itemIds?: string[] };
     const itemIds = body.itemIds ?? [];
     preflightItems.push(itemIds);
     if (itemIds.length < 2)
-      return route.fulfill({ json: { allowed: true, selection: [], findings: [] } });
+      return route.fulfill({
+        json: {
+          allowed: true,
+          selection: [],
+          findings: [],
+        } satisfies components["schemas"]["ExportPreflight"],
+      });
     await new Promise<void>((resolve) => {
       releaseSelected = () => {
         void route
