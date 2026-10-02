@@ -1,3 +1,4 @@
+import type * as EffectApiTypes from "../../generated/effect-api";
 import { useAtomValue, useAtomSet } from "@effect/atom-solid";
 import { Effect } from "effect";
 import * as AsyncResult from "effect/reactivity/AsyncResult";
@@ -12,11 +13,10 @@ import {
   type Accessor,
   type Setter,
 } from "solid-js";
-import type { components } from "../../generated/api";
 import type { Job } from "../../generated/effect-api";
 import { useServerAtom, type ServerState } from "../app/server";
 
-type Media = components["schemas"]["Media"];
+type Media = EffectApiTypes.Media;
 type PageResult = import("../../generated/effect-api").FolderPage;
 type ImportJob = Pick<Job, "id" | "state" | "errorCode"> & {
   progress: number;

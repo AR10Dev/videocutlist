@@ -1,5 +1,5 @@
+import type * as EffectApiTypes from "../../generated/effect-api";
 import { createEffect, createSignal, onCleanup, type Accessor, type Setter } from "solid-js";
-import type { components } from "../../generated/api";
 import { frameDuration } from "./frame";
 import {
   moveSegment as moveSegments,
@@ -27,7 +27,7 @@ import {
   type Segment,
 } from "../preview/model";
 
-type Media = components["schemas"]["Media"];
+type Media = EffectApiTypes.Media;
 type Track = {
   index: number;
   type: string;

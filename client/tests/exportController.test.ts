@@ -1,3 +1,4 @@
+import type * as EffectApiTypes from "../src/generated/effect-api";
 import { RegistryContext, RegistryProvider } from "@effect/atom-solid";
 import { createComponent, createRoot, createSignal, untrack, useContext } from "solid-js";
 import { describe, expect, it } from "vitest";
@@ -7,13 +8,12 @@ import { createExportController } from "../src/features/export/controller";
 import { createTimelineHistory } from "../src/features/editor/timeline";
 import type { EditableProjectItem } from "../src/features/projects/model";
 import { defaultSettings } from "../src/features/settings/model";
-import type { components } from "../src/generated/api";
 
 const batchId = "b_exportstatus0001";
 const timestamp = "2026-01-01T00:00:00Z";
 
-type Batch = components["schemas"]["Batch"];
-type Job = components["schemas"]["Job"];
+type Batch = EffectApiTypes.Batch;
+type Job = EffectApiTypes.Job;
 type ExportController = ReturnType<typeof createExportController>;
 
 const job = (id: string, state: Job["state"], revision: number, errorCode?: string): Job => ({
@@ -36,7 +36,7 @@ const batch = (state: Batch["state"], progress: number, jobs: Job[]): Batch => (
   progress,
   jobs,
 });
-const exportItem = (media: components["schemas"]["Media"]): EditableProjectItem => ({
+const exportItem = (media: EffectApiTypes.Media): EditableProjectItem => ({
   id: `i_${"i".repeat(24)}`,
   media,
   timeline: createTimelineHistory({
@@ -74,19 +74,21 @@ async function withExportController(
   exercise: (controller: ExportController) => Promise<void>,
   options: {
     initialBatch?: Batch;
-    selected?: components["schemas"]["Media"];
+    selected?: EffectApiTypes.Media;
     projectItems?: EditableProjectItem[];
     dirty?: boolean;
     revision?: number;
-    saveProject?: () => Promise<components["schemas"]["Project"] | undefined>;
+    saveProject?: () => Promise<EffectApiTypes.Project | undefined>;
     onRequest?: (method: string, path: string) => void;
-    preflightFailure?: components["schemas"]["Error"]["error"];
+    preflightFailure?: EffectApiTypes.Error["error"];
     batchListResponse?: Promise<Response>;
     destinationsResponse?: Promise<Response>;
+    nextDestinationsResponse?: () => Promise<Response>;
   } = {},
 ) {
   const originalStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
   const originalFetch = globalThis.fetch;
+  let destinationRequestCount = 0;
   const initialBatch =
     options.initialBatch ??
     batch("running", 0.4, [
@@ -102,13 +104,16 @@ async function withExportController(
         options.batchListResponse ??
         Promise.resolve(Response.json({ items: [initialBatch], nextCursor: null }))
       );
-    if (requestUrl.pathname === "/api/v2/destinations")
+    if (requestUrl.pathname === "/api/v2/destinations") {
+      if (options.nextDestinationsResponse && destinationRequestCount++ > 0)
+        return options.nextDestinationsResponse();
       return (
         options.destinationsResponse ??
         Promise.resolve(
           Response.json({ destinations: [], capabilities: { saveBesideSource: false } }),
         )
       );
+    }
     if (requestUrl.pathname.endsWith("/exports/preflight") && method === "POST")
       return options.preflightFailure
         ? Response.json({ error: options.preflightFailure }, { status: 400 })
@@ -254,6 +259,88 @@ describe("export controller aggregate status", () => {
       { batchListResponse, destinationsResponse },
     );
   });
+  it("keeps generated destination data current through refresh, selection fallback, and failure", async () => {
+    const sourceAdjacent = {
+      id: "source",
+      label: "Beside source",
+      kind: "source_adjacent" as const,
+    };
+    const downloads = { id: "download", label: "Downloads", kind: "download" as const };
+    let refreshDestinations!: (response: Response) => void;
+    let failDestinations!: (response: Response) => void;
+    const refreshResponse = new Promise<Response>((resolve) => (refreshDestinations = resolve));
+    const failureResponse = new Promise<Response>((resolve) => (failDestinations = resolve));
+    let requests = 0;
+    await withExportController(
+      batch("succeeded", 1, [job("j_exportstatus0001", "succeeded", 2)]),
+      async (controller) => {
+        const deadline = Date.now() + 2_000;
+        while (!controller.destinations().length || controller.destinationsLoading()) {
+          if (Date.now() >= deadline) throw new Error("Initial destination read did not settle.");
+          await new Promise((resolve) => setTimeout(resolve, 1));
+        }
+        expect(controller.destinations()).toEqual([sourceAdjacent, downloads]);
+        expect(controller.destinationCapabilities()).toEqual({ saveBesideSource: true });
+
+        controller.setDestination("source");
+        controller.retryDestinations();
+        while (!controller.destinationsLoading()) {
+          if (Date.now() >= deadline) throw new Error("Destination refresh did not start.");
+          await new Promise((resolve) => setTimeout(resolve, 1));
+        }
+        expect(controller.destinations()).toEqual([sourceAdjacent, downloads]);
+        expect(controller.destinationsError()).toBe("");
+        refreshDestinations(
+          Response.json({ destinations: [downloads], capabilities: { saveBesideSource: false } }),
+        );
+        while (controller.destinationsLoading() || controller.destinationId() !== "download") {
+          if (Date.now() >= deadline) throw new Error("Destination refresh did not settle.");
+          await new Promise((resolve) => setTimeout(resolve, 1));
+        }
+        expect(controller.destinations()).toEqual([downloads]);
+        expect(controller.destinationCapabilities()).toEqual({ saveBesideSource: false });
+
+        controller.retryDestinations();
+        while (!controller.destinationsLoading()) {
+          if (Date.now() >= deadline) throw new Error("Destination retry did not start.");
+          await new Promise((resolve) => setTimeout(resolve, 1));
+        }
+        expect(controller.destinations()).toEqual([downloads]);
+        failDestinations(
+          Response.json(
+            {
+              error: {
+                code: "internal_error",
+                message: "Destination refresh failed.",
+                requestId: "r-destination-refresh",
+              },
+            },
+            { status: 500 },
+          ),
+        );
+        while (controller.destinationsLoading()) {
+          if (Date.now() >= deadline) throw new Error("Destination failure did not settle.");
+          await new Promise((resolve) => setTimeout(resolve, 1));
+        }
+        expect(controller.destinations()).toEqual([downloads]);
+        expect(controller.destinationCapabilities()).toEqual({ saveBesideSource: false });
+        expect(controller.destinationsError()).toBe("Destination refresh failed.");
+        expect(requests).toBe(2);
+      },
+      {
+        destinationsResponse: Promise.resolve(
+          Response.json({
+            destinations: [sourceAdjacent, downloads],
+            capabilities: { saveBesideSource: true },
+          }),
+        ),
+        nextDestinationsResponse: () => {
+          requests++;
+          return requests === 1 ? refreshResponse : failureResponse;
+        },
+      },
+    );
+  });
   it("projects generated read errors only after the resource actually fails", async () => {
     await withExportController(
       batch("succeeded", 1, [job("j_exportstatus0001", "succeeded", 2)]),
@@ -303,7 +390,7 @@ describe("export controller aggregate status", () => {
     );
   });
   it("saves before a fresh generated preflight and generated keyed submission", async () => {
-    const media: components["schemas"]["Media"] = {
+    const media: EffectApiTypes.Media = {
       id: `m_${"m".repeat(43)}`,
       name: "clip.mp4",
       durationMs: 2_000,
@@ -351,7 +438,7 @@ describe("export controller aggregate status", () => {
     );
   });
   it("shows a generated preflight error and does not submit the export", async () => {
-    const media: components["schemas"]["Media"] = {
+    const media: EffectApiTypes.Media = {
       id: `m_${"m".repeat(43)}`,
       name: "clip.mp4",
       durationMs: 2_000,

@@ -1,10 +1,10 @@
+import type * as EffectApiTypes from "../../generated/effect-api";
 import * as Schema from "effect/Schema";
-import type { components } from "../../generated/api";
 import { BatchExportSubmission as BatchExportSubmissionSchema } from "../../generated/effect-api";
 
-export type BatchExportSubmission = components["schemas"]["BatchExportSubmission"];
-export type ExportJob = components["schemas"]["Job"];
-type Batch = components["schemas"]["Batch"];
+export type BatchExportSubmission = EffectApiTypes.BatchExportSubmission;
+export type ExportJob = EffectApiTypes.Job;
+type Batch = EffectApiTypes.Batch;
 export const isJobActive = (job: Pick<ExportJob, "state"> | undefined) =>
   job?.state === "queued" || job?.state === "running";
 

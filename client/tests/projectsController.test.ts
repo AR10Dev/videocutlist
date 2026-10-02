@@ -1,3 +1,4 @@
+import type * as EffectApiTypes from "../src/generated/effect-api";
 import { Effect } from "effect";
 import * as AtomRegistry from "effect/reactivity/AtomRegistry";
 import { createSignal } from "solid-js";
@@ -8,9 +9,8 @@ import { createTimelineHistory } from "../src/features/editor/timeline";
 import { createProjectsController } from "../src/features/projects/controller";
 import type { EditableProjectItem } from "../src/features/projects/model";
 import { defaultSettings } from "../src/features/settings/model";
-import type { components } from "../src/generated/api";
 
-const media: components["schemas"]["Media"] = {
+const media: EffectApiTypes.Media = {
   id: "m_" + "a".repeat(43),
   name: "loaded.mp4",
   durationMs: 10_000,
@@ -102,7 +102,7 @@ describe("projects controller", () => {
         assetRequest: () => Promise.resolve(Response.json({})),
         mediaRequest: () => Promise.reject(new Error("Unexpected media attachment request")),
       };
-      const [selected, setSelected] = createSignal<components["schemas"]["Media"]>();
+      const [selected, setSelected] = createSignal<EffectApiTypes.Media>();
       const [projectId, setProjectId] = createSignal("p_currentproject");
       const [projectName, setProjectName] = createSignal("Editing");
       const [revision, setRevision] = createSignal(0);
@@ -244,7 +244,7 @@ describe("projects controller", () => {
         container: "mkv",
       },
     };
-    const remoteProject: components["schemas"]["Project"] = {
+    const remoteProject: EffectApiTypes.Project = {
       id: "p_conflict-load1",
       revision: 2,
       updatedAt: "2026-01-01T00:00:00Z",
@@ -307,7 +307,7 @@ describe("projects controller", () => {
       assetRequest: () => Promise.resolve(Response.json({})),
       mediaRequest: () => Promise.reject(new Error("Unexpected media attachment request")),
     };
-    const [selected, setSelected] = createSignal<components["schemas"]["Media"] | undefined>(media);
+    const [selected, setSelected] = createSignal<EffectApiTypes.Media | undefined>(media);
     const [projectId, setProjectId] = createSignal("p_conflict-load1");
     const [projectName, setProjectName] = createSignal("Local project");
     const [revision, setRevision] = createSignal(1);
@@ -410,7 +410,7 @@ describe("projects controller", () => {
         container: "mkv",
       },
     };
-    const [selected] = createSignal<components["schemas"]["Media"]>(media);
+    const [selected] = createSignal<EffectApiTypes.Media>(media);
     const [projectId, setProjectId] = createSignal("p_autosave123456");
     const [projectName, setProjectName] = createSignal("Editing");
     const [revision, setRevision] = createSignal(0);

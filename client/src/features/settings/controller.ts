@@ -1,10 +1,10 @@
+import type * as EffectApiTypes from "../../generated/effect-api";
 import { Cause, Effect, Layer } from "effect";
 import * as AsyncResult from "effect/reactivity/AsyncResult";
 import * as Atom from "effect/reactivity/Atom";
 import * as AtomRegistry from "effect/reactivity/AtomRegistry";
 import { createSignal, getOwner, onCleanup, type Accessor, type Setter } from "solid-js";
 import { runEffect, type ApiClient } from "../../api";
-import type { components } from "../../generated/api";
 import type {
   GetMCPSettings200,
   SettingsResponse as GeneratedSettingsResponse,
@@ -24,9 +24,9 @@ type LibraryRoot = {
   state?: "ready" | "unavailable";
   message?: string;
 };
-type ServerRuntimeSettings = components["schemas"]["RuntimeSettings"];
+type ServerRuntimeSettings = EffectApiTypes.SettingsResponse["settings"];
 type MCPSettings = GetMCPSettings200;
-type MCPCredentialCreate = components["schemas"]["MCPCredentialCreate"];
+type MCPCredentialCreate = EffectApiTypes.MCPCredentialCreate;
 
 const originMessage =
   "This browser origin is not allowed by the server. Check the deployment CORS settings.";
@@ -190,7 +190,7 @@ export function createSettingsController(api: ApiClient, server?: ServerState) {
       : Effect.fail(new Error(mcpRefreshMessage));
   });
   const mcpLoadResult = observe(mcpLoad);
-  const settingsSave = runtime.fn((input: components["schemas"]["SettingsUpdate"]) => {
+  const settingsSave = runtime.fn((input: EffectApiTypes.SettingsUpdate) => {
     const mutation = server?.generatedApi?.mutation("default", "updateSettings");
     return mutation
       ? generatedMutation(mutation, { payload: input }).pipe(
@@ -406,7 +406,7 @@ export function createSettingsController(api: ApiClient, server?: ServerState) {
       );
       return false;
     }
-    const input: components["schemas"]["SettingsUpdate"] = {
+    const input: EffectApiTypes.SettingsUpdate = {
       revision: settingsRevision(),
       settings: candidate,
     };

@@ -1,9 +1,9 @@
+import type * as EffectApiTypes from "../src/generated/effect-api";
 import { createRoot, createSignal } from "solid-js";
 import { describe, expect, it } from "vitest";
-import type { components } from "../src/generated/api";
 import { createEditorController } from "../src/features/editor/controller";
 
-type Media = components["schemas"]["Media"];
+type Media = EffectApiTypes.Media;
 
 const media: Media = {
   id: "m_0123456789012345678901234567890123456789012",

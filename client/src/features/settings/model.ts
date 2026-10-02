@@ -1,8 +1,8 @@
+import type * as EffectApiTypes from "../../generated/effect-api";
 import * as Schema from "effect/Schema";
-import type { components } from "../../generated/api";
 
-type RuntimeSettings = components["schemas"]["RuntimeSettings"];
-type RuntimeSettingsInput = components["schemas"]["SettingsUpdate"]["settings"];
+type RuntimeSettings = EffectApiTypes.SettingsResponse["settings"];
+type RuntimeSettingsInput = EffectApiTypes.SettingsUpdate["settings"];
 
 const positiveLimit = Schema.Number.check(Schema.isInt()).check(Schema.isGreaterThan(0));
 const runtimeSettingsInput = Schema.Struct({

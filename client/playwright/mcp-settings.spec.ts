@@ -1,9 +1,8 @@
+import type * as EffectApiTypes from "../src/generated/effect-api";
 import { expect, test } from "@playwright/test";
-import type { components } from "../src/generated/api";
 
-type Schema = components["schemas"];
 const origin = "http://127.0.0.1:8787/api/v2";
-const credential: Schema["MCPCredential"] = {
+const credential: EffectApiTypes.MCPCredential = {
   id: "c_123456789012",
   tokenIdentifier: "token-1",
   name: "Scoped assistant",
@@ -14,7 +13,7 @@ const credential: Schema["MCPCredential"] = {
   createdAt: "2026-01-01T00:00:00Z",
   status: "active",
 };
-const proposal: Schema["ExportProposal"] = {
+const proposal: EffectApiTypes.ExportProposal = {
   id: "ep_123456789012",
   credentialId: credential.id,
   projectId: "p_123456789012",
@@ -55,7 +54,7 @@ const proposal: Schema["ExportProposal"] = {
     },
   ],
 };
-const initial: Schema["MCPSettingsResponse"] = {
+const initial: EffectApiTypes.MCPSettingsResponse = {
   enabled: false,
   endpoint: "/mcp",
   authentication: "Bearer token",
@@ -105,7 +104,7 @@ test.beforeEach(async ({ page }) => {
             mediaMaxDepth: 4,
             mcpEnabled: false,
           },
-        } satisfies Schema["SettingsResponse"],
+        } satisfies EffectApiTypes.SettingsResponse,
       });
     if (path.endsWith("/media/status"))
       return route.fulfill({ json: { state: "ready_empty", message: "Empty" } });
@@ -206,7 +205,7 @@ test("MCP refresh, pagination, exact approval, scopes and revoke remain reachabl
               : [proposal]
             : [],
         proposalNextCursor: refreshed && !approved && !proposalMore ? "proposal-page-2" : undefined,
-      } satisfies Schema["MCPSettingsResponse"],
+      } satisfies EffectApiTypes.MCPSettingsResponse,
     });
   });
   await page.route(`${origin}/export-proposals/ep_123456789012/approval`, (route) => {
@@ -214,7 +213,10 @@ test("MCP refresh, pagination, exact approval, scopes and revoke remain reachabl
     expect(route.request().postData()).toBeNull();
     approved = true;
     return route.fulfill({
-      json: { ...proposal, approvedAt: "2026-01-01T00:01:00Z" } satisfies Schema["ExportProposal"],
+      json: {
+        ...proposal,
+        approvedAt: "2026-01-01T00:01:00Z",
+      } satisfies EffectApiTypes.ExportProposal,
     });
   });
   await page.route(`${origin}/settings/mcp/credentials/c_234567890123`, (route) => {
@@ -226,7 +228,7 @@ test("MCP refresh, pagination, exact approval, scopes and revoke remain reachabl
         ...credential,
         id: "c_234567890123",
         status: "revoked",
-      } satisfies Schema["MCPCredential"],
+      } satisfies EffectApiTypes.MCPCredential,
     });
   });
   await page.goto("/");
@@ -317,7 +319,7 @@ test("MCP secret is creation-only including a response arriving after dismissal"
       json: {
         ...credential,
         secret: "vcl_test-only-secret",
-      } satisfies Schema["MCPCredentialCreated"],
+      } satisfies EffectApiTypes.MCPCredentialCreated,
     });
   });
   await page.goto("/");

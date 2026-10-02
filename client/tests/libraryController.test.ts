@@ -1,3 +1,4 @@
+import type * as EffectApiTypes from "../src/generated/effect-api";
 import { RegistryContext, RegistryProvider } from "@effect/atom-solid";
 import {
   createComponent,
@@ -11,10 +12,9 @@ import { describe, expect, it, vi } from "vitest";
 import type { ApiClient, NativeMediaApiClient } from "../src/api";
 import { createServerState } from "../src/features/app/server";
 import { createLibraryController } from "../src/features/media/controller";
-import type { components } from "../src/generated/api";
 
 type LibrarySurface = {
-  media: Accessor<components["schemas"]["Media"][]>;
+  media: Accessor<EffectApiTypes.Media[]>;
   activeFolder: Accessor<string | undefined>;
   nextCursor: Accessor<string | undefined>;
   loadingMore: () => boolean;
@@ -26,7 +26,7 @@ type LibrarySurface = {
   cancelImport: () => Promise<void>;
 };
 
-const item = (name: string): components["schemas"]["Media"] => ({
+const item = (name: string): EffectApiTypes.Media => ({
   id: `m_${name.padEnd(43, "a")}`,
   name,
   durationMs: 1000,

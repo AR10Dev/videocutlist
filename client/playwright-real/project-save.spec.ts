@@ -1,9 +1,8 @@
+import type * as EffectApiTypes from "../src/generated/effect-api";
 import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { expect, test, type Locator, type Page, type TestInfo } from "@playwright/test";
-
-import type { components } from "../src/generated/api";
 
 const token = "real-media-test-token";
 const serverBaseUrl = "http://127.0.0.1:18787";
@@ -124,7 +123,7 @@ test("creates, downloads, and verifies every export option with real media", asy
   const response = await savedResponse;
   expect(response.status()).toBe(200);
   await expect(page.getByText("Saved", { exact: true })).toBeVisible();
-  const saved = (await response.json()) as components["schemas"]["Project"];
+  const saved = (await response.json()) as EffectApiTypes.Project;
   expect(saved.items).toHaveLength(2);
 
   await page.getByRole("button", { name: "Close project tools", exact: true }).click();
@@ -204,7 +203,7 @@ test("creates, downloads, and verifies every export option with real media", asy
     headers: { Authorization: `Bearer ${token}` },
   });
   expect(persistedResponse.status()).toBe(200);
-  const persisted = (await persistedResponse.json()) as components["schemas"]["Project"];
+  const persisted = (await persistedResponse.json()) as EffectApiTypes.Project;
   expect(persisted.items).toHaveLength(2);
   expect(persisted.items.every((item) => item.segments.length === 2)).toBe(true);
 });

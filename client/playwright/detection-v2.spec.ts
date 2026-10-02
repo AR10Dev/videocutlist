@@ -1,5 +1,5 @@
+import type * as EffectApiTypes from "../src/generated/effect-api";
 import { expect, test, type Page } from "@playwright/test";
-import type { components } from "../src/generated/api";
 
 const origin = "http://127.0.0.1:8787";
 const media = {
@@ -10,7 +10,7 @@ const media = {
   container: "mp4",
   streams: { tracks: [{ index: 0, type: "video", codec: "h264" }] },
   etag: "fingerprint-v1",
-} satisfies components["schemas"]["Media"];
+} satisfies EffectApiTypes.Media;
 const settings = {
   revision: 1,
   schemaVersion: 1,
@@ -30,7 +30,7 @@ const settings = {
     mediaMaxDepth: 4,
     mcpEnabled: false,
   },
-} satisfies components["schemas"]["SettingsResponse"];
+} satisfies EffectApiTypes.SettingsResponse;
 
 async function addToProject(page: Page) {
   await page.getByRole("button", { name: "Select camera.mp4" }).click();
@@ -62,7 +62,7 @@ test.beforeEach(async ({ page }) => {
           authentication: "Bearer token",
           remoteAccessGuidance: "Use HTTPS for remote access.",
           clientCompatibility: "Streamable HTTP bearer-token clients only.",
-        } satisfies components["schemas"]["MCPSettingsResponse"],
+        } satisfies EffectApiTypes.MCPSettingsResponse,
       });
     if (path === "/api/v2/media/status")
       return route.fulfill({ json: { state: "ready_with_media", message: "Library ready." } });
@@ -97,13 +97,13 @@ test("detection saves then submits a keyed source/item revision and reviews the 
   page,
 }) => {
   const calls: string[] = [];
-  let submitted: { input: components["schemas"]["DetectionInput"]; key: string | null } | undefined;
-  let savedProject: components["schemas"]["Project"] | undefined;
+  let submitted: { input: EffectApiTypes.DetectionInput; key: string | null } | undefined;
+  let savedProject: EffectApiTypes.Project | undefined;
   await page.route(`${origin}/api/v2/projects/*/detections`, async (route) => {
     calls.push("submit");
     const request = route.request();
     submitted = {
-      input: request.postDataJSON() as components["schemas"]["DetectionInput"],
+      input: request.postDataJSON() as EffectApiTypes.DetectionInput,
       key: request.headers()["idempotency-key"] ?? null,
     };
     const projectId = new URL(request.url()).pathname.split("/")[4]!;
@@ -118,7 +118,7 @@ test("detection saves then submits a keyed source/item revision and reviews the 
         projectId,
         projectRevision: input.projectRevision,
         kind: input.kind,
-      } satisfies components["schemas"]["DetectionJob"],
+      } satisfies EffectApiTypes.DetectionJob,
     });
   });
   await page.route(`${origin}/api/v2/jobs/j_012345678901/events`, (route) => {
@@ -163,7 +163,7 @@ test("detection saves then submits a keyed source/item revision and reviews the 
       id: projectId,
       revision: 1,
       updatedAt: "2026-01-01T00:00:00Z",
-    } as components["schemas"]["Project"];
+    } as EffectApiTypes.Project;
     return route.fulfill({ json: savedProject });
   });
 

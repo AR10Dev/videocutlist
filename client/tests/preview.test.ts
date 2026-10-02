@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createRoot, createSignal } from "solid-js";
+import type * as EffectApiTypes from "../src/generated/effect-api";
 import { createPreviewController } from "../src/features/preview/controller";
 import {
   canStreamPreview,
@@ -15,7 +16,10 @@ import {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("hybrid Smart Cut eligibility", () => {
-  const media = (video: Record<string, unknown>, overrides = {}) => ({
+  const media = (
+    video: { codec?: string; avgFrameRate?: string; frameRate?: string },
+    overrides: Partial<EffectApiTypes.Media> = {},
+  ): EffectApiTypes.Media => ({
     id: "m1",
     name: "clip.mkv",
     durationMs: 1000,

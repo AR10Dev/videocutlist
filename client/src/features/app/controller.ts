@@ -1,10 +1,10 @@
+import type * as EffectApiTypes from "../../generated/effect-api";
 import { RegistryContext, useAtomValue } from "@effect/atom-solid";
 import * as AsyncResult from "effect/reactivity/AsyncResult";
 import * as Atom from "effect/reactivity/Atom";
 import { createEffect, createSignal, onCleanup, useContext } from "solid-js";
 import { createApiClient, resolveBrowserConfiguration } from "../../api";
 import { createPreviewController } from "../preview/controller";
-import type { components } from "../../generated/api";
 import { createProjectItem, moveProjectItem, type EditableProjectItem } from "../projects/model";
 import { createDetectionController } from "../detection/controller";
 import {
@@ -22,7 +22,7 @@ import { createEditorController } from "../editor/controller";
 import { createTimelineHistory } from "../editor/timeline";
 import type { AssetViewport } from "../preview/assets";
 import { createServerState, useServerAtom } from "./server";
-type Media = components["schemas"]["Media"];
+type Media = EffectApiTypes.Media;
 
 export function createWorkspaceController() {
   const configuration = resolveBrowserConfiguration();
@@ -267,7 +267,7 @@ export function createWorkspaceController() {
     setMuted(item.muted);
     setExportMode(item.exportOptions.mode ?? "merge");
     setExportSelection(item.exportOptions.selection ?? "segments");
-    setStreamIndexes(item.exportOptions.streamIndexes ?? []);
+    setStreamIndexes([...(item.exportOptions.streamIndexes ?? [])]);
     setCutStrategy(item.exportOptions.cutStrategy ?? settings().cutStrategy);
     setExportContainer(item.exportOptions.container ?? "mkv");
     setDestinationId(item.exportOptions.destinationId ?? "download");

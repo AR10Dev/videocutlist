@@ -1,5 +1,5 @@
+import type * as EffectApiTypes from "../../generated/effect-api";
 import * as Schema from "effect/Schema";
-import type { components } from "../../generated/api";
 import { validateSegmentLabel } from "../preview/model";
 
 export type RecentProject = { id: string; label: string; lastOpened: number };
@@ -117,7 +117,7 @@ export type ProjectRecovery = {
   revision: number;
   schemaVersion: 2;
   name: string;
-  items: components["schemas"]["ProjectItem"][];
+  items: EffectApiTypes.Project["items"][number][];
   savedAt: number;
 };
 const projectRecoverySchema = loose({

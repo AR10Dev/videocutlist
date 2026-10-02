@@ -1,6 +1,6 @@
-import type { components } from "../../generated/api";
+import type * as EffectApiTypes from "../../generated/effect-api";
 
-export type Media = components["schemas"]["Media"];
+export type Media = EffectApiTypes.Media;
 
 type VideoStream = {
   codec?: unknown;

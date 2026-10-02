@@ -1,3 +1,4 @@
+import type * as EffectApiTypes from "../../generated/effect-api";
 import {
   createEffect,
   createMemo,
@@ -7,7 +8,7 @@ import {
   type Accessor,
   type Setter,
 } from "solid-js";
-import { useAtomSet, useAtomValue } from "@effect/atom-solid";
+import { useAtomSet } from "@effect/atom-solid";
 import { Cause, Effect, Exit } from "effect";
 import * as Schema from "effect/Schema";
 import * as AsyncResult from "effect/reactivity/AsyncResult";
@@ -15,7 +16,6 @@ import * as Atom from "effect/reactivity/Atom";
 import * as AtomRegistry from "effect/reactivity/AtomRegistry";
 import { ApiFailure, runEffect, type ApiClient } from "../../api";
 import { readServerAtom, useServerAtom, type ServerState } from "../app/server";
-import type { components } from "../../generated/api";
 import { Batch as BatchSchema } from "../../generated/effect-api";
 import type { Batch as ObservedBatch } from "../../generated/effect-api";
 import type { EditableProjectItem, ExportContainer } from "../projects/model";
@@ -31,10 +31,10 @@ import {
 } from "./queueResponse";
 import { destinationIsConfigured, lastDestinationId, rememberDestination } from "./destination";
 
-type Media = components["schemas"]["Media"];
-type Destination = components["schemas"]["Destination"];
-type ExportJob = components["schemas"]["Job"];
-type Batch = components["schemas"]["Batch"];
+type Media = EffectApiTypes.Media;
+type Destination = EffectApiTypes.Destination;
+type ExportJob = EffectApiTypes.Job;
+type Batch = EffectApiTypes.Batch;
 type ExportPreflight = import("../../generated/effect-api").ExportPreflight;
 type ExportCancellation = {
   batchId: string;
@@ -118,7 +118,7 @@ export function createExportController(deps: {
   editableItems: Accessor<EditableProjectItem[]>;
   segments: Accessor<Segment[]>;
   tracks: Accessor<Track[]>;
-  saveProject: () => Promise<components["schemas"]["Project"] | undefined>;
+  saveProject: () => Promise<EffectApiTypes.Project | undefined>;
   settings: Accessor<AppSettings>;
   markDirty: () => void;
   saveSettings: (changes: Partial<AppSettings>) => void;
@@ -236,15 +236,6 @@ export function createExportController(deps: {
     return ids;
   };
   const [streamIndexes, setStreamIndexes] = createSignal<number[]>([]);
-  const destinationsAtom = Atom.make<Destination[]>([]);
-  const destinationCapabilitiesAtom = Atom.make<components["schemas"]["DestinationCapabilities"]>({
-    saveBesideSource: false,
-  });
-  const destinations = useAtomValue(() => destinationsAtom);
-  const destinationCapabilities = useAtomValue(() => destinationCapabilitiesAtom);
-  const setDestinations = (value: Destination[]) => registry.set(destinationsAtom, value);
-  const setDestinationCapabilities = (value: components["schemas"]["DestinationCapabilities"]) =>
-    registry.set(destinationCapabilitiesAtom, value);
   const [preflightError, setPreflightError] = createSignal("");
   const [destinationId, setDestinationId] = createSignal(lastDestinationId() ?? "download");
   const [destinationStatus, setDestinationStatus] = createSignal("");
@@ -295,16 +286,13 @@ export function createExportController(deps: {
   const generatedApi = deps.server.generatedApi;
   if (!generatedApi) throw new Error("Generated export API is not configured.");
   const preflightMutation = generatedApi.mutation("default", "preflightExport");
-  const preflightRequest = (request: {
-    projectId: string;
-    input: components["schemas"]["ExportInput"];
-  }) =>
+  const preflightRequest = (request: { projectId: string; input: EffectApiTypes.ExportInput }) =>
     generatedMutation(preflightMutation, {
       params: { projectId: request.projectId },
       payload: request.input,
     });
   const preflightCommand = runtime.fn(
-    (request: { projectId: string; input: components["schemas"]["ExportInput"] }) =>
+    (request: { projectId: string; input: EffectApiTypes.ExportInput }) =>
       Effect.andThen(Effect.sleep(250), preflightRequest(request)),
   );
   const runPreflight = useAtomSet(() => preflightCommand, { mode: "promise" });
@@ -317,6 +305,15 @@ export function createExportController(deps: {
   const batchList = useServerAtom(() => batchListAtom);
   const destinationAtom = generatedApi.query("default", "listDestinations", {});
   const destinationResult = useServerAtom(() => destinationAtom);
+  const destinations = createMemo<Destination[]>(() => [
+    ...(destinationResult.value()?.destinations ?? []),
+  ]);
+  const destinationCapabilities = createMemo(
+    () =>
+      destinationResult.value()?.capabilities ?? {
+        saveBesideSource: false,
+      },
+  );
   const cancelBatchCommands = Atom.family((id: string) =>
     runtime.fn(() => {
       const cancel = deps.server.generatedApi?.mutation("default", "cancelBatch");
@@ -341,7 +338,7 @@ export function createExportController(deps: {
   let uncertainExport:
     | {
         key: string;
-        body: components["schemas"]["ExportSubmissionInput"];
+        body: EffectApiTypes.ExportSubmissionInput;
       }
     | undefined;
   const isUncertainCommandFailure = (error: unknown): boolean => {
@@ -473,17 +470,6 @@ export function createExportController(deps: {
       deps.server.refreshMedia();
       refreshBatches();
     }
-  });
-  createEffect(() => {
-    const value = destinationResult.value();
-    if (!value) return;
-    const configured = Array.isArray(value.destinations) ? value.destinations : [];
-    setDestinations(configured);
-    setDestinationCapabilities(
-      value.capabilities ?? {
-        saveBesideSource: configured.some((item) => item.kind === "source_adjacent"),
-      },
-    );
   });
   createEffect(() => {
     const configured = destinations().filter(
@@ -722,7 +708,7 @@ export function createExportController(deps: {
           return;
         }
         setExportStatus("Creating clips…");
-        const submissionBody: components["schemas"]["ExportSubmissionInput"] = {
+        const submissionBody: EffectApiTypes.ExportSubmissionInput = {
           projectRevision: savedRevision,
           ...(context.input.itemIds ? { itemIds: context.input.itemIds } : {}),
         };

@@ -1,3 +1,4 @@
+import type * as EffectApiTypes from "../../generated/effect-api";
 import { createEffect, createSignal, type Accessor, type Setter } from "solid-js";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
@@ -13,7 +14,6 @@ import {
   type Job,
 } from "../../generated/effect-api";
 import type { ServerState } from "../app/server";
-import type { components } from "../../generated/api";
 import {
   acceptCandidates,
   type Candidate,
@@ -23,10 +23,10 @@ import {
 } from "./model";
 import type { Segment } from "../preview/model";
 
-type Media = components["schemas"]["Media"];
-type Project = components["schemas"]["Project"];
-type DetectionJob = components["schemas"]["DetectionJob"];
-type DetectionInput = components["schemas"]["DetectionInput"];
+type Media = EffectApiTypes.Media;
+type Project = EffectApiTypes.Project;
+type DetectionJob = EffectApiTypes.DetectionJob;
+type DetectionInput = EffectApiTypes.DetectionInput;
 
 type DetectionReview = {
   jobId: string;
@@ -137,10 +137,7 @@ export interface DetectionController {
   clearDetectionContext: () => void;
   startDetection: (
     kind: DetectionKind,
-    options?: Pick<
-      components["schemas"]["DetectionInput"],
-      "noiseDb" | "minDurationMs" | "sceneThreshold"
-    >,
+    options?: Pick<EffectApiTypes.DetectionInput, "noiseDb" | "minDurationMs" | "sceneThreshold">,
   ) => Promise<void>;
   cancelDetection: () => Promise<void>;
   acceptDetection: (candidate: Candidate) => CandidateAcceptance;
@@ -305,7 +302,7 @@ export function createDetectionController(
       server.setJobLocallyCancelled(next.id, false);
     }
     if (next.state === "succeeded") {
-      setDetectionResult(next.candidates ?? []);
+      setDetectionResult([...(next.candidates ?? [])]);
     } else if (next.state === "queued" || next.state === "running") {
       if (failedCancellation !== next.id) {
         setDetectionStatus(next.state === "queued" ? "Detection queued." : "Detection running.");
@@ -355,7 +352,7 @@ export function createDetectionController(
   const startDetection = async (
     kind: DetectionKind,
     options: Pick<
-      components["schemas"]["DetectionInput"],
+      EffectApiTypes.DetectionInput,
       "noiseDb" | "minDurationMs" | "sceneThreshold"
     > = {},
   ) => {
