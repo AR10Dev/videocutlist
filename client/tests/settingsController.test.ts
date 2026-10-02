@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { createApiClient } from "../src/api";
 import { createServerState } from "../src/features/app/server";
+import * as AsyncResult from "effect/reactivity/AsyncResult";
 import * as AtomRegistry from "effect/reactivity/AtomRegistry";
 import { createSettingsController } from "../src/features/settings/controller";
 import { validRuntimeSettingsInput } from "../src/features/settings/model";
@@ -65,7 +66,7 @@ const proposal = (id: string) => ({
 });
 
 const cleanups: Array<() => void> = [];
-function controller(fetch: typeof globalThis.fetch) {
+function workspace(fetch: typeof globalThis.fetch) {
   vi.stubGlobal("localStorage", { getItem: () => null });
   vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = new Request(input, init);
@@ -86,12 +87,13 @@ function controller(fetch: typeof globalThis.fetch) {
     authentication: { type: "none" as const },
   };
   const api = createApiClient(configuration, fetch);
-  const state = createSettingsController(
-    api,
-    createServerState(api, AtomRegistry.make(), configuration),
-  );
+  const server = createServerState(api, AtomRegistry.make(), configuration);
+  const state = createSettingsController(api, server);
   cleanups.push(state.dispose);
-  return state;
+  return { server, state };
+}
+function controller(fetch: typeof globalThis.fetch) {
+  return workspace(fetch).state;
 }
 afterEach(() => {
   for (const dispose of cleanups.splice(0)) dispose();
@@ -448,7 +450,9 @@ describe("settings controller", () => {
             releaseRefresh = resolve;
           }),
       );
-    const state = controller(fetch);
+    const { server, state } = workspace(fetch);
+    const createCredential = server.generatedApi!.mutation("default", "createMCPCredential");
+    cleanups.push(server.registry.mount(createCredential));
     state.setSettingsOpen(true);
     const creation = state.createMCPCredential({
       name: "Demo",
@@ -457,6 +461,14 @@ describe("settings controller", () => {
       projectScope: { kind: "all" },
     });
     await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(2));
+    expect(fetch.mock.calls[0][0]).toContain("/settings/mcp/credentials");
+    expect(fetch.mock.calls[0][1]?.method).toBe("POST");
+    expect(JSON.parse(String(fetch.mock.calls[0][1]?.body))).toEqual({
+      name: "Demo",
+      permissions: [],
+      mediaScope: { kind: "all" },
+      projectScope: { kind: "all" },
+    });
     expect(state.mcpPending()).toBe(true);
     expect(state.revealedMCPSecret()).toBe("once-only");
     state.setSettingsOpen(false);
@@ -464,6 +476,8 @@ describe("settings controller", () => {
     releaseRefresh(Response.json(mcp));
     expect(await creation).toBe(true);
     expect(state.revealedMCPSecret()).toBe("");
+    expect(AsyncResult.isInitial(server.registry.get(createCredential))).toBe(true);
+    expect(JSON.stringify(server.registry.get(createCredential))).not.toContain("once-only");
     expect(state.mcpStatus()).toContain("disclosure was dismissed");
     expect(state.mcpSettings()?.credentials).toEqual([]);
   });
@@ -479,7 +493,9 @@ describe("settings controller", () => {
           }),
       )
       .mockResolvedValueOnce(Response.json(mcp));
-    const state = controller(fetch);
+    const { server, state } = workspace(fetch);
+    const createCredential = server.generatedApi!.mutation("default", "createMCPCredential");
+    cleanups.push(server.registry.mount(createCredential));
     state.setSettingsOpen(true);
     const creation = state.createMCPCredential({
       name: "Demo",
@@ -500,6 +516,42 @@ describe("settings controller", () => {
     expect(state.revealedMCPSecret()).toBe("");
     expect(state.mcpStatus()).toBe("");
     expect(JSON.stringify(state.settings())).not.toContain("never-show-late");
+    expect(AsyncResult.isInitial(server.registry.get(createCredential))).toBe(true);
+    expect(JSON.stringify(server.registry.get(createCredential))).not.toContain("never-show-late");
+  });
+
+  it("resets the actual credential mutation result when controller disposal interrupts it", async () => {
+    let releaseCreate!: (response: Response) => void;
+    const fetch = vi.fn<typeof globalThis.fetch>(
+      () => new Promise((resolve) => (releaseCreate = resolve)),
+    );
+    const { server, state } = workspace(fetch);
+    const createCredential = server.generatedApi!.mutation("default", "createMCPCredential");
+    cleanups.push(server.registry.mount(createCredential));
+    state.setSettingsOpen(true);
+    const creation = state.createMCPCredential({
+      name: "Demo",
+      permissions: [],
+      mediaScope: { kind: "all" },
+      projectScope: { kind: "all" },
+    });
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+
+    state.dispose();
+    releaseCreate(
+      Response.json(
+        { ...credential("c_000000000001"), secret: "interrupted-secret" },
+        { status: 201 },
+      ),
+    );
+    expect(await creation).toBe(false);
+    await vi.waitFor(() =>
+      expect(AsyncResult.isInitial(server.registry.get(createCredential))).toBe(true),
+    );
+    expect(JSON.stringify(server.registry.get(createCredential))).not.toContain(
+      "interrupted-secret",
+    );
+    expect(fetch).toHaveBeenCalledTimes(1);
   });
 
   it("interrupts in-flight commands on disposal without republishing late settings", async () => {
