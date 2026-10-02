@@ -164,6 +164,7 @@ test.beforeEach(async ({ page }) => {
   let savedRevision = 0;
   let detectionPoll = 0;
   let detectionSequence = 0;
+  let detectionStream = 0;
   let detectionProjectId = "p_demo-project";
   let detectionRevision = 1;
   await page.route(`${apiOrigin}/api/v2/**`, async (route) => {
@@ -234,6 +235,7 @@ test.beforeEach(async ({ page }) => {
       detectionProjectId = projectId;
       detectionRevision = body.projectRevision;
       detectionPoll = 0;
+      detectionStream = 0;
       detectionSequence += 1;
       const job = {
         id: `j_detection-${kind}-${detectionSequence}`,
@@ -248,6 +250,7 @@ test.beforeEach(async ({ page }) => {
     }
     if (/^\/api\/v2\/jobs\/j_detection-(?:black|silence)-\d+\/events$/.test(url.pathname)) {
       const jobId = url.pathname.split("/")[4];
+      expect(request.headers().accept).toContain("text/event-stream");
       const kind = jobId.includes("black") ? "black" : "silence";
       type DetectionSnapshot = components["schemas"]["DetectionJob"] &
         Pick<components["schemas"]["Job"], "revision" | "createdAt" | "updatedAt">;
@@ -302,15 +305,13 @@ test.beforeEach(async ({ page }) => {
                 ],
               },
             ];
+      const frameIndex = kind === "black" ? 0 : Math.min(detectionStream++, 1);
+      const snapshot = snapshots[frameIndex]!;
+      if (frameIndex > 0) expect(request.headers()["last-event-id"]).toBe("1");
       return route.fulfill({
         status: 200,
         headers: { "content-type": "text/event-stream" },
-        body: snapshots
-          .map(
-            (snapshot, index) =>
-              `id: ${index + 1}\nevent: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`,
-          )
-          .join(""),
+        body: `id: ${frameIndex + 1}\nevent: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`,
       });
     }
     if (/^\/api\/v2\/jobs\/j_detection-black-\d+$/.test(url.pathname) && request.method() === "GET")
@@ -1008,6 +1009,7 @@ test("restores the durable queue and retries a failed child as a new job", async
         type: "export",
         ...jobTimestamps,
         state: "failed",
+        revision: 1,
         progress: 1,
         errorCode: "source_changed",
       },
@@ -1024,23 +1026,38 @@ test("restores the durable queue and retries a failed child as a new job", async
         id: "j_retryqueue001",
         batchId: "b_retryqueue001",
         state: "queued",
+        revision: 1,
         progress: 0,
         errorCode: undefined,
       },
     ],
   };
   let retried = false;
-  await page.route(`${apiOrigin}/api/v1/batches**`, (route) => {
+  await page.route(`${apiOrigin}/api/v2/batches**`, (route) => {
     const path = new URL(route.request().url()).pathname;
-    if (path === "/api/v1/batches/b_retryqueue001") return route.fulfill({ json: retryBatch });
-    return route.fulfill({ json: { items: retried ? [retryBatch, failedBatch] : [failedBatch] } });
+    if (path === "/api/v2/batches/b_retryqueue001") return route.fulfill({ json: retryBatch });
+    return route.fulfill({
+      json: { items: retried ? [retryBatch, failedBatch] : [failedBatch], nextCursor: null },
+    });
   });
-  await page.route(`${apiOrigin}/api/v1/jobs/j_failedqueue01/retry`, (route) => {
+  await page.route(`${apiOrigin}/api/v2/jobs/j_failedqueue01/retry`, (route) => {
+    expect(route.request().headers()["idempotency-key"]).toMatch(/^[A-Za-z0-9_-]{1,128}$/);
     retried = true;
     return route.fulfill({ status: 202, json: retryBatch });
   });
-  await page.route(`${apiOrigin}/api/v1/jobs/j_retryqueue001`, (route) =>
-    route.fulfill({ json: retryBatch.jobs[0] }),
+  await page.route(`${apiOrigin}/api/v2/batches/b_failedqueue01/events`, (route) =>
+    route.fulfill({
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+      body: `id: failed-1\nevent: snapshot\ndata: ${JSON.stringify(failedBatch)}\n\n`,
+    }),
+  );
+  await page.route(`${apiOrigin}/api/v2/batches/b_retryqueue001/events`, (route) =>
+    route.fulfill({
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+      body: `id: retry-1\nevent: snapshot\ndata: ${JSON.stringify(retryBatch)}\n\n`,
+    }),
   );
 
   await page.goto("/");
@@ -1072,6 +1089,7 @@ test("child retry exposes pending state, rejects visibly, and ignores duplicate 
     type: "export",
     ...jobTimestamps,
     state: "failed",
+    revision: 1,
     progress: 1,
     errorCode: "source_changed",
   };
@@ -1088,20 +1106,28 @@ test("child retry exposes pending state, rejects visibly, and ignores duplicate 
   const retryResponse = new Promise<void>((resolve) => {
     releaseRetry = resolve;
   });
-  await page.route(`${apiOrigin}/api/v1/batches**`, async (route) => {
+  await page.route(`${apiOrigin}/api/v2/batches**`, async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
     if (request.method() === "GET")
       return route.fulfill({
-        json: path === "/api/v1/batches" ? { items: [failedBatch] } : failedBatch,
+        json: path === "/api/v2/batches" ? { items: [failedBatch], nextCursor: null } : failedBatch,
       });
     return route.fallback();
   });
-  await page.route(`${apiOrigin}/api/v1/jobs/${failedJob.id}`, async (route) => {
+  await page.route(`${apiOrigin}/api/v2/batches/${failedBatch.batchId}/events`, (route) =>
+    route.fulfill({
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+      body: `id: 1\nevent: snapshot\ndata: ${JSON.stringify(failedBatch)}\n\n`,
+    }),
+  );
+  await page.route(`${apiOrigin}/api/v2/jobs/${failedJob.id}`, async (route) => {
     if (route.request().method() === "GET") return route.fulfill({ json: failedJob });
     return route.fallback();
   });
-  await page.route(`${apiOrigin}/api/v1/jobs/${failedJob.id}/retry`, async (route) => {
+  await page.route(`${apiOrigin}/api/v2/jobs/${failedJob.id}/retry`, async (route) => {
+    expect(route.request().headers()["idempotency-key"]).toMatch(/^[A-Za-z0-9_-]{1,128}$/);
     retryCalls += 1;
     await retryResponse;
     await route.abort();
@@ -1124,7 +1150,9 @@ test("child retry exposes pending state, rejects visibly, and ignores duplicate 
   );
   expect(retryCalls).toBe(1);
   releaseRetry();
-  await expect(page.locator(".export-status")).toContainText(/failed|could not|try again/i);
+  await expect(page.locator(".export-status")).toContainText(
+    /failed|could not|try again|transport error/i,
+  );
   await expect(retry).toBeEnabled();
   await retry.click();
   await expect.poll(() => retryCalls).toBe(2);
@@ -1148,6 +1176,7 @@ test("reload restores the active project and permits child and batch cancellatio
         type: "export",
         ...jobTimestamps,
         state: "queued",
+        revision: 1,
         progress: 0,
       },
     ],
@@ -1157,17 +1186,24 @@ test("reload restores the active project and permits child and batch cancellatio
   await page.addInitScript(() =>
     localStorage.setItem("videocutlist.active-project.v2", "p_demo-project"),
   );
-  await page.route(`${apiOrigin}/api/v1/batches**`, (route) => {
+  await page.route(`${apiOrigin}/api/v2/batches**`, (route) => {
     const path = new URL(route.request().url()).pathname;
     if (route.request().method() === "DELETE") {
       batchCancelled = true;
       return route.fulfill({ status: 204 });
     }
     return route.fulfill({
-      json: path === "/api/v1/batches" ? { items: [queuedBatch] } : queuedBatch,
+      json: path === "/api/v2/batches" ? { items: [queuedBatch], nextCursor: null } : queuedBatch,
     });
   });
-  await page.route(`${apiOrigin}/api/v1/jobs/j_restorequeue01`, (route) => {
+  await page.route(`${apiOrigin}/api/v2/batches/b_restorequeue01/events`, (route) =>
+    route.fulfill({
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+      body: `id: 1\nevent: snapshot\ndata: ${JSON.stringify(queuedBatch)}\n\n`,
+    }),
+  );
+  await page.route(`${apiOrigin}/api/v2/jobs/j_restorequeue01`, (route) => {
     if (route.request().method() === "DELETE") childCancelled = true;
     return route.fulfill({ status: 204 });
   });
@@ -1220,7 +1256,14 @@ test("keeps the inspector contextual until media is selected", async ({ page }) 
   await expect(page.getByRole("tab", { name: "Auto-detect", exact: true })).toBeVisible();
 });
 
-test("detection polls, previews, and supports sequential keyboard review", async ({ page }) => {
+test("detection observes snapshots, previews, and supports sequential keyboard review", async ({
+  page,
+}) => {
+  const eventCursors: string[] = [];
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname.endsWith("/events"))
+      eventCursors.push(request.headers()["last-event-id"] ?? "");
+  });
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   await page.getByRole("button", { name: "Add to project" }).click();
@@ -1232,6 +1275,8 @@ test("detection polls, previews, and supports sequential keyboard review", async
   await expect(
     page.getByText("1 candidates found. Review each before accepting.", { exact: true }),
   ).toBeVisible();
+  await expect(page.getByText("Detection complete", { exact: true })).toBeVisible();
+  expect(eventCursors).toEqual(["", "1"]);
   await page.getByRole("button", { name: "Preview candidate 1" }).click();
   await expect(page.getByLabel("Preview player")).toHaveAttribute(
     "data-playback-mode",
