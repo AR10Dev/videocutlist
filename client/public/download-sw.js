@@ -1,7 +1,36 @@
 // This worker controls only its registered deployment-root download path.
 // Credentials and upstream URLs remain transient and never enter navigation URLs or storage.
 const prefix = new URL(self.registration.scope);
+const mediaRoot = configuredMediaRoot();
 const downloads = new Map();
+
+function configuredMediaRoot() {
+  try {
+    const script = new URL(self.location.href);
+    const values = script.searchParams.getAll("mediaRoot");
+    if (
+      script.hash ||
+      [...script.searchParams.keys()].join(",") !== "mediaRoot" ||
+      values.length !== 1
+    )
+      return undefined;
+    const root = new URL(values[0]);
+    if (
+      values[0] !== root.href ||
+      (root.protocol !== "https:" && root.protocol !== "http:") ||
+      root.username ||
+      root.password ||
+      root.search ||
+      root.hash ||
+      !root.pathname.endsWith("/media/v2/") ||
+      decodeURIComponent(root.pathname) !== root.pathname
+    )
+      return undefined;
+    return root;
+  } catch {
+    return undefined;
+  }
+}
 
 self.addEventListener("install", (event) => event.waitUntil(self.skipWaiting()));
 
@@ -49,14 +78,17 @@ self.addEventListener("message", (event) => {
       return;
     }
     url = new URL(request.url);
-    const mediaPath = url.pathname.slice(url.pathname.lastIndexOf("/media/v2/"));
+    const mediaPath = url.pathname.slice(mediaRoot?.pathname.length ?? 0);
     if (
-      (url.protocol !== "https:" && url.protocol !== "http:") ||
+      !mediaRoot ||
+      url.origin !== mediaRoot.origin ||
+      !url.pathname.startsWith(mediaRoot.pathname) ||
       url.username ||
       url.password ||
       url.search ||
       url.hash ||
-      !/^\/media\/v2\/(jobs\/[A-Za-z0-9_-]+\/outputs\/[0-9]+|batches\/[A-Za-z0-9_-]+\/download)$/.test(
+      url.href !== request.url ||
+      !/^(jobs\/[A-Za-z0-9_-]+\/outputs\/[0-9]+|batches\/[A-Za-z0-9_-]+\/download)$/.test(
         mediaPath,
       ) ||
       decodeURIComponent(url.pathname) !== url.pathname

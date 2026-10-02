@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { runInNewContext } from "node:vm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createRoot } from "solid-js";
 import type { StreamingApiClient } from "../src/api";
@@ -106,7 +108,7 @@ describe("export download actions", () => {
 });
 
 describe("service worker transfer", () => {
-  const worker = { state: "activated", postMessage: vi.fn() };
+  const worker = { state: "activated", scriptURL: "", postMessage: vi.fn() };
   function browser() {
     const link = { href: "", referrerPolicy: "", click: vi.fn() };
     const pagePort = {
@@ -126,7 +128,15 @@ describe("service worker transfer", () => {
       reportUnauthorized,
     };
     vi.stubGlobal("navigator", {
-      serviceWorker: { register: vi.fn(async () => ({ active: worker })) },
+      serviceWorker: {
+        register: vi.fn(async (scriptURL: string, options: RegistrationOptions) => {
+          worker.scriptURL = scriptURL;
+          return {
+            active: worker,
+            scope: new URL(options.scope ?? "/", window.location.origin).href,
+          };
+        }),
+      },
     });
     vi.stubGlobal("window", { isSecureContext: true, location: { origin: "https://app.example" } });
     vi.stubGlobal("document", { createElement: vi.fn(() => link) });
@@ -157,10 +167,10 @@ describe("service worker transfer", () => {
     expect(worker.postMessage).toHaveBeenCalledWith(expect.objectContaining({ url: message.url }), [
       expect.any(Object),
     ]);
-    expect(navigator.serviceWorker.register).toHaveBeenCalledWith("/deploy/download-sw.js", {
-      scope: "/deploy/download-stream/",
-      updateViaCache: "none",
-    });
+    expect(navigator.serviceWorker.register).toHaveBeenCalledWith(
+      "https://app.example/deploy/download-sw.js?mediaRoot=https%3A%2F%2Fserver.example%2Fdeploy%2Fmedia%2Fv2%2F",
+      { scope: "/deploy/download-stream/", updateViaCache: "none" },
+    );
     expect(message.authentication).toBe(authentication);
     send("ready");
     send("done");
@@ -171,6 +181,22 @@ describe("service worker transfer", () => {
     expect(link.referrerPolicy).toBe("no-referrer");
     expect(pagePort.postMessage).not.toHaveBeenCalled();
     expect(pagePort.close).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a reused worker whose immutable configured root does not match", async () => {
+    const { api, worker } = browser();
+    api.mediaUrl = (path) => `https://other-server.example/other/media/v2/${path}`;
+    vi.mocked(navigator.serviceWorker.register).mockResolvedValueOnce({
+      active: {
+        ...worker,
+        scriptURL: "https://app.example/other/download-sw.js?mediaRoot=stale",
+      } as unknown as ServiceWorker,
+      scope: "https://app.example/other/download-stream/",
+    } as ServiceWorkerRegistration);
+    await expect(
+      downloadExport(api, "jobs/1/outputs/0", "clip.mp4", { type: "none" }),
+    ).rejects.toThrow("Configured download worker is unavailable.");
+    expect(worker.postMessage).not.toHaveBeenCalled();
   });
 
   it("interrupts the worker entry and ignores an unauthorized message after cancellation", async () => {
@@ -194,5 +220,118 @@ describe("service worker transfer", () => {
     } as MessageEvent<{ type: string; status: number }>);
     send("error", 401);
     expect(reportUnauthorized).not.toHaveBeenCalled();
+  });
+});
+
+function actualDownloadWorker(scriptUrl: string) {
+  const listeners = new Map<string, (event: unknown) => void>();
+  const fetch = vi.fn<typeof globalThis.fetch>(async () => new Response(new ReadableStream()));
+  const serviceWorker = {
+    location: { href: scriptUrl, origin: "https://app.example" },
+    registration: { scope: "https://app.example/deploy/download-stream/" },
+    addEventListener: (type: string, listener: (event: unknown) => void) =>
+      listeners.set(type, listener),
+    skipWaiting: vi.fn(),
+  };
+  runInNewContext(readFileSync(new URL("../public/download-sw.js", import.meta.url), "utf8"), {
+    self: serviceWorker,
+    fetch,
+    URL,
+    Headers,
+    Response,
+    ReadableStream,
+    AbortController,
+    setTimeout,
+    clearTimeout,
+  });
+  return { fetch, listeners };
+}
+
+describe("download service worker origin confinement", () => {
+  const root = "https://server.example/deploy/media/v2/";
+  const script = `https://app.example/deploy/download-sw.js?mediaRoot=${encodeURIComponent(root)}`;
+  const validPath = "https://server.example/deploy/media/v2/jobs/job_123/outputs/0";
+
+  function message(url: string) {
+    const port = {
+      close: vi.fn(),
+      postMessage: vi.fn(),
+      onmessage: null as null | ((event: MessageEvent) => void),
+    };
+    return {
+      data: {
+        type: "download",
+        id: "b321a7b3-1a95-4e4f-9ca7-151d48123023",
+        name: "video.mp4",
+        url,
+        authentication: { type: "bearer", token: "secret-token" },
+      },
+      source: { url: "https://app.example/deploy/editor" },
+      ports: [port],
+      waitUntil: vi.fn(),
+      port,
+    };
+  }
+
+  it.each([
+    ["off-origin", "https://attacker.example/outside/media/v2/jobs/job_123/outputs/0"],
+    ["wrong deployment prefix", "https://server.example/wrong/media/v2/jobs/job_123/outputs/0"],
+    [
+      "encoded traversal",
+      "https://server.example/deploy/media/v2/jobs/job_123%2F..%2F..%2Fattacker/outputs/0",
+    ],
+    [
+      "normalized traversal",
+      "https://server.example/deploy/media/v2/jobs/../jobs/job_123/outputs/0",
+    ],
+    ["root escape", "https://server.example/deploy/media/v20/jobs/job_123/outputs/0"],
+  ])("rejects %s without fetching or forwarding credentials", (_case, url) => {
+    const worker = actualDownloadWorker(script);
+    const event = message(url);
+    worker.listeners.get("message")!(event);
+    expect(worker.fetch).not.toHaveBeenCalled();
+    expect(event.port.close).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["missing", "https://app.example/deploy/download-sw.js"],
+    [
+      "malformed",
+      "https://app.example/deploy/download-sw.js?mediaRoot=https%3A%2F%2Fserver.example%2Fwrong%2F",
+    ],
+    [
+      "credentials",
+      `https://app.example/deploy/download-sw.js?mediaRoot=${encodeURIComponent("https://user:pass@server.example/deploy/media/v2/")}`,
+    ],
+    [
+      "traversal",
+      `https://app.example/deploy/download-sw.js?mediaRoot=${encodeURIComponent("https://server.example/deploy/../deploy/media/v2/")}`,
+    ],
+  ])("fails closed with %s immutable root configuration", (_case, scriptUrl) => {
+    const worker = actualDownloadWorker(scriptUrl);
+    const event = message(validPath);
+    worker.listeners.get("message")!(event);
+    expect(worker.fetch).not.toHaveBeenCalled();
+    expect(event.port.close).toHaveBeenCalledOnce();
+  });
+
+  it("fetches a valid prefixed cross-origin URL only from the configured origin and root", async () => {
+    const worker = actualDownloadWorker(script);
+    const event = message(validPath);
+    worker.listeners.get("message")!(event);
+    await vi.waitFor(() => expect(worker.fetch).toHaveBeenCalledOnce());
+    expect(worker.fetch).toHaveBeenCalledWith(
+      validPath,
+      expect.objectContaining({
+        headers: expect.any(Headers),
+        credentials: "omit",
+        redirect: "error",
+      }),
+    );
+    const init = worker.fetch.mock.calls[0]?.[1];
+    expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer secret-token");
+    event.port.onmessage?.({ data: { type: "cancel" } } as MessageEvent);
+    await event.waitUntil.mock.calls[0]?.[0];
+    expect(event.port.close).toHaveBeenCalledOnce();
   });
 });

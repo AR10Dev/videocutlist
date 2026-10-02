@@ -49,20 +49,36 @@ export function createExportDownload(start: (signal: AbortSignal) => Promise<voi
   };
 }
 
-let registration: { rootPath: string; promise: Promise<ServiceWorkerRegistration> } | undefined;
+let registration:
+  | { scriptUrl: string; scope: string; promise: Promise<ServiceWorkerRegistration> }
+  | undefined;
 
-function downloadWorker(rootPath: string): Effect.Effect<ServiceWorker, Error> {
+function downloadWorker(mediaRoot: URL): Effect.Effect<ServiceWorker, Error> {
   return Effect.gen(function* () {
     if (!("serviceWorker" in navigator) || !window.isSecureContext)
       return yield* Effect.fail(
         new Error("Downloads require a secure browser context (HTTPS or localhost)."),
       );
-    const scope = `${rootPath}download-stream/`;
-    if (!registration || registration.rootPath !== rootPath) {
-      const state: { rootPath: string; promise: Promise<ServiceWorkerRegistration> } = {
-        rootPath,
+    const scriptUrl = new URL(
+      `${mediaRoot.pathname.slice(0, mediaRoot.pathname.lastIndexOf("/media/v2/"))}/download-sw.js`,
+      window.location.origin,
+    );
+    scriptUrl.searchParams.set("mediaRoot", mediaRoot.href);
+    const scope = `${scriptUrl.pathname.slice(0, scriptUrl.pathname.lastIndexOf("download-sw.js"))}download-stream/`;
+    if (
+      !registration ||
+      registration.scriptUrl !== scriptUrl.href ||
+      registration.scope !== scope
+    ) {
+      const state: {
+        scriptUrl: string;
+        scope: string;
+        promise: Promise<ServiceWorkerRegistration>;
+      } = {
+        scriptUrl: scriptUrl.href,
+        scope,
         promise: navigator.serviceWorker
-          .register(`${rootPath}download-sw.js`, { scope, updateViaCache: "none" })
+          .register(scriptUrl.href, { scope, updateViaCache: "none" })
           .catch((error: unknown) => {
             if (registration === state) registration = undefined;
             throw error;
@@ -70,16 +86,21 @@ function downloadWorker(rootPath: string): Effect.Effect<ServiceWorker, Error> {
       };
       registration = state;
     }
+    const selectedRegistration = registration!;
     const installed = yield* Effect.tryPromise({
-      try: () => registration!.promise,
+      try: () => selectedRegistration.promise,
       catch: (cause) =>
         cause instanceof Error
           ? cause
           : new Error("Could not start the download worker. Try again."),
     });
-    const worker = installed.active ?? installed.installing ?? installed.waiting;
+    if (installed.scope !== new URL(scope, window.location.origin).href)
+      return yield* Effect.fail(new Error("Configured download worker scope changed. Try again."));
+    const worker = [installed.active, installed.installing, installed.waiting].find(
+      (candidate) => candidate?.scriptURL === scriptUrl.href,
+    );
     if (!worker)
-      return yield* Effect.fail(new Error("Could not start the download worker. Try again."));
+      return yield* Effect.fail(new Error("Configured download worker is unavailable. Try again."));
     if (worker.state !== "activated") {
       yield* Effect.callback<void, Error>((resume) => {
         const onStateChange = () => {
@@ -97,6 +118,8 @@ function downloadWorker(rootPath: string): Effect.Effect<ServiceWorker, Error> {
         return Effect.sync(() => worker.removeEventListener("statechange", onStateChange));
       });
     }
+    if (worker.scriptURL !== scriptUrl.href)
+      return yield* Effect.fail(new Error("Configured download worker changed. Try again."));
     return worker;
   });
 }
@@ -115,13 +138,20 @@ function streamDownload(
 ): Effect.Effect<void, Error> {
   return Effect.scoped(
     Effect.gen(function* () {
-      const mediaBase = new URL(api.mediaUrl(""));
+      const mediaRoot = new URL(api.mediaUrl(""));
       const mediaMarker = "/media/v2/";
-      const mediaRoot = mediaBase.pathname.lastIndexOf(mediaMarker);
-      if (mediaRoot < 0 || mediaBase.pathname.slice(mediaRoot) !== mediaMarker)
+      if (
+        (mediaRoot.protocol !== "https:" && mediaRoot.protocol !== "http:") ||
+        mediaRoot.username ||
+        mediaRoot.password ||
+        mediaRoot.search ||
+        mediaRoot.hash ||
+        !mediaRoot.pathname.endsWith(mediaMarker) ||
+        decodeURIComponent(mediaRoot.pathname) !== mediaRoot.pathname
+      )
         return yield* Effect.fail(new Error("Could not determine the configured download root."));
-      const rootPath = mediaBase.pathname.slice(0, mediaRoot + 1);
-      const worker = yield* downloadWorker(rootPath);
+      const rootPath = mediaRoot.pathname.slice(0, -"media/v2/".length);
+      const worker = yield* downloadWorker(mediaRoot);
       const fiberSignal = yield* Effect.abortSignal;
       const messages = yield* Queue.unbounded<DownloadMessage>();
       const id = crypto.randomUUID();

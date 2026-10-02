@@ -5,17 +5,17 @@ import { expect, test, type Page } from "@playwright/test";
 
 const token = "test-only-download-token";
 
-async function exportServer(onResponse: (response: ServerResponse) => void) {
+async function exportServer(appOrigin: string, onResponse: (response: ServerResponse) => void) {
   let authorized = 0;
   const server = createServer((request, response) => {
-    response.setHeader("Access-Control-Allow-Origin", "http://127.0.0.1:5199");
+    response.setHeader("Access-Control-Allow-Origin", appOrigin);
     response.setHeader("Access-Control-Allow-Headers", "Authorization");
     if (request.method === "OPTIONS") {
       response.writeHead(204).end();
       return;
     }
     if (
-      request.url !== "/media/v2/jobs/job_123/outputs/0" ||
+      request.url !== "/deploy/media/v2/jobs/job_123/outputs/0" ||
       request.headers.authorization !== `Bearer ${token}`
     ) {
       response.writeHead(401).end();
@@ -46,9 +46,11 @@ async function startDownload(
   return page.evaluate(
     async ({ baseUrl, token, cancelAfterStart, name }) => {
       // page.evaluate runs in Chromium, not the Playwright Node module graph.
-      const { createApiClient } = await import(/* @vite-ignore */ `${location.origin}/src/api.ts`);
+      const { createApiClient } = await import(
+        /* @vite-ignore */ new URL("./src/api.ts", location.href).href
+      );
       const { downloadExport } = await import(
-        /* @vite-ignore */ `${location.origin}/src/features/export/download.ts`
+        /* @vite-ignore */ new URL("./src/features/export/download.ts", location.href).href
       );
       const authentication = { type: "bearer" as const, token };
       const configuration = { serverBaseUrl: baseUrl, authentication };
@@ -70,10 +72,11 @@ async function startDownload(
 
 test("first-use cross-origin bearer download saves streamed bytes without a page Blob", async ({
   page,
+  baseURL,
 }, testInfo) => {
   const bytes = 8 * 1024 * 1024;
   const name = "director's-cut*.mkv";
-  const server = await exportServer((response) => {
+  const server = await exportServer(new URL(baseURL!).origin, (response) => {
     response.writeHead(200, { "Content-Length": bytes, "Content-Type": "video/mp4" });
     for (let sent = 0; sent < bytes; sent += 64 * 1024)
       response.write(Buffer.alloc(64 * 1024, sent / (64 * 1024)));
@@ -91,7 +94,7 @@ test("first-use cross-origin bearer download saves streamed bytes without a page
     }
   });
   try {
-    await page.goto("/");
+    await page.goto(baseURL!);
     await page.evaluate(() => {
       Response.prototype.blob = () => {
         throw new Error("Page must never buffer a Blob.");
@@ -101,11 +104,12 @@ test("first-use cross-origin bearer download saves streamed bytes without a page
       };
     });
     const arriving = page.waitForEvent("download");
-    const transfer = startDownload(page, server.url, false, name);
+    const transfer = startDownload(page, `${server.url}/deploy`, false, name);
     const download = await arriving;
     // Chromium sanitizes '*' in the on-disk name even when filename* is valid.
     expect(download.suggestedFilename()).toBe("director's-cut_.mkv");
-    expect(download.url()).toMatch(/^http:\/\/127\.0\.0\.1:5199\/download-stream\/[0-9a-f-]{36}$/);
+    expect(new URL(download.url()).origin).toBe(new URL(baseURL!).origin);
+    expect(new URL(download.url()).pathname).toMatch(/^\/deploy\/download-stream\/[0-9a-f-]{36}$/);
     const path = testInfo.outputPath(download.suggestedFilename());
     await download.saveAs(path);
     await transfer;
@@ -120,18 +124,21 @@ test("first-use cross-origin bearer download saves streamed bytes without a page
   }
 });
 
-test("canceling a streamed export aborts the protected upstream request", async ({ page }) => {
+test("canceling a streamed export aborts the protected upstream request", async ({
+  page,
+  baseURL,
+}) => {
   let upstreamClosed!: () => void;
   const closed = new Promise<void>((resolve) => (upstreamClosed = resolve));
-  const server = await exportServer((response) => {
+  const server = await exportServer(new URL(baseURL!).origin, (response) => {
     response.writeHead(200, { "Content-Type": "video/mp4" });
     response.write(Buffer.alloc(64 * 1024));
     response.on("close", upstreamClosed);
   });
   try {
-    await page.goto("/");
+    await page.goto(baseURL!);
     const arriving = page.waitForEvent("download");
-    const transfer = startDownload(page, server.url, true).then(
+    const transfer = startDownload(page, `${server.url}/deploy`, true).then(
       () => undefined,
       (error: unknown) => error,
     );
@@ -151,13 +158,13 @@ test("canceling a streamed export aborts the protected upstream request", async 
   }
 });
 
-test("unauthorized streamed download opens the shared access gate", async ({ page }) => {
-  const server = await exportServer((response) => {
+test("unauthorized streamed download opens the shared access gate", async ({ page, baseURL }) => {
+  const server = await exportServer(new URL(baseURL!).origin, (response) => {
     response.writeHead(401).end();
   });
   try {
-    await page.goto("/");
-    await expect(startDownload(page, server.url)).rejects.toThrow(
+    await page.goto(baseURL!);
+    await expect(startDownload(page, `${server.url}/deploy`)).rejects.toThrow(
       "Download failed (401). Try again.",
     );
     await expect(page.getByRole("heading", { name: "VideoCutlist access" })).toBeVisible();
@@ -169,17 +176,18 @@ test("unauthorized streamed download opens the shared access gate", async ({ pag
 
 test("late 401 from a replaced download token does not reopen the access gate", async ({
   page,
+  baseURL,
 }) => {
   let respond!: () => void;
   let received!: () => void;
   const requestReceived = new Promise<void>((resolve) => (received = resolve));
-  const server = await exportServer((response) => {
+  const server = await exportServer(new URL(baseURL!).origin, (response) => {
     respond = () => response.writeHead(401).end();
     received();
   });
   try {
-    await page.goto("/");
-    const transfer = startDownload(page, server.url);
+    await page.goto(baseURL!);
+    const transfer = startDownload(page, `${server.url}/deploy`);
     await requestReceived;
     await page.evaluate(() => {
       const replace = (window as Window & { replaceDownloadAuthentication?: () => void })
