@@ -331,18 +331,18 @@ test("panel widths persist, desktop sidebars reopen, and narrow drawers stay exc
 test("server projects are browsable without selecting media and support pagination", async ({
   page,
 }) => {
+  const projectRequests: string[] = [];
   await page.route(`${origin}/api/v2/**`, (route) => {
-    if (!new URL(route.request().url()).pathname.endsWith("/projects")) return route.fallback();
+    const url = new URL(route.request().url());
+    if (!url.pathname.endsWith("/projects")) return route.fallback();
+    projectRequests.push(url.href);
+    const hasCursor = url.searchParams.has("cursor");
     return route.fulfill({
       json: {
         items: [
-          new URL(route.request().url()).searchParams.has("cursor")
-            ? { ...project, id: "p_second-project01", name: "Second project" }
-            : project,
+          hasCursor ? { ...project, id: "p_second-project01", name: "Second project" } : project,
         ],
-        nextCursor: new URL(route.request().url()).searchParams.has("cursor")
-          ? null
-          : "cursor-page-2",
+        nextCursor: hasCursor ? null : "cursor/page+2",
       },
     });
   });
@@ -350,8 +350,15 @@ test("server projects are browsable without selecting media and support paginati
   await openProjectTools(page);
   await page.getByText("Browse saved projects", { exact: true }).click();
   await expect(page.getByRole("button", { name: "Saved interview" })).toBeVisible();
+  await expect.poll(() => projectRequests).toHaveLength(1);
+  const firstQuery = new URL(projectRequests[0]).searchParams;
+  expect(firstQuery.has("cursor")).toBe(false);
   await page.getByRole("button", { name: "Load more projects" }).click();
   await expect(page.getByRole("button", { name: "Second project" })).toBeVisible();
+  await expect.poll(() => projectRequests).toHaveLength(2);
+  const nextRequest = new URL(projectRequests[1]);
+  expect(nextRequest.searchParams.get("cursor")).toBe("cursor/page+2");
+  expect(nextRequest.search).toContain("cursor=cursor%2Fpage%2B2");
   await page.getByRole("button", { name: "Saved interview" }).click();
   await expect(page.getByLabel("Project name")).toHaveValue("Saved interview");
   await page.getByRole("button", { name: "Close project tools", exact: true }).click();

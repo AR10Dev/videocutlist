@@ -22,7 +22,10 @@ export function ProjectBrowser() {
     const read = new AbortController();
     activeRead = read;
     try {
-      const resource = server.projectPage({ limit: 50, cursor: next });
+      const resource = server.projectPage({
+        limit: 50,
+        ...(next !== undefined ? { cursor: next } : {}),
+      });
       server.registry.refresh(resource);
       const result = await Effect.runPromise(readServerAtom(server, resource), {
         signal: read.signal,
