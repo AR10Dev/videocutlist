@@ -59,6 +59,31 @@ function errorCode(error: unknown): string | undefined {
   return typeof envelope.code === "string" ? envelope.code : undefined;
 }
 
+function responseStatus(error: unknown): number | undefined {
+  if (!error || typeof error !== "object") return;
+  if ("status" in error && typeof error.status === "number") return error.status;
+  const reason = "reason" in error ? error.reason : undefined;
+  if (reason && typeof reason === "object" && "response" in reason) {
+    const response = reason.response;
+    if (
+      response &&
+      typeof response === "object" &&
+      "status" in response &&
+      typeof response.status === "number"
+    )
+      return response.status;
+  }
+  const cause = "cause" in error ? error.cause : undefined;
+  return cause === error ? undefined : responseStatus(cause);
+}
+
+function isUncertainRequestError(error: unknown): boolean {
+  const status = responseStatus(error);
+  if (status !== undefined) return status >= 500;
+  const code = errorCode(error);
+  return code === undefined || code === "internal_error";
+}
+
 export function createSettingsController(api: ApiClient, server?: ServerState) {
   const registry = server?.registry ?? AtomRegistry.make();
   const runtime = server?.runtime ?? Atom.runtime(Layer.empty);
@@ -246,14 +271,16 @@ export function createSettingsController(api: ApiClient, server?: ServerState) {
     }),
   );
   const mcpMutationResult = observe(mcpMutation);
+  let uncertainRescanKey: string | undefined;
   const rescan = runtime.fn((key: string) => {
     const mutation = server?.generatedApi?.mutation("default", "refreshSettingsMedia");
     return mutation
       ? generatedMutation(mutation, { headers: { "Idempotency-Key": key } }).pipe(
           Effect.map(() => 202),
-          Effect.mapError(
-            () => new Error("Media library could not be rescanned. Check mounts and permissions."),
-          ),
+          Effect.mapError((error) => {
+            uncertainRescanKey = isUncertainRequestError(error) ? key : undefined;
+            return new Error("Media library could not be rescanned. Check mounts and permissions.");
+          }),
         )
       : Effect.fail(new Error("Generated settings API is not configured."));
   });
@@ -448,7 +475,6 @@ export function createSettingsController(api: ApiClient, server?: ServerState) {
       if (!disposed) setMCPStatus(publicError(error, "Credential could not be revoked."));
     }
   };
-  let uncertainRescanKey: string | undefined;
   const rescanLibrary = async () => {
     if (rescanPending() || disposed) return;
     const key = uncertainRescanKey ?? globalThis.crypto.randomUUID();
@@ -464,7 +490,13 @@ export function createSettingsController(api: ApiClient, server?: ServerState) {
           : "Media library could not be rescanned. Check mounts and permissions.",
       );
     } catch (error) {
-      uncertainRescanKey = key;
+      if (
+        !(
+          error instanceof Error &&
+          error.message === "Media library could not be rescanned. Check mounts and permissions."
+        )
+      )
+        uncertainRescanKey = isUncertainRequestError(error) ? key : undefined;
       if (!disposed) setServerSettingsStatus(publicError(error, "Media library rescan failed."));
     }
   };

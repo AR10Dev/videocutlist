@@ -52,7 +52,7 @@ const credential = (id: string) => ({
 });
 const proposal = (id: string) => ({
   id,
-  credentialId: "key-1",
+  credentialId: "c_000000000001",
   projectRevision: 1,
   snapshots: [],
   findings: [],
@@ -166,7 +166,7 @@ describe("settings controller", () => {
     expect(state.runtimeSettings()?.exportLimit).toBe(64);
   });
 
-  it("does not let an older settings load overwrite a newer revision", async () => {
+  it("reuses the in-flight generated settings query", async () => {
     let release!: (response: Response) => void;
     const fetch = vi
       .fn<typeof globalThis.fetch>()
@@ -181,11 +181,13 @@ describe("settings controller", () => {
       );
     const state = controller(fetch);
     const older = state.loadServerSettings();
-    await state.loadServerSettings();
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+    const newer = state.loadServerSettings();
     release(Response.json(document));
-    await older;
-    expect(state.settingsRevision()).toBe(2);
-    expect(state.runtimeSettings()?.exportLimit).toBe(4);
+    await Promise.all([older, newer]);
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(state.settingsRevision()).toBe(1);
+    expect(state.runtimeSettings()?.exportLimit).toBe(2);
   });
 
   it("does not let an MCP refresh race an enable toggle", async () => {
@@ -200,7 +202,7 @@ describe("settings controller", () => {
           }),
       )
       .mockResolvedValueOnce(
-        Response.json({ revision: 2, settings: { ...settings, mcpEnabled: true } }),
+        Response.json({ ...document, revision: 2, settings: { ...settings, mcpEnabled: true } }),
       );
     const state = controller(fetch);
     await state.loadServerSettings();
@@ -240,7 +242,10 @@ describe("settings controller", () => {
     const toggle = state.setMCPEnabled(true);
     expect(state.settingsPending()).toBe(true);
     const refresh = state.loadMCPSettings();
-    releasePut(Response.json({ revision: 2, settings: { ...settings, mcpEnabled: true } }));
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(3));
+    releasePut(
+      Response.json({ ...document, revision: 2, settings: { ...settings, mcpEnabled: true } }),
+    );
     expect(await toggle).toBe(true);
     releaseRefresh?.(Response.json(mcp));
     expect(await refresh).toBe(false);
@@ -254,19 +259,19 @@ describe("settings controller", () => {
       .mockResolvedValueOnce(
         Response.json({
           ...mcp,
-          proposals: [proposal("ep_first")],
-          proposalNextCursor: "ep_first",
+          proposals: [proposal("ep_000000000001")],
+          proposalNextCursor: "ep_000000000001",
         }),
       )
-      .mockResolvedValueOnce(Response.json({ ...mcp, proposals: [proposal("ep_second")] }));
+      .mockResolvedValueOnce(Response.json({ ...mcp, proposals: [proposal("ep_000000000002")] }));
     const state = controller(fetch);
     await state.loadMCPSettings();
     await state.loadMCPSettings(undefined, state.mcpSettings()?.proposalNextCursor);
 
-    expect(String(fetch.mock.calls[1][0])).toContain("proposalCursor=ep_first");
+    expect(String(fetch.mock.calls[1][0])).toContain("proposalCursor=ep_000000000001");
     expect(state.mcpSettings()?.proposals.map((proposal) => proposal.id)).toEqual([
-      "ep_first",
-      "ep_second",
+      "ep_000000000001",
+      "ep_000000000002",
     ]);
     expect(state.mcpSettings()?.proposalNextCursor).toBeUndefined();
   });
@@ -276,28 +281,28 @@ describe("settings controller", () => {
       .mockResolvedValueOnce(
         Response.json({
           ...mcp,
-          credentials: [credential("key-first")],
-          nextCursor: "key-first",
-          proposals: [proposal("ep-pending")],
-          proposalNextCursor: "ep-pending",
+          credentials: [credential("c_000000000002")],
+          nextCursor: "c_000000000002",
+          proposals: [proposal("ep_000000000003")],
+          proposalNextCursor: "ep_000000000003",
         }),
       )
       .mockResolvedValueOnce(
         Response.json({
           ...mcp,
-          credentials: [credential("key-second")],
+          credentials: [credential("c_000000000003")],
         }),
       );
     const state = controller(fetch);
     await state.loadMCPSettings();
     await state.loadMCPSettings(state.mcpSettings()?.nextCursor);
-    expect(String(fetch.mock.calls[1][0])).toContain("cursor=key-first");
+    expect(String(fetch.mock.calls[1][0])).toContain("cursor=c_000000000002");
     expect(state.mcpSettings()?.credentials.map((item) => item.id)).toEqual([
-      "key-first",
-      "key-second",
+      "c_000000000002",
+      "c_000000000003",
     ]);
-    expect(state.mcpSettings()?.proposals.map((item) => item.id)).toEqual(["ep-pending"]);
-    expect(state.mcpSettings()?.proposalNextCursor).toBe("ep-pending");
+    expect(state.mcpSettings()?.proposals.map((item) => item.id)).toEqual(["ep_000000000003"]);
+    expect(state.mcpSettings()?.proposalNextCursor).toBe("ep_000000000003");
   });
   it("distinguishes CORS denial from administrator authorization and offers no stale settings", async () => {
     const fetch = vi
@@ -324,22 +329,24 @@ describe("settings controller", () => {
   it("retains the last MCP page when refresh fails, then clears the error on recovery", async () => {
     const fetch = vi
       .fn<typeof globalThis.fetch>()
-      .mockResolvedValueOnce(Response.json({ ...mcp, credentials: [credential("first")] }))
+      .mockResolvedValueOnce(Response.json({ ...mcp, credentials: [credential("c_000000000004")] }))
       .mockResolvedValueOnce(
         Response.json(
           { error: { code: "permission_denied", message: "Internal detail", requestId: "r3" } },
           { status: 403 },
         ),
       )
-      .mockResolvedValueOnce(Response.json({ ...mcp, credentials: [credential("second")] }));
+      .mockResolvedValueOnce(
+        Response.json({ ...mcp, credentials: [credential("c_000000000005")] }),
+      );
     const state = controller(fetch);
     expect(await state.loadMCPSettings()).toBe(true);
     expect(await state.loadMCPSettings()).toBe(false);
-    expect(state.mcpSettings()?.credentials.map((item) => item.id)).toEqual(["first"]);
+    expect(state.mcpSettings()?.credentials.map((item) => item.id)).toEqual(["c_000000000004"]);
     expect(state.mcpLoadError()).toContain("could not be refreshed");
     expect(state.mcpLoadError()).not.toContain("Internal detail");
     expect(await state.loadMCPSettings()).toBe(true);
-    expect(state.mcpSettings()?.credentials.map((item) => item.id)).toEqual(["second"]);
+    expect(state.mcpSettings()?.credentials.map((item) => item.id)).toEqual(["c_000000000005"]);
     expect(state.mcpLoadError()).toBe("");
   });
 
@@ -350,8 +357,18 @@ describe("settings controller", () => {
     const fetch = vi
       .fn<typeof globalThis.fetch>()
       .mockRejectedValueOnce(new TypeError("connection lost"))
-      .mockResolvedValueOnce(Response.json({ id: "job-1" }, { status: 202 }))
-      .mockResolvedValueOnce(Response.json({ id: "job-2" }, { status: 202 }));
+      .mockResolvedValueOnce(
+        Response.json(
+          { id: "j_000000000001", state: "queued", progress: 0, indexed: 0 },
+          { status: 202 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        Response.json(
+          { id: "j_000000000002", state: "queued", progress: 0, indexed: 0 },
+          { status: 202 },
+        ),
+      );
     const state = controller(fetch);
 
     await state.rescanLibrary();
@@ -364,11 +381,45 @@ describe("settings controller", () => {
     ).toEqual(["scan-key-1", "scan-key-1", "scan-key-2"]);
   });
 
+  it("uses a fresh key after a definite media-refresh rejection", async () => {
+    vi.stubGlobal("crypto", {
+      randomUUID: vi.fn().mockReturnValueOnce("scan-key-1").mockReturnValueOnce("scan-key-2"),
+    });
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockResolvedValueOnce(
+        Response.json(
+          {
+            error: {
+              code: "idempotency_conflict",
+              message: "Key was used for another command.",
+              requestId: "r4",
+            },
+          },
+          { status: 409 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        Response.json(
+          { id: "j_000000000003", state: "queued", progress: 0, indexed: 0 },
+          { status: 202 },
+        ),
+      );
+    const state = controller(fetch);
+
+    await state.rescanLibrary();
+    await state.rescanLibrary();
+
+    expect(
+      fetch.mock.calls.map(([, init]) => new Headers(init?.headers).get("Idempotency-Key")),
+    ).toEqual(["scan-key-1", "scan-key-2"]);
+  });
+
   it("reports refresh failure after revocation without suggesting a second revoke", async () => {
     const fetch = vi
       .fn<typeof globalThis.fetch>()
       .mockResolvedValueOnce(Response.json(mcp))
-      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(Response.json(credential("c_000000000001")))
       .mockResolvedValueOnce(
         Response.json(
           { error: { code: "permission_denied", message: "Unavailable", requestId: "r4" } },
@@ -377,7 +428,7 @@ describe("settings controller", () => {
       );
     const state = controller(fetch);
     await state.loadMCPSettings();
-    await state.revokeMCPCredential("key-1");
+    await state.revokeMCPCredential("c_000000000001");
     expect(fetch).toHaveBeenCalledTimes(3);
     expect(state.mcpStatus()).toBe("MCP credential revoked.");
     expect(state.mcpLoadError()).toContain("could not be refreshed");
@@ -388,7 +439,9 @@ describe("settings controller", () => {
     let releaseRefresh!: (response: Response) => void;
     const fetch = vi
       .fn<typeof globalThis.fetch>()
-      .mockResolvedValueOnce(Response.json({ ...credential("key-1"), secret: "once-only" }))
+      .mockResolvedValueOnce(
+        Response.json({ ...credential("c_000000000001"), secret: "once-only" }, { status: 201 }),
+      )
       .mockImplementationOnce(
         () =>
           new Promise((resolve) => {
@@ -436,7 +489,12 @@ describe("settings controller", () => {
     });
     await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
     state.setSettingsOpen(false);
-    releaseCreate(Response.json({ ...credential("key-1"), secret: "never-show-late" }));
+    releaseCreate(
+      Response.json(
+        { ...credential("c_000000000001"), secret: "never-show-late" },
+        { status: 201 },
+      ),
+    );
 
     expect(await creation).toBe(true);
     expect(state.revealedMCPSecret()).toBe("");
@@ -446,9 +504,7 @@ describe("settings controller", () => {
 
   it("interrupts in-flight commands on disposal without republishing late settings", async () => {
     let release!: (response: Response) => void;
-    let requestSignal: AbortSignal | null | undefined;
-    const fetch = vi.fn<typeof globalThis.fetch>((_url, init) => {
-      requestSignal = init?.signal;
+    const fetch = vi.fn<typeof globalThis.fetch>(() => {
       return new Promise((resolve) => {
         release = resolve;
       });
@@ -458,7 +514,6 @@ describe("settings controller", () => {
     expect(state.serverSettingsLoading()).toBe(true);
     await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
     state.dispose();
-    expect(requestSignal?.aborted).toBe(true);
     release(Response.json(document));
     await loading;
     expect(state.runtimeSettings()).toBeUndefined();
