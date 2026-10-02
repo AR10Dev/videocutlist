@@ -1,4 +1,11 @@
 import { expect, test, type Page } from "@playwright/test";
+import * as Schema from "effect/Schema";
+import {
+  ExportSubmissionInput as ExportSubmissionInputSchema,
+  ProjectInput as ProjectInputSchema,
+  type ExportSubmissionInput,
+  type ProjectInput,
+} from "../src/generated/effect-api";
 import type { components } from "../src/generated/api";
 
 const jobTimestamps = {
@@ -159,11 +166,11 @@ test.beforeEach(async ({ page }) => {
   let detectionSequence = 0;
   let detectionProjectId = "p_demo-project";
   let detectionRevision = 1;
-  await page.route(`${apiOrigin}/api/v1/**`, async (route) => {
+  await page.route(`${apiOrigin}/api/v2/**`, async (route) => {
     const request = route.request();
     const url = new URL(request.url());
-    if (url.pathname === "/api/v1/settings") return route.fulfill({ json: serverSettings });
-    if (url.pathname === "/api/v1/settings/mcp")
+    if (url.pathname === "/api/v2/settings") return route.fulfill({ json: serverSettings });
+    if (url.pathname === "/api/v2/settings/mcp")
       return route.fulfill({
         json: {
           enabled: false,
@@ -177,85 +184,136 @@ test.beforeEach(async ({ page }) => {
           clientCompatibility: "Streamable HTTP bearer-token clients only.",
         } satisfies components["schemas"]["MCPSettingsResponse"],
       });
-    if (url.pathname === "/api/v1/media/status")
+    if (url.pathname === "/api/v2/media/status")
       return route.fulfill({
         json: { state: "ready_with_media", message: "Media library is ready." },
       });
-    if (url.pathname === "/api/v1/media/tree")
-      return route.fulfill({ json: { folders: [], items: [media, secondMedia] } });
-    if (url.pathname === `/api/v1/media/${media.id}`) return route.fulfill({ json: media });
-    if (url.pathname === `/api/v1/media/${secondMedia.id}`)
+    if (url.pathname === "/api/v2/media/tree")
+      return route.fulfill({
+        json: { folders: [], items: [media, secondMedia], nextCursor: null },
+      });
+    if (url.pathname === `/api/v2/media/${media.id}`) return route.fulfill({ json: media });
+    if (url.pathname === `/api/v2/media/${secondMedia.id}`)
       return route.fulfill({ json: secondMedia });
-    if (
-      url.pathname === `/api/v1/media/${media.id}/thumbnails` ||
-      url.pathname === `/api/v1/media/${secondMedia.id}/thumbnails`
-    )
-      return route.fulfill({
-        headers: { "content-type": "image/png" },
-        body: "png-fixture",
-      });
-    if (
-      url.pathname === `/api/v1/media/${media.id}/waveform` ||
-      url.pathname === `/api/v1/media/${secondMedia.id}/waveform`
-    )
-      return route.fulfill({
-        json: { startMs: 0, durationMs: 10000, peaks: [0.1, 0.5, 1] },
-      });
-    if (
-      url.pathname === `/api/v1/media/${media.id}/preview` ||
-      url.pathname === `/api/v1/media/${secondMedia.id}/preview`
-    ) {
-      const center = url.searchParams.get("centerMs") ?? "0";
-      if (center === "1000") await new Promise((resolve) => setTimeout(resolve, 500));
-      return route.fulfill({
-        headers: {
-          "content-type": "video/mp4",
-          "Access-Control-Expose-Headers":
-            "X-Preview-Start, X-Preview-Duration, X-Preview-Offset, X-Preview-Cache, X-Request-ID",
-          "X-Preview-Start": "0",
-          "X-Preview-Duration": "8000",
-          "X-Preview-Offset": center,
-          "X-Preview-Cache": "hit",
-          "X-Request-ID": `preview-${center}`,
-        },
-        body: "fragment",
-      });
-    }
-    if (url.pathname === "/api/v1/destinations")
+    if (url.pathname === "/api/v2/destinations")
       return route.fulfill({
         json: {
           destinations: [
             { id: "download", label: "Browser download", kind: "download", retention: "24 hours" },
           ],
+          capabilities: { saveBesideSource: false },
+        } satisfies {
+          destinations: components["schemas"]["Destination"][];
+          capabilities: components["schemas"]["DestinationCapabilities"];
         },
       });
-    if (url.pathname === "/api/v1/media/refresh" && request.method() === "POST")
+    if (url.pathname === "/api/v2/media/refresh" && request.method() === "POST")
       return route.fulfill({
         json: { id: "j_refresh", type: "media_refresh", state: "succeeded", progress: 1 },
       });
     if (url.pathname.endsWith("/exports/preflight") && request.method() === "POST")
       return route.fulfill({ json: { allowed: true, selection: [], findings: [] } });
     if (url.pathname.endsWith("/detections") && request.method() === "POST") {
-      const kind = (request.postDataJSON() as { kind?: string }).kind ?? "silence";
+      const body: unknown = request.postDataJSON();
+      if (
+        !body ||
+        typeof body !== "object" ||
+        !("kind" in body) ||
+        typeof body.kind !== "string" ||
+        !("projectRevision" in body) ||
+        typeof body.projectRevision !== "number" ||
+        !("projectItemId" in body) ||
+        typeof body.projectItemId !== "string"
+      )
+        throw new Error("Detection fixture requires the generated v2 request fields.");
+      expect(request.headers()["idempotency-key"]).toMatch(/^[A-Za-z0-9_-]{16,128}$/);
+      expect(body.projectRevision).toBeGreaterThan(0);
+      expect(body.projectItemId).toMatch(/^i_[A-Za-z0-9_-]{12,64}$/);
+      const kind = body.kind === "black" || body.kind === "scene" ? body.kind : "silence";
       const projectId = url.pathname.split("/")[4];
       detectionProjectId = projectId;
-      detectionRevision = savedRevision;
+      detectionRevision = body.projectRevision;
       detectionPoll = 0;
       detectionSequence += 1;
+      const job = {
+        id: `j_detection-${kind}-${detectionSequence}`,
+        type: "detection",
+        state: "queued",
+        mediaId: media.id,
+        projectId,
+        projectRevision: detectionRevision,
+        kind,
+      } satisfies components["schemas"]["DetectionJob"];
+      return route.fulfill({ status: 202, json: job });
+    }
+    if (/^\/api\/v2\/jobs\/j_detection-(?:black|silence)-\d+\/events$/.test(url.pathname)) {
+      const jobId = url.pathname.split("/")[4];
+      const kind = jobId.includes("black") ? "black" : "silence";
+      type DetectionSnapshot = components["schemas"]["DetectionJob"] &
+        Pick<components["schemas"]["Job"], "revision" | "createdAt" | "updatedAt">;
+      const snapshots: DetectionSnapshot[] =
+        kind === "black"
+          ? [
+              {
+                id: jobId,
+                type: "detection",
+                state: "failed",
+                revision: 1,
+                ...jobTimestamps,
+                mediaId: media.id,
+                projectId: detectionProjectId,
+                projectRevision: detectionRevision,
+                kind,
+                errorCode: "detection_failed",
+              },
+            ]
+          : [
+              {
+                id: jobId,
+                type: "detection",
+                state: "running",
+                revision: 1,
+                ...jobTimestamps,
+                mediaId: media.id,
+                projectId: detectionProjectId,
+                projectRevision: detectionRevision,
+                kind,
+              },
+              {
+                id: jobId,
+                type: "detection",
+                state: "succeeded",
+                revision: 2,
+                ...jobTimestamps,
+                mediaId: media.id,
+                projectId: detectionProjectId,
+                projectRevision: detectionRevision,
+                kind,
+                candidates: [
+                  {
+                    id: "c_detection-1",
+                    mediaId: media.id,
+                    projectId: detectionProjectId,
+                    projectRevision: detectionRevision,
+                    startMs: 1000,
+                    endMs: 1500,
+                    source: "silence",
+                  },
+                ],
+              },
+            ];
       return route.fulfill({
-        status: 202,
-        json: {
-          id: `j_detection-${kind}-${detectionSequence}`,
-          type: "detection",
-          state: "queued",
-          mediaId: media.id,
-          projectId,
-          projectRevision: detectionRevision,
-          kind,
-        },
+        status: 200,
+        headers: { "content-type": "text/event-stream" },
+        body: snapshots
+          .map(
+            (snapshot, index) =>
+              `id: ${index + 1}\nevent: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`,
+          )
+          .join(""),
       });
     }
-    if (/^\/api\/v1\/jobs\/j_detection-black-\d+$/.test(url.pathname) && request.method() === "GET")
+    if (/^\/api\/v2\/jobs\/j_detection-black-\d+$/.test(url.pathname) && request.method() === "GET")
       return route.fulfill({
         json: {
           id: url.pathname.split("/").pop(),
@@ -269,7 +327,7 @@ test.beforeEach(async ({ page }) => {
         },
       });
     if (
-      /^\/api\/v1\/jobs\/j_detection-silence-\d+$/.test(url.pathname) &&
+      /^\/api\/v2\/jobs\/j_detection-silence-\d+$/.test(url.pathname) &&
       request.method() === "GET"
     ) {
       detectionPoll += 1;
@@ -309,15 +367,16 @@ test.beforeEach(async ({ page }) => {
       });
     }
     if (
-      /^\/api\/v1\/jobs\/j_detection-(?:black|silence)-\d+$/.test(url.pathname) &&
+      /^\/api\/v2\/jobs\/j_detection-(?:black|silence)-\d+$/.test(url.pathname) &&
       request.method() === "DELETE"
     )
       return route.fulfill({ status: 204 });
-    if (url.pathname === "/api/v1/projects")
+    if (url.pathname === "/api/v2/projects")
       return route.fulfill({ json: { items: [], nextCursor: null } });
-    if (url.pathname === "/api/v1/batches") return route.fulfill({ json: { items: [] } });
-    if (/^\/api\/v1\/batches\/[^/]+$/.test(url.pathname)) return route.fulfill({ status: 404 });
-    if (/^\/api\/v1\/projects\/[^/]+$/.test(url.pathname)) {
+    if (url.pathname === "/api/v2/batches")
+      return route.fulfill({ json: { items: [], nextCursor: null } });
+    if (/^\/api\/v2\/batches\/[^/]+$/.test(url.pathname)) return route.fulfill({ status: 404 });
+    if (/^\/api\/v2\/projects\/[^/]+$/.test(url.pathname)) {
       if (request.method() === "GET")
         return route.fulfill({
           json: {
@@ -359,6 +418,31 @@ test.beforeEach(async ({ page }) => {
       }
     }
     throw new Error(`Unexpected API request: ${request.method()} ${url.pathname}`);
+  });
+  await page.route(`${apiOrigin}/media/v2/**`, async (route) => {
+    const url = new URL(route.request().url());
+    if (/^\/media\/v2\/media\/[^/]+\/thumbnails$/.test(url.pathname))
+      return route.fulfill({ headers: { "content-type": "image/png" }, body: "png-fixture" });
+    if (/^\/media\/v2\/media\/[^/]+\/waveform$/.test(url.pathname))
+      return route.fulfill({ json: { startMs: 0, durationMs: 10000, peaks: [0.1, 0.5, 1] } });
+    if (/^\/media\/v2\/media\/[^/]+\/preview$/.test(url.pathname)) {
+      const center = url.searchParams.get("centerMs") ?? "0";
+      if (center === "1000") await new Promise((resolve) => setTimeout(resolve, 500));
+      return route.fulfill({
+        headers: {
+          "content-type": "video/mp4",
+          "Access-Control-Expose-Headers":
+            "X-Preview-Start, X-Preview-Duration, X-Preview-Offset, X-Preview-Cache, X-Request-ID",
+          "X-Preview-Start": "0",
+          "X-Preview-Duration": "8000",
+          "X-Preview-Offset": center,
+          "X-Preview-Cache": "hit",
+          "X-Request-ID": `preview-${center}`,
+        },
+        body: "fragment",
+      });
+    }
+    throw new Error(`Unexpected native media request: ${route.request().method()} ${url.pathname}`);
   });
 });
 
@@ -756,8 +840,8 @@ test("unavailable browser storage still permits settings reset and new project",
 });
 
 test("edits independent project items and submits a durable batch", async ({ page }) => {
-  let savedBody: Record<string, unknown> | undefined;
-  let exportBody: Record<string, unknown> | undefined;
+  let savedBody: ProjectInput | undefined;
+  let exportBody: ExportSubmissionInput | undefined;
   let submitted = false;
   const batch = {
     batchId: "b_batch-edit01",
@@ -775,6 +859,7 @@ test("edits independent project items and submits a durable batch", async ({ pag
         type: "export",
         ...jobTimestamps,
         state: "queued",
+        revision: 1,
         progress: 0,
       },
       {
@@ -786,17 +871,18 @@ test("edits independent project items and submits a durable batch", async ({ pag
         type: "export",
         ...jobTimestamps,
         state: "queued",
+        revision: 1,
         progress: 0,
       },
     ],
-  };
-  await page.route(`${apiOrigin}/api/v1/media/${secondMedia.id}`, (route) =>
+  } satisfies components["schemas"]["Batch"];
+  await page.route(`${apiOrigin}/api/v2/media/${secondMedia.id}`, (route) =>
     route.fulfill({ json: secondMedia }),
   );
-  await page.route(`${apiOrigin}/api/v1/projects/*`, async (route) => {
+  await page.route(`${apiOrigin}/api/v2/projects/*`, async (route) => {
     if (route.request().method() !== "PUT") return route.fallback();
-    savedBody = route.request().postDataJSON() as Record<string, unknown>;
-    const savedItems = savedBody.items as Array<{ id: string }>;
+    savedBody = Schema.decodeUnknownSync(ProjectInputSchema)(route.request().postDataJSON());
+    const savedItems = savedBody.items;
     batch.jobs[0].projectItemId = savedItems[0].id;
     batch.jobs[1].projectItemId = savedItems[1].id;
     return route.fulfill({
@@ -808,19 +894,40 @@ test("edits independent project items and submits a durable batch", async ({ pag
       },
     });
   });
-  await page.route(`${apiOrigin}/api/v1/batches**`, (route) => {
+  await page.route(`${apiOrigin}/api/v2/batches**`, (route) => {
     const path = new URL(route.request().url()).pathname;
     return route.fulfill({
-      json: path === "/api/v1/batches" ? { items: submitted ? [batch] : [] } : batch,
+      json:
+        path === "/api/v2/batches"
+          ? ({
+              items: submitted ? [batch] : [],
+              nextCursor: null,
+            } satisfies components["schemas"]["BatchPage"])
+          : batch,
     });
   });
-  await page.route(`${apiOrigin}/api/v1/projects/*/exports`, (route) => {
-    exportBody = route.request().postDataJSON() as Record<string, unknown>;
+  await page.route(`${apiOrigin}/api/v2/projects/*/exports`, (route) => {
+    expect(route.request().headers()["idempotency-key"]).toMatch(/^[A-Za-z0-9_-]{16,128}$/);
+    exportBody = Schema.decodeUnknownSync(ExportSubmissionInputSchema)(
+      route.request().postDataJSON(),
+    );
+    expect(exportBody.projectRevision).toBe(1);
     submitted = true;
     return route.fulfill({ status: 202, json: batch });
   });
-  await page.route(`${apiOrigin}/api/v1/jobs/j_batch-edit01`, (route) =>
-    route.fulfill({ json: batch.jobs[0] }),
+  await page.route(`${apiOrigin}/api/v2/jobs/j_batch-edit01/events`, (route) =>
+    route.fulfill({
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+      body: `id: 1\nevent: snapshot\ndata: ${JSON.stringify(batch.jobs[0])}\n\n`,
+    }),
+  );
+  await page.route(`${apiOrigin}/api/v2/batches/b_batch-edit01/events`, (route) =>
+    route.fulfill({
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+      body: `id: 1\nevent: snapshot\ndata: ${JSON.stringify(batch)}\n\n`,
+    }),
   );
 
   await page.goto("/");
@@ -850,12 +957,9 @@ test("edits independent project items and submits a durable batch", async ({ pag
   await expect(page.getByRole("list", { name: "Selected cuts" })).toContainText("00:00.200");
   await page.getByRole("button", { name: "Save project from project header", exact: true }).click();
   await expect.poll(() => savedBody).toBeTruthy();
-  const items = savedBody?.items as Array<{
-    mediaId: string;
-    segments: Array<{ startMs: number }>;
-  }>;
-  expect(items.map((item) => item.mediaId)).toEqual([media.id, secondMedia.id]);
-  expect(items.map((item) => item.segments[0]?.startMs)).toEqual([100, 200]);
+  const items = savedBody?.items;
+  expect(items?.map((item) => item.mediaId)).toEqual([media.id, secondMedia.id]);
+  expect(items?.map((item) => item.segments[0]?.startMs)).toEqual([100, 200]);
 
   await openTask(page, "Export");
   await page.getByRole("radio", { name: "Selected project items" }).check();
@@ -870,10 +974,7 @@ test("edits independent project items and submits a durable batch", async ({ pag
   await openTask(page, "Export");
   await page.getByRole("button", { name: "Create clips" }).click();
   await expect.poll(() => exportBody).toBeTruthy();
-  const exportedItems = savedBody?.items as Array<{
-    mediaId: string;
-    exportOptions: { mode?: string };
-  }>;
+  const exportedItems = savedBody?.items ?? [];
   expect(exportedItems.find((item) => item.mediaId === media.id)?.exportOptions.mode).toBe(
     "separate",
   );
@@ -1452,26 +1553,20 @@ test("keeps playback position, markers, and undo history synchronized", async ({
 });
 
 test("shows a safe preview failure and maps markers from the watched preview", async ({ page }) => {
-  await page.unroute(`${apiOrigin}/api/v1/**`);
-  await page.route(`${apiOrigin}/api/v1/**`, (route) => {
-    const url = new URL(route.request().url());
-    if (url.pathname === "/api/v1/media/tree")
-      return route.fulfill({ json: { folders: [], items: [media] } });
-    if (url.pathname === `/api/v1/media/${media.id}`) return route.fulfill({ json: media });
-    if (url.pathname.endsWith("/preview"))
-      return route.fulfill({
-        headers: {
-          "content-type": "video/mp4",
-          "Access-Control-Expose-Headers":
-            "X-Preview-Start, X-Preview-Duration, X-Preview-Offset, X-Preview-Cache, X-Request-ID",
-          "X-Preview-Start": "1000",
-          "X-Preview-Duration": "8000",
-          "X-Preview-Offset": "250",
-        },
-        body: "fragment",
-      });
-    return route.fulfill({ status: 404 });
-  });
+  await page.route(`${apiOrigin}/media/v2/media/${media.id}/preview**`, (route) =>
+    route.fulfill({
+      headers: {
+        "content-type": "video/mp4",
+        "Access-Control-Expose-Headers":
+          "X-Preview-Start, X-Preview-Duration, X-Preview-Offset, X-Preview-Cache, X-Request-ID",
+        "X-Preview-Start": "1000",
+        "X-Preview-Duration": "8000",
+        "X-Preview-Offset": "250",
+        "X-Request-ID": "preview-safe-fixture",
+      },
+      body: "fragment",
+    }),
+  );
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   await expect(page.getByLabel("Preview player")).toHaveAttribute("data-preview-offset", "250");
@@ -3098,16 +3193,24 @@ test("load fetches project media directly and corrupt recents do not block start
 });
 
 test("loads cursor pages once and removes Load more at the end", async ({ page }) => {
-  await page.route(`${apiOrigin}/api/v1/media**`, async (route) => {
+  await page.route(`${apiOrigin}/api/v2/media/tree**`, async (route) => {
     const url = new URL(route.request().url());
-    if (route.request().method() !== "GET") return route.fallback();
+    expect(route.request().method()).toBe("GET");
     if (!url.searchParams.get("cursor"))
       return route.fulfill({
-        json: { folders: [], items: [media], nextCursor: "next/+=" },
+        json: {
+          folders: [],
+          items: [media],
+          nextCursor: "next/+=",
+        } satisfies components["schemas"]["FolderPage"],
       });
     expect(url.searchParams.get("cursor")).toBe("next/+=");
     return route.fulfill({
-      json: { folders: [], items: [media, secondMedia], nextCursor: null },
+      json: {
+        folders: [],
+        items: [media, secondMedia],
+        nextCursor: null,
+      } satisfies components["schemas"]["FolderPage"],
     });
   });
   await page.goto("/");
