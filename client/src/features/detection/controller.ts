@@ -50,6 +50,18 @@ type SubmittedDetection = {
   editorVersion: number;
 };
 
+type DetectionSubmissionAttempt = {
+  key: string;
+  projectId: string;
+  body: DetectionInput;
+  mediaId: string;
+  sourceFingerprint: string;
+  activeItemId: string | undefined;
+  editorVersion: number;
+  kind: DetectionKind;
+  options: Pick<EffectApiTypes.DetectionInput, "noiseDb" | "minDurationMs" | "sceneThreshold">;
+};
+
 function generatedMutation<Arg, A, E>(
   registry: AtomRegistry.AtomRegistry,
   atom: Atom.AtomResultFn<Arg, A, E>,
@@ -95,6 +107,7 @@ type DetectionDependencies = {
   activeItemId: Accessor<string | undefined>;
   projectId: Accessor<string>;
   revision: Accessor<number>;
+  dirty: Accessor<boolean>;
   editorVersion: Accessor<number>;
   saveConflict: Accessor<boolean>;
   segments: Accessor<Segment[]>;
@@ -211,7 +224,7 @@ export function createDetectionController(
     if (applyingDetectionEdit) return;
     synchronizeDetectionReview();
   });
-  let uncertainSubmission: { key: string; projectId: string; body: DetectionInput } | undefined;
+  let uncertainSubmission: DetectionSubmissionAttempt | undefined;
   const submit = runtime.fn((input: { key: string; projectId: string; body: DetectionInput }) => {
     const mutation = server.generatedApi?.mutation("default", "createDetection");
     return mutation
@@ -332,16 +345,35 @@ export function createDetectionController(
       "noiseDb" | "minDurationMs" | "sceneThreshold"
     > = {},
   ) => {
-    clearDetectionContext();
-    const currentOperation = operation;
     const selectedBeforeSave = dependencies.selected();
     const projectBeforeSave = dependencies.projectId();
     const itemBeforeSave = dependencies.activeItemId();
     const editorBeforeSave = dependencies.editorVersion();
-    setDetectionStatus("Saving project before detection…");
-    let pendingSubmission: { key: string; projectId: string; body: DetectionInput } | undefined;
+    const retry = uncertainSubmission;
+    const retryUnchanged = Boolean(
+      retry &&
+      retry.projectId === projectBeforeSave &&
+      retry.mediaId === selectedBeforeSave?.id &&
+      retry.sourceFingerprint === selectedBeforeSave?.etag &&
+      retry.activeItemId === itemBeforeSave &&
+      retry.editorVersion === editorBeforeSave &&
+      retry.kind === kind &&
+      JSON.stringify(retry.options) === JSON.stringify(options) &&
+      dependencies.revision() === retry.body.projectRevision &&
+      !dependencies.dirty() &&
+      !dependencies.saveConflict(),
+    );
+    clearDetectionContext();
+    const currentOperation = operation;
+    setDetectionStatus(
+      retryUnchanged ? `Starting ${kind} detection…` : "Saving project before detection…",
+    );
+    let pendingSubmission: DetectionSubmissionAttempt | undefined;
     try {
-      const saved = await dependencies.saveProject();
+      const saved =
+        retryUnchanged && retry
+          ? { id: retry.projectId, revision: retry.body.projectRevision }
+          : await dependencies.saveProject();
       if (currentOperation !== operation) return;
       const selected = dependencies.selected();
       if (!saved || !selected) {
@@ -362,21 +394,30 @@ export function createDetectionController(
         return;
       }
       setDetectionStatus(`Starting ${kind} detection…`);
-      const body = Schema.decodeUnknownSync(DetectionInputSchema)({
-        mediaId: selected.id,
-        projectItemId: itemBeforeSave,
-        projectRevision: saved.revision,
-        kind,
-        sourceFingerprint: selected.etag,
-        ...options,
-      });
-      const key =
-        uncertainSubmission?.projectId === saved.id &&
-        JSON.stringify(uncertainSubmission.body) === JSON.stringify(body)
-          ? uncertainSubmission.key
-          : globalThis.crypto.randomUUID();
+      const body =
+        retryUnchanged && retry
+          ? retry.body
+          : Schema.decodeUnknownSync(DetectionInputSchema)({
+              mediaId: selected.id,
+              projectItemId: itemBeforeSave,
+              projectRevision: saved.revision,
+              kind,
+              sourceFingerprint: selected.etag,
+              ...options,
+            });
+      const key = retryUnchanged && retry ? retry.key : globalThis.crypto.randomUUID();
       uncertainSubmission = undefined;
-      pendingSubmission = { key, projectId: saved.id, body };
+      pendingSubmission = {
+        key,
+        projectId: saved.id,
+        body,
+        mediaId: selected.id,
+        sourceFingerprint: selected.etag,
+        activeItemId: itemBeforeSave,
+        editorVersion: editorBeforeSave,
+        kind,
+        options: { ...options },
+      };
       const submittedJob = await runEffect(
         generatedMutation(registry, submit, { key, projectId: saved.id, body }),
       );

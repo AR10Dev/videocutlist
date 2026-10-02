@@ -75,6 +75,7 @@ async function withExportController(
   options: {
     initialBatch?: Batch;
     selected?: EffectApiTypes.Media;
+    projectId?: () => string;
     projectItems?: EditableProjectItem[];
     dirty?: boolean;
     revision?: number;
@@ -86,7 +87,7 @@ async function withExportController(
     nextDestinationsResponse?: () => Promise<Response>;
     exportResponses?: Response[];
     retryResponses?: Response[];
-    onExportHeaders?: (headers: Headers, body: string | undefined) => void;
+    onExportHeaders?: (headers: Headers, body: string | undefined, target: string) => void;
     onRetryRequest?: (request: { path: string; key: string; body: string | undefined }) => void;
     onApiRequest?: (path: string) => void;
     onBatchEvent?: (path: string, signal?: AbortSignal) => Promise<Response>;
@@ -149,7 +150,7 @@ async function withExportController(
       });
     }
     if (requestUrl.pathname.endsWith("/exports") && method === "POST") {
-      options.onExportHeaders?.(headers, body);
+      options.onExportHeaders?.(headers, body, requestUrl.pathname.split("/").at(-2) ?? "");
       const response = options.exportResponses?.shift();
       if (response) return response;
       return Response.json(
@@ -204,7 +205,7 @@ async function withExportController(
           controller = createExportController({
             server: createServerState(api, registry, configuration),
             selected: () => options.selected,
-            projectId: () => "p_exportstatus0001",
+            projectId: options.projectId ?? (() => "p_exportstatus0001"),
             revision: () => options.revision ?? 1,
             dirty,
             setDirty,
@@ -473,6 +474,56 @@ describe("export controller aggregate status", () => {
       },
     );
   });
+  it("uses a fresh export key for another project with the same submitted body", async () => {
+    const media: EffectApiTypes.Media = {
+      id: `m_${"m".repeat(43)}`,
+      name: "clip.mp4",
+      durationMs: 2_000,
+      sizeBytes: 1,
+      container: "mp4",
+      streams: {},
+      etag: "v1",
+    };
+    let projectId = "p_exportstatus0001";
+    const attempts: Array<{ target: string; key: string; body: string | undefined }> = [];
+    await withExportController(
+      batch("succeeded", 1, [job("j_exportstatus0001", "succeeded", 2)]),
+      async (controller) => {
+        await controller.exportProject();
+        projectId = "p_exportstatus0002";
+        await controller.exportProject();
+        expect(attempts).toHaveLength(2);
+        expect(attempts[0]?.target).toBe("p_exportstatus0001");
+        expect(attempts[1]?.target).toBe("p_exportstatus0002");
+        expect(attempts[1]?.body).toBe(attempts[0]?.body);
+        expect(JSON.parse(attempts[0]?.body ?? "{}")).toEqual({ projectRevision: 1 });
+        expect(attempts[0]?.key).toBeTruthy();
+        expect(attempts[1]?.key).toBeTruthy();
+        expect(attempts[1]?.key).not.toBe(attempts[0]?.key);
+      },
+      {
+        initialBatch: batch("succeeded", 1, [job("j_exportstatus0001", "succeeded", 1)]),
+        selected: media,
+        projectId: () => projectId,
+        projectItems: [exportItem(media)],
+        exportResponses: [
+          Response.json(
+            {
+              error: { code: "internal_error", message: "Retry", requestId: "r-export-lost" },
+            },
+            { status: 500 },
+          ),
+          Response.json(
+            { batchId, jobs: [job("j_exportfresh0001", "queued", 1)] },
+            { status: 202 },
+          ),
+        ],
+        onExportHeaders: (headers, body, target) =>
+          attempts.push({ target, key: headers.get("Idempotency-Key") ?? "", body }),
+      },
+    );
+  });
+
   it("redelivers an unfamiliar generated export failure with the same key and body", async () => {
     const media: EffectApiTypes.Media = {
       id: `m_${"m".repeat(43)}`,

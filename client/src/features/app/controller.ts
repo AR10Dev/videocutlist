@@ -418,6 +418,7 @@ export function createWorkspaceController() {
     activeItemId,
     projectId,
     revision,
+    dirty,
     editorVersion: () => editorVersion,
     saveConflict: () => projectsRef.current?.saveConflict() ?? false,
     segments: () => present().segments,

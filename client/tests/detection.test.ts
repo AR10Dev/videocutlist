@@ -11,12 +11,15 @@ import {
   skippedCandidateSummary,
   type Candidate,
 } from "../src/features/detection/model";
-import type { ApiClient } from "../src/api";
+import type { ApiClient, NativeMediaApiClient } from "../src/api";
 import {
   createDetectionController,
   type DetectionController,
 } from "../src/features/detection/controller";
 import { createServerState } from "../src/features/app/server";
+import { createProjectsController } from "../src/features/projects/controller";
+import type { EditableProjectItem } from "../src/features/projects/model";
+import { defaultSettings } from "../src/features/settings/model";
 
 const candidate = {
   id: "c_1",
@@ -37,7 +40,7 @@ const point = {
 };
 const project = { id: "p_1", mediaId: "m_1", revision: 2, segments: [] };
 const detectionMedia: EffectApiTypes.Media = {
-  id: "m_detection",
+  id: `m_${"m".repeat(43)}`,
   name: "detection.mp4",
   durationMs: 1_000,
   sizeBytes: 1,
@@ -109,6 +112,7 @@ async function withDetection(
                 activeItemId: overrides.activeItemId ?? (() => "i_detection"),
                 projectId,
                 revision,
+                dirty: () => false,
                 editorVersion,
                 saveConflict: () => false,
                 segments,
@@ -147,48 +151,347 @@ async function withDetection(
   });
 }
 
-it("redelivers an uncertain detection submission with its original key and validated body", async () => {
+async function withProjectSaveAndDetection(
+  api: ApiClient & Pick<NativeMediaApiClient, "mediaRequest">,
+  exercise: (
+    controller: DetectionController,
+    context: {
+      projectId: () => string;
+      revision: () => number;
+      setProjectId: (id: string) => void;
+      selected: () => EffectApiTypes.Media | undefined;
+      setSelected: (media: EffectApiTypes.Media) => void;
+      activeItemId: () => string | undefined;
+      setActiveItemId: (id: string) => void;
+      setEditorVersion: (version: number) => void;
+      setDirty: (dirty: boolean) => void;
+      projectItems: () => EditableProjectItem[];
+      setProjectItems: (items: EditableProjectItem[]) => void;
+    },
+  ) => Promise<void>,
+) {
+  const originalFetch = globalThis.fetch;
+  const originalStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  const storage = new Map<string, string>();
+  Object.defineProperty(globalThis, "localStorage", {
+    configurable: true,
+    value: {
+      getItem: (key: string) => storage.get(key) ?? null,
+      setItem: (key: string, value: string) => void storage.set(key, value),
+      removeItem: (key: string) => void storage.delete(key),
+    },
+  });
+  globalThis.fetch = (input, init) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    return api.request(url.pathname.replace(/^\/api\/v2\//, "") + url.search, init);
+  };
+  const projectItemId = `i_${"d".repeat(24)}`;
+  const item: EditableProjectItem = {
+    id: projectItemId,
+    media: detectionMedia,
+    timeline: createTimelineHistory({ playheadMs: 0, inMs: 0, outMs: 0, segments: [], zoom: 1 }),
+    muted: false,
+    exportOptions: {
+      mode: "merge",
+      selection: "segments",
+      cutStrategy: "stream_copy_preferred",
+      container: "mkv",
+    },
+  };
+  let registry!: ReturnType<typeof import("effect/reactivity/AtomRegistry").make>;
+  let projects!: ReturnType<typeof createProjectsController>;
+  let controller!: DetectionController;
+  let context!: Parameters<typeof exercise>[1];
+  let dispose!: () => void;
+  createRoot((disposeRoot) => {
+    dispose = disposeRoot;
+    createComponent(RegistryProvider, {
+      get children() {
+        untrack(() => {
+          registry = useContext(RegistryContext);
+          const [selected, setSelected] = createSignal<EffectApiTypes.Media | undefined>(
+            detectionMedia,
+          );
+          const [projectId, setProjectId] = createSignal(queuedDetectionJob.projectId);
+          const [projectName, setProjectName] = createSignal("Detection project");
+          const [revision, setRevision] = createSignal(1);
+          const [dirty, setDirty] = createSignal(true);
+          const [editorVersion, setEditorVersion] = createSignal(0);
+          const [projectItems, setProjectItems] = createSignal([item]);
+          const [activeItemId, setActiveItemId] = createSignal<string | undefined>(projectItemId);
+          const [, setSelectedExportItems] = createSignal<string[]>([]);
+          const [, setTimeline] = createSignal(item.timeline);
+          const [, setRecent] = createSignal<{ id: string; label: string; lastOpened: number }[]>(
+            [],
+          );
+          const [, setMuted] = createSignal(false);
+          const [, setExportMode] = createSignal<"merge" | "separate">("merge");
+          const [, setExportSelection] = createSignal<"segments" | "gaps">("segments");
+          const [, setStreamIndexes] = createSignal<number[]>([]);
+          const [, setCutStrategy] = createSignal(defaultSettings.cutStrategy);
+          const [, setExportContainer] = createSignal<"mkv" | "mp4" | "mov">("mkv");
+          const [, setDestinationId] = createSignal("download");
+          const [, setFilenameTemplate] = createSignal(defaultSettings.filenameTemplate);
+          const [, setStatus] = createSignal("");
+          const server = createServerState({ ...api, mediaRequest: api.request }, registry, {
+            serverBaseUrl: "http://localhost",
+            authentication: { type: "none" },
+          });
+          projects = createProjectsController({
+            server,
+            selected,
+            projectId,
+            setProjectId,
+            projectName,
+            setProjectName,
+            revision,
+            setRevision,
+            dirty,
+            setDirty,
+            editorVersion,
+            contextKey: () => "detection-test",
+            projectItems,
+            setProjectItems,
+            setSelectedExportItems,
+            setActiveItemId,
+            setSelected,
+            setTimeline,
+            setPreviewCenterMs: () => undefined,
+            setRecent,
+            settings: () => defaultSettings,
+            setMuted,
+            setExportMode,
+            setExportSelection,
+            setStreamIndexes,
+            setCutStrategy,
+            setExportContainer,
+            setDestinationId,
+            setFilenameTemplate,
+            editableItems: projectItems,
+            clearDetectionContext: () => undefined,
+            setDiagnostics: () => undefined,
+            setStatus,
+          });
+          controller = createDetectionController(server, {
+            selected,
+            activeItemId,
+            projectId,
+            revision,
+            dirty,
+            editorVersion,
+            saveConflict: projects.saveConflict,
+            segments: () =>
+              projectItems().find((entry) => entry.id === activeItemId())?.timeline.present
+                .segments ?? [],
+            saveProject: projects.saveProject,
+            updateSegments: (segments) => {
+              setProjectItems((items) =>
+                items.map((entry) =>
+                  entry.id === activeItemId()
+                    ? {
+                        ...entry,
+                        timeline: {
+                          ...entry.timeline,
+                          present: { ...entry.timeline.present, segments },
+                        },
+                      }
+                    : entry,
+                ),
+              );
+              setEditorVersion((version) => version + 1);
+            },
+          });
+          context = {
+            projectId,
+            revision,
+            setProjectId,
+            selected,
+            setSelected,
+            activeItemId,
+            setActiveItemId,
+            setEditorVersion,
+            setDirty,
+            projectItems,
+            setProjectItems,
+          };
+        });
+        return null;
+      },
+    });
+  });
+  try {
+    await exercise(controller, context);
+  } finally {
+    projects.dispose();
+    dispose();
+    registry.dispose();
+    globalThis.fetch = originalFetch;
+    if (originalStorage) Object.defineProperty(globalThis, "localStorage", originalStorage);
+    else delete (globalThis as { localStorage?: Storage }).localStorage;
+  }
+}
+
+it("redelivers uncertain detection against the real project saver without an extra PUT", async () => {
+  const puts: Array<{ target: string; revision: number }> = [];
   const submissions: Array<{ key: string | null; target: string; body: string }> = [];
-  const api: ApiClient = {
+  let acceptedJob: EffectApiTypes.DetectionJob | undefined;
+  const api: ApiClient & Pick<NativeMediaApiClient, "mediaRequest"> = {
     url: (path) => path,
     request: (path, init) => {
-      if (path.endsWith("/detections") && init?.method === "POST") {
-        submissions.push({
-          key: new Headers(init.headers).get("Idempotency-Key"),
-          target: path.split("/")[1]!,
-          body: String(init.body),
-        });
+      if (init?.method === "PUT" && path.startsWith("projects/")) {
+        const target = path.split("/")[1]!;
+        const payload = JSON.parse(String(init.body)) as {
+          revision: number;
+          name: string;
+          items: unknown[];
+        };
+        puts.push({ target, revision: payload.revision });
         return Promise.resolve(
-          submissions.length === 1
-            ? Response.json(
-                { error: { code: "upstream_timeout", message: "Retry", requestId: "r1" } },
-                { status: 500 },
-              )
-            : Response.json(queuedDetectionJob, { status: 202 }),
+          Response.json({
+            id: target,
+            revision: payload.revision + 1,
+            updatedAt: "2026-01-01T00:00:00Z",
+            schemaVersion: 2,
+            name: payload.name,
+            items: payload.items,
+          }),
         );
       }
-      if (path.endsWith("/events")) return Promise.resolve(jobEvent(queuedDetectionJob));
+      if (path.endsWith("/detections") && init?.method === "POST") {
+        const target = path.split("/")[1]!;
+        submissions.push({
+          key: new Headers(init.headers).get("Idempotency-Key"),
+          target,
+          body: String(init.body),
+        });
+        if (submissions.length === 1)
+          return Promise.resolve(
+            Response.json(
+              { error: { code: "internal_error", message: "Retry", requestId: "r-lost" } },
+              { status: 500 },
+            ),
+          );
+        acceptedJob = {
+          ...queuedDetectionJob,
+          projectId: target,
+          projectRevision: JSON.parse(String(init.body)).projectRevision,
+        };
+        return Promise.resolve(Response.json(acceptedJob, { status: 202 }));
+      }
+      if (path.endsWith("/events") && acceptedJob) return Promise.resolve(jobEvent(acceptedJob));
       return Promise.resolve(Response.json({}));
     },
     assetRequest: () => Promise.resolve(Response.json({})),
+    mediaRequest: () => Promise.reject(new Error("Unexpected media request")),
   };
-  await withDetection(api, async (controller) => {
+  await withProjectSaveAndDetection(api, async (controller, context) => {
     await controller.startDetection("silence", { noiseDb: -35 });
-    await controller.startDetection("silence", { noiseDb: -35 });
-    expect(submissions).toHaveLength(2);
-    expect(submissions[0].key).toBeTruthy();
-    expect(submissions[0].key).toMatch(/^[A-Za-z0-9_-]{1,128}$/);
-    expect(submissions[1]).toEqual(submissions[0]);
-    expect(submissions[0].target).toBe(queuedDetectionJob.projectId);
-    expect(JSON.parse(submissions[0].body)).toMatchObject({
+    expect(puts).toEqual([{ target: queuedDetectionJob.projectId, revision: 1 }]);
+    const frozenAttempt = submissions[0];
+    expect(frozenAttempt?.key).toBeTruthy();
+    expect(JSON.parse(frozenAttempt!.body)).toMatchObject({
       mediaId: detectionMedia.id,
-      projectItemId: "i_detection",
-      projectRevision: 1,
+      projectItemId: `i_${"d".repeat(24)}`,
+      projectRevision: 2,
       kind: "silence",
       noiseDb: -35,
     });
+
+    await controller.startDetection("silence", { noiseDb: -35 });
+    expect(puts).toHaveLength(1);
+    expect(submissions).toHaveLength(2);
+    expect(submissions[1]).toEqual(frozenAttempt);
+    expect(context.revision()).toBe(2);
   });
 });
+
+it.each(["project", "source", "item", "editor", "options", "dirty"] as const)(
+  "saves changed %s detection intent before assigning a fresh key",
+  async (change) => {
+    const puts: Array<{ target: string; revision: number }> = [];
+    const submissions: Array<{ key: string | null; target: string; body: string }> = [];
+    let acceptedJob: EffectApiTypes.DetectionJob | undefined;
+    const api: ApiClient & Pick<NativeMediaApiClient, "mediaRequest"> = {
+      url: (path) => path,
+      request: (path, init) => {
+        if (init?.method === "PUT" && path.startsWith("projects/")) {
+          const target = path.split("/")[1]!;
+          const payload = JSON.parse(String(init.body)) as {
+            revision: number;
+            name: string;
+            items: unknown[];
+          };
+          puts.push({ target, revision: payload.revision });
+          return Promise.resolve(
+            Response.json({
+              id: target,
+              revision: payload.revision + 1,
+              updatedAt: "2026-01-01T00:00:00Z",
+              schemaVersion: 2,
+              name: payload.name,
+              items: payload.items,
+            }),
+          );
+        }
+        if (path.endsWith("/detections") && init?.method === "POST") {
+          const target = path.split("/")[1]!;
+          const body = String(init.body);
+          submissions.push({ key: new Headers(init.headers).get("Idempotency-Key"), target, body });
+          if (submissions.length === 1)
+            return Promise.resolve(
+              Response.json(
+                { error: { code: "internal_error", message: "Retry", requestId: "r-lost" } },
+                { status: 500 },
+              ),
+            );
+          acceptedJob = {
+            ...queuedDetectionJob,
+            projectId: target,
+            projectRevision: JSON.parse(body).projectRevision,
+          };
+          return Promise.resolve(Response.json(acceptedJob, { status: 202 }));
+        }
+        if (path.endsWith("/events") && acceptedJob) return Promise.resolve(jobEvent(acceptedJob));
+        return Promise.resolve(Response.json({}));
+      },
+      assetRequest: () => Promise.resolve(Response.json({})),
+      mediaRequest: () => Promise.reject(new Error("Unexpected media request")),
+    };
+    await withProjectSaveAndDetection(api, async (controller, context) => {
+      await controller.startDetection("silence", { noiseDb: -35 });
+      const first = submissions[0]!;
+      if (change === "project") context.setProjectId("p_000000000002");
+      if (change === "source") {
+        const changedMedia = { ...detectionMedia, etag: "v2" };
+        context.setSelected(changedMedia);
+        context.setProjectItems(
+          context.projectItems().map((entry) => ({ ...entry, media: changedMedia })),
+        );
+      }
+      if (change === "item") {
+        const newItem: EditableProjectItem = {
+          ...context.projectItems()[0]!,
+          id: `i_${"e".repeat(24)}`,
+        };
+        context.setProjectItems([...context.projectItems(), newItem]);
+        context.setActiveItemId(newItem.id);
+      }
+      if (change === "editor") context.setEditorVersion(1);
+      context.setDirty(true);
+      await controller.startDetection("silence", { noiseDb: change === "options" ? -20 : -35 });
+      expect(puts).toHaveLength(2);
+      expect(puts[1]?.revision).toBe(2);
+      expect(submissions).toHaveLength(2);
+      expect(submissions[1]?.key).toBeTruthy();
+      expect(submissions[1]?.key).not.toBe(first.key);
+      expect(submissions[1]?.body).not.toBe(first.body);
+      if (change === "project") {
+        expect(puts[1]?.target).toBe("p_000000000002");
+        expect(submissions[1]?.target).toBe("p_000000000002");
+      }
+    });
+  },
+);
 
 it("uses a fresh key after generated detection capacity rejection", async () => {
   const submissions: Array<{ key: string | null; target: string; body: string }> = [];

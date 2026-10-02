@@ -337,6 +337,7 @@ export function createExportController(deps: {
   let uncertainExport:
     | {
         key: string;
+        projectId: string;
         body: EffectApiTypes.ExportSubmissionInput;
       }
     | undefined;
@@ -709,7 +710,9 @@ export function createExportController(deps: {
           projectRevision: savedRevision,
           ...(context.input.itemIds ? { itemIds: context.input.itemIds } : {}),
         };
-        const key = idempotencyKeyForAttempt(uncertainExport, submissionBody, () =>
+        const retry =
+          uncertainExport?.projectId === context.projectId ? uncertainExport : undefined;
+        const key = idempotencyKeyForAttempt(retry, submissionBody, () =>
           globalThis.crypto.randomUUID(),
         );
         const create = deps.server.generatedApi?.mutation("default", "createExport");
@@ -722,7 +725,7 @@ export function createExportController(deps: {
               }).pipe(
                 Effect.mapError((error) => {
                   uncertainExport = isUncertainExportFailure(error)
-                    ? { key, body: submissionBody }
+                    ? { key, projectId: context.projectId, body: submissionBody }
                     : undefined;
                   if (error instanceof Error) return error;
                   const envelope = publicApiError(error);
