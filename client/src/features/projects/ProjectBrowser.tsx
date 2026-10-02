@@ -1,50 +1,45 @@
-import { createSignal, For, Show, onCleanup, useContext } from "solid-js";
-import { RegistryContext, useAtomSet } from "@effect/atom-solid";
+import { createSignal, For, Show, onCleanup } from "solid-js";
 import { Effect } from "effect";
-import * as Atom from "effect/reactivity/Atom";
-import { apiJson, createApiClient, resolveBrowserConfiguration } from "../../api";
-import { useServerAtom } from "../app/server";
+import { readServerAtom } from "../app/server";
 import type { components } from "../../generated/api";
 import { useWorkspace } from "../app/WorkspaceContext";
 
 export function ProjectBrowser() {
-  const { projects } = useWorkspace();
-  const api = createApiClient(resolveBrowserConfiguration());
-  const registry = useContext(RegistryContext);
-  const page = Atom.fn((next: string | undefined) =>
-    apiJson<components["schemas"]["ProjectPage"]>(
-      api,
-      `projects?limit=50${next ? `&cursor=${encodeURIComponent(next)}` : ""}`,
-    ).pipe(
-      Effect.mapError(() => new Error("Saved projects could not be loaded. Try Refresh projects.")),
-    ),
-  );
-  const fetchPage = useAtomSet(() => page, { mode: "promise" });
-  const state = useServerAtom(() => page);
-  const pending = state.waiting;
+  const { projects, server } = useWorkspace();
+  const [pending, setPending] = createSignal(false);
   let disposed = false;
+  let activeRead: AbortController | undefined;
   onCleanup(() => {
     disposed = true;
-    registry.set(page, Atom.Interrupt);
+    activeRead?.abort();
   });
   const [items, setItems] = createSignal<components["schemas"]["ProjectSummary"][]>([]);
   const [cursor, setCursor] = createSignal<string | null>(null);
   const [message, setMessage] = createSignal("");
   const load = async (next?: string) => {
     if (pending()) return;
+    setPending(true);
+    const read = new AbortController();
+    activeRead = read;
     try {
-      const result = await fetchPage(next);
+      const resource = server.projectPage({ limit: 50, cursor: next });
+      server.registry.refresh(resource);
+      const result = await Effect.runPromise(readServerAtom(server, resource), {
+        signal: read.signal,
+      });
       if (disposed) return;
-      setItems((previous) => (next ? [...previous, ...result.items] : result.items));
+      setItems((previous) => (next ? [...previous, ...result.items] : [...result.items]));
       setCursor(result.nextCursor);
       setMessage(
         !result.items.length && !next
           ? "No saved projects yet. Choose media and save your first project."
           : "",
       );
-    } catch (error) {
-      if (!disposed)
-        setMessage(error instanceof Error ? error.message : "Saved projects could not be loaded.");
+    } catch {
+      if (!disposed) setMessage("Saved projects could not be loaded. Try Refresh projects.");
+    } finally {
+      if (activeRead === read) activeRead = undefined;
+      if (!disposed) setPending(false);
     }
   };
   return (

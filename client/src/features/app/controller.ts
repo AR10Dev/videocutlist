@@ -482,6 +482,7 @@ export function createWorkspaceController() {
   });
   projectsRef.current = projectsFeature;
   return {
+    server,
     library: libraryFeature,
     editorStatus: editorFeature.editorStatus,
     setEditorStatus: editorFeature.setEditorStatus,

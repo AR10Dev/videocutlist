@@ -1,8 +1,9 @@
+import { Effect } from "effect";
 import * as AtomRegistry from "effect/reactivity/AtomRegistry";
 import { createSignal } from "solid-js";
 import { describe, expect, it } from "vitest";
 import type { ApiClient } from "../src/api";
-import { createServerState } from "../src/features/app/server";
+import { createServerState, readServerAtom } from "../src/features/app/server";
 import { createTimelineHistory } from "../src/features/editor/timeline";
 import { createProjectsController } from "../src/features/projects/controller";
 import type { EditableProjectItem } from "../src/features/projects/model";
@@ -34,6 +35,46 @@ function memoryStorage(): Storage {
 }
 
 describe("projects controller", () => {
+  it("reads saved-project pages through the generated project API", async () => {
+    const originalFetch = globalThis.fetch;
+    let requestedURL = "";
+    globalThis.fetch = async (input) => {
+      requestedURL = String(input);
+      return Response.json({
+        items: [
+          {
+            id: "p_savedproject0001",
+            name: "Saved project",
+            revision: 3,
+            updatedAt: "2026-01-01T00:00:00Z",
+          },
+        ],
+        nextCursor: "opaque-next-page",
+      });
+    };
+    const api: ApiClient = {
+      url: (path) => path,
+      request: () => Promise.reject(new Error("Unexpected legacy request")),
+      assetRequest: () => Promise.reject(new Error("Unexpected asset request")),
+    };
+    const registry = AtomRegistry.make();
+    const server = createServerState(api, registry, {
+      serverBaseUrl: "http://localhost",
+      authentication: { type: "none" },
+    });
+    try {
+      const resource = server.projectPage({ limit: 50, cursor: "opaque-cursor" });
+      const page = await Effect.runPromise(readServerAtom(server, resource));
+      expect(new URL(requestedURL).pathname).toBe("/api/v2/projects");
+      expect(new URL(requestedURL).searchParams.get("cursor")).toBe("opaque-cursor");
+      expect(page.items[0]?.name).toBe("Saved project");
+      expect(page.nextCursor).toBe("opaque-next-page");
+    } finally {
+      registry.dispose();
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it.each(["an edit", "a media switch"])(
     "does not apply a delayed load after %s",
     async (change) => {
@@ -45,6 +86,13 @@ describe("projects controller", () => {
       const projectResponse = new Promise<Response>((resolve) => {
         resolveProject = resolve;
       });
+      const generatedRequests: string[] = [];
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = async (input) => {
+        const url = String(input);
+        generatedRequests.push(url);
+        return url.includes("/projects/") ? projectResponse : Response.json(media);
+      };
       const request: ApiClient["request"] = (path) =>
         path.startsWith("projects/") ? projectResponse : Promise.resolve(Response.json(media));
       const api: ApiClient = {
@@ -77,7 +125,10 @@ describe("projects controller", () => {
       let editorContext = 0;
       const registry = AtomRegistry.make();
       const controller = createProjectsController({
-        server: createServerState(api, registry),
+        server: createServerState(api, registry, {
+          serverBaseUrl: "http://localhost",
+          authentication: { type: "none" },
+        }),
         selected,
         projectId,
         setProjectId,
@@ -145,7 +196,11 @@ describe("projects controller", () => {
         }),
       );
       await loading;
+      globalThis.fetch = originalFetch;
 
+      expect(
+        generatedRequests.some((url) => url.endsWith("/api/v2/projects/p_loadedproject")),
+      ).toBe(true);
       expect(projectId()).toBe("p_currentproject");
       expect(projectName()).toBe(change === "an edit" ? "Unsaved edit" : "Editing");
       if (change === "a media switch") expect(selected()?.id).toBe("m_" + "b".repeat(43));
@@ -162,7 +217,7 @@ describe("projects controller", () => {
       value: memoryStorage(),
     });
     const item: EditableProjectItem = {
-      id: "i_conflict-load01",
+      id: "i_conflictload000000000000",
       media,
       timeline: createTimelineHistory({
         playheadMs: 100,
@@ -193,6 +248,16 @@ describe("projects controller", () => {
       ],
     };
     let reloadFailed = true;
+    const originalFetch = globalThis.fetch;
+    const generatedRequests: string[] = [];
+    globalThis.fetch = async (input) => {
+      const url = String(input);
+      generatedRequests.push(url);
+      if (url.endsWith(`/api/v2/projects/p_conflict-load1`))
+        return reloadFailed ? new Response(null, { status: 503 }) : Response.json(remoteProject);
+      if (url.endsWith(`/api/v2/media/${media.id}`)) return Response.json(media);
+      return new Response(null, { status: 404 });
+    };
     const api: ApiClient = {
       url: (path) => path,
       request: (path, init) => {
@@ -238,8 +303,12 @@ describe("projects controller", () => {
     const [, setDestinationId] = createSignal("download");
     const [, setFilenameTemplate] = createSignal(defaultSettings.filenameTemplate);
     const registry = AtomRegistry.make();
+    let lastStatus = "";
     const controller = createProjectsController({
-      server: createServerState(api, registry),
+      server: createServerState(api, registry, {
+        serverBaseUrl: "http://localhost",
+        authentication: { type: "none" },
+      }),
       selected,
       projectId,
       setProjectId,
@@ -272,7 +341,10 @@ describe("projects controller", () => {
       editableItems: () => projectItems(),
       clearDetectionContext: () => undefined,
       setDiagnostics: () => undefined,
-      setStatus: () => undefined,
+      setStatus: (value) => {
+        lastStatus = typeof value === "function" ? value(lastStatus) : value;
+        return lastStatus;
+      },
     });
 
     await controller.saveProject();
@@ -282,6 +354,11 @@ describe("projects controller", () => {
 
     reloadFailed = false;
     await controller.reloadRemoteProject();
+    globalThis.fetch = originalFetch;
+    expect(
+      generatedRequests.filter((url) => url.endsWith("/api/v2/projects/p_conflict-load1")),
+    ).toHaveLength(2);
+    expect(lastStatus).toBe("Project loaded.");
     expect(controller.saveConflict()).toBe(false);
     expect(projectName()).toBe("Remote project");
     expect(timeline().present.segments[0]?.startMs).toBe(200);

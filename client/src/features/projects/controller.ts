@@ -2,7 +2,7 @@ import { createSignal, type Accessor, type Setter } from "solid-js";
 import { Cause, Effect, Exit, Fiber } from "effect";
 import type { Fiber as FiberHandle } from "effect/Fiber";
 import { apiJson, ApiFailure } from "../../api";
-import type { ServerState } from "../app/server";
+import { readServerAtom, type ServerState } from "../app/server";
 import type { components } from "../../generated/api";
 import {
   confirmDiscard,
@@ -25,6 +25,7 @@ import type { TimelineHistory } from "../editor/timeline";
 import type { AppSettings } from "../settings/model";
 
 type Project = components["schemas"]["Project"];
+type GeneratedProject = import("../../generated/effect-api").Project;
 type Media = components["schemas"]["Media"];
 export type SaveState = "unsaved" | "saving" | "saved" | "failed";
 const recoveryKey = "videocutlist.project-recovery.v1";
@@ -317,9 +318,27 @@ export function createProjectsController(deps: ProjectsControllerDeps) {
     const fiber: FiberHandle<void, never> = Effect.runFork(
       Effect.gen(function* () {
         yield* Effect.yieldNow;
-        const project =
-          imported ??
-          (yield* apiJson<Project>(deps.server.api, `projects/${encodeURIComponent(id)}`));
+        let loadedProject: Project | GeneratedProject;
+        if (imported) {
+          loadedProject = imported;
+        } else {
+          const projectResource = deps.server.project(id);
+          deps.server.registry.refresh(projectResource);
+          loadedProject = yield* readServerAtom(deps.server, projectResource);
+        }
+        const project: Project = {
+          ...loadedProject,
+          items: loadedProject.items.map((item) => ({
+            ...item,
+            segments: item.segments.map((segment) => ({ ...segment })),
+            exportOptions: {
+              ...item.exportOptions,
+              streamIndexes: item.exportOptions.streamIndexes
+                ? [...item.exportOptions.streamIndexes]
+                : undefined,
+            },
+          })),
+        };
         const restored = yield* Effect.forEach(
           project.items,
           (entry) =>
@@ -386,8 +405,9 @@ export function createProjectsController(deps: ProjectsControllerDeps) {
           imported ? "Cut list imported. Save the project to keep it." : "Project loaded.",
         );
       }).pipe(
-        Effect.catch((error) =>
+        Effect.catchCause((cause) =>
           Effect.sync(() => {
+            const error = Cause.squash(cause);
             if (!disposed && request === projectRequestVersion)
               deps.setStatus(error instanceof Error ? error.message : "Project load failed.");
           }),

@@ -15,6 +15,7 @@ import {
 } from "../../api";
 import { VideoCutListApi } from "../../generated/effect-api";
 import type { components } from "../../generated/api";
+import type { Project, ProjectPage } from "../../generated/effect-api";
 
 type Media = components["schemas"]["Media"];
 
@@ -24,6 +25,11 @@ export interface ServerState {
   readonly runtime: Atom.AtomRuntime<never>;
   readonly generatedApi?: ReturnType<typeof createGeneratedApi>;
   readonly media: (id: string) => Atom.Atom<AsyncResult.AsyncResult<Media, Error>>;
+  readonly project: (id: string) => Atom.Atom<AsyncResult.AsyncResult<Project, unknown>>;
+  readonly projectPage: (query: {
+    limit?: number;
+    cursor?: string;
+  }) => Atom.Atom<AsyncResult.AsyncResult<ProjectPage, unknown>>;
   readonly mediaRevision: Atom.Writable<number>;
   refreshMedia(): void;
 }
@@ -46,6 +52,14 @@ export function createServerState(
   const generatedApi = configuration ? createGeneratedApi(configuration) : undefined;
   const runtime = Atom.runtime(Layer.empty);
   const mediaRevision = Atom.make(0);
+  const project = (id: string) => {
+    if (!generatedApi) throw new Error("Generated project API is not configured.");
+    return generatedApi.query("default", "getProject", { params: { projectId: id } });
+  };
+  const projectPage = (query: { limit?: number; cursor?: string }) => {
+    if (!generatedApi) throw new Error("Generated project API is not configured.");
+    return generatedApi.query("default", "listProjects", { query });
+  };
   const media = Atom.family((id: string) =>
     runtime
       .atom((get) => {
@@ -74,6 +88,8 @@ export function createServerState(
     runtime,
     generatedApi,
     media,
+    project,
+    projectPage,
     mediaRevision,
     refreshMedia() {
       registry.update(mediaRevision, (revision) => revision + 1);
@@ -117,10 +133,10 @@ export function pollAtom<A, R = never>(
 }
 
 /** Awaiting a resource holds its native registry mount only for that operation. */
-export function readServerAtom<A>(
+export function readServerAtom<A, E>(
   server: ServerState,
-  atom: Atom.Atom<AsyncResult.AsyncResult<A, Error>>,
-): Effect.Effect<A, Error> {
+  atom: Atom.Atom<AsyncResult.AsyncResult<A, E>>,
+): Effect.Effect<A, E> {
   return Effect.acquireUseRelease(
     Effect.sync(() => server.registry.mount(atom)),
     () => AtomRegistry.getResult(server.registry, atom, { suspendOnWaiting: true }),
