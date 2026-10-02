@@ -298,13 +298,22 @@ test("Create clips saves a dirty revision before fresh preflight and batch submi
     },
   };
   let startBatchStream!: () => void;
-  let startJobStream!: () => void;
   let releaseStreams!: () => void;
   const batchStreamStarted = new Promise<void>((resolve) => (startBatchStream = resolve));
-  const jobStreamStarted = new Promise<void>((resolve) => (startJobStream = resolve));
   const streamsReleased = new Promise<void>((resolve) => (releaseStreams = resolve));
   const calls: string[] = [];
   const deleteRequests: string[] = [];
+  let batchListRequests = 0;
+  let releaseStaleBatchList!: () => void;
+  let markStaleBatchListStarted!: () => void;
+  let markStaleBatchListCompleted!: () => void;
+  const staleBatchListReleased = new Promise<void>((resolve) => (releaseStaleBatchList = resolve));
+  const staleBatchListStarted = new Promise<void>(
+    (resolve) => (markStaleBatchListStarted = resolve),
+  );
+  const staleBatchListCompleted = new Promise<void>(
+    (resolve) => (markStaleBatchListCompleted = resolve),
+  );
   let savedBody: Record<string, unknown> | undefined;
   let savedRevision: number | undefined;
   let submittedBody: Record<string, unknown> | undefined;
@@ -353,8 +362,29 @@ test("Create clips saves a dirty revision before fresh preflight and batch submi
           capabilities: { saveBesideSource: false },
         },
       });
-    if (path === "/batches" && request.method() === "GET")
-      return route.fulfill({ json: { items: [], nextCursor: null } });
+    if (path === "/batches" && request.method() === "GET") {
+      batchListRequests++;
+      if (batchListRequests === 1) return route.fulfill({ json: { items: [], nextCursor: null } });
+      markStaleBatchListStarted();
+      await staleBatchListReleased;
+      const response = await route.fulfill({
+        json: {
+          items: [
+            {
+              batchId,
+              projectId: projectId!,
+              projectRevision: 1,
+              state: "queued",
+              progress: 0,
+              jobs: [job],
+            },
+          ],
+          nextCursor: null,
+        },
+      });
+      markStaleBatchListCompleted();
+      return response;
+    }
     const projectPath = path.match(/^\/projects\/(p_[A-Za-z0-9_-]{12,64})$/);
     if (projectPath && request.method() === "PUT") {
       projectId = projectPath[1];
@@ -409,20 +439,6 @@ test("Create clips saves a dirty revision before fresh preflight and batch submi
         ].join("\n"),
       });
     }
-    if (path === `/jobs/${jobId}/events`) {
-      startJobStream();
-      await streamsReleased;
-      return route.fulfill({
-        headers: { "Content-Type": "text/event-stream" },
-        body: [
-          "id: job-cursor-2",
-          "event: snapshot",
-          `data: ${JSON.stringify(terminalJob)}`,
-          "",
-          "",
-        ].join("\n"),
-      });
-    }
     return route.fulfill({
       status: 404,
       json: { error: { code: "not_found", message: "Not found", requestId: "test" } },
@@ -437,7 +453,9 @@ test("Create clips saves a dirty revision before fresh preflight and batch submi
   await expect(create).toBeEnabled();
   await create.click();
   await expect(page.getByText("Export queued.", { exact: true })).toBeVisible();
-  await Promise.all([batchStreamStarted, jobStreamStarted]);
+  await Promise.all([staleBatchListStarted, batchStreamStarted]);
+  await page.getByRole("button", { name: "Cancel export", exact: true }).click();
+  await expect.poll(() => deleteRequests).toEqual([`/batches/${batchId}`]);
   await page.getByRole("button", { name: "Hide editing tools", exact: true }).click();
   releaseStreams();
   await expect(page.getByRole("button", { name: "Show editing tools", exact: true })).toBeVisible();
@@ -445,8 +463,11 @@ test("Create clips saves a dirty revision before fresh preflight and batch submi
   await expect(
     page.getByRole("region", { name: "Current batch" }).getByText("succeeded", { exact: true }),
   ).toBeVisible();
+  releaseStaleBatchList();
+  await staleBatchListCompleted;
+  await expect(page.locator(".queue-batch-heading .badge")).toHaveText("succeeded");
   expect(calls).toEqual(["save", "preflight", "export"]);
-  expect(deleteRequests).toEqual([]);
+  expect(deleteRequests).toEqual([`/batches/${batchId}`]);
   expect(submittedBody).toMatchObject({ projectRevision: savedRevision });
   expect(idempotencyKey).toMatch(
     /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
