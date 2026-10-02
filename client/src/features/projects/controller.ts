@@ -2,7 +2,7 @@ import { createSignal, type Accessor, type Setter } from "solid-js";
 import { Cause, Effect, Exit, Fiber } from "effect";
 import * as AtomRegistry from "effect/reactivity/AtomRegistry";
 import type { Fiber as FiberHandle } from "effect/Fiber";
-import { apiJson, ApiFailure } from "../../api";
+import { ApiFailure } from "../../api";
 import { readServerAtom, type ServerState } from "../app/server";
 import type { components } from "../../generated/api";
 import {
@@ -375,10 +375,7 @@ export function createProjectsController(deps: ProjectsControllerDeps) {
           project.items,
           (entry) =>
             Effect.gen(function* () {
-              const media = yield* apiJson<Media>(
-                deps.server.api,
-                `media/${encodeURIComponent(entry.mediaId)}`,
-              );
+              const media = yield* readServerAtom(deps.server, deps.server.media(entry.mediaId));
               const error = validateSegments(entry.segments, media.durationMs);
               if (error) return yield* Effect.fail(new Error(error));
               return restoreProjectItem(entry, media);

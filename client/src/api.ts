@@ -346,26 +346,6 @@ export function apiRequest(
   });
 }
 
-/** Keep fetch and body consumption in the same interruptible operation. */
-export function apiJson<A>(
-  api: ApiClient,
-  path: string,
-  init: RequestInit = {},
-): Effect.Effect<A, Error> {
-  return Effect.tryPromise({
-    try: async (signal) => {
-      const response = await api.request(path, {
-        ...init,
-        signal: init.signal ? AbortSignal.any([signal, init.signal]) : signal,
-      });
-      if (!response.ok) throw new ApiFailure(response.status, await readApiError(response));
-      return (await response.json()) as A;
-    },
-    catch: (cause) =>
-      cause instanceof Error ? cause : new Error("Request could not be completed."),
-  });
-}
-
 /** Promise consumers receive the original public failure, never a FiberFailure string. */
 export async function runEffect<A, E>(
   effect: Effect.Effect<A, E>,
