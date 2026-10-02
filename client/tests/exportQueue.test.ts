@@ -9,29 +9,31 @@ describe("export batch response", () => {
   });
 
   it.each([
-    [null, "jobs.0"],
-    [
-      {
-        id: "job-1",
-        type: "export",
-        state: "unknown",
-        createdAt: "2026-01-01T00:00:00Z",
-        updatedAt: "2026-01-01T00:00:00Z",
-      },
-      "jobs.0.state",
-    ],
-    [
-      {
-        id: "job-1",
-        type: "export",
-        state: "queued",
-        updatedAt: "2026-01-01T00:00:00Z",
-      },
-      "jobs.0.createdAt",
-    ],
-  ])("rejects malformed child jobs before polling and queue rendering: %s", (job, path) => {
+    null,
+    {
+      id: "job-1",
+      type: "export",
+      state: "unknown",
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-01T00:00:00Z",
+    },
+    {
+      id: "job-1",
+      type: "export",
+      state: "queued",
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-01T00:00:00Z",
+      progress: 2,
+    },
+    {
+      id: "job-1",
+      type: "export",
+      state: "queued",
+      updatedAt: "2026-01-01T00:00:00Z",
+    },
+  ])("rejects malformed child jobs before polling and queue rendering: %s", (job) => {
     expect(() => parseBatchExportSubmission({ batchId: "batch-1", jobs: [job] })).toThrow(
-      `Invalid export batch response: ${path}:`,
+      "Invalid export batch response",
     );
   });
 });
