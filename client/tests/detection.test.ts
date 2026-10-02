@@ -158,6 +158,9 @@ async function withProjectSaveAndDetection(
     context: {
       projectId: () => string;
       revision: () => number;
+      dirty: () => boolean;
+      saveConflict: () => boolean;
+      saveProject: () => Promise<EffectApiTypes.Project | undefined>;
       setProjectId: (id: string) => void;
       selected: () => EffectApiTypes.Media | undefined;
       setSelected: (media: EffectApiTypes.Media) => void;
@@ -304,6 +307,9 @@ async function withProjectSaveAndDetection(
           context = {
             projectId,
             revision,
+            dirty,
+            saveConflict: projects.saveConflict,
+            saveProject: projects.saveProject,
             setProjectId,
             selected,
             setSelected,
@@ -405,93 +411,129 @@ it("redelivers uncertain detection against the real project saver without an ext
   });
 });
 
-it.each(["project", "source", "item", "editor", "options", "dirty"] as const)(
-  "saves changed %s detection intent before assigning a fresh key",
-  async (change) => {
-    const puts: Array<{ target: string; revision: number }> = [];
-    const submissions: Array<{ key: string | null; target: string; body: string }> = [];
-    let acceptedJob: EffectApiTypes.DetectionJob | undefined;
-    const api: ApiClient & Pick<NativeMediaApiClient, "mediaRequest"> = {
-      url: (path) => path,
-      request: (path, init) => {
-        if (init?.method === "PUT" && path.startsWith("projects/")) {
-          const target = path.split("/")[1]!;
-          const payload = JSON.parse(String(init.body)) as {
-            revision: number;
-            name: string;
-            items: unknown[];
-          };
-          puts.push({ target, revision: payload.revision });
+it.each([
+  "project",
+  "media",
+  "source",
+  "item",
+  "editor",
+  "options",
+  "kind",
+  "revision",
+  "conflict",
+  "dirty",
+] as const)("saves changed %s detection intent before assigning a fresh key", async (change) => {
+  const puts: Array<{ target: string; revision: number }> = [];
+  const submissions: Array<{ key: string | null; target: string; body: string }> = [];
+  let acceptedJob: EffectApiTypes.DetectionJob | undefined;
+  let conflictNextPut = false;
+  const api: ApiClient & Pick<NativeMediaApiClient, "mediaRequest"> = {
+    url: (path) => path,
+    request: (path, init) => {
+      if (init?.method === "PUT" && path.startsWith("projects/")) {
+        const target = path.split("/")[1]!;
+        const payload = JSON.parse(String(init.body)) as {
+          revision: number;
+          name: string;
+          items: unknown[];
+        };
+        puts.push({ target, revision: payload.revision });
+        if (conflictNextPut) {
+          conflictNextPut = false;
           return Promise.resolve(
-            Response.json({
-              id: target,
-              revision: payload.revision + 1,
-              updatedAt: "2026-01-01T00:00:00Z",
-              schemaVersion: 2,
-              name: payload.name,
-              items: payload.items,
-            }),
+            Response.json(
+              {
+                error: { code: "revision_conflict", message: "Conflict", requestId: "r-conflict" },
+              },
+              { status: 409 },
+            ),
           );
         }
-        if (path.endsWith("/detections") && init?.method === "POST") {
-          const target = path.split("/")[1]!;
-          const body = String(init.body);
-          submissions.push({ key: new Headers(init.headers).get("Idempotency-Key"), target, body });
-          if (submissions.length === 1)
-            return Promise.resolve(
-              Response.json(
-                { error: { code: "internal_error", message: "Retry", requestId: "r-lost" } },
-                { status: 500 },
-              ),
-            );
-          acceptedJob = {
-            ...queuedDetectionJob,
-            projectId: target,
-            projectRevision: JSON.parse(body).projectRevision,
-          };
-          return Promise.resolve(Response.json(acceptedJob, { status: 202 }));
-        }
-        if (path.endsWith("/events") && acceptedJob) return Promise.resolve(jobEvent(acceptedJob));
-        return Promise.resolve(Response.json({}));
-      },
-      assetRequest: () => Promise.resolve(Response.json({})),
-      mediaRequest: () => Promise.reject(new Error("Unexpected media request")),
-    };
-    await withProjectSaveAndDetection(api, async (controller, context) => {
-      await controller.startDetection("silence", { noiseDb: -35 });
-      const first = submissions[0]!;
-      if (change === "project") context.setProjectId("p_000000000002");
-      if (change === "source") {
-        const changedMedia = { ...detectionMedia, etag: "v2" };
-        context.setSelected(changedMedia);
-        context.setProjectItems(
-          context.projectItems().map((entry) => ({ ...entry, media: changedMedia })),
+        return Promise.resolve(
+          Response.json({
+            id: target,
+            revision: payload.revision + 1,
+            updatedAt: "2026-01-01T00:00:00Z",
+            schemaVersion: 2,
+            name: payload.name,
+            items: payload.items,
+          }),
         );
       }
-      if (change === "item") {
-        const newItem: EditableProjectItem = {
-          ...context.projectItems()[0]!,
-          id: `i_${"e".repeat(24)}`,
+      if (path.endsWith("/detections") && init?.method === "POST") {
+        const target = path.split("/")[1]!;
+        const body = String(init.body);
+        submissions.push({ key: new Headers(init.headers).get("Idempotency-Key"), target, body });
+        if (submissions.length === 1)
+          return Promise.resolve(
+            Response.json(
+              { error: { code: "internal_error", message: "Retry", requestId: "r-lost" } },
+              { status: 500 },
+            ),
+          );
+        acceptedJob = {
+          ...queuedDetectionJob,
+          projectId: target,
+          projectRevision: JSON.parse(body).projectRevision,
         };
-        context.setProjectItems([...context.projectItems(), newItem]);
-        context.setActiveItemId(newItem.id);
+        return Promise.resolve(Response.json(acceptedJob, { status: 202 }));
       }
-      if (change === "editor") context.setEditorVersion(1);
-      context.setDirty(true);
-      await controller.startDetection("silence", { noiseDb: change === "options" ? -20 : -35 });
-      expect(puts).toHaveLength(2);
-      expect(puts[1]?.revision).toBe(2);
-      expect(submissions).toHaveLength(2);
-      expect(submissions[1]?.key).toBeTruthy();
-      expect(submissions[1]?.key).not.toBe(first.key);
-      expect(submissions[1]?.body).not.toBe(first.body);
-      if (change === "project") {
-        expect(puts[1]?.target).toBe("p_000000000002");
-        expect(submissions[1]?.target).toBe("p_000000000002");
-      }
-    });
-  },
-);
+      if (path.endsWith("/events") && acceptedJob) return Promise.resolve(jobEvent(acceptedJob));
+      return Promise.resolve(Response.json({}));
+    },
+    assetRequest: () => Promise.resolve(Response.json({})),
+    mediaRequest: () => Promise.reject(new Error("Unexpected media request")),
+  };
+  await withProjectSaveAndDetection(api, async (controller, context) => {
+    await controller.startDetection("silence", { noiseDb: -35 });
+    const first = submissions[0]!;
+    if (change === "project") context.setProjectId("p_000000000002");
+    if (change === "media" || change === "source") {
+      const changedMedia = {
+        ...detectionMedia,
+        ...(change === "media" ? { id: `m_${"n".repeat(43)}` } : { etag: "v2" }),
+      };
+      context.setSelected(changedMedia);
+      context.setProjectItems(
+        context.projectItems().map((entry) => ({ ...entry, media: changedMedia })),
+      );
+    }
+    if (change === "item") {
+      const newItem: EditableProjectItem = {
+        ...context.projectItems()[0]!,
+        id: `i_${"e".repeat(24)}`,
+      };
+      context.setProjectItems([...context.projectItems(), newItem]);
+      context.setActiveItemId(newItem.id);
+    }
+    if (change === "editor") context.setEditorVersion(1);
+    if (change === "revision") {
+      expect(await context.saveProject()).toBeTruthy();
+      expect(context.revision()).toBe(3);
+    }
+    if (change === "conflict") {
+      conflictNextPut = true;
+      expect(await context.saveProject()).toBeUndefined();
+      expect(context.saveConflict()).toBe(true);
+    }
+    if (change === "dirty") context.setDirty(true);
+    expect(context.dirty()).toBe(change === "dirty");
+    expect(context.saveConflict()).toBe(change === "conflict");
+    expect(context.revision()).toBe(change === "revision" ? 3 : 2);
+    const kind = change === "kind" ? "black" : "silence";
+    await controller.startDetection(kind, { noiseDb: change === "options" ? -20 : -35 });
+    expect(puts).toHaveLength(change === "revision" || change === "conflict" ? 3 : 2);
+    expect(puts[1]?.revision).toBe(2);
+    expect(submissions).toHaveLength(2);
+    expect(submissions[1]?.key).toBeTruthy();
+    expect(submissions[1]?.key).not.toBe(first.key);
+    expect(submissions[1]?.body).not.toBe(first.body);
+    if (change === "project") {
+      expect(puts[1]?.target).toBe("p_000000000002");
+      expect(submissions[1]?.target).toBe("p_000000000002");
+    }
+  });
+});
 
 it("uses a fresh key after generated detection capacity rejection", async () => {
   const submissions: Array<{ key: string | null; target: string; body: string }> = [];
