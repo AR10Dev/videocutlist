@@ -75,10 +75,16 @@ func (s *Server) streamJob(writer http.ResponseWriter, request *http.Request, jo
 		}
 	}
 
+	stream, err := newSSEWriter(writer)
+	if err != nil {
+		internalError(writer, requestID)
+		return
+	}
+	writer = stream
 	writer.Header().Set("Content-Type", "text/event-stream")
 	writer.Header().Set("Cache-Control", "no-cache")
 	writer.Header().Set("X-Accel-Buffering", "no")
-	flush := http.NewResponseController(writer).Flush
+	flush := stream.flush
 	if resync {
 		if !writeJobEvent(writer, flush, "resync", job) {
 			return
@@ -174,10 +180,16 @@ func (s *Server) streamBatch(writer http.ResponseWriter, request *http.Request, 
 		resync = len(lastEventIDs) != 1 || lastEventIDs[0] != cursor
 	}
 
+	stream, err := newSSEWriter(writer)
+	if err != nil {
+		internalError(writer, requestID)
+		return
+	}
+	writer = stream
 	writer.Header().Set("Content-Type", "text/event-stream")
 	writer.Header().Set("Cache-Control", "no-cache")
 	writer.Header().Set("X-Accel-Buffering", "no")
-	flush := http.NewResponseController(writer).Flush
+	flush := stream.flush
 	event := "snapshot"
 	if resync {
 		event = "resync"
