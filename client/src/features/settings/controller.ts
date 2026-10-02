@@ -3,8 +3,12 @@ import * as AsyncResult from "effect/reactivity/AsyncResult";
 import * as Atom from "effect/reactivity/Atom";
 import * as AtomRegistry from "effect/reactivity/AtomRegistry";
 import { createSignal, getOwner, onCleanup, type Accessor, type Setter } from "solid-js";
-import { ApiFailure, apiJson, apiRequest, runEffect, type ApiClient } from "../../api";
+import { runEffect, type ApiClient } from "../../api";
 import type { components } from "../../generated/api";
+import type {
+  GetMCPSettings200,
+  SettingsResponse as GeneratedSettingsResponse,
+} from "../../generated/effect-api";
 import type { ServerState } from "../app/server";
 import {
   validFilenameTemplateLength,
@@ -21,11 +25,8 @@ type LibraryRoot = {
   message?: string;
 };
 type ServerRuntimeSettings = components["schemas"]["RuntimeSettings"];
-type ServerSettings = components["schemas"]["SettingsResponse"];
-type MCPSettings = components["schemas"]["MCPSettingsResponse"];
+type MCPSettings = GetMCPSettings200;
 type MCPCredentialCreate = components["schemas"]["MCPCredentialCreate"];
-type MCPCredentialCreated = components["schemas"]["MCPCredentialCreated"];
-type ExportProposal = components["schemas"]["ExportProposal"];
 
 const originMessage =
   "This browser origin is not allowed by the server. Check the deployment CORS settings.";
@@ -40,6 +41,47 @@ function resultError<A>(result: AsyncResult.AsyncResult<A, Error>): Error | unde
   if (!AsyncResult.isFailure(result)) return;
   const error = Cause.squash(result.cause);
   return error instanceof Error ? error : new Error("Request could not be completed.");
+}
+
+function mutableSettings(value: GeneratedSettingsResponse["settings"]): ServerRuntimeSettings {
+  return {
+    ...value,
+    destinations: value.destinations?.map((destination) => ({ ...destination })),
+  };
+}
+
+function errorCode(error: unknown): string | undefined {
+  if (!error || typeof error !== "object") return;
+  const direct = "code" in error ? error.code : undefined;
+  if (typeof direct === "string") return direct;
+  const envelope = "error" in error ? error.error : undefined;
+  if (!envelope || typeof envelope !== "object" || !("code" in envelope)) return;
+  return typeof envelope.code === "string" ? envelope.code : undefined;
+}
+
+function responseStatus(error: unknown): number | undefined {
+  if (!error || typeof error !== "object") return;
+  if ("status" in error && typeof error.status === "number") return error.status;
+  const reason = "reason" in error ? error.reason : undefined;
+  if (reason && typeof reason === "object" && "response" in reason) {
+    const response = reason.response;
+    if (
+      response &&
+      typeof response === "object" &&
+      "status" in response &&
+      typeof response.status === "number"
+    )
+      return response.status;
+  }
+  const cause = "cause" in error ? error.cause : undefined;
+  return cause === error ? undefined : responseStatus(cause);
+}
+
+function isUncertainRequestError(error: unknown): boolean {
+  const status = responseStatus(error);
+  if (status !== undefined) return status >= 500;
+  const code = errorCode(error);
+  return code === undefined || code === "internal_error";
 }
 
 export function createSettingsController(api: ApiClient, server?: ServerState) {
@@ -75,63 +117,100 @@ export function createSettingsController(api: ApiClient, server?: ServerState) {
     return value;
   }
 
-  const settingsLoad = runtime.fn(() =>
-    apiJson<ServerSettings>(api, "settings").pipe(
-      Effect.mapError(
-        (error) =>
-          new Error(
-            error instanceof ApiFailure && error.code === "origin_forbidden"
-              ? originMessage
-              : "Administrator settings are unavailable on this server. Check your access and retry.",
+  function generatedQuery<A, E>(
+    atom: Atom.Atom<AsyncResult.AsyncResult<A, E>>,
+  ): Effect.Effect<A, E> {
+    return Effect.acquireUseRelease(
+      Effect.sync(() => {
+        const current = registry.get(atom);
+        const release = registry.mount(atom);
+        if (AsyncResult.isNotInitial(current)) registry.refresh(atom);
+        return release;
+      }),
+      () => AtomRegistry.getResult(registry, atom, { suspendOnWaiting: true }),
+      (release) => Effect.sync(release),
+    );
+  }
+
+  function generatedMutation<Arg, A, E>(
+    atom: Atom.AtomResultFn<Arg, A, E>,
+    arg: Arg,
+  ): Effect.Effect<A, E> {
+    return Effect.acquireUseRelease(
+      Effect.sync(() => registry.mount(atom)),
+      () => {
+        registry.set(atom, arg);
+        return AtomRegistry.getResult(registry, atom, { suspendOnWaiting: true });
+      },
+      (release) =>
+        Effect.sync(() => {
+          registry.set(atom, Atom.Reset);
+          release();
+        }),
+    );
+  }
+
+  const settingsLoad = runtime.fn(() => {
+    const query = server?.generatedApi?.query("default", "getSettings", {});
+    return query
+      ? generatedQuery(query).pipe(
+          Effect.map((value) => ({ ...value, settings: mutableSettings(value.settings) })),
+          Effect.mapError(
+            (error) =>
+              new Error(
+                errorCode(error) === "origin_forbidden"
+                  ? originMessage
+                  : "Administrator settings are unavailable on this server. Check your access and retry.",
+              ),
           ),
-      ),
-    ),
-  );
+        )
+      : Effect.fail(new Error("Generated settings API is not configured."));
+  });
   const settingsLoadResult = observe(settingsLoad);
   const mcpLoad = runtime.fn((args: { cursor?: string; proposalCursor?: string }) => {
-    const query = new URLSearchParams();
-    if (args.cursor) query.set("cursor", args.cursor);
-    if (args.proposalCursor) {
-      query.set("proposalCursor", args.proposalCursor);
-      query.set("proposalLimit", "25");
-    }
-    return apiJson<MCPSettings>(api, `settings/mcp${query.size ? `?${query}` : ""}`).pipe(
-      Effect.flatMap((value) =>
-        Effect.try({
-          try: () => ({
-            ...value,
-            endpoint: new URL(value.endpoint, api.url("settings")).toString(),
-          }),
-          catch: () => new Error(mcpRefreshMessage),
-        }),
-      ),
-      Effect.mapError(() => new Error(mcpRefreshMessage)),
-    );
+    const query = server?.generatedApi?.query("default", "getMCPSettings", {
+      query: {
+        ...(args.cursor ? { cursor: args.cursor } : {}),
+        ...(args.proposalCursor ? { proposalCursor: args.proposalCursor, proposalLimit: 25 } : {}),
+      },
+    });
+    return query
+      ? generatedQuery(query).pipe(
+          Effect.flatMap((value) =>
+            Effect.try({
+              try: () => ({
+                ...value,
+                endpoint: new URL(value.endpoint, api.url("settings")).toString(),
+              }),
+              catch: () => new Error(mcpRefreshMessage),
+            }),
+          ),
+          Effect.mapError(() => new Error(mcpRefreshMessage)),
+        )
+      : Effect.fail(new Error(mcpRefreshMessage));
   });
   const mcpLoadResult = observe(mcpLoad);
-  const settingsSave = runtime.fn((input: components["schemas"]["SettingsUpdate"]) =>
-    apiJson<components["schemas"]["SettingsUpdated"]>(api, "settings", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(input),
-    }).pipe(
-      Effect.mapError(
-        (error) =>
-          new Error(
-            error instanceof ApiFailure
-              ? error.code === "settings_revision_conflict"
-                ? "Settings changed; reload before updating."
-                : error.code === "invalid_settings" ||
-                    error.code === "deployment_settings_read_only"
-                  ? "Settings were rejected. Check the configured limits; deployment settings are read-only."
-                  : error.code === "origin_forbidden"
-                    ? originMessage
-                    : "Settings could not be saved. Retry or reload to check the server state."
-              : "Settings could not be saved. Retry or reload to check the server state.",
+  const settingsSave = runtime.fn((input: components["schemas"]["SettingsUpdate"]) => {
+    const mutation = server?.generatedApi?.mutation("default", "updateSettings");
+    return mutation
+      ? generatedMutation(mutation, { payload: input }).pipe(
+          Effect.map((value) => ({ ...value, settings: mutableSettings(value.settings) })),
+          Effect.mapError(
+            (error) =>
+              new Error(
+                errorCode(error) === "settings_revision_conflict"
+                  ? "Settings changed; reload before updating."
+                  : errorCode(error) === "invalid_settings" ||
+                      errorCode(error) === "deployment_settings_read_only"
+                    ? "Settings were rejected. Check the configured limits; deployment settings are read-only."
+                    : errorCode(error) === "origin_forbidden"
+                      ? originMessage
+                      : "Settings could not be saved. Retry or reload to check the server state.",
+              ),
           ),
-      ),
-    ),
-  );
+        )
+      : Effect.fail(new Error("Generated settings API is not configured."));
+  });
   const settingsSaveResult = observe(settingsSave);
   type MCPMutation =
     | { type: "create"; input: MCPCredentialCreate; session: number }
@@ -139,18 +218,17 @@ export function createSettingsController(api: ApiClient, server?: ServerState) {
     | { type: "revoke"; id: string };
   type MCPMutationOutcome =
     | { type: "create" }
-    | { type: "approve"; approved: ExportProposal }
+    | { type: "approve"; proposalId: string }
     | { type: "revoke" };
   const mcpMutation = runtime.fn((action: MCPMutation, get) =>
     Effect.gen(function* () {
       let outcome: MCPMutationOutcome;
       switch (action.type) {
         case "create": {
-          yield* apiJson<MCPCredentialCreated>(api, "settings/mcp/credentials", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(action.input),
-          }).pipe(
+          const mutation = server?.generatedApi?.mutation("default", "createMCPCredential");
+          if (!mutation)
+            return yield* Effect.fail(new Error("Generated settings API is not configured."));
+          yield* generatedMutation(mutation, { payload: action.input }).pipe(
             Effect.mapError(() => new Error("Credential settings were rejected.")),
             Effect.tap((created) =>
               Effect.sync(() => {
@@ -164,27 +242,25 @@ export function createSettingsController(api: ApiClient, server?: ServerState) {
           break;
         }
         case "approve": {
-          const approved = yield* apiJson<ExportProposal>(
-            api,
-            `export-proposals/${encodeURIComponent(action.id)}/approval`,
-            { method: "POST" },
-          ).pipe(Effect.mapError(() => new Error("Export proposal could not be approved.")));
-          outcome = { type: "approve", approved };
+          const mutation = server?.generatedApi?.mutation("default", "approveExportProposal");
+          if (!mutation)
+            return yield* Effect.fail(new Error("Generated settings API is not configured."));
+          const approved = yield* generatedMutation(mutation, {
+            params: { proposalId: action.id },
+          }).pipe(Effect.mapError(() => new Error("Export proposal could not be approved.")));
+          outcome = { type: "approve", proposalId: approved.id };
           break;
         }
-        case "revoke":
-          yield* apiRequest(api, `settings/mcp/credentials/${encodeURIComponent(action.id)}`, {
-            method: "DELETE",
-          }).pipe(
-            Effect.flatMap((response) =>
-              response.ok
-                ? Effect.succeed(undefined)
-                : Effect.fail(new Error("Credential could not be revoked.")),
-            ),
-            Effect.mapError(() => new Error("Credential could not be revoked.")),
-          );
+        case "revoke": {
+          const mutation = server?.generatedApi?.mutation("default", "revokeMCPCredential");
+          if (!mutation)
+            return yield* Effect.fail(new Error("Generated settings API is not configured."));
+          yield* generatedMutation(mutation, {
+            params: { credentialId: action.id },
+          }).pipe(Effect.mapError(() => new Error("Credential could not be revoked.")));
           outcome = { type: "revoke" };
           break;
+        }
       }
       // A failed refresh must not turn a completed mutation into a retryable mutation.
       yield* get.setResult(mcpLoad, {}).pipe(
@@ -195,22 +271,19 @@ export function createSettingsController(api: ApiClient, server?: ServerState) {
     }),
   );
   const mcpMutationResult = observe(mcpMutation);
-  const rescan = runtime.fn(() =>
-    apiRequest(api, "settings/media/refresh", {
-      method: "POST",
-    }).pipe(
-      Effect.flatMap((response) =>
-        response.ok
-          ? Effect.succeed(undefined)
-          : Effect.fail(
-              new Error("Media library could not be rescanned. Check mounts and permissions."),
-            ),
-      ),
-      Effect.mapError(
-        () => new Error("Media library could not be rescanned. Check mounts and permissions."),
-      ),
-    ),
-  );
+  let uncertainRescanKey: string | undefined;
+  const rescan = runtime.fn((key: string) => {
+    const mutation = server?.generatedApi?.mutation("default", "refreshSettingsMedia");
+    return mutation
+      ? generatedMutation(mutation, { headers: { "Idempotency-Key": key } }).pipe(
+          Effect.map(() => 202),
+          Effect.mapError((error) => {
+            uncertainRescanKey = isUncertainRequestError(error) ? key : undefined;
+            return new Error("Media library could not be rescanned. Check mounts and permissions.");
+          }),
+        )
+      : Effect.fail(new Error("Generated settings API is not configured."));
+  });
   const rescanResult = observe(rescan);
   const serverSettingsLoading = () => settingsLoadResult().waiting;
   const settingsPending = () => settingsSaveResult().waiting;
@@ -386,7 +459,7 @@ export function createSettingsController(api: ApiClient, server?: ServerState) {
     try {
       const result = await execute(mcpMutation, { type: "approve", id: proposalId });
       if (disposed || result.type !== "approve") return false;
-      setMCPStatus(`Export proposal ${result.approved.id} approved.`);
+      setMCPStatus(`Export proposal ${result.proposalId} approved.`);
       return true;
     } catch (error) {
       if (!disposed) setMCPStatus(publicError(error, "Export proposal could not be approved."));
@@ -404,11 +477,26 @@ export function createSettingsController(api: ApiClient, server?: ServerState) {
   };
   const rescanLibrary = async () => {
     if (rescanPending() || disposed) return;
+    const key = uncertainRescanKey ?? globalThis.crypto.randomUUID();
     setServerSettingsStatus("Rescanning media library…");
     try {
-      await execute(rescan, undefined);
-      if (!disposed) setServerSettingsStatus("Media library rescan started.");
+      const status = await execute(rescan, key);
+      if (status >= 500) uncertainRescanKey = key;
+      else uncertainRescanKey = undefined;
+      if (disposed) return;
+      setServerSettingsStatus(
+        status >= 200 && status < 300
+          ? "Media library rescan started."
+          : "Media library could not be rescanned. Check mounts and permissions.",
+      );
     } catch (error) {
+      if (
+        !(
+          error instanceof Error &&
+          error.message === "Media library could not be rescanned. Check mounts and permissions."
+        )
+      )
+        uncertainRescanKey = isUncertainRequestError(error) ? key : undefined;
       if (!disposed) setServerSettingsStatus(publicError(error, "Media library rescan failed."));
     }
   };

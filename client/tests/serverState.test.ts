@@ -8,7 +8,7 @@ import { describe, expect, it, vi } from "@effect/vitest";
 import { authenticationRequiredEvent, createApiClient } from "../src/api";
 import { createWorkspaceController } from "../src/features/app/controller";
 import { createServerState, pollAtom } from "../src/features/app/server";
-import type { Job } from "../src/generated/effect-api";
+import type { Batch, Job } from "../src/generated/effect-api";
 
 describe("workspace server atoms", () => {
   it.effect("recovers polling failures and stops after the terminal result", () =>
@@ -285,6 +285,8 @@ describe("workspace server atoms", () => {
   it("keeps local job cancellation above stale stream snapshots and disposes without DELETE", async () => {
     let sendProgress!: () => void;
     let sendStale!: () => void;
+    let sendAfterClear!: () => void;
+    let sendTerminal!: () => void;
     let requestStarted!: () => void;
     const started = new Promise<void>((resolve) => (requestStarted = resolve));
     let aborted = false;
@@ -317,6 +319,22 @@ describe("workspace server atoms", () => {
             controller.enqueue(
               encoder.encode(`event: snapshot\nid: cursor-3\ndata: ${JSON.stringify(job(4))}\n\n`),
             );
+          sendAfterClear = () =>
+            controller.enqueue(
+              encoder.encode(`event: snapshot\nid: cursor-4\ndata: ${JSON.stringify(job(4))}\n\n`),
+            );
+          sendTerminal = () => {
+            controller.enqueue(
+              encoder.encode(
+                `event: snapshot\nid: cursor-5\ndata: ${JSON.stringify({ ...job(6), id: "j_other", state: "succeeded" })}\n\n`,
+              ),
+            );
+            controller.enqueue(
+              encoder.encode(
+                `event: snapshot\nid: cursor-6\ndata: ${JSON.stringify({ ...job(5), state: "succeeded" })}\n\n`,
+              ),
+            );
+          };
           requestStarted();
           init?.signal?.addEventListener(
             "abort",
@@ -352,6 +370,21 @@ describe("workspace server atoms", () => {
     expect(registry.get(atom)).toMatchObject({
       value: { state: "running", revision: 3, progress: 0.3 },
     });
+    server.setJobLocallyCancelled("j_local", false);
+    sendAfterClear();
+    await vi.waitFor(() =>
+      expect(registry.get(atom)).toMatchObject({ value: { state: "running", revision: 4 } }),
+    );
+    server.setJobLocallyCancelled("j_local", true);
+    sendTerminal();
+    await vi.waitFor(() =>
+      expect(registry.get(atom)).toMatchObject({
+        value: { id: "j_local", state: "succeeded", revision: 5 },
+      }),
+    );
+    server.setJobLocallyCancelled("j_local", false);
+    expect(server.observeJob("j_local", job(2))).toBe(atom);
+    expect(fetch).toHaveBeenCalledOnce();
     registry.dispose();
     expect(aborted).toBe(true);
     const replacementConfiguration = {
@@ -376,6 +409,69 @@ describe("workspace server atoms", () => {
         ([input, init]) => String(input).includes("DELETE") || init?.method === "DELETE",
       ),
     ).toBe(false);
+    vi.unstubAllGlobals();
+  });
+
+  it("accepts a valid terminal batch snapshot while local cancellation is pending", async () => {
+    let sendSnapshots!: () => void;
+    let requestStarted!: () => void;
+    const started = new Promise<void>((resolve) => (requestStarted = resolve));
+    const batch = (batchId: string, state: Batch["state"], revision: number): Batch => ({
+      batchId,
+      state,
+      progress: state === "succeeded" ? 1 : 0.2,
+      jobs: [
+        {
+          id: "j_batch",
+          type: "export",
+          state,
+          revision,
+          createdAt: "2025-01-01T00:00:00Z",
+          updatedAt: "2025-01-01T00:00:01Z",
+        },
+      ],
+    });
+    const fetch = vi.fn(async () => {
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          const encoder = new TextEncoder();
+          sendSnapshots = () => {
+            controller.enqueue(
+              encoder.encode(
+                `event: snapshot\nid: cursor-1\ndata: ${JSON.stringify(batch("b_other", "succeeded", 4))}\n\n`,
+              ),
+            );
+            controller.enqueue(
+              encoder.encode(
+                `event: snapshot\nid: cursor-2\ndata: ${JSON.stringify(batch("b_batch", "succeeded", 3))}\n\n`,
+              ),
+            );
+          };
+          requestStarted();
+        },
+      });
+      return new Response(body, { headers: { "Content-Type": "text/event-stream" } });
+    });
+    vi.stubGlobal("fetch", fetch);
+    const configuration = {
+      serverBaseUrl: "https://example.test",
+      authentication: { type: "none" as const },
+    };
+    const registry = AtomRegistry.make();
+    const server = createServerState(createApiClient(configuration), registry, configuration);
+    const atom = server.observeBatch("b_batch", batch("b_batch", "running", 2));
+    server.setBatchLocallyCancelled("b_batch", true);
+    await started;
+    sendSnapshots();
+    await vi.waitFor(() =>
+      expect(registry.get(atom)).toMatchObject({
+        value: { batchId: "b_batch", state: "succeeded", jobs: [{ revision: 3 }] },
+      }),
+    );
+    server.setBatchLocallyCancelled("b_batch", false);
+    expect(server.observeBatch("b_batch")).toBe(atom);
+    expect(fetch).toHaveBeenCalledOnce();
+    registry.dispose();
     vi.unstubAllGlobals();
   });
 

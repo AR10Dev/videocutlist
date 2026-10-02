@@ -86,18 +86,24 @@ export function createServerState(
       } else {
         let latestRevision = initial?.revision ?? 0;
         let terminal = false;
+        const isValidSnapshot = (snapshot: Job) =>
+          snapshot.id === id && snapshot.revision > latestRevision;
+        const isTerminalSnapshot = (snapshot: Job) =>
+          isValidSnapshot(snapshot) &&
+          ["succeeded", "failed", "cancelled"].includes(snapshot.state);
         atom = runtime.atom<Job, Error>(
-          observeSnapshots<Job, Job>(api, `jobs/${encodeURIComponent(id)}/events`, JobSchema).pipe(
+          observeSnapshots<Job, Job>(
+            api,
+            `jobs/${encodeURIComponent(id)}/events`,
+            JobSchema,
+            isTerminalSnapshot,
+          ).pipe(
             Stream.filter((snapshot) => {
-              if (
-                snapshot.id !== id ||
-                locallyCancelledJobs.has(id) ||
-                terminal ||
-                snapshot.revision <= latestRevision
-              )
-                return false;
+              if (!isValidSnapshot(snapshot) || terminal) return false;
+              const terminalSnapshot = isTerminalSnapshot(snapshot);
+              if (locallyCancelledJobs.has(id) && !terminalSnapshot) return false;
               latestRevision = snapshot.revision;
-              terminal = ["succeeded", "failed", "cancelled"].includes(snapshot.state);
+              terminal = terminalSnapshot;
               return true;
             }),
           ),
@@ -115,19 +121,24 @@ export function createServerState(
     if (!atom) {
       let latestRevisions = new Map(initial?.jobs.map((job) => [job.id, job.revision]) ?? []);
       let terminal = initial ? ["succeeded", "failed", "cancelled"].includes(initial.state) : false;
+      const isValidSnapshot = (snapshot: Batch) =>
+        snapshot.batchId === id &&
+        !snapshot.jobs.some((job) => job.revision < (latestRevisions.get(job.id) ?? 0));
+      const isTerminalSnapshot = (snapshot: Batch) =>
+        isValidSnapshot(snapshot) && ["succeeded", "failed", "cancelled"].includes(snapshot.state);
       atom = runtime.atom<Batch, Error>(
         observeSnapshots<Batch, Batch>(
           api,
           `batches/${encodeURIComponent(id)}/events`,
           BatchSchema,
+          isTerminalSnapshot,
         ).pipe(
           Stream.filter((snapshot) => {
-            if (snapshot.batchId !== id || locallyCancelledBatches.has(id) || terminal)
-              return false;
-            if (snapshot.jobs.some((job) => job.revision < (latestRevisions.get(job.id) ?? 0)))
-              return false;
+            if (!isValidSnapshot(snapshot) || terminal) return false;
+            const terminalSnapshot = isTerminalSnapshot(snapshot);
+            if (locallyCancelledBatches.has(id) && !terminalSnapshot) return false;
             latestRevisions = new Map(snapshot.jobs.map((job) => [job.id, job.revision]));
-            terminal = ["succeeded", "failed", "cancelled"].includes(snapshot.state);
+            terminal = terminalSnapshot;
             return true;
           }),
         ),
