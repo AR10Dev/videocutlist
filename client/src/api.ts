@@ -23,6 +23,43 @@ export async function readApiError(
   };
 }
 
+/** Unknown generated envelopes contain no trustworthy HTTP status. */
+export function apiErrorCode(error: unknown, seen = new Set<object>()): string | undefined {
+  if (!error || typeof error !== "object" || seen.has(error)) return;
+  seen.add(error);
+  if ("code" in error && typeof error.code === "string") return error.code;
+  for (const nested of [
+    "error" in error ? error.error : undefined,
+    "cause" in error ? error.cause : undefined,
+    "reason" in error ? error.reason : undefined,
+    "response" in error ? error.response : undefined,
+  ]) {
+    const code = apiErrorCode(nested, seen);
+    if (code) return code;
+  }
+}
+
+export function apiErrorStatus(error: unknown, seen = new Set<object>()): number | undefined {
+  if (!error || typeof error !== "object" || seen.has(error)) return;
+  seen.add(error);
+  if ("status" in error && typeof error.status === "number") return error.status;
+  for (const nested of [
+    "cause" in error ? error.cause : undefined,
+    "reason" in error ? error.reason : undefined,
+    "response" in error ? error.response : undefined,
+  ]) {
+    const status = apiErrorStatus(nested, seen);
+    if (status !== undefined) return status;
+  }
+}
+
+export function uncertainCommandFailure(error: unknown, rejectionCodes: readonly string[] = []) {
+  const status = apiErrorStatus(error);
+  if (status !== undefined) return status === 0 || status >= 500;
+  const code = apiErrorCode(error);
+  return code === undefined || !rejectionCodes.includes(code);
+}
+
 export type Authentication =
   | { type: "none" }
   | { type: "bearer"; token: string }

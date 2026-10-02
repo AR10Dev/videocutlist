@@ -160,7 +160,6 @@ export function createWorkspaceController() {
     newSegment,
   } = editorFeature;
   const exportFeature = createExportController({
-    api,
     server,
     selected,
     projectId,

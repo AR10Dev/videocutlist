@@ -4,7 +4,7 @@ import * as AsyncResult from "effect/reactivity/AsyncResult";
 import * as Atom from "effect/reactivity/Atom";
 import * as AtomRegistry from "effect/reactivity/AtomRegistry";
 import { createSignal, getOwner, onCleanup, type Accessor, type Setter } from "solid-js";
-import { runEffect, type ApiClient } from "../../api";
+import { apiErrorCode, runEffect, type ApiClient, uncertainCommandFailure } from "../../api";
 import type {
   GetMCPSettings200,
   SettingsResponse as GeneratedSettingsResponse,
@@ -50,38 +50,15 @@ function mutableSettings(value: GeneratedSettingsResponse["settings"]): ServerRu
   };
 }
 
-function errorCode(error: unknown): string | undefined {
-  if (!error || typeof error !== "object") return;
-  const direct = "code" in error ? error.code : undefined;
-  if (typeof direct === "string") return direct;
-  const envelope = "error" in error ? error.error : undefined;
-  if (!envelope || typeof envelope !== "object" || !("code" in envelope)) return;
-  return typeof envelope.code === "string" ? envelope.code : undefined;
-}
-
-function responseStatus(error: unknown): number | undefined {
-  if (!error || typeof error !== "object") return;
-  if ("status" in error && typeof error.status === "number") return error.status;
-  const reason = "reason" in error ? error.reason : undefined;
-  if (reason && typeof reason === "object" && "response" in reason) {
-    const response = reason.response;
-    if (
-      response &&
-      typeof response === "object" &&
-      "status" in response &&
-      typeof response.status === "number"
-    )
-      return response.status;
-  }
-  const cause = "cause" in error ? error.cause : undefined;
-  return cause === error ? undefined : responseStatus(cause);
-}
-
 function isUncertainRequestError(error: unknown): boolean {
-  const status = responseStatus(error);
-  if (status !== undefined) return status >= 500;
-  const code = errorCode(error);
-  return code === undefined || code === "internal_error";
+  return uncertainCommandFailure(error, [
+    "origin_forbidden",
+    "library_busy",
+    "invalid_settings",
+    "deployment_settings_read_only",
+    "settings_revision_conflict",
+    "idempotency_conflict",
+  ]);
 }
 
 export function createSettingsController(api: ApiClient, server?: ServerState) {
@@ -158,7 +135,7 @@ export function createSettingsController(api: ApiClient, server?: ServerState) {
           Effect.mapError(
             (error) =>
               new Error(
-                errorCode(error) === "origin_forbidden"
+                apiErrorCode(error) === "origin_forbidden"
                   ? originMessage
                   : "Administrator settings are unavailable on this server. Check your access and retry.",
               ),
@@ -198,12 +175,12 @@ export function createSettingsController(api: ApiClient, server?: ServerState) {
           Effect.mapError(
             (error) =>
               new Error(
-                errorCode(error) === "settings_revision_conflict"
+                apiErrorCode(error) === "settings_revision_conflict"
                   ? "Settings changed; reload before updating."
-                  : errorCode(error) === "invalid_settings" ||
-                      errorCode(error) === "deployment_settings_read_only"
+                  : apiErrorCode(error) === "invalid_settings" ||
+                      apiErrorCode(error) === "deployment_settings_read_only"
                     ? "Settings were rejected. Check the configured limits; deployment settings are read-only."
-                    : errorCode(error) === "origin_forbidden"
+                    : apiErrorCode(error) === "origin_forbidden"
                       ? originMessage
                       : "Settings could not be saved. Retry or reload to check the server state.",
               ),

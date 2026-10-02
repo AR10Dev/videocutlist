@@ -178,7 +178,6 @@ async function withExportController(
           const [dirty, setDirty] = createSignal(options.dirty ?? false);
           const [projectItems, setProjectItems] = createSignal<EditableProjectItem[]>([]);
           controller = createExportController({
-            api,
             server: createServerState(api, registry, configuration),
             selected: () => options.selected,
             projectId: () => "p_exportstatus0001",

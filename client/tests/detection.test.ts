@@ -161,7 +161,7 @@ it("redelivers an uncertain detection submission with its original key and valid
         return Promise.resolve(
           submissions.length === 1
             ? Response.json(
-                { error: { code: "internal_error", message: "Retry", requestId: "r1" } },
+                { error: { code: "upstream_timeout", message: "Retry", requestId: "r1" } },
                 { status: 503 },
               )
             : Response.json(queuedDetectionJob, { status: 202 }),

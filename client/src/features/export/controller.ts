@@ -14,7 +14,7 @@ import * as Schema from "effect/Schema";
 import * as AsyncResult from "effect/reactivity/AsyncResult";
 import * as Atom from "effect/reactivity/Atom";
 import * as AtomRegistry from "effect/reactivity/AtomRegistry";
-import { ApiFailure, runEffect, type ApiClient } from "../../api";
+import { ApiFailure, runEffect, uncertainCommandFailure } from "../../api";
 import { readServerAtom, useServerAtom, type ServerState } from "../app/server";
 import { Batch as BatchSchema } from "../../generated/effect-api";
 import type { Batch as ObservedBatch } from "../../generated/effect-api";
@@ -103,7 +103,6 @@ type Track = {
 export type ExportScope = "active" | "selected";
 
 export function createExportController(deps: {
-  api: ApiClient;
   server: ServerState;
   selected: Accessor<Media | undefined>;
   projectId: Accessor<string>;
@@ -341,27 +340,14 @@ export function createExportController(deps: {
         body: EffectApiTypes.ExportSubmissionInput;
       }
     | undefined;
-  const isUncertainCommandFailure = (error: unknown): boolean => {
-    if (!error || typeof error !== "object") return true;
-    if ("status" in error && typeof error.status === "number") return error.status >= 500;
-    const envelope = publicApiError(error);
-    if (envelope) return envelope.code === "internal_error";
-    if ("error" in error && error.error && typeof error.error === "object") {
-      const envelope = error.error;
-      if ("code" in envelope && typeof envelope.code === "string")
-        return envelope.code === "internal_error";
-    }
-    if ("code" in error && typeof error.code === "string") return error.code === "internal_error";
-    if ("reason" in error && error.reason && typeof error.reason === "object") {
-      const reason = error.reason;
-      if ("response" in reason && reason.response && typeof reason.response === "object") {
-        const response = reason.response;
-        if ("status" in response && typeof response.status === "number")
-          return response.status >= 500;
-      }
-    }
-    return true;
-  };
+  const isUncertainCommandFailure = (error: unknown) =>
+    uncertainCommandFailure(error, [
+      "export_busy",
+      "invalid_export",
+      "revision_conflict",
+      "destination_not_found",
+      "media_not_found",
+    ]);
   const refreshBatches = () => registry.refresh(batchListAtom);
   const refreshQueue = () => refreshBatches();
   const markChildJobPending = (id: string, pending: boolean) => {
