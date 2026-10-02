@@ -69,7 +69,11 @@ async function withDetection(
   api: ApiClient,
   exercise: (
     controller: DetectionController,
-    state: { setRevision: (value: number) => void; editorVersion: () => number },
+    state: {
+      setRevision: (value: number) => void;
+      editorVersion: () => number;
+      setProjectId: (value: string) => void;
+    },
   ) => Promise<void>,
   overrides: {
     selected?: () => components["schemas"]["Media"] | undefined;
@@ -80,6 +84,7 @@ async function withDetection(
   await new Promise<void>((resolve, reject) => {
     createRoot((dispose) => {
       const [revision, setRevision] = createSignal(1);
+      const [projectId, setProjectId] = createSignal(queuedDetectionJob.projectId);
       const [editorVersion, setEditorVersion] = createSignal(0);
       const [segments, setSegments] = createSignal<components["schemas"]["Segment"][]>([]);
       let controller!: DetectionController;
@@ -100,7 +105,7 @@ async function withDetection(
               {
                 selected: overrides.selected ?? (() => detectionMedia),
                 activeItemId: overrides.activeItemId ?? (() => "i_detection"),
-                projectId: () => queuedDetectionJob.projectId,
+                projectId,
                 revision,
                 editorVersion,
                 saveConflict: () => false,
@@ -109,7 +114,7 @@ async function withDetection(
                   overrides.saveProject ??
                   (() =>
                     Promise.resolve({
-                      id: queuedDetectionJob.projectId,
+                      id: projectId(),
                       revision: revision(),
                     } as components["schemas"]["Project"])),
                 updateSegments: (value) => {
@@ -123,7 +128,7 @@ async function withDetection(
         },
       });
       queueMicrotask(() => {
-        void exercise(controller, { setRevision, editorVersion }).then(
+        void exercise(controller, { setRevision, editorVersion, setProjectId }).then(
           () => {
             dispose();
             vi.unstubAllGlobals();
@@ -141,13 +146,14 @@ async function withDetection(
 }
 
 it("redelivers an uncertain detection submission with its original key and validated body", async () => {
-  const submissions: Array<{ key: string | null; body: string }> = [];
+  const submissions: Array<{ key: string | null; target: string; body: string }> = [];
   const api: ApiClient = {
     url: (path) => path,
     request: (path, init) => {
       if (path.endsWith("/detections") && init?.method === "POST") {
         submissions.push({
           key: new Headers(init.headers).get("Idempotency-Key"),
+          target: path.split("/")[1]!,
           body: String(init.body),
         });
         return Promise.resolve(
@@ -171,6 +177,7 @@ it("redelivers an uncertain detection submission with its original key and valid
     expect(submissions[0].key).toBeTruthy();
     expect(submissions[0].key).toMatch(/^[A-Za-z0-9_-]{1,128}$/);
     expect(submissions[1]).toEqual(submissions[0]);
+    expect(submissions[0].target).toBe(queuedDetectionJob.projectId);
     expect(JSON.parse(submissions[0].body)).toMatchObject({
       mediaId: detectionMedia.id,
       projectItemId: "i_detection",
@@ -178,6 +185,51 @@ it("redelivers an uncertain detection submission with its original key and valid
       kind: "silence",
       noiseDb: -35,
     });
+  });
+});
+
+it("uses a fresh key for an uncertain identical command sent to another project", async () => {
+  const secondProjectId = "p_000000000002";
+  const submissions: Array<{ key: string | null; target: string; body: string }> = [];
+  let acceptedJob: components["schemas"]["DetectionJob"] | undefined;
+  const api: ApiClient = {
+    url: (path) => path,
+    request: (path, init) => {
+      if (path.endsWith("/detections") && init?.method === "POST") {
+        const target = path.split("/")[1]!;
+        submissions.push({
+          key: new Headers(init.headers).get("Idempotency-Key"),
+          target,
+          body: String(init.body),
+        });
+        if (submissions.length === 1)
+          return Promise.resolve(
+            Response.json(
+              { error: { code: "internal_error", message: "Retry", requestId: "r1" } },
+              { status: 503 },
+            ),
+          );
+        acceptedJob = { ...queuedDetectionJob, projectId: target };
+        return Promise.resolve(Response.json(acceptedJob, { status: 202 }));
+      }
+      if (path.endsWith("/events") && acceptedJob) return Promise.resolve(jobEvent(acceptedJob));
+      return Promise.resolve(Response.json({}));
+    },
+    assetRequest: () => Promise.resolve(Response.json({})),
+  };
+  await withDetection(api, async (controller, { setProjectId }) => {
+    await controller.startDetection("silence", { noiseDb: -35 });
+    setProjectId(secondProjectId);
+    await controller.startDetection("silence", { noiseDb: -35 });
+    expect(submissions).toHaveLength(2);
+    expect(submissions.map(({ target }) => target)).toEqual([
+      queuedDetectionJob.projectId,
+      secondProjectId,
+    ]);
+    expect(submissions[0].body).toBe(submissions[1].body);
+    expect(submissions[0].key).toMatch(/^[A-Za-z0-9_-]{1,128}$/);
+    expect(submissions[1].key).toMatch(/^[A-Za-z0-9_-]{1,128}$/);
+    expect(submissions[1].key).not.toBe(submissions[0].key);
   });
 });
 

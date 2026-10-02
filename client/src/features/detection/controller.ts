@@ -238,7 +238,7 @@ export function createDetectionController(
     if (applyingDetectionEdit) return;
     synchronizeDetectionReview();
   });
-  let uncertainSubmission: { key: string; body: DetectionInput } | undefined;
+  let uncertainSubmission: { key: string; projectId: string; body: DetectionInput } | undefined;
   const submit = runtime.fn((input: { key: string; projectId: string; body: DetectionInput }) => {
     const mutation = server.generatedApi?.mutation("default", "createDetection");
     return mutation
@@ -366,7 +366,7 @@ export function createDetectionController(
     const itemBeforeSave = dependencies.activeItemId();
     const editorBeforeSave = dependencies.editorVersion();
     setDetectionStatus("Saving project before detection…");
-    let pendingSubmission: { key: string; body: DetectionInput } | undefined;
+    let pendingSubmission: { key: string; projectId: string; body: DetectionInput } | undefined;
     try {
       const saved = await dependencies.saveProject();
       if (currentOperation !== operation) return;
@@ -398,11 +398,12 @@ export function createDetectionController(
         ...options,
       });
       const key =
-        uncertainSubmission && JSON.stringify(uncertainSubmission.body) === JSON.stringify(body)
+        uncertainSubmission?.projectId === saved.id &&
+        JSON.stringify(uncertainSubmission.body) === JSON.stringify(body)
           ? uncertainSubmission.key
           : globalThis.crypto.randomUUID();
       uncertainSubmission = undefined;
-      pendingSubmission = { key, body };
+      pendingSubmission = { key, projectId: saved.id, body };
       const submittedJob = await runEffect(
         generatedMutation(registry, submit, { key, projectId: saved.id, body }),
       );
