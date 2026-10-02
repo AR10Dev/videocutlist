@@ -76,8 +76,8 @@ describe("projects controller", () => {
     }
   });
 
-  it.each(["an edit", "a media switch"])(
-    "does not apply a delayed load after %s",
+  it.each(["an edit", "a media switch", "a normal project restore"])(
+    "loads media through the generated resource and respects %s",
     async (change) => {
       Object.defineProperty(globalThis, "localStorage", {
         configurable: true,
@@ -124,6 +124,7 @@ describe("projects controller", () => {
       const [, setFilenameTemplate] = createSignal(defaultSettings.filenameTemplate);
       let editorVersion = 0;
       let editorContext = 0;
+      let status = "";
       const registry = AtomRegistry.make();
       const controller = createProjectsController({
         server: createServerState(api, registry, {
@@ -161,14 +162,17 @@ describe("projects controller", () => {
         editableItems: projectItems,
         clearDetectionContext: () => undefined,
         setDiagnostics: () => undefined,
-        setStatus: () => "",
+        setStatus: (value) => {
+          status = typeof value === "function" ? value(status) : value;
+          return status;
+        },
       });
 
       const loading = controller.loadProject("p_loadedproject");
       if (change === "an edit") {
         editorVersion++;
         setProjectName("Unsaved edit");
-      } else {
+      } else if (change === "a media switch") {
         editorContext++;
         setSelected({ ...media, id: "m_" + "b".repeat(43), name: "new.mp4" });
       }
@@ -181,7 +185,7 @@ describe("projects controller", () => {
           name: "Loaded project",
           items: [
             {
-              id: "i_loadedproject",
+              id: `i_${"l".repeat(24)}`,
               mediaId: media.id,
               segments: [],
               editorState: { playheadMs: 0, zoom: 1, muted: false },
@@ -201,8 +205,17 @@ describe("projects controller", () => {
       expect(
         generatedRequests.some((url) => url.endsWith("/api/v2/projects/p_loadedproject")),
       ).toBe(true);
-      expect(projectId()).toBe("p_currentproject");
-      expect(projectName()).toBe(change === "an edit" ? "Unsaved edit" : "Editing");
+      expect(projectId(), status).toBe(
+        change === "a normal project restore" ? "p_loadedproject" : "p_currentproject",
+      );
+      expect(generatedRequests.some((url) => url.endsWith(`/api/v2/media/${media.id}`))).toBe(true);
+      expect(projectName()).toBe(
+        change === "an edit"
+          ? "Unsaved edit"
+          : change === "a normal project restore"
+            ? "Loaded project"
+            : "Editing",
+      );
       if (change === "a media switch") expect(selected()?.id).toBe("m_" + "b".repeat(43));
       expect(timeline().present.segments).toEqual([]);
       controller.dispose();

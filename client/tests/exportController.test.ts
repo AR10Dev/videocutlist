@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { ApiClient, NativeMediaApiClient } from "../src/api";
 import { createServerState } from "../src/features/app/server";
 import { createExportController } from "../src/features/export/controller";
+import { createTimelineHistory } from "../src/features/editor/timeline";
 import type { EditableProjectItem } from "../src/features/projects/model";
 import { defaultSettings } from "../src/features/settings/model";
 import type { components } from "../src/generated/api";
@@ -35,6 +36,24 @@ const batch = (state: Batch["state"], progress: number, jobs: Job[]): Batch => (
   progress,
   jobs,
 });
+const exportItem = (media: components["schemas"]["Media"]): EditableProjectItem => ({
+  id: `i_${"i".repeat(24)}`,
+  media,
+  timeline: createTimelineHistory({
+    playheadMs: 0,
+    inMs: 0,
+    outMs: 1_000,
+    segments: [{ id: "s_exportfresh0001", startMs: 0, endMs: 1_000 }],
+    zoom: 1,
+  }),
+  muted: false,
+  exportOptions: {
+    mode: "merge",
+    selection: "segments",
+    cutStrategy: "stream_copy_preferred",
+    container: "mkv",
+  },
+});
 
 function memoryStorage(): Storage {
   const values = new Map<string, string>();
@@ -53,23 +72,54 @@ function memoryStorage(): Storage {
 async function withExportController(
   terminalBatch: Batch,
   exercise: (controller: ExportController) => Promise<void>,
+  options: {
+    initialBatch?: Batch;
+    selected?: components["schemas"]["Media"];
+    projectItems?: EditableProjectItem[];
+    dirty?: boolean;
+    revision?: number;
+    saveProject?: () => Promise<components["schemas"]["Project"] | undefined>;
+    onRequest?: (method: string, path: string) => void;
+    preflightFailure?: components["schemas"]["Error"]["error"];
+  } = {},
 ) {
   const originalStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+  const originalFetch = globalThis.fetch;
+  const initialBatch =
+    options.initialBatch ??
+    batch("running", 0.4, [
+      job("j_exportstatus0001", "succeeded", 1),
+      job("j_exportstatus0002", "running", 1),
+    ]);
+  globalThis.fetch = async (input, init) => {
+    const requestUrl = new URL(input instanceof Request ? input.url : String(input));
+    const method = init?.method ?? (input instanceof Request ? input.method : "GET");
+    options.onRequest?.(method, requestUrl.pathname);
+    if (requestUrl.pathname === "/api/v2/batches" && method === "GET")
+      return Response.json({ items: [initialBatch], nextCursor: null });
+    if (requestUrl.pathname === "/api/v2/destinations")
+      return Response.json({ destinations: [], capabilities: { saveBesideSource: false } });
+    if (requestUrl.pathname.endsWith("/exports/preflight") && method === "POST")
+      return options.preflightFailure
+        ? Response.json({ error: options.preflightFailure }, { status: 400 })
+        : Response.json({ allowed: true, selection: [], findings: [] });
+    if (requestUrl.pathname.endsWith("/exports") && method === "POST")
+      return Response.json(
+        {
+          batchId,
+          jobs: [job("j_exportfresh0001", "queued", 1)],
+        },
+        { status: 202 },
+      );
+    throw new Error(`Unexpected generated API request: ${method} ${requestUrl}`);
+  };
   Object.defineProperty(globalThis, "localStorage", {
     configurable: true,
     value: memoryStorage(),
   });
-  const initialBatch = batch("running", 0.4, [
-    job("j_exportstatus0001", "succeeded", 1),
-    job("j_exportstatus0002", "running", 1),
-  ]);
   const api: ApiClient & Pick<NativeMediaApiClient, "mediaRequest"> = {
     url: (path) => path,
     request: async (path, init) => {
-      if (path === "batches?limit=50")
-        return Response.json({ items: [initialBatch], nextCursor: null });
-      if (path === "destinations")
-        return Response.json({ destinations: [], capabilities: { saveBesideSource: false } });
       if (path === `batches/${batchId}/events`) {
         const data = [
           "id: export-status-1",
@@ -97,25 +147,25 @@ async function withExportController(
       get children() {
         untrack(() => {
           const registry = useContext(RegistryContext);
-          const [dirty, setDirty] = createSignal(false);
+          const [dirty, setDirty] = createSignal(options.dirty ?? false);
           const [projectItems, setProjectItems] = createSignal<EditableProjectItem[]>([]);
           controller = createExportController({
             api,
             server: createServerState(api, registry, configuration),
-            selected: () => undefined,
+            selected: () => options.selected,
             projectId: () => "p_exportstatus0001",
-            revision: () => 1,
+            revision: () => options.revision ?? 1,
             dirty,
             setDirty,
             editorVersion: () => 0,
             status: () => "",
-            projectItems,
+            projectItems: () => options.projectItems ?? projectItems(),
             setProjectItems,
-            activeItemId: () => undefined,
-            editableItems: () => [],
-            segments: () => [],
+            activeItemId: () => options.projectItems?.[0]?.id,
+            editableItems: () => options.projectItems ?? projectItems(),
+            segments: () => options.projectItems?.[0]?.timeline.present.segments ?? [],
             tracks: () => [],
-            saveProject: async () => undefined,
+            saveProject: options.saveProject ?? (async () => undefined),
             settings: () => defaultSettings,
             markDirty: () => undefined,
             saveSettings: () => undefined,
@@ -129,6 +179,7 @@ async function withExportController(
     await exercise(controller);
   } finally {
     dispose();
+    globalThis.fetch = originalFetch;
     if (originalStorage) Object.defineProperty(globalThis, "localStorage", originalStorage);
     else delete (globalThis as { localStorage?: Storage }).localStorage;
   }
@@ -146,6 +197,102 @@ async function waitForStatus(controller: ExportController, expected: string) {
 }
 
 describe("export controller aggregate status", () => {
+  it("saves before a fresh generated preflight and generated keyed submission", async () => {
+    const media: components["schemas"]["Media"] = {
+      id: `m_${"m".repeat(43)}`,
+      name: "clip.mp4",
+      durationMs: 2_000,
+      sizeBytes: 1,
+      container: "mp4",
+      streams: {},
+      etag: "v1",
+    };
+    const item = exportItem(media);
+    const calls: string[] = [];
+    await withExportController(
+      batch("succeeded", 1, [job("j_exportstatus0001", "succeeded", 2)]),
+      async (controller) => {
+        const deadline = Date.now() + 2_000;
+        while (controller.preflightPending() || calls.length === 0) {
+          if (Date.now() >= deadline) throw new Error("Initial preflight did not finish.");
+          await new Promise((resolve) => setTimeout(resolve, 1));
+        }
+        controller.setMode("separate");
+        await controller.exportProject();
+        expect(calls).toEqual(["preflight", "save", "preflight", "submit"]);
+      },
+      {
+        initialBatch: batch("succeeded", 1, [job("j_exportstatus0001", "succeeded", 1)]),
+        selected: media,
+        projectItems: [item],
+        dirty: false,
+        revision: 2,
+        onRequest: (_method, path) => {
+          if (_method !== "POST") return;
+          calls.push(path.endsWith("/preflight") ? "preflight" : "submit");
+        },
+        saveProject: async () => {
+          calls.push("save");
+          return {
+            id: "p_exportstatus0001",
+            name: "Saved",
+            revision: 2,
+            updatedAt: timestamp,
+            schemaVersion: 2,
+            items: [],
+          };
+        },
+      },
+    );
+  });
+  it("shows a generated preflight error and does not submit the export", async () => {
+    const media: components["schemas"]["Media"] = {
+      id: `m_${"m".repeat(43)}`,
+      name: "clip.mp4",
+      durationMs: 2_000,
+      sizeBytes: 1,
+      container: "mp4",
+      streams: {},
+      etag: "v1",
+    };
+    const calls: string[] = [];
+    await withExportController(
+      batch("succeeded", 1, [job("j_exportstatus0001", "succeeded", 2)]),
+      async (controller) => {
+        await controller.exportProject();
+        expect(calls).toEqual(["save", "preflight"]);
+        expect(controller.preflightError()).toBe(
+          "Export preflight failed (invalid_export): No playable streams. (request r-preflight)",
+        );
+      },
+      {
+        initialBatch: batch("succeeded", 1, [job("j_exportstatus0001", "succeeded", 1)]),
+        selected: media,
+        projectItems: [exportItem(media)],
+        dirty: true,
+        revision: 2,
+        onRequest: (method, path) => {
+          if (method === "POST") calls.push(path.endsWith("/preflight") ? "preflight" : "submit");
+        },
+        preflightFailure: {
+          code: "invalid_export",
+          message: "No playable streams.",
+          requestId: "r-preflight",
+        },
+        saveProject: async () => {
+          calls.push("save");
+          return {
+            id: "p_exportstatus0001",
+            name: "Saved",
+            revision: 2,
+            updatedAt: timestamp,
+            schemaVersion: 2,
+            items: [],
+          };
+        },
+      },
+    );
+  });
   it.each([
     [
       "reports failure when an earlier child succeeded",

@@ -13,7 +13,7 @@ import * as Schema from "effect/Schema";
 import * as AsyncResult from "effect/reactivity/AsyncResult";
 import * as Atom from "effect/reactivity/Atom";
 import * as AtomRegistry from "effect/reactivity/AtomRegistry";
-import { ApiFailure, apiJson, runEffect, type ApiClient } from "../../api";
+import { ApiFailure, runEffect, type ApiClient } from "../../api";
 import { readServerAtom, useServerAtom, type ServerState } from "../app/server";
 import type { components } from "../../generated/api";
 import { Batch as BatchSchema } from "../../generated/effect-api";
@@ -35,6 +35,7 @@ type Media = components["schemas"]["Media"];
 type Destination = components["schemas"]["Destination"];
 type ExportJob = components["schemas"]["Job"];
 type Batch = components["schemas"]["Batch"];
+type ExportPreflight = import("../../generated/effect-api").ExportPreflight;
 type ExportCancellation = {
   batchId: string;
   jobId: string;
@@ -48,10 +49,39 @@ type ChildJobContext = {
   editorVersion: number;
   generation: number;
 };
-type DestinationResponse = {
-  destinations?: Destination[];
-  capabilities?: components["schemas"]["DestinationCapabilities"];
+const publicApiError = (
+  failure: unknown,
+): { code: string; message: string; requestId: string } | undefined => {
+  if (typeof failure !== "object" || failure === null || !("error" in failure)) return;
+  const error = failure.error;
+  if (
+    typeof error !== "object" ||
+    error === null ||
+    !("code" in error) ||
+    typeof error.code !== "string" ||
+    !("message" in error) ||
+    typeof error.message !== "string" ||
+    !("requestId" in error) ||
+    typeof error.requestId !== "string"
+  )
+    return;
+  return { code: error.code, message: error.message, requestId: error.requestId };
 };
+
+const requestErrorMessage = (failure: unknown, fallback: string): string => {
+  if (failure instanceof Error) return failure.message;
+  return publicApiError(failure)?.message ?? fallback;
+};
+
+const preflightFailureMessage = (failure: unknown): string => {
+  if (failure instanceof ApiFailure)
+    return `Export preflight failed (${failure.status}). Try again.`;
+  const error = publicApiError(failure);
+  return error
+    ? `Export preflight failed (${error.code}): ${error.message} (request ${error.requestId})`
+    : "Export preflight could not be reached. Try again.";
+};
+
 type Track = {
   index: number;
   type: string;
@@ -208,7 +238,7 @@ export function createExportController(deps: {
   const [destinationId, setDestinationId] = createSignal(lastDestinationId() ?? "download");
   const [destinationStatus, setDestinationStatus] = createSignal("");
   const [filenameTemplate, setFilenameTemplate] = createSignal(deps.settings().filenameTemplate);
-  const [preflight, setPreflight] = createSignal<components["schemas"]["ExportPreflight"]>();
+  const [preflight, setPreflight] = createSignal<ExportPreflight>();
   const [preflightPending, setPreflightPending] = createSignal(false);
   const [exportPending, setExportPending] = createSignal(false);
   let workflowActive = false;
@@ -235,33 +265,6 @@ export function createExportController(deps: {
       return false;
     return state === "queued" || state === "running";
   };
-  const preflightCommand = runtime.fn(
-    (request: { projectId: string; input: components["schemas"]["ExportInput"] }) =>
-      Effect.andThen(
-        Effect.sleep(250),
-        apiJson<components["schemas"]["ExportPreflight"]>(
-          deps.api,
-          `projects/${encodeURIComponent(request.projectId)}/exports/preflight`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(request.input),
-          },
-        ),
-      ),
-  );
-  const runPreflight = useAtomSet(() => preflightCommand, { mode: "promise" });
-  const cancelPreflight = () => {
-    registry.set(preflightCommand, Atom.Interrupt);
-    preflightVersion++;
-  };
-
-  const batchListAtom = runtime.atom(
-    apiJson<components["schemas"]["BatchPage"]>(deps.api, "batches?limit=50"),
-  );
-  const batchList = useServerAtom(() => batchListAtom);
-  const destinationAtom = runtime.atom(apiJson<DestinationResponse>(deps.api, "destinations"));
-  const destinationResult = useServerAtom(() => destinationAtom);
   const generatedMutation = <Arg, A, E>(
     atom: Atom.AtomResultFn<Arg, A, E>,
     argument: Arg,
@@ -278,6 +281,31 @@ export function createExportController(deps: {
           release();
         }),
     );
+  const generatedApi = deps.server.generatedApi;
+  if (!generatedApi) throw new Error("Generated export API is not configured.");
+  const preflightMutation = generatedApi.mutation("default", "preflightExport");
+  const preflightRequest = (request: {
+    projectId: string;
+    input: components["schemas"]["ExportInput"];
+  }) =>
+    generatedMutation(preflightMutation, {
+      params: { projectId: request.projectId },
+      payload: request.input,
+    });
+  const preflightCommand = runtime.fn(
+    (request: { projectId: string; input: components["schemas"]["ExportInput"] }) =>
+      Effect.andThen(Effect.sleep(250), preflightRequest(request)),
+  );
+  const runPreflight = useAtomSet(() => preflightCommand, { mode: "promise" });
+  const cancelPreflight = () => {
+    registry.set(preflightCommand, Atom.Interrupt);
+    preflightVersion++;
+  };
+
+  const batchListAtom = generatedApi.query("default", "listBatches", { query: { limit: 50 } });
+  const batchList = useServerAtom(() => batchListAtom);
+  const destinationAtom = generatedApi.query("default", "listDestinations", {});
+  const destinationResult = useServerAtom(() => destinationAtom);
   const cancelBatchCommands = Atom.family((id: string) =>
     runtime.fn(() => {
       const cancel = deps.server.generatedApi?.mutation("default", "cancelBatch");
@@ -512,11 +540,7 @@ export function createExportController(deps: {
         (error: unknown) => {
           if (version !== preflightVersion) return;
           setPreflight();
-          setPreflightError(
-            error instanceof ApiFailure
-              ? `Export preflight failed (${error.status}). Try again.`
-              : "Export preflight could not be reached. Try again.",
-          );
+          setPreflightError(preflightFailureMessage(error));
           setExportStatus("Export preflight failed. Try again.");
         },
       )
@@ -659,15 +683,10 @@ export function createExportController(deps: {
         }
         setExportStatus("Checking export requirements…");
         const checked = yield* Effect.exit(
-          apiJson<components["schemas"]["ExportPreflight"]>(
-            deps.api,
-            `projects/${encodeURIComponent(context.projectId)}/exports/preflight`,
-            {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ ...context.input, itemIds: [...itemIDs] }),
-            },
-          ),
+          preflightRequest({
+            projectId: context.projectId,
+            input: { ...context.input, itemIds: [...itemIDs] },
+          }),
         );
         if (!workflowCurrent()) {
           stopForStaleContext();
@@ -676,11 +695,7 @@ export function createExportController(deps: {
         if (Exit.isFailure(checked)) {
           const failure = Cause.squash(checked.cause);
           setPreflight();
-          setPreflightError(
-            failure instanceof ApiFailure
-              ? `Export preflight failed (${failure.status}). Try again.`
-              : "Export preflight could not be reached. Try again.",
-          );
+          setPreflightError(preflightFailureMessage(failure));
           setExportStatus("Export preflight failed. Try again.");
           return;
         }
@@ -855,7 +870,7 @@ export function createExportController(deps: {
     const result = currentBatchResult();
     if (!AsyncResult.isFailure(result)) return "";
     const cause = Cause.squash(result.cause);
-    return cause instanceof Error ? cause.message : "Request could not be completed.";
+    return requestErrorMessage(cause, "Request could not be completed.");
   };
   const childJobContext = (): ChildJobContext => ({
     projectId: deps.projectId(),
@@ -978,11 +993,12 @@ export function createExportController(deps: {
     exportCancellationPending,
     childJobPending: (id: string) => pendingChildJobs().has(id),
     destinationsLoading: () => destinationResult.waiting(),
-    destinationsError: () => destinationResult.error()?.message ?? "",
+    destinationsError: () =>
+      requestErrorMessage(destinationResult.error(), "Request could not be completed."),
     retryDestinations: () => registry.refresh(destinationAtom),
     batchesLoading: () => batchList.waiting() && !batchList.value(),
     batchesRefreshing: () => batchList.waiting(),
-    batchesError: () => batchList.error()?.message ?? "",
+    batchesError: () => requestErrorMessage(batchList.error(), "Request could not be completed."),
     refreshBatches,
     batchLoading: () => Boolean(batchId()) && currentBatchResult().waiting,
     batchError: currentBatchError,

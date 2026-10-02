@@ -1,10 +1,9 @@
-import { Effect } from "effect";
+import { Cause, Effect, Exit } from "effect";
+import * as AtomRegistry from "effect/reactivity/AtomRegistry";
 import * as HttpClient from "effect/http/HttpClient";
 import { describe, expect, it, vi } from "vitest";
 import {
   authenticationRequiredEvent,
-  apiJson,
-  ApiFailure,
   createApiClient,
   createNativeHttpClientLayer,
   MAX_INTERCHANGE_FILE_BYTES,
@@ -12,8 +11,36 @@ import {
   runEffect,
   validInterchangeFileSize,
 } from "../src/api";
+import { createServerState, readServerAtom } from "../src/features/app/server";
 
 describe("client API boundary", () => {
+  it("preserves public failures through a generated resource operation", async () => {
+    const originalFetch = globalThis.fetch;
+    const publicError = {
+      code: "not_found",
+      message: "Project not found.",
+      requestId: "r-not-found",
+    };
+    globalThis.fetch = async () => Response.json({ error: publicError }, { status: 404 });
+    const configuration = {
+      serverBaseUrl: "https://example.test",
+      authentication: { type: "none" as const },
+    };
+    const api = createApiClient(configuration);
+    const registry = AtomRegistry.make();
+    const server = createServerState(api, registry, configuration);
+    try {
+      const result = await Effect.runPromiseExit(
+        readServerAtom(server, server.project(`p_${"c".repeat(12)}`)),
+      );
+      expect(Exit.isFailure(result)).toBe(true);
+      if (Exit.isFailure(result))
+        expect(Cause.squash(result.cause)).toMatchObject({ error: publicError });
+    } finally {
+      registry.dispose();
+      globalThis.fetch = originalFetch;
+    }
+  });
   it("preserves error codes, public messages, and request IDs, with safe malformed-response fallbacks", async () => {
     const error = {
       code: "origin_forbidden",
@@ -32,32 +59,6 @@ describe("client API boundary", () => {
         ),
       ).toEqual({ code: "http_error", message: "Try again.", requestId: "r-2" });
     }
-  });
-  it("preserves public failure details across the Effect execution seam", async () => {
-    const client = createApiClient(
-      { serverBaseUrl: "https://example.test", authentication: { type: "none" } },
-      async () =>
-        Response.json(
-          {
-            error: {
-              code: "revision_conflict",
-              message: "Reload before saving.",
-              requestId: "r-conflict",
-            },
-          },
-          { status: 409 },
-        ),
-    );
-    const failure = await runEffect(apiJson(client, "projects/p_current")).catch(
-      (error: unknown) => error,
-    );
-    expect(failure).toBeInstanceOf(ApiFailure);
-    expect(failure).toMatchObject({
-      status: 409,
-      code: "revision_conflict",
-      message: "Reload before saving.",
-      requestId: "r-conflict",
-    });
   });
   it("bounds interchange files before reading them", () => {
     expect(validInterchangeFileSize(MAX_INTERCHANGE_FILE_BYTES)).toBe(true);
