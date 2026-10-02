@@ -1,7 +1,6 @@
 import { createSignal, type Accessor, type Setter } from "solid-js";
 import { Cause, Effect, Exit, Fiber } from "effect";
 import type { Fiber as FiberHandle } from "effect/Fiber";
-import { z } from "zod";
 import { apiJson, ApiFailure } from "../../api";
 import type { ServerState } from "../app/server";
 import type { components } from "../../generated/api";
@@ -11,7 +10,8 @@ import {
   recentProjects,
   recentProjectsKey,
   validProjectId,
-  parseProjectJson,
+  parseProjectRecovery,
+  type ProjectRecovery,
   type RecentProject,
 } from "./lifecycle";
 import {
@@ -27,33 +27,11 @@ import type { AppSettings } from "../settings/model";
 type Project = components["schemas"]["Project"];
 type Media = components["schemas"]["Media"];
 export type SaveState = "unsaved" | "saving" | "saved" | "failed";
-export type ProjectRecovery = {
-  version: 1;
-  projectId: string;
-  revision: number;
-  schemaVersion: 2;
-  name: string;
-  items: components["schemas"]["ProjectItem"][];
-  savedAt: number;
-};
-
 const recoveryKey = "videocutlist.project-recovery.v1";
-const recoveryDocument = z.object({
-  version: z.literal(1),
-  projectId: z.string().refine(validProjectId),
-  revision: z.number().int().nonnegative(),
-  schemaVersion: z.literal(2),
-  name: z.string().refine((name) => Boolean(name.trim())),
-  items: z.array(z.unknown()).min(1),
-  savedAt: z.number().int().nonnegative(),
-});
 
 const readRecovery = (): ProjectRecovery | undefined => {
   try {
-    const value: unknown = JSON.parse(localStorage.getItem(recoveryKey) ?? "null");
-    if (!recoveryDocument.validate(value)) return;
-    parseProjectJson(JSON.stringify(value));
-    return value as ProjectRecovery;
+    return parseProjectRecovery(JSON.parse(localStorage.getItem(recoveryKey) ?? "null"));
   } catch {
     return;
   }
