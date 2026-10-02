@@ -161,8 +161,10 @@ type Config struct {
 }
 
 type Server struct {
-	config  Config
-	metrics *Metrics
+	config         Config
+	metrics        *Metrics
+	shutdown       context.Context
+	shutdownCancel context.CancelFunc
 }
 
 func New(config Config) (*Server, error) {
@@ -187,8 +189,12 @@ func New(config Config) (*Server, error) {
 	if config.Metrics == nil {
 		config.Metrics = NewMetrics()
 	}
-	return &Server{config: config, metrics: config.Metrics}, nil
+	shutdown, shutdownCancel := context.WithCancel(context.Background())
+	return &Server{config: config, metrics: config.Metrics, shutdown: shutdown, shutdownCancel: shutdownCancel}, nil
 }
+
+// Shutdown stops long-lived observation handlers when the owning HTTP server shuts down.
+func (s *Server) Shutdown() { s.shutdownCancel() }
 
 func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	started := time.Now()
@@ -375,6 +381,9 @@ func (s *Server) dispatch(writer http.ResponseWriter, request *http.Request, id 
 	case routeGetJob:
 		s.getJob(writer, request, r.id, id)
 		return "/api/v2/jobs/{jobId}", ""
+	case routeStreamJob:
+		s.streamJob(writer, request, r.id, id)
+		return "/api/v2/jobs/{jobId}/events", ""
 	case routeDownloadOutput:
 		s.downloadOutput(writer, request, r.id, id)
 		return "/media/v2/jobs/{jobId}/outputs/{position}", ""
@@ -513,7 +522,13 @@ func (w *statusWriter) Write(data []byte) (int, error) {
 	return w.ResponseWriter.Write(data)
 }
 func (w *statusWriter) Flush() {
-	if flush, ok := w.ResponseWriter.(http.Flusher); ok {
-		flush.Flush()
+	_ = w.FlushError()
+}
+func (w *statusWriter) FlushError() error {
+	flush, ok := w.ResponseWriter.(http.Flusher)
+	if !ok {
+		return http.ErrNotSupported
 	}
+	flush.Flush()
+	return nil
 }

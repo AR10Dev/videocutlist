@@ -77,7 +77,7 @@ func TestJobUseCasePreservesDetectionLifecycle(t *testing.T) {
 	} {
 		t.Run(string(test.state), func(t *testing.T) {
 			record := jobqueue.Job{
-				ID: "j_detection1234", Kind: jobqueue.JobDetect, State: test.state,
+				ID: "j_detection1234", Kind: jobqueue.JobDetect, State: test.state, Revision: 4,
 				ProjectID: "p_project", ProjectItemID: "i_item", BatchID: "b_detection1234",
 				RequestJSON: `{"mediaId":"m_media","projectRevision":7,"kind":"scene"}`,
 				CreatedAt:   created, UpdatedAt: updated,
@@ -86,7 +86,7 @@ func TestJobUseCasePreservesDetectionLifecycle(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got.Progress != test.progress || !got.CreatedAt.Equal(created) || !got.UpdatedAt.Equal(updated) || got.ProjectID != record.ProjectID || got.ProjectRevision != 7 {
+			if got.Progress != test.progress || got.Revision != record.Revision || !got.CreatedAt.Equal(created) || !got.UpdatedAt.Equal(updated) || got.ProjectID != record.ProjectID || got.ProjectRevision != 7 {
 				t.Fatalf("detection %s lifecycle = %#v", test.state, got)
 			}
 		})

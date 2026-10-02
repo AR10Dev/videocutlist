@@ -662,6 +662,7 @@ export type BatchExportSubmission = {
       readonly kind?: string;
       readonly type: "export" | "detection" | "library_scan";
       readonly state: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+      readonly revision: number;
       readonly progress?: number;
       readonly result?: {
         readonly container?: "mkv" | "mp4" | "mov";
@@ -722,6 +723,11 @@ export const BatchExportSubmission = Schema.StructWithRest(
           kind: Schema.optionalKey(Schema.String),
           type: Schema.Literals(["export", "detection", "library_scan"]),
           state: Schema.Literals(["queued", "running", "succeeded", "failed", "cancelled"]),
+          revision: Schema.Number.check(Schema.isInt().annotate({ expected: "an integer" })).check(
+            Schema.isGreaterThanOrEqualTo(1).annotate({
+              expected: "a value greater than or equal to 1",
+            }),
+          ),
           progress: Schema.optionalKey(
             Schema.Number.check(Schema.isFinite().annotate({ expected: "a finite number" }))
               .check(
@@ -897,6 +903,7 @@ export type BatchPage = {
           readonly kind?: string;
           readonly type: "export" | "detection" | "library_scan";
           readonly state: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+          readonly revision: number;
           readonly progress?: number;
           readonly result?: {
             readonly container?: "mkv" | "mp4" | "mov";
@@ -983,6 +990,13 @@ export const BatchPage = Schema.StructWithRest(
                 kind: Schema.optionalKey(Schema.String),
                 type: Schema.Literals(["export", "detection", "library_scan"]),
                 state: Schema.Literals(["queued", "running", "succeeded", "failed", "cancelled"]),
+                revision: Schema.Number.check(
+                  Schema.isInt().annotate({ expected: "an integer" }),
+                ).check(
+                  Schema.isGreaterThanOrEqualTo(1).annotate({
+                    expected: "a value greater than or equal to 1",
+                  }),
+                ),
                 progress: Schema.optionalKey(
                   Schema.Number.check(Schema.isFinite().annotate({ expected: "a finite number" }))
                     .check(
@@ -1170,6 +1184,7 @@ export type Batch = {
       readonly kind?: string;
       readonly type: "export" | "detection" | "library_scan";
       readonly state: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+      readonly revision: number;
       readonly progress?: number;
       readonly result?: {
         readonly container?: "mkv" | "mp4" | "mov";
@@ -1248,6 +1263,11 @@ export const Batch = Schema.StructWithRest(
           kind: Schema.optionalKey(Schema.String),
           type: Schema.Literals(["export", "detection", "library_scan"]),
           state: Schema.Literals(["queued", "running", "succeeded", "failed", "cancelled"]),
+          revision: Schema.Number.check(Schema.isInt().annotate({ expected: "an integer" })).check(
+            Schema.isGreaterThanOrEqualTo(1).annotate({
+              expected: "a value greater than or equal to 1",
+            }),
+          ),
           progress: Schema.optionalKey(
             Schema.Number.check(Schema.isFinite().annotate({ expected: "a finite number" }))
               .check(
@@ -1528,6 +1548,7 @@ export type Job = {
   readonly kind?: string;
   readonly type: "export" | "detection" | "library_scan";
   readonly state: "queued" | "running" | "succeeded" | "failed" | "cancelled";
+  readonly revision: number;
   readonly progress?: number;
   readonly result?: {
     readonly container?: "mkv" | "mp4" | "mov";
@@ -1582,6 +1603,9 @@ export const Job = Schema.StructWithRest(
     kind: Schema.optionalKey(Schema.String),
     type: Schema.Literals(["export", "detection", "library_scan"]),
     state: Schema.Literals(["queued", "running", "succeeded", "failed", "cancelled"]),
+    revision: Schema.Number.check(Schema.isInt().annotate({ expected: "an integer" })).check(
+      Schema.isGreaterThanOrEqualTo(1).annotate({ expected: "a value greater than or equal to 1" }),
+    ),
     progress: Schema.optionalKey(
       Schema.Number.check(Schema.isFinite().annotate({ expected: "a finite number" }))
         .check(

@@ -40,6 +40,7 @@ const (
 	routeExportInterchange
 	routeCreateDetection
 	routeGetJob
+	routeStreamJob
 	routeCancelJob
 	routeAutomation
 	routeListDestinations
@@ -71,7 +72,7 @@ func RouteCoverageKinds() []string {
 		"list_media", "browse_media", "media_status", "refresh_media", "start_media_import",
 		"get_media_import", "cancel_media_import", "get_media", "preview", "thumbnails", "waveform",
 		"list_projects", "get_project", "put_project", "create_export", "preflight_export",
-		"import_interchange", "export_interchange", "create_detection", "get_job", "cancel_job",
+		"import_interchange", "export_interchange", "create_detection", "get_job", "stream_job", "cancel_job",
 		"automation", "list_destinations", "get_settings", "put_settings", "refresh_settings",
 		"download_output", "download_batch", "list_batches", "get_batch", "cancel_batch", "retry_job",
 		"get_export_proposal", "approve_export_proposal", "get_mcp_settings", "create_mcp_credential", "revoke_mcp_credential",
@@ -192,6 +193,8 @@ func parseRouteParts(method string, parts []string) route {
 		return route{kind: routeCreateDetection, id: parts[1]}
 	case len(parts) == 2 && parts[0] == "jobs" && validJobID(parts[1]) && method == http.MethodGet:
 		return route{kind: routeGetJob, id: parts[1]}
+	case len(parts) == 3 && parts[0] == "jobs" && validJobID(parts[1]) && parts[2] == "events" && method == http.MethodGet:
+		return route{kind: routeStreamJob, id: parts[1]}
 	case len(parts) == 4 && parts[0] == "jobs" && validJobID(parts[1]) && parts[2] == "outputs" && method == http.MethodGet:
 		return route{kind: routeDownloadOutput, id: parts[1] + ":" + parts[3]}
 	case len(parts) == 3 && parts[0] == "batches" && validBatchID(parts[1]) && parts[2] == "download" && method == http.MethodGet:

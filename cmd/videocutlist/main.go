@@ -237,6 +237,7 @@ func run(ctx context.Context) (runErr error) {
 		return err
 	}
 	server := newHTTPServer(cfg, proxied)
+	server.RegisterOnShutdown(apiServer.Shutdown)
 	listener, err := net.Listen("tcp", server.Addr)
 	if err != nil {
 		return fmt.Errorf("listen on %s: %w", server.Addr, err)

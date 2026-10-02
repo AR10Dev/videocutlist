@@ -499,6 +499,7 @@ func unifiedJobResult(value jobqueue.Job) Job {
 	}
 	job.BatchID = value.BatchID
 	job.ProjectItemID = value.ProjectItemID
+	job.Revision = value.Revision
 	return job
 }
 
