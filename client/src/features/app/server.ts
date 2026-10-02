@@ -1,5 +1,5 @@
 import { useAtomValue } from "@effect/atom-solid";
-import { Cause, Effect, Exit, Layer, Option, Schedule } from "effect";
+import { Cause, Effect, Exit, Layer, Option, Schedule, Stream } from "effect";
 import * as AsyncResult from "effect/reactivity/AsyncResult";
 import * as Atom from "effect/reactivity/Atom";
 import * as AtomRegistry from "effect/reactivity/AtomRegistry";
@@ -15,7 +15,15 @@ import {
 } from "../../api";
 import { VideoCutListApi } from "../../generated/effect-api";
 import type { components } from "../../generated/api";
-import type { Project, ProjectPage } from "../../generated/effect-api";
+import {
+  Batch as BatchSchema,
+  Job as JobSchema,
+  type Batch,
+  type Job,
+  type Project,
+  type ProjectPage,
+} from "../../generated/effect-api";
+import { observeSnapshots } from "../queue/jobStream";
 
 type Media = components["schemas"]["Media"];
 
@@ -30,6 +38,16 @@ export interface ServerState {
     limit?: number;
     cursor?: string;
   }) => Atom.Atom<AsyncResult.AsyncResult<ProjectPage, unknown>>;
+  readonly observeJob: (
+    id: string,
+    initial?: Job,
+  ) => Atom.Atom<AsyncResult.AsyncResult<Job, Error>>;
+  readonly observeBatch: (
+    id: string,
+    initial?: Batch,
+  ) => Atom.Atom<AsyncResult.AsyncResult<Batch, Error>>;
+  readonly setJobLocallyCancelled: (id: string, cancelled: boolean) => void;
+  readonly setBatchLocallyCancelled: (id: string, cancelled: boolean) => void;
   readonly mediaRevision: Atom.Writable<number>;
   refreshMedia(): void;
 }
@@ -52,6 +70,81 @@ export function createServerState(
   const generatedApi = configuration ? createGeneratedApi(configuration) : undefined;
   const runtime = Atom.runtime(Layer.empty);
   const mediaRevision = Atom.make(0);
+  const mountedJobs = new Set<string>();
+  const mountedBatches = new Set<string>();
+  const locallyCancelledJobs = new Set<string>();
+  const locallyCancelledBatches = new Set<string>();
+  const jobAtoms = new Map<string, Atom.Atom<AsyncResult.AsyncResult<Job, Error>>>();
+  const batchAtoms = new Map<string, Atom.Atom<AsyncResult.AsyncResult<Batch, Error>>>();
+  const jobAtom = (id: string, initial?: Job) => {
+    if (initial && initial.id !== id) throw new Error("Job snapshot does not match its identity.");
+    let atom = jobAtoms.get(id);
+    if (!atom) {
+      let latestRevision = initial?.revision ?? 0;
+      atom = runtime.atom<Job, Error>(
+        observeSnapshots<Job, Job>(api, `jobs/${encodeURIComponent(id)}/events`, JobSchema).pipe(
+          Stream.filter((snapshot) => {
+            if (
+              snapshot.id !== id ||
+              locallyCancelledJobs.has(id) ||
+              snapshot.revision <= latestRevision
+            )
+              return false;
+            latestRevision = snapshot.revision;
+            return true;
+          }),
+        ),
+        initial ? { initialValue: initial } : undefined,
+      );
+      jobAtoms.set(id, atom);
+    }
+    return atom;
+  };
+  const batchAtom = (id: string, initial?: Batch) => {
+    if (initial && initial.batchId !== id)
+      throw new Error("Batch snapshot does not match its identity.");
+    let atom = batchAtoms.get(id);
+    if (!atom) {
+      let latestRevisions = new Map(initial?.jobs.map((job) => [job.id, job.revision]) ?? []);
+      let terminal = initial ? ["succeeded", "failed", "cancelled"].includes(initial.state) : false;
+      atom = runtime.atom<Batch, Error>(
+        observeSnapshots<Batch, Batch>(
+          api,
+          `batches/${encodeURIComponent(id)}/events`,
+          BatchSchema,
+        ).pipe(
+          Stream.filter((snapshot) => {
+            if (snapshot.batchId !== id || locallyCancelledBatches.has(id) || terminal)
+              return false;
+            if (snapshot.jobs.some((job) => job.revision < (latestRevisions.get(job.id) ?? 0)))
+              return false;
+            latestRevisions = new Map(snapshot.jobs.map((job) => [job.id, job.revision]));
+            terminal = ["succeeded", "failed", "cancelled"].includes(snapshot.state);
+            return true;
+          }),
+        ),
+        initial ? { initialValue: initial } : undefined,
+      );
+      batchAtoms.set(id, atom);
+    }
+    return atom;
+  };
+  const observeJob = (id: string, initial?: Job) => {
+    const atom = jobAtom(id, initial);
+    if (!mountedJobs.has(id)) {
+      mountedJobs.add(id);
+      registry.mount(atom);
+    }
+    return atom;
+  };
+  const observeBatch = (id: string, initial?: Batch) => {
+    const atom = batchAtom(id, initial);
+    if (!mountedBatches.has(id)) {
+      mountedBatches.add(id);
+      registry.mount(atom);
+    }
+    return atom;
+  };
   const project = (id: string) => {
     if (!generatedApi) throw new Error("Generated project API is not configured.");
     return generatedApi.query("default", "getProject", { params: { projectId: id } });
@@ -90,6 +183,16 @@ export function createServerState(
     media,
     project,
     projectPage,
+    observeJob,
+    observeBatch,
+    setJobLocallyCancelled(id: string, cancelled: boolean) {
+      if (cancelled) locallyCancelledJobs.add(id);
+      else locallyCancelledJobs.delete(id);
+    },
+    setBatchLocallyCancelled(id: string, cancelled: boolean) {
+      if (cancelled) locallyCancelledBatches.add(id);
+      else locallyCancelledBatches.delete(id);
+    },
     mediaRevision,
     refreshMedia() {
       registry.update(mediaRevision, (revision) => revision + 1);

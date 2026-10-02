@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from "@effect/vitest";
 import { authenticationRequiredEvent, createApiClient } from "../src/api";
 import { createWorkspaceController } from "../src/features/app/controller";
 import { createServerState, pollAtom } from "../src/features/app/server";
+import type { Job } from "../src/generated/effect-api";
 
 describe("workspace server atoms", () => {
   it.effect("recovers polling failures and stops after the terminal result", () =>
@@ -206,6 +207,171 @@ describe("workspace server atoms", () => {
       vi.unstubAllGlobals();
       delete browser.VIDEOCUTLIST_CONFIG;
     }
+  });
+
+  it("owns one terminal job snapshot atom per identity", async () => {
+    const job: Job = {
+      id: "j_one",
+      type: "export",
+      state: "succeeded",
+      revision: 2,
+      createdAt: "2025-01-01T00:00:00Z",
+      updatedAt: "2025-01-01T00:00:01Z",
+    };
+    const batch = { batchId: "b_one", state: "succeeded", progress: 1, jobs: [] };
+    const fetch = vi.fn(
+      async (input: RequestInfo | URL) =>
+        new Response(
+          String(input).includes("/batches/")
+            ? `event: snapshot\nid: cursor-2\ndata: ${JSON.stringify(batch)}\n\n`
+            : `event: snapshot\nid: cursor-1\ndata: ${JSON.stringify({ ...job, id: "j_other", state: "running" })}\n\n` +
+                `event: snapshot\nid: cursor-2\ndata: ${JSON.stringify(job)}\n\n`,
+          { headers: { "Content-Type": "text/event-stream" } },
+        ),
+    );
+    vi.stubGlobal("fetch", fetch);
+    const configuration = {
+      serverBaseUrl: "https://example.test",
+      authentication: { type: "none" as const },
+    };
+    const registry = AtomRegistry.make();
+    const server = createServerState(createApiClient(configuration), registry, configuration);
+    const atom = server.observeJob("j_one");
+    expect(server.observeJob("j_one")).toBe(atom);
+    const result = await Effect.runPromise(
+      AtomRegistry.getResult(registry, atom, { suspendOnWaiting: true }),
+    );
+    expect(result).toMatchObject({ id: "j_one", revision: 2, state: "succeeded" });
+    expect(fetch).toHaveBeenCalledOnce();
+    const batchAtom = server.observeBatch("b_one");
+    expect(server.observeBatch("b_one")).toBe(batchAtom);
+    await expect(
+      Effect.runPromise(AtomRegistry.getResult(registry, batchAtom, { suspendOnWaiting: true })),
+    ).resolves.toMatchObject({ batchId: "b_one", state: "succeeded" });
+    expect(fetch).toHaveBeenCalledTimes(2);
+    registry.dispose();
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps local job cancellation above stale stream snapshots and disposes without DELETE", async () => {
+    let sendProgress!: () => void;
+    let sendStale!: () => void;
+    let requestStarted!: () => void;
+    const started = new Promise<void>((resolve) => (requestStarted = resolve));
+    let aborted = false;
+    const job = (revision: number): Job => ({
+      id: "j_local",
+      type: "export",
+      state: "running",
+      revision,
+      progress: revision / 10,
+      createdAt: "2025-01-01T00:00:00Z",
+      updatedAt: "2025-01-01T00:00:0" + revision + "Z",
+    });
+    const fetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      if (new Headers(init?.headers).get("Authorization") === "Bearer new")
+        return new Response(
+          `event: snapshot\nid: cursor-new\ndata: ${JSON.stringify({ ...job(4), state: "succeeded" })}\n\n`,
+          { headers: { "Content-Type": "text/event-stream" } },
+        );
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          const encoder = new TextEncoder();
+          controller.enqueue(
+            encoder.encode(`event: snapshot\nid: cursor-1\ndata: ${JSON.stringify(job(2))}\n\n`),
+          );
+          sendProgress = () =>
+            controller.enqueue(
+              encoder.encode(`event: snapshot\nid: cursor-2\ndata: ${JSON.stringify(job(3))}\n\n`),
+            );
+          sendStale = () =>
+            controller.enqueue(
+              encoder.encode(`event: snapshot\nid: cursor-3\ndata: ${JSON.stringify(job(4))}\n\n`),
+            );
+          requestStarted();
+          init?.signal?.addEventListener(
+            "abort",
+            () => {
+              aborted = true;
+              controller.error(new DOMException("Aborted", "AbortError"));
+            },
+            { once: true },
+          );
+        },
+      });
+      return new Response(body, { headers: { "Content-Type": "text/event-stream" } });
+    });
+    vi.stubGlobal("fetch", fetch);
+    const configuration = {
+      serverBaseUrl: "https://example.test",
+      authentication: { type: "bearer" as const, token: "old" },
+    };
+    const registry = AtomRegistry.make();
+    const server = createServerState(createApiClient(configuration), registry, configuration);
+    const atom = server.observeJob("j_local", job(2));
+    await started;
+    await vi.waitFor(() =>
+      expect(registry.get(atom)).toMatchObject({ value: { state: "running", revision: 2 } }),
+    );
+    sendProgress();
+    await vi.waitFor(() =>
+      expect(registry.get(atom)).toMatchObject({ value: { state: "running", revision: 3 } }),
+    );
+    server.setJobLocallyCancelled("j_local", true);
+    sendStale();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(registry.get(atom)).toMatchObject({
+      value: { state: "running", revision: 3, progress: 0.3 },
+    });
+    registry.dispose();
+    expect(aborted).toBe(true);
+    const replacementConfiguration = {
+      serverBaseUrl: "https://example.test",
+      authentication: { type: "bearer" as const, token: "new" },
+    };
+    const replacementRegistry = AtomRegistry.make();
+    const replacement = createServerState(
+      createApiClient(replacementConfiguration),
+      replacementRegistry,
+      replacementConfiguration,
+    );
+    const replacementAtom = replacement.observeJob("j_local");
+    await expect(
+      Effect.runPromise(
+        AtomRegistry.getResult(replacementRegistry, replacementAtom, { suspendOnWaiting: true }),
+      ),
+    ).resolves.toMatchObject({ state: "succeeded", revision: 4 });
+    replacementRegistry.dispose();
+    expect(
+      fetch.mock.calls.some(
+        ([input, init]) => String(input).includes("DELETE") || init?.method === "DELETE",
+      ),
+    ).toBe(false);
+    vi.unstubAllGlobals();
+  });
+
+  it("propagates terminal observation authorization errors", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json(
+          { error: { code: "forbidden", message: "Forbidden", requestId: "request" } },
+          { status: 403 },
+        ),
+      ),
+    );
+    const configuration = {
+      serverBaseUrl: "https://example.test",
+      authentication: { type: "none" as const },
+    };
+    const registry = AtomRegistry.make();
+    const server = createServerState(createApiClient(configuration), registry, configuration);
+    const atom = server.observeJob("j_forbidden");
+    await expect(
+      Effect.runPromise(AtomRegistry.getResult(registry, atom, { suspendOnWaiting: true })),
+    ).rejects.toThrow("Forbidden");
+    registry.dispose();
+    vi.unstubAllGlobals();
   });
 
   it("interrupts an in-flight generated atom when its workspace registry is disposed", async () => {
