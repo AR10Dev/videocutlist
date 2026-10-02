@@ -515,6 +515,8 @@ type statusWriter struct {
 	errorCode string
 }
 
+func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
 func (w *statusWriter) WriteHeader(status int) {
 	if !w.wrote {
 		w.status = status
@@ -532,10 +534,5 @@ func (w *statusWriter) Flush() {
 	_ = w.FlushError()
 }
 func (w *statusWriter) FlushError() error {
-	flush, ok := w.ResponseWriter.(http.Flusher)
-	if !ok {
-		return http.ErrNotSupported
-	}
-	flush.Flush()
-	return nil
+	return http.NewResponseController(w.ResponseWriter).Flush()
 }

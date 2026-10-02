@@ -658,7 +658,9 @@ paths:
         Observation cadence is bounded. At most 64 job and batch streams are
         admitted concurrently per server process; excess streams receive 429
         observation_capacity before the initial resource snapshot is read.
-        Cancellation, shutdown, and heartbeat auth checks are honored.
+        Each snapshot, error, and keepalive write/flush has a 5-second deadline.
+        Writers without deadline support fail closed before the SSE response
+        starts. Cancellation, shutdown, and heartbeat auth checks are honored.
         Disconnecting never cancels the job.
       responses:
         "200":
@@ -696,7 +698,9 @@ paths:
         resynchronize to current state. At most 64 job and batch streams are
         admitted concurrently per server process; excess streams receive 429
         observation_capacity before the initial resource snapshot is read.
-        Cancellation, shutdown, and heartbeat auth checks are honored.
+        Each snapshot, error, and keepalive write/flush has a 5-second deadline.
+        Writers without deadline support fail closed before the SSE response
+        starts. Cancellation, shutdown, and heartbeat auth checks are honored.
         Disconnecting never cancels child jobs.
       responses:
         "200":

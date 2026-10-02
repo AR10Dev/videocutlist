@@ -45,7 +45,7 @@ func TestBatchEventStreamSendsCurrentSnapshotAndResynchronizesCursor(t *testing.
 			if test.cursor != "" {
 				request.Header.Set("Last-Event-ID", test.cursor)
 			}
-			response := httptest.NewRecorder()
+			response := &deadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
 			server.ServeHTTP(response, request)
 			if response.Code != http.StatusOK || response.Header().Get("Content-Type") != "text/event-stream" {
 				t.Fatalf("status=%d headers=%v body=%s", response.Code, response.Header(), response.Body.String())
@@ -156,7 +156,7 @@ func TestJobEventStreamSendsTerminalSnapshotAndResynchronizesInvalidCursor(t *te
 			if test.sendCursor {
 				request.Header.Set("Last-Event-ID", test.cursor)
 			}
-			response := httptest.NewRecorder()
+			response := &deadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
 			server.ServeHTTP(response, request)
 			if response.Code != http.StatusOK {
 				t.Fatalf("status = %d, body %s", response.Code, response.Body.String())
@@ -299,6 +299,12 @@ type capacityFlushWriter struct {
 	ready chan<- struct{}
 }
 
+func (*capacityFlushWriter) SetWriteDeadline(time.Time) error { return nil }
+
+type deadlineRecorder struct{ *httptest.ResponseRecorder }
+
+func (*deadlineRecorder) SetWriteDeadline(time.Time) error { return nil }
+
 func (w *capacityFlushWriter) Flush() {
 	w.ResponseRecorder.Flush()
 	w.ready <- struct{}{}
@@ -322,6 +328,31 @@ func (b *capacityTestBatches) Snapshot(_ context.Context, id string) (projects.B
 	return projects.Batch{BatchID: id, State: "running", Jobs: []projects.Job{}}, "b2_current", nil
 }
 
+func TestUnsupportedDeadlineWriterFailsClosedAndReleasesObservation(t *testing.T) {
+	authenticator, err := NewAuthenticator(AuthConfig{Mode: "none"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobs := &streamTestJobs{job: Job{ID: "j_aaaaaaaaaaaa", Type: "export", State: "running"}}
+	server, err := New(Config{
+		Authenticator: authenticator,
+		Media:         &routeTestMedia{}, Preview: routeTestPreview{}, Projects: routeTestProjects{},
+		BatchExports: &routeTestBatchExports{}, Jobs: jobs,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "http://api.test/api/v2/jobs/"+jobs.job.ID+"/events", nil)
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusInternalServerError || response.Header().Get("Content-Type") != "application/json; charset=utf-8" || !strings.Contains(response.Body.String(), `"code":"internal_error"`) {
+		t.Fatalf("unsupported writer response status=%d headers=%v body=%s", response.Code, response.Header(), response.Body.String())
+	}
+	if got := len(server.observationSlots); got != 0 {
+		t.Fatalf("observation slots retained after unsupported writer: %d", got)
+	}
+}
+
 func TestJobEventStreamReleasesObservationOnDisconnectAndShutdown(t *testing.T) {
 	for _, shutdown := range []bool{false, true} {
 		t.Run(map[bool]string{false: "disconnect", true: "shutdown"}[shutdown], func(t *testing.T) {
@@ -339,7 +370,6 @@ func TestJobEventStreamReleasesObservationOnDisconnectAndShutdown(t *testing.T) 
 				t.Fatal(err)
 			}
 			ctx, cancel := context.WithCancel(t.Context())
-			defer cancel()
 			writer := &cancelAfterFlushWriter{ResponseRecorder: httptest.NewRecorder()}
 			if shutdown {
 				writer.afterFlush = server.Shutdown
@@ -354,6 +384,10 @@ func TestJobEventStreamReleasesObservationOnDisconnectAndShutdown(t *testing.T) 
 			if writer.flushed != 1 {
 				t.Fatalf("flush count = %d, want 1", writer.flushed)
 			}
+			if got := len(server.observationSlots); got != 0 {
+				t.Fatalf("observation slots retained after %s: %d", map[bool]string{false: "disconnect", true: "shutdown"}[shutdown], got)
+			}
+			cancel()
 		})
 	}
 }
@@ -369,11 +403,60 @@ func (s *streamTestJobs) Get(context.Context, string) (Job, error) {
 }
 func (*streamTestJobs) Cancel(context.Context, string) error { return nil }
 
+func TestJobEventStreamSendsHeartbeatAfterWriteTimeoutInterval(t *testing.T) {
+	authenticator, err := NewAuthenticator(AuthConfig{Mode: "none"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobs := &streamTestJobs{job: Job{ID: "j_aaaaaaaaaaaa", Type: "export", State: "running"}}
+	server, err := New(Config{
+		Authenticator: authenticator,
+		Media:         &routeTestMedia{}, Preview: routeTestPreview{}, Projects: routeTestProjects{},
+		BatchExports: &routeTestBatchExports{}, Jobs: jobs,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	writer := &heartbeatCancelWriter{ResponseRecorder: httptest.NewRecorder(), cancel: cancel}
+	request := httptest.NewRequest(http.MethodGet, "http://api.test/api/v2/jobs/"+jobs.job.ID+"/events", nil).WithContext(ctx)
+	started := time.Now()
+	server.ServeHTTP(writer, request)
+	if elapsed := time.Since(started); elapsed < sseWriteTimeout {
+		t.Fatalf("stream ended after %s, before the write timeout interval", elapsed)
+	}
+	if !strings.Contains(writer.Body.String(), ": keepalive\n\n") || writer.flushed != 2 {
+		t.Fatalf("heartbeat missing or flush count=%d: %q", writer.flushed, writer.Body.String())
+	}
+	if got := len(server.observationSlots); got != 0 {
+		t.Fatalf("observation slots retained after heartbeat: %d", got)
+	}
+	cancel()
+}
+
+type heartbeatCancelWriter struct {
+	*httptest.ResponseRecorder
+	cancel  context.CancelFunc
+	flushed int
+}
+
+func (*heartbeatCancelWriter) SetWriteDeadline(time.Time) error { return nil }
+
+func (w *heartbeatCancelWriter) Flush() {
+	w.flushed++
+	w.ResponseRecorder.Flush()
+	if w.flushed == 2 {
+		w.cancel()
+	}
+}
+
 type cancelAfterFlushWriter struct {
 	*httptest.ResponseRecorder
 	afterFlush func()
 	flushed    int
 }
+
+func (*cancelAfterFlushWriter) SetWriteDeadline(time.Time) error { return nil }
 
 func (w *cancelAfterFlushWriter) Flush() {
 	w.flushed++
