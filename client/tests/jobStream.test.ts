@@ -239,6 +239,157 @@ describe("job snapshot stream", () => {
     }
   });
 
+  it("backpressures slow consumers and delivers a queued terminal snapshot exactly once", async () => {
+    const encoder = new TextEncoder();
+    const payload = (revision: number, state: "running" | "succeeded") =>
+      JSON.stringify({
+        id: "j_demo",
+        type: "export",
+        state,
+        revision,
+        createdAt: "2026-01-01T00:00:00Z",
+        updatedAt: "2026-01-01T00:00:01Z",
+      });
+    const frames = Array.from({ length: 9 }, (_, index) => {
+      const revision = index + 1;
+      const state = revision === 9 ? "succeeded" : "running";
+      return `event: snapshot\nid: cursor-${revision}\ndata: ${payload(revision, state)}\n\n`;
+    });
+    let pulls = 0;
+    let resolveThirdPull!: () => void;
+    let resolveFirst!: () => void;
+    let resolveTerminal!: () => void;
+    let releaseFirst!: () => void;
+    const thirdPull = new Promise<void>((resolve) => (resolveThirdPull = resolve));
+    const firstSeen = new Promise<void>((resolve) => (resolveFirst = resolve));
+    const terminalSeen = new Promise<void>((resolve) => (resolveTerminal = resolve));
+    const firstGate = new Promise<void>((resolve) => (releaseFirst = resolve));
+    const body = new ReadableStream<Uint8Array>(
+      {
+        pull(controller) {
+          const index = pulls++;
+          if (index === 2) resolveThirdPull();
+          if (index < frames.length) controller.enqueue(encoder.encode(frames[index]));
+          else controller.close();
+        },
+      },
+      { highWaterMark: 0 },
+    );
+    const api = createApiClient(
+      { serverBaseUrl: "https://video.example.test", authentication: { type: "none" } },
+      () =>
+        Promise.resolve(new Response(body, { headers: { "Content-Type": "text/event-stream" } })),
+    );
+    const revisions: number[] = [];
+    const fiber = Effect.runFork(
+      Stream.runForEach(
+        observeSnapshots<JobSnapshot, JobSnapshot>(api, "jobs/j_demo/events", Job),
+        (snapshot) =>
+          Effect.tryPromise({
+            try: async () => {
+              revisions.push(snapshot.revision);
+              if (snapshot.revision === 1) {
+                resolveFirst();
+                await firstGate;
+              }
+              if (snapshot.state === "succeeded") resolveTerminal();
+            },
+            catch: (cause) => (cause instanceof Error ? cause : new Error("consumer failed")),
+          }),
+      ),
+    );
+
+    try {
+      await firstSeen;
+      await thirdPull;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(pulls).toBe(3);
+      expect(revisions).toEqual([1]);
+
+      releaseFirst();
+      await terminalSeen;
+      await Effect.runPromise(Fiber.await(fiber));
+      expect(revisions).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
+      expect(revisions.filter((revision) => revision === 9)).toHaveLength(1);
+      expect(pulls).toBe(9);
+      expect(body.locked).toBe(false);
+    } finally {
+      releaseFirst();
+      await Effect.runPromise(Fiber.interrupt(fiber));
+    }
+  });
+
+  it("interrupts a blocked snapshot offer and releases its reader without reading ahead", async () => {
+    const encoder = new TextEncoder();
+    const frames = Array.from({ length: 9 }, (_, index) => index + 1).map(
+      (revision) =>
+        `event: snapshot\nid: cursor-${revision}\ndata: ${JSON.stringify({
+          id: "j_demo",
+          type: "export",
+          state: "running",
+          revision,
+          createdAt: "2026-01-01T00:00:00Z",
+          updatedAt: "2026-01-01T00:00:01Z",
+        })}\n\n`,
+    );
+    let pulls = 0;
+    let wasCancelled = false;
+    let resolveThirdPull!: () => void;
+    let resolveFirst!: () => void;
+    let releaseFirst!: () => void;
+    const thirdPull = new Promise<void>((resolve) => (resolveThirdPull = resolve));
+    const firstSeen = new Promise<void>((resolve) => (resolveFirst = resolve));
+    const firstGate = new Promise<void>((resolve) => (releaseFirst = resolve));
+    const body = new ReadableStream<Uint8Array>(
+      {
+        pull(controller) {
+          const index = pulls++;
+          if (index === 2) resolveThirdPull();
+          if (index < frames.length) controller.enqueue(encoder.encode(frames[index]));
+        },
+        cancel() {
+          wasCancelled = true;
+        },
+      },
+      { highWaterMark: 0 },
+    );
+    const api = createApiClient(
+      { serverBaseUrl: "https://video.example.test", authentication: { type: "none" } },
+      () =>
+        Promise.resolve(new Response(body, { headers: { "Content-Type": "text/event-stream" } })),
+    );
+    const fiber = Effect.runFork(
+      Stream.runForEach(
+        observeSnapshots<JobSnapshot, JobSnapshot>(api, "jobs/j_demo/events", Job),
+        (snapshot) =>
+          Effect.tryPromise({
+            try: async () => {
+              if (snapshot.revision === 1) {
+                resolveFirst();
+                await firstGate;
+              }
+            },
+            catch: (cause) => (cause instanceof Error ? cause : new Error("consumer failed")),
+          }),
+      ),
+    );
+
+    try {
+      await firstSeen;
+      await thirdPull;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(pulls).toBe(3);
+      expect(body.locked).toBe(true);
+      await Effect.runPromise(Fiber.interrupt(fiber));
+      expect(wasCancelled).toBe(true);
+      expect(body.locked).toBe(false);
+      expect(pulls).toBe(3);
+    } finally {
+      releaseFirst();
+      await Effect.runPromise(Fiber.interrupt(fiber));
+    }
+  });
+
   it("does not retry unauthorized streams", async () => {
     const fetch = vi.fn<typeof globalThis.fetch>(() =>
       Promise.resolve(

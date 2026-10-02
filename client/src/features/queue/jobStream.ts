@@ -141,19 +141,43 @@ export function observeSnapshots<A extends { readonly state: string }, I>(
     }
   };
 
-  return Stream.callback<A, Error>((queue) =>
-    Effect.tryPromise({
-      try: async (signal) => {
-        for await (const snapshot of snapshots(signal)) {
-          if (!Queue.offerUnsafe(queue, snapshot)) return;
+  return Stream.callback<A, Error>(
+    (queue) => {
+      const controller = new AbortController();
+      const iterator = snapshots(controller.signal);
+      const close = Effect.sync(() => controller.abort()).pipe(
+        Effect.andThen(
+          Effect.tryPromise({
+            try: () => iterator.return(undefined),
+            catch: () => undefined,
+          }).pipe(Effect.ignore),
+        ),
+      );
+      const consume = Effect.gen(function* () {
+        while (true) {
+          const next = yield* Effect.tryPromise({
+            try: (signal) => {
+              const interrupt = () => controller.abort();
+              signal.addEventListener("abort", interrupt, { once: true });
+              return iterator.next().finally(() => signal.removeEventListener("abort", interrupt));
+            },
+            catch: (cause) =>
+              cause instanceof Error ? cause : new Error("Job observation failed."),
+          });
+          if (next.done) return;
+          if (!(yield* Queue.offer(queue, next.value))) return;
         }
-      },
-      catch: (cause) => (cause instanceof Error ? cause : new Error("Job observation failed.")),
-    }).pipe(
-      Effect.matchEffect({
-        onFailure: (error) => Queue.fail(queue, error),
-        onSuccess: () => Queue.end(queue),
-      }),
-    ),
+      });
+      return Effect.ensuring(
+        consume.pipe(
+          Effect.matchEffect({
+            onFailure: (error) => Queue.fail(queue, error),
+            onSuccess: () => Queue.end(queue),
+          }),
+        ),
+        close,
+      );
+    },
+    { bufferSize: 1, strategy: "suspend" },
   );
 }
