@@ -269,15 +269,164 @@ test.beforeEach(async ({ page }) => {
 test("Create clips saves a dirty revision before fresh preflight and batch submission", async ({
   page,
 }) => {
+  const api = `${origin}/api/v2`;
+  let projectId: string | undefined;
+  const batchId = "b_0123456789ab";
+  const jobId = "j_0123456789ab";
+  const job = {
+    id: jobId,
+    batchId,
+    type: "export",
+    state: "queued",
+    revision: 1,
+    progress: 0,
+    createdAt: "2026-01-01T00:00:00Z",
+    updatedAt: "2026-01-01T00:00:00Z",
+  };
+  const terminalJob = {
+    ...job,
+    state: "succeeded",
+    revision: 2,
+    progress: 1,
+    result: {
+      outputName: "camera.mkv",
+      container: "mkv",
+      sizeBytes: 100,
+      retainUntil: "2099-01-01T00:00:00Z",
+      destinationId: "download",
+      destinationKind: "download",
+    },
+  };
+  let startBatchStream!: () => void;
+  let startJobStream!: () => void;
+  let releaseStreams!: () => void;
+  const batchStreamStarted = new Promise<void>((resolve) => (startBatchStream = resolve));
+  const jobStreamStarted = new Promise<void>((resolve) => (startJobStream = resolve));
+  const streamsReleased = new Promise<void>((resolve) => (releaseStreams = resolve));
   const calls: string[] = [];
+  const deleteRequests: string[] = [];
   let savedBody: Record<string, unknown> | undefined;
-  page.on("request", (request) => {
-    const path = new URL(request.url()).pathname;
-    if (request.method() === "PUT" && /^\/api\/v1\/projects\/[^/]+$/.test(path)) {
+  let savedRevision: number | undefined;
+  let submittedBody: Record<string, unknown> | undefined;
+  let idempotencyKey: string | undefined;
+  await page.route(`${api}/**`, async (route) => {
+    const request = route.request();
+    const path = new URL(request.url()).pathname.slice("/api/v2".length);
+    if (request.method() === "DELETE") {
+      deleteRequests.push(path);
+      return route.fulfill({ status: 204 });
+    }
+    if (path === "/media/status")
+      return route.fulfill({ json: { state: "ready_with_media", message: "Library ready." } });
+    if (path === "/media/tree")
+      return route.fulfill({ json: { folders: [], items: [media], nextCursor: null } });
+    if (path === `/media/${media.id}`) return route.fulfill({ json: media });
+    if (path === "/projects" && request.method() === "GET")
+      return route.fulfill({ json: { items: [], nextCursor: null } });
+    if (path === "/settings")
+      return route.fulfill({
+        json: {
+          settings: {
+            destinations: [{ id: "download", label: "Browser download", kind: "download" }],
+            exportLimit: 1,
+            cacheMaxBytes: 1_000_000,
+            previewGlobalLimit: 2,
+            previewBeforeMs: 1000,
+            previewAfterMs: 1000,
+            previewMaxMs: 5000,
+            previewGridMs: 1000,
+            mediaMaxFiles: 100,
+            mediaMaxDepth: 4,
+            mcpEnabled: false,
+          },
+          revision: 1,
+          schemaVersion: 2,
+          updatedAt: "2026-01-01T00:00:00Z",
+          pathsConstrained: false,
+          roots: {},
+        },
+      });
+    if (path === "/destinations")
+      return route.fulfill({
+        json: {
+          destinations: [{ id: "download", label: "Browser download", kind: "download" }],
+          capabilities: { saveBesideSource: false },
+        },
+      });
+    if (path === "/batches" && request.method() === "GET")
+      return route.fulfill({ json: { items: [], nextCursor: null } });
+    const projectPath = path.match(/^\/projects\/(p_[A-Za-z0-9_-]{12,64})$/);
+    if (projectPath && request.method() === "PUT") {
+      projectId = projectPath[1];
       calls.push("save");
-      savedBody = request.postDataJSON() as Record<string, unknown>;
-    } else if (path.endsWith("/exports/preflight")) calls.push("preflight");
-    else if (path.endsWith("/exports")) calls.push("export");
+      savedBody = request.postDataJSON();
+      savedRevision = 1;
+      return route.fulfill({
+        json: {
+          ...savedBody,
+          id: projectId,
+          revision: savedRevision,
+          schemaVersion: 2,
+          updatedAt: "2026-01-01T00:00:00Z",
+        },
+      });
+    }
+    if (
+      /^\/projects\/p_[A-Za-z0-9_-]{12,64}\/exports\/preflight$/.test(path) &&
+      request.method() === "POST"
+    ) {
+      calls.push("preflight");
+      return route.fulfill({ json: { allowed: true, selection: [0], findings: [] } });
+    }
+    if (/^\/projects\/p_[A-Za-z0-9_-]{12,64}\/exports$/.test(path) && request.method() === "POST") {
+      calls.push("export");
+      submittedBody = request.postDataJSON();
+      idempotencyKey = request.headers()["idempotency-key"];
+      return route.fulfill({
+        status: 202,
+        json: { batchId, jobs: [job] },
+      });
+    }
+    if (path === `/batches/${batchId}/events`) {
+      startBatchStream();
+      await streamsReleased;
+      const terminalBatch = {
+        batchId,
+        projectId: projectId!,
+        projectRevision: 1,
+        state: "succeeded",
+        progress: 1,
+        jobs: [terminalJob],
+      };
+      return route.fulfill({
+        headers: { "Content-Type": "text/event-stream" },
+        body: [
+          "id: batch-cursor-2",
+          "event: snapshot",
+          `data: ${JSON.stringify(terminalBatch)}`,
+          "",
+          "",
+        ].join("\n"),
+      });
+    }
+    if (path === `/jobs/${jobId}/events`) {
+      startJobStream();
+      await streamsReleased;
+      return route.fulfill({
+        headers: { "Content-Type": "text/event-stream" },
+        body: [
+          "id: job-cursor-2",
+          "event: snapshot",
+          `data: ${JSON.stringify(terminalJob)}`,
+          "",
+          "",
+        ].join("\n"),
+      });
+    }
+    return route.fulfill({
+      status: 404,
+      json: { error: { code: "not_found", message: "Not found", requestId: "test" } },
+    });
   });
   await page.goto("/");
   await page.getByRole("button", { name: "Select camera.mp4" }).click();
@@ -287,10 +436,21 @@ test("Create clips saves a dirty revision before fresh preflight and batch submi
   const create = page.getByRole("button", { name: "Create clips" });
   await expect(create).toBeEnabled();
   await create.click();
+  await expect(page.getByText("Export queued.", { exact: true })).toBeVisible();
+  await Promise.all([batchStreamStarted, jobStreamStarted]);
+  await page.getByRole("button", { name: "Hide editing tools", exact: true }).click();
+  releaseStreams();
+  await expect(page.getByRole("button", { name: "Show editing tools", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Show editing tools", exact: true }).click();
   await expect(
     page.getByRole("region", { name: "Current batch" }).getByText("succeeded", { exact: true }),
   ).toBeVisible();
   expect(calls).toEqual(["save", "preflight", "export"]);
+  expect(deleteRequests).toEqual([]);
+  expect(submittedBody).toMatchObject({ projectRevision: savedRevision });
+  expect(idempotencyKey).toMatch(
+    /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+  );
   expect(savedBody?.items).toEqual(
     expect.arrayContaining([
       expect.objectContaining({ exportOptions: expect.objectContaining({ mode: "separate" }) }),

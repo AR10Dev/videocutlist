@@ -676,7 +676,7 @@ export function createExportController(deps: {
         setExportStatus("Creating clips…");
         const submissionBody: components["schemas"]["ExportSubmissionInput"] = {
           projectRevision: savedRevision,
-          itemIds: context.input.itemIds,
+          ...(context.input.itemIds ? { itemIds: context.input.itemIds } : {}),
         };
         const key = idempotencyKeyForAttempt(uncertainExport, submissionBody, () =>
           globalThis.crypto.randomUUID(),
