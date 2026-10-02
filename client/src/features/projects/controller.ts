@@ -1,5 +1,6 @@
 import { createSignal, type Accessor, type Setter } from "solid-js";
 import { Cause, Effect, Exit, Fiber } from "effect";
+import * as AtomRegistry from "effect/reactivity/AtomRegistry";
 import type { Fiber as FiberHandle } from "effect/Fiber";
 import { apiJson, ApiFailure } from "../../api";
 import { readServerAtom, type ServerState } from "../app/server";
@@ -29,6 +30,18 @@ type GeneratedProject = import("../../generated/effect-api").Project;
 type Media = components["schemas"]["Media"];
 export type SaveState = "unsaved" | "saving" | "saved" | "failed";
 const recoveryKey = "videocutlist.project-recovery.v1";
+
+const errorCode = (failure: unknown): string | undefined => {
+  if (failure instanceof ApiFailure) return failure.code;
+  if (typeof failure !== "object" || failure === null || !("error" in failure)) return;
+  const error = failure.error;
+  return typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    typeof error.code === "string"
+    ? error.code
+    : undefined;
+};
 
 const readRecovery = (): ProjectRecovery | undefined => {
   try {
@@ -174,22 +187,30 @@ export function createProjectsController(deps: ProjectsControllerDeps) {
     const sameProject = () =>
       !disposed && snapshot.context === contextVersion && snapshot.project === deps.projectId();
     setSaveState("saving");
+    const mutation = deps.server.generatedApi?.mutation("default", "putProject");
+    if (!mutation) return void failSave("Generated project API is not configured.");
     const result = yield* Effect.exit(
-      apiJson<Project>(deps.server.api, `projects/${encodeURIComponent(snapshot.project)}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          revision: snapshot.revision,
-          schemaVersion: 2,
-          name: snapshot.name,
-          items: snapshot.items.map(serializeProjectItem),
-        }),
-      }),
+      Effect.acquireUseRelease(
+        Effect.sync(() => deps.server.registry.mount(mutation)),
+        () => {
+          deps.server.registry.set(mutation, {
+            params: { projectId: snapshot.project },
+            payload: {
+              revision: snapshot.revision,
+              schemaVersion: 2,
+              name: snapshot.name,
+              items: snapshot.items.map(serializeProjectItem),
+            },
+          });
+          return AtomRegistry.getResult(deps.server.registry, mutation, { suspendOnWaiting: true });
+        },
+        (release) => Effect.sync(release),
+      ),
     );
     if (!sameProject()) return;
     if (Exit.isFailure(result)) {
       const failure = Cause.squash(result.cause);
-      if (failure instanceof ApiFailure && failure.code === "revision_conflict") {
+      if (errorCode(failure) === "revision_conflict") {
         pendingSave = undefined;
         setSaveConflict(true);
         failSave(
@@ -208,7 +229,19 @@ export function createProjectsController(deps: ProjectsControllerDeps) {
       }
       return;
     }
-    const project = result.value;
+    const project: Project = {
+      ...result.value,
+      items: result.value.items.map((item) => ({
+        ...item,
+        segments: item.segments.map((segment) => ({ ...segment })),
+        exportOptions: {
+          ...item.exportOptions,
+          streamIndexes: item.exportOptions.streamIndexes
+            ? [...item.exportOptions.streamIndexes]
+            : undefined,
+        },
+      })),
+    };
     deps.setRevision(project.revision);
     if (!sameProject()) return;
     if (snapshot.editorVersion === deps.editorVersion() && snapshot.media === deps.selected()?.id) {

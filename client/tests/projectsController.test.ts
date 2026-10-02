@@ -250,9 +250,20 @@ describe("projects controller", () => {
     let reloadFailed = true;
     const originalFetch = globalThis.fetch;
     const generatedRequests: string[] = [];
-    globalThis.fetch = async (input) => {
+    globalThis.fetch = async (input, init) => {
       const url = String(input);
-      generatedRequests.push(url);
+      if (init?.method !== "PUT") generatedRequests.push(url);
+      if (url.endsWith(`/api/v2/projects/p_conflict-load1`) && init?.method === "PUT")
+        return Response.json(
+          {
+            error: {
+              code: "revision_conflict",
+              message: "Project changed",
+              requestId: "r-conflict",
+            },
+          },
+          { status: 409 },
+        );
       if (url.endsWith(`/api/v2/projects/p_conflict-load1`))
         return reloadFailed ? new Response(null, { status: 503 }) : Response.json(remoteProject);
       if (url.endsWith(`/api/v2/media/${media.id}`)) return Response.json(media);
@@ -409,7 +420,12 @@ describe("projects controller", () => {
     let editorVersion = 1;
     const [, setExportContainer] = createSignal<"mkv" | "mp4" | "mov">("mkv");
     let requests = 0;
+    let delayedBody: Record<string, unknown> = {};
     const submitted: Array<{ revision: number; name: string }> = [];
+    let signalFirstSave!: () => void;
+    const firstSaveStarted = new Promise<void>((resolve) => {
+      signalFirstSave = resolve;
+    });
     let resolveDelayedSave!: (response: Response) => void;
     let signalDelayedSave!: () => void;
     const delayedSaveStarted = new Promise<void>((resolve) => {
@@ -419,35 +435,58 @@ describe("projects controller", () => {
     const contextSaveStarted = new Promise<void>((resolve) => {
       signalContextSave = resolve;
     });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (input, init) => {
+      const url = new URL(String(input));
+      if (url.pathname.endsWith("/projects/p_autosave123456") && init?.method === "PUT") {
+        requests += 1;
+        const body = JSON.parse(String(init.body)) as Record<string, unknown> & {
+          revision: number;
+          name: string;
+        };
+        submitted.push({ revision: body.revision, name: body.name });
+        if (requests === 1) signalFirstSave();
+        const response = Response.json({
+          ...body,
+          id: projectId(),
+          revision: requests,
+          updatedAt: "2026-01-01T00:00:00Z",
+        });
+        if (requests === 4)
+          return Response.json(
+            {
+              error: {
+                code: "internal_error",
+                message: "Save outcome is uncertain.",
+                requestId: "r-uncertain",
+              },
+            },
+            { status: 500 },
+          );
+        if (requests === 2 || requests === 5) {
+          delayedBody = body;
+          if (requests === 2) signalDelayedSave();
+          else signalContextSave();
+          return new Promise<Response>((resolve) => {
+            resolveDelayedSave = resolve;
+          });
+        }
+        return response;
+      }
+      return Response.json(media);
+    };
     const api: ApiClient = {
       url: (path) => path,
-      request: (path, init) => {
-        if (path.startsWith("projects/") && init?.method === "PUT") {
-          requests += 1;
-          const body = JSON.parse(String(init.body));
-          submitted.push({ revision: body.revision, name: body.name });
-          const response = Response.json({
-            ...body,
-            id: projectId(),
-            revision: requests,
-            updatedAt: "2026-01-01T00:00:00Z",
-          });
-          if (requests === 2 || requests === 4) {
-            if (requests === 2) signalDelayedSave();
-            else signalContextSave();
-            return new Promise<Response>((resolve) => {
-              resolveDelayedSave = resolve;
-            });
-          }
-          return Promise.resolve(response);
-        }
-        return Promise.resolve(Response.json(media));
-      },
+      request: () => Promise.reject(new Error("Unexpected legacy request")),
       assetRequest: () => Promise.resolve(Response.json({})),
     };
     const registry = AtomRegistry.make();
+    const configuration = {
+      serverBaseUrl: "http://localhost",
+      authentication: { type: "none" as const },
+    };
     const controller = createProjectsController({
-      server: createServerState(api, registry),
+      server: createServerState(api, registry, configuration),
       selected,
       projectId,
       setProjectId,
@@ -492,15 +531,14 @@ describe("projects controller", () => {
       persistedSetItem(key, value);
     };
     controller.scheduleAutosave();
-    await new Promise((resolve) => setTimeout(resolve, 800));
+    await firstSaveStarted;
     expect(requests).toBe(1);
-    expect(controller.saveState()).toBe("saved");
-    expect(controller.saveError()).toBe("");
-    expect(dirty()).toBe(false);
-    expect(controller.recovery()).toBeUndefined();
-    // A later edit waits for the in-flight PUT and uses its returned revision.
+    // An explicit save queues behind the autosave currently in flight.
     const saving = controller.saveProject();
     await delayedSaveStarted;
+    expect(controller.saveError()).toBe("");
+    expect(controller.recovery()).toBeUndefined();
+    // A later edit waits for the in-flight PUT and uses its returned revision.
     setProjectName("Newer edit");
     editorVersion++;
     setDirty(true);
@@ -508,12 +546,10 @@ describe("projects controller", () => {
     expect(requests).toBe(2);
     resolveDelayedSave(
       Response.json({
+        ...delayedBody,
         id: "p_autosave123456",
         revision: 2,
         updatedAt: "2026-01-01T00:00:00Z",
-        schemaVersion: 2,
-        name: "Editing",
-        items: [],
       }),
     );
     await saving;
@@ -524,19 +560,26 @@ describe("projects controller", () => {
     ]);
     expect(controller.saveState()).toBe("saved");
     expect(dirty()).toBe(false);
+    setProjectName("Uncertain edit");
+    editorVersion++;
+    setDirty(true);
+    await controller.saveProject();
+    expect(requests).toBe(4);
+    expect(controller.saveState()).toBe("failed");
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    expect(requests).toBe(4);
     // A late PUT response from the previous context must not overwrite the new project.
     const staleSave = controller.saveProject();
     await contextSaveStarted;
+    setDirty(false);
     controller.newProject();
     const newID = projectId();
     resolveDelayedSave(
       Response.json({
+        ...delayedBody,
         id: "p_autosave123456",
         revision: 4,
         updatedAt: "2026-01-01T00:00:00Z",
-        schemaVersion: 2,
-        name: "Newer edit",
-        items: [],
       }),
     );
     await staleSave;
@@ -547,6 +590,7 @@ describe("projects controller", () => {
     expect(localStorage.getItem("videocutlist.active-project.v2")).toBeNull();
     controller.dispose();
     registry.dispose();
+    globalThis.fetch = originalFetch;
     void setProjectName;
     void setRevision;
     void knownMedia;
