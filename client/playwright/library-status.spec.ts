@@ -20,12 +20,12 @@ test.beforeEach(async ({ page }) => {
 
 for (const [state, message, action] of statuses) {
   test(`shows one actionable ${state} library message`, async ({ page }) => {
-    await page.route(`${apiOrigin}/api/v1/**`, async (route) => {
+    await page.route(`${apiOrigin}/api/v2/**`, async (route) => {
       const path = new URL(route.request().url()).pathname;
-      if (path === "/api/v1/media/status") return route.fulfill({ json: { state, message } });
-      if (path === "/api/v1/media") return route.fulfill({ json: { items: [] } });
-      if (path === "/api/v1/media/tree") return route.fulfill({ json: { folders: [], items: [] } });
-      if (path === "/api/v1/destinations") return route.fulfill({ json: { destinations: [] } });
+      if (path === "/api/v2/media/status") return route.fulfill({ json: { state, message } });
+      if (path === "/api/v2/media") return route.fulfill({ json: { items: [] } });
+      if (path === "/api/v2/media/tree") return route.fulfill({ json: { folders: [], items: [] } });
+      if (path === "/api/v2/destinations") return route.fulfill({ json: { destinations: [] } });
       return route.fulfill({ status: 404 });
     });
     await page.goto("/");
@@ -40,17 +40,17 @@ for (const [state, message, action] of statuses) {
 test("shows one actionable loading message while status is pending", async ({ page }) => {
   let release!: () => void;
   const pending = new Promise<void>((resolve) => (release = resolve));
-  await page.route(`${apiOrigin}/api/v1/**`, async (route) => {
+  await page.route(`${apiOrigin}/api/v2/**`, async (route) => {
     const path = new URL(route.request().url()).pathname;
-    if (path === "/api/v1/media/status") {
+    if (path === "/api/v2/media/status") {
       await pending;
       return route.fulfill({
         json: { state: "ready_empty", message: "No supported media was found." },
       });
     }
-    if (path === "/api/v1/media") return route.fulfill({ json: { items: [] } });
-    if (path === "/api/v1/media/tree") return route.fulfill({ json: { folders: [], items: [] } });
-    if (path === "/api/v1/destinations") return route.fulfill({ json: { destinations: [] } });
+    if (path === "/api/v2/media") return route.fulfill({ json: { items: [] } });
+    if (path === "/api/v2/media/tree") return route.fulfill({ json: { folders: [], items: [] } });
+    if (path === "/api/v2/destinations") return route.fulfill({ json: { destinations: [] } });
     return route.fulfill({ status: 404 });
   });
   await page.goto("/");
@@ -71,18 +71,18 @@ test("requests library thumbnails only when their rows become visible", async ({
   }));
   const requested = new Set<string>();
   await page.setViewportSize({ width: 1280, height: 720 });
-  await page.route(`${apiOrigin}/api/v1/**`, async (route) => {
+  await page.route(`${apiOrigin}/api/v2/**`, async (route) => {
     const path = new URL(route.request().url()).pathname;
-    if (path === "/api/v1/media/status")
+    if (path === "/api/v2/media/status")
       return route.fulfill({
         json: { state: "ready_with_media", message: "Media library is ready." },
       });
-    if (path === "/api/v1/media/tree") return route.fulfill({ json: { folders: [], items } });
+    if (path === "/api/v2/media/tree") return route.fulfill({ json: { folders: [], items } });
     if (path.endsWith("/thumbnails")) {
       requested.add(path.split("/")[4]);
       return route.fulfill({ status: 404 });
     }
-    if (path === "/api/v1/destinations") return route.fulfill({ json: { destinations: [] } });
+    if (path === "/api/v2/destinations") return route.fulfill({ json: { destinations: [] } });
     return route.fulfill({ status: 404 });
   });
   await page.goto("/");
@@ -100,13 +100,13 @@ test("browses folders, paginates within the active folder, and returns to root",
   page,
 }) => {
   const treeRequests: string[] = [];
-  await page.route(`${apiOrigin}/api/v1/**`, async (route) => {
+  await page.route(`${apiOrigin}/api/v2/**`, async (route) => {
     const url = new URL(route.request().url());
-    if (url.pathname === "/api/v1/media/status")
+    if (url.pathname === "/api/v2/media/status")
       return route.fulfill({
         json: { state: "ready_with_media", message: "Media library is ready." },
       });
-    if (url.pathname === "/api/v1/media/tree") {
+    if (url.pathname === "/api/v2/media/tree") {
       treeRequests.push(url.search);
       const folder = url.searchParams.get("folderId");
       const cursor = url.searchParams.get("cursor");
@@ -138,7 +138,7 @@ test("browses folders, paginates within the active folder, and returns to root",
         },
       });
     }
-    if (url.pathname === "/api/v1/destinations")
+    if (url.pathname === "/api/v2/destinations")
       return route.fulfill({ json: { destinations: [] } });
     return route.fulfill({ status: 404 });
   });
@@ -161,13 +161,13 @@ test("ignores a delayed folder response after refresh returns to root", async ({
   let releaseFolder!: () => void;
   const folderPending = new Promise<void>((resolve) => (releaseFolder = resolve));
   let folderRequest = false;
-  await page.route(`${apiOrigin}/api/v1/**`, async (route) => {
+  await page.route(`${apiOrigin}/api/v2/**`, async (route) => {
     const url = new URL(route.request().url());
-    if (url.pathname === "/api/v1/media/status")
+    if (url.pathname === "/api/v2/media/status")
       return route.fulfill({
         json: { state: "ready_with_media", message: "Media library is ready." },
       });
-    if (url.pathname === "/api/v1/media/tree") {
+    if (url.pathname === "/api/v2/media/tree") {
       const folder = url.searchParams.get("folderId");
       if (folder && !folderRequest) {
         folderRequest = true;
@@ -195,8 +195,26 @@ test("ignores a delayed folder response after refresh returns to root", async ({
         },
       });
     }
-    if (url.pathname === "/api/v1/media/refresh") return route.fulfill({ status: 202 });
-    if (url.pathname === "/api/v1/destinations")
+    if (url.pathname === "/api/v2/media/refresh")
+      return route.fulfill({
+        status: 202,
+        json: { id: "j_abcdefghijkl", state: "queued", progress: 0, indexed: 0 },
+      });
+    if (url.pathname === "/api/v2/jobs/j_abcdefghijkl/events")
+      return route.fulfill({
+        contentType: "text/event-stream",
+        body: `event: snapshot\nid: cursor-1\ndata: ${JSON.stringify({
+          id: "j_abcdefghijkl",
+          type: "library_scan",
+          state: "running",
+          revision: 1,
+          progress: 0.5,
+          indexed: 0,
+          createdAt: "2026-01-01T00:00:00Z",
+          updatedAt: "2026-01-01T00:00:01Z",
+        })}\n\n`,
+      });
+    if (url.pathname === "/api/v2/destinations")
       return route.fulfill({ json: { destinations: [] } });
     return route.fulfill({ status: 404 });
   });
@@ -210,20 +228,37 @@ test("ignores a delayed folder response after refresh returns to root", async ({
 
 test("loads status once and refreshes it after a rescan", async ({ page }) => {
   let statusRequests = 0;
-  await page.route(`${apiOrigin}/api/v1/**`, async (route) => {
+  await page.route(`${apiOrigin}/api/v2/**`, async (route) => {
     const path = new URL(route.request().url()).pathname;
-    if (path === "/api/v1/media/status") {
+    if (path === "/api/v2/media/status") {
       statusRequests++;
       return route.fulfill({
         json: { state: "ready_empty", message: "No supported media was found." },
       });
     }
-    if (path === "/api/v1/media/refresh") return route.fulfill({ status: 202 });
-    if (path === "/api/v1/media" || path === "/api/v1/media/tree")
+    if (path === "/api/v2/media/refresh")
+      return route.fulfill({
+        status: 202,
+        json: { id: "j_abcdefghijkl", state: "queued", progress: 0, indexed: 0 },
+      });
+    if (path === "/api/v2/jobs/j_abcdefghijkl/events")
+      return route.fulfill({
+        contentType: "text/event-stream",
+        body: `event: snapshot\nid: cursor-1\ndata: ${JSON.stringify({
+          id: "j_abcdefghijkl",
+          type: "library_scan",
+          state: "running",
+          revision: 1,
+          progress: 0.5,
+          createdAt: "2026-01-01T00:00:00Z",
+          updatedAt: "2026-01-01T00:00:01Z",
+        })}\n\n`,
+      });
+    if (path === "/api/v2/media" || path === "/api/v2/media/tree")
       return route.fulfill({
         json: path.endsWith("tree") ? { folders: [], items: [] } : { items: [] },
       });
-    if (path === "/api/v1/destinations") return route.fulfill({ json: { destinations: [] } });
+    if (path === "/api/v2/destinations") return route.fulfill({ json: { destinations: [] } });
     return route.fulfill({ status: 404 });
   });
   await page.goto("/");
@@ -234,34 +269,57 @@ test("loads status once and refreshes it after a rescan", async ({ page }) => {
 
 test("keeps one media retry pending and tracks its scan", async ({ page }) => {
   let submissions = 0;
+  const keys: string[] = [];
   let releaseRetry!: () => void;
   const retryPending = new Promise<void>((resolve) => (releaseRetry = resolve));
-  await page.route(`${apiOrigin}/api/v1/**`, async (route) => {
+  await page.route(`${apiOrigin}/api/v2/**`, async (route) => {
     const path = new URL(route.request().url()).pathname;
-    if (path === "/api/v1/media/refresh") {
+    if (path === "/api/v2/media/refresh") {
       submissions++;
+      keys.push(route.request().headers()["idempotency-key"] ?? "");
       if (submissions === 1) {
         return route.fulfill({
           status: 202,
-          json: { id: "j_failed", state: "failed", progress: 0, indexed: 0 },
+          json: { id: "j_abcdefghijkl", state: "failed", progress: 0, indexed: 0 },
         });
       }
       await retryPending;
       return route.fulfill({
         status: 202,
-        json: { id: "j_retry", state: "running", progress: 0.5, indexed: 7 },
+        json: { id: "j_mnopqrstuvwx", state: "running", progress: 0.5, indexed: 7 },
       });
     }
-    if (path === "/api/v1/media/import/j_retry") {
+    if (path === "/api/v2/jobs/j_abcdefghijkl/events")
       return route.fulfill({
-        json: { id: "j_retry", state: "running", progress: 0.5, indexed: 7 },
+        contentType: "text/event-stream",
+        body: `event: snapshot\nid: cursor-1\ndata: ${JSON.stringify({
+          id: "j_abcdefghijkl",
+          type: "library_scan",
+          state: "failed",
+          revision: 1,
+          createdAt: "2026-01-01T00:00:00Z",
+          updatedAt: "2026-01-01T00:00:01Z",
+        })}\n\n`,
       });
-    }
-    if (path === "/api/v1/media/status") {
+    if (path === "/api/v2/jobs/j_mnopqrstuvwx/events")
+      return route.fulfill({
+        contentType: "text/event-stream",
+        body: `event: snapshot\nid: cursor-1\ndata: ${JSON.stringify({
+          id: "j_mnopqrstuvwx",
+          type: "library_scan",
+          state: "running",
+          revision: 1,
+          progress: 0.5,
+          indexed: 7,
+          createdAt: "2026-01-01T00:00:00Z",
+          updatedAt: "2026-01-01T00:00:01Z",
+        })}\n\n`,
+      });
+    if (path === "/api/v2/media/status") {
       return route.fulfill({ json: { state: "ready_empty", message: "No supported media." } });
     }
-    if (path === "/api/v1/media/tree") return route.fulfill({ json: { folders: [], items: [] } });
-    if (path === "/api/v1/destinations") return route.fulfill({ json: { destinations: [] } });
+    if (path === "/api/v2/media/tree") return route.fulfill({ json: { folders: [], items: [] } });
+    if (path === "/api/v2/destinations") return route.fulfill({ json: { destinations: [] } });
     return route.fulfill({ status: 404 });
   });
   await page.goto("/");
@@ -279,4 +337,7 @@ test("keeps one media retry pending and tracks its scan", async ({ page }) => {
   await expect(page.getByRole("status", { name: "Library scan" })).toContainText("7 indexed");
   await expect(retry).toHaveCount(0);
   expect(submissions).toBe(2);
+  expect(keys).toHaveLength(2);
+  expect(keys.every((key) => /^[A-Za-z0-9_-]{1,128}$/.test(key))).toBe(true);
+  expect(keys[0]).not.toBe(keys[1]);
 });

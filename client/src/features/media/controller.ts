@@ -2,26 +2,64 @@ import { useAtomValue, useAtomSet } from "@effect/atom-solid";
 import { Effect } from "effect";
 import * as AsyncResult from "effect/reactivity/AsyncResult";
 import * as Atom from "effect/reactivity/Atom";
+import * as AtomRegistry from "effect/reactivity/AtomRegistry";
 import { createEffect, createSignal, on, onCleanup, type Setter } from "solid-js";
 import { apiJson, apiRequest } from "../../api";
 import type { components } from "../../generated/api";
-import { pollAtom, readServerAtom, useServerAtom, type ServerState } from "../app/server";
+import type { Job } from "../../generated/effect-api";
+import { readServerAtom, useServerAtom, type ServerState } from "../app/server";
 
 type Media = components["schemas"]["Media"];
 type FolderPage = components["schemas"]["FolderPage"];
 type LibraryStatus = components["schemas"]["LibraryStatus"];
-type ImportJob = {
-  id: string;
-  state: string;
+type ImportJob = Pick<Job, "id" | "state" | "errorCode"> & {
   progress: number;
-  indexed: number;
-  errorCode?: string;
+  indexed?: number;
   validationErrors?: string[];
 };
+
 type LibraryPage = { page: FolderPage; library?: LibraryStatus };
 
-const isActiveImport = (job: ImportJob | undefined) =>
+const isActiveImport = (job: { state: string } | undefined) =>
   job?.state === "queued" || job?.state === "running";
+
+function generatedMutation<Arg, A, E>(
+  server: ServerState,
+  atom: Atom.AtomResultFn<Arg, A, E>,
+  arg: Arg,
+): Effect.Effect<A, E> {
+  return Effect.acquireUseRelease(
+    Effect.sync(() => server.registry.mount(atom)),
+    () => {
+      server.registry.set(atom, arg);
+      return AtomRegistry.getResult(server.registry, atom, { suspendOnWaiting: true });
+    },
+    (release) =>
+      Effect.sync(() => {
+        server.registry.set(atom, Atom.Reset);
+        release();
+      }),
+  );
+}
+
+function errorStatus(error: unknown, seen = new Set<object>()): number | undefined {
+  if (!error || typeof error !== "object" || seen.has(error)) return;
+  seen.add(error);
+  if ("status" in error && typeof error.status === "number") return error.status;
+  for (const nested of [
+    "cause" in error ? error.cause : undefined,
+    "reason" in error ? error.reason : undefined,
+    "response" in error ? error.response : undefined,
+  ]) {
+    const status = errorStatus(nested, seen);
+    if (status !== undefined) return status;
+  }
+}
+
+function uncertainRequest(error: unknown): boolean {
+  const status = errorStatus(error);
+  return status === undefined || status === 0 || status >= 500;
+}
 
 export function createLibraryController(server: ServerState, setStatus: Setter<string>) {
   const { api, registry, runtime } = server;
@@ -64,8 +102,8 @@ export function createLibraryController(server: ServerState, setStatus: Setter<s
   const [pendingCursor, setPendingCursor] = createSignal<string>();
   const [libraryStatus, setLibraryStatus] = createSignal<LibraryStatus>();
   const [actionError, setActionError] = createSignal("");
-  const [startedJob, setStartedJob] = createSignal<ImportJob>();
   const [jobId, setJobId] = createSignal<string>();
+  const [observationPending, setObservationPending] = createSignal(false);
   createEffect(
     on(
       revision,
@@ -105,70 +143,74 @@ export function createLibraryController(server: ServerState, setStatus: Setter<s
     if (error) setStatus(error.message);
   });
 
-  const jobFamily = Atom.family((id: string) =>
-    pollAtom(
-      runtime,
-      apiJson<ImportJob>(api, `media/import/${encodeURIComponent(id)}`),
-      isActiveImport,
-      500,
-    ),
-  );
-  const emptyJob = Atom.make(AsyncResult.initial<ImportJob, Error>());
-  const scan = useServerAtom<ImportJob>(() =>
-    jobId() && isActiveImport(startedJob()) ? jobFamily(jobId()!) : emptyJob,
-  );
-  const importJob = () => {
-    const observed = scan.value();
-    return observed?.id === jobId() ? observed : startedJob();
+  const scan = useServerAtom<Job>(() => {
+    const id = jobId();
+    return id ? server.observeJob(id) : Atom.make(AsyncResult.initial<Job, Error>());
+  });
+  const importJob = (): ImportJob | undefined => {
+    const job = scan.value();
+    if (!job || job.id !== jobId()) return;
+    const indexed = job.indexed;
+    const validationErrors = job.validationErrors;
+    return {
+      id: job.id,
+      state: job.state,
+      progress: job.progress ?? 0,
+      indexed: typeof indexed === "number" ? indexed : undefined,
+      errorCode: job.errorCode,
+      validationErrors:
+        Array.isArray(validationErrors) &&
+        validationErrors.every((error) => typeof error === "string")
+          ? validationErrors
+          : undefined,
+    };
   };
-  const scanActive = () => isActiveImport(importJob());
+  const scanActive = () => observationPending() || isActiveImport(importJob());
   createEffect(() => {
     const job = scan.value();
-    if (job && job.id === jobId() && !isActiveImport(job)) {
-      setStartedJob(job);
-      server.refreshMedia();
+    if (job && job.id === jobId()) {
+      setObservationPending(false);
+      if (!isActiveImport(job)) server.refreshMedia();
     }
   });
+  createEffect(() => {
+    if (jobId() && scan.error()) setObservationPending(false);
+  });
 
-  const refreshCommand = runtime.fn(() =>
-    Effect.gen(function* () {
-      const response = yield* apiRequest(api, "media/refresh", { method: "POST" });
-      if (!response.ok) return { status: response.status };
-      const job = yield* Effect.tryPromise({
-        try: () => response.json().catch(() => undefined) as Promise<ImportJob | undefined>,
-        catch: (error) => (error instanceof Error ? error : new Error("Media refresh failed.")),
-      });
-      yield* Effect.sync(() => {
-        if (job?.id) {
-          setStartedJob(job);
+  let uncertainRefreshKey: string | undefined;
+  const refreshCommand = runtime.fn((key: string) => {
+    const mutation = server.generatedApi?.mutation("default", "refreshMedia");
+    if (!mutation) return Effect.fail(new Error("Generated media API is not configured."));
+    return generatedMutation(server, mutation, {
+      headers: { "Idempotency-Key": key },
+    }).pipe(
+      Effect.mapError((error) => new Error("Media refresh failed.", { cause: error })),
+      Effect.tap((job) =>
+        Effect.sync(() => {
+          uncertainRefreshKey = undefined;
+          setObservationPending(true);
           setJobId(job.id);
-        }
-        setPendingCursor(undefined);
-        setActiveFolder(undefined);
-        server.refreshMedia();
-      });
-      const requestedRevision = registry.get(server.mediaRevision);
-      const refreshed = yield* readServerAtom(
-        server,
-        pageFamily(JSON.stringify([null, null, requestedRevision])),
-      );
-      return { status: response.status, requestedRevision, refreshed };
-    }),
-  );
+          setPendingCursor(undefined);
+          setActiveFolder(undefined);
+          server.refreshMedia();
+        }),
+      ),
+      Effect.map((job) => ({ status: 202, job })),
+    );
+  });
   const refreshResult = useAtomValue(() => refreshCommand);
   const startRefresh = useAtomSet(() => refreshCommand, { mode: "promise" });
   const refreshing = () => refreshResult().waiting;
-  const cancelCommand = runtime.fn((id: string) =>
-    Effect.gen(function* () {
-      const response = yield* apiRequest(api, `media/import/${encodeURIComponent(id)}`, {
-        method: "DELETE",
-      });
-      if (!response.ok) throw new Error("Scan could not be cancelled. Try again.");
-    }),
-  );
+  const cancelCommand = runtime.fn((id: string) => {
+    const mutation = server.generatedApi?.mutation("default", "cancelJob");
+    if (!mutation) return Effect.fail(new Error("Generated job API is not configured."));
+    return generatedMutation(server, mutation, { params: { jobId: id } }).pipe(
+      Effect.mapError(() => new Error("Scan could not be cancelled. Try again.")),
+    );
+  });
   const cancelResult = useAtomValue(() => cancelCommand);
   const startCancel = useAtomSet(() => cancelCommand, { mode: "promise" });
-  const cancellingImport = () => cancelResult().waiting;
+  const cancellingImport = () => observationPending() || cancelResult().waiting;
   onCleanup(() => {
     registry.set(refreshCommand, Atom.Interrupt);
     registry.set(cancelCommand, Atom.Interrupt);
@@ -217,22 +259,32 @@ export function createLibraryController(server: ServerState, setStatus: Setter<s
   const refreshMedia = async () => {
     if (refreshing() || scanActive()) return;
     setActionError("");
+    const key = uncertainRefreshKey ?? globalThis.crypto.randomUUID();
     try {
-      const result = await startRefresh();
-      if (result.status === 403) setStatus("You are not allowed to refresh media.");
-      else if (result.status === 429)
+      await startRefresh(key);
+      uncertainRefreshKey = undefined;
+    } catch (error) {
+      uncertainRefreshKey = uncertainRequest(error) ? key : undefined;
+      const status = errorStatus(error);
+      if (status === 403) setStatus("You are not allowed to refresh media.");
+      else if (status === 429)
         setStatus("Media refresh is already in progress. Try again shortly.");
-      else if (result.status < 200 || result.status >= 300)
-        setStatus("Media refresh failed. Try again.");
-      else if (
-        result.refreshed &&
-        result.requestedRevision === registry.get(server.mediaRevision) &&
+      else setStatus("Media refresh failed. Try again.");
+      return;
+    }
+    const requestedRevision = registry.get(server.mediaRevision);
+    try {
+      const refreshed = await Effect.runPromise(
+        readServerAtom(server, pageFamily(JSON.stringify([null, null, requestedRevision]))),
+      );
+      if (
+        requestedRevision === registry.get(server.mediaRevision) &&
         activeFolder() === undefined
       ) {
-        if (result.refreshed.library) setLibraryStatus(result.refreshed.library);
-        setFolders(result.refreshed.page.folders);
-        setMedia(result.refreshed.page.items);
-        setNextCursor(result.refreshed.page.nextCursor ?? undefined);
+        if (refreshed.library) setLibraryStatus(refreshed.library);
+        setFolders(refreshed.page.folders);
+        setMedia(refreshed.page.items);
+        setNextCursor(refreshed.page.nextCursor ?? undefined);
         setStatus("Choose media to begin.");
       }
     } catch {
@@ -244,10 +296,11 @@ export function createLibraryController(server: ServerState, setStatus: Setter<s
     const job = importJob();
     if (!job || !scanActive() || cancellingImport()) return;
     setActionError("");
+    server.setJobLocallyCancelled(job.id, true);
     try {
       await startCancel(job.id);
-      registry.refresh(jobFamily(job.id));
     } catch (error) {
+      server.setJobLocallyCancelled(job.id, false);
       setActionError(error instanceof Error ? error.message : "Scan cancellation failed.");
     }
   };
