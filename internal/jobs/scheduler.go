@@ -548,7 +548,7 @@ func (s *Scheduler) claim(ctx context.Context) (job Job, err error) {
 		return Job{}, err
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	r, err := tx.ExecContext(ctx, `UPDATE jobs SET state=?,updated_at=? WHERE id=? AND state=?`, JobRunning, now, id, JobQueued)
+	r, err := tx.ExecContext(ctx, `UPDATE jobs SET state=?,updated_at=?,revision=revision+1 WHERE id=? AND state=?`, JobRunning, now, id, JobQueued)
 	if err != nil {
 		return Job{}, err
 	}
@@ -556,7 +556,7 @@ func (s *Scheduler) claim(ctx context.Context) (job Job, err error) {
 	if err != nil || n != 1 {
 		return Job{}, sql.ErrNoRows
 	}
-	row := tx.QueryRowContext(ctx, `SELECT id,batch_id,kind,COALESCE(project_id,''),COALESCE(project_item_id,''),COALESCE(proposal_id,''),COALESCE(credential_id,''),state,request_json,result_json,error_code,created_at,updated_at FROM jobs WHERE id=?`, id)
+	row := tx.QueryRowContext(ctx, `SELECT id,batch_id,kind,COALESCE(project_id,''),COALESCE(project_item_id,''),COALESCE(proposal_id,''),COALESCE(credential_id,''),state,request_json,result_json,error_code,created_at,updated_at,revision FROM jobs WHERE id=?`, id)
 	job, err = scanUnifiedJob(row)
 	if err != nil {
 		return Job{}, err

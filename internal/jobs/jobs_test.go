@@ -27,17 +27,45 @@ func TestUnifiedJobsTransitionsAndDerivedBatch(t *testing.T) {
 	}
 	ctx := context.Background()
 	job, err := jobs.Create(ctx, store.Job{ID: "j_000000000001", BatchID: "b_000000000001", Kind: store.JobExport, ProjectID: "p_one", ProjectItemID: "i_one", RequestJSON: `{"mediaId":"m_safe"}`})
-	if err != nil || job.State != store.JobQueued {
+	if err != nil || job.State != store.JobQueued || job.Revision != 1 {
 		t.Fatalf("create = %#v, %v", job, err)
 	}
 	if _, err = jobs.Succeed(ctx, job.ID, `{}`); !errors.Is(err, store.ErrJobState) {
 		t.Fatalf("queued succeed = %v", err)
 	}
+	unchanged, err := jobs.Get(ctx, job.ID)
+	if err != nil || unchanged.Revision != 1 {
+		t.Fatalf("failed transition changed revision: %#v, %v", unchanged, err)
+	}
+	batchCursor, err := jobs.BatchCursor(ctx, job.BatchID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err = jobs.Start(ctx, job.ID); err != nil {
 		t.Fatal(err)
 	}
+	started, err := jobs.Get(ctx, job.ID)
+	if err != nil || started.Revision != 2 {
+		t.Fatalf("started job revision = %d, %v", started.Revision, err)
+	}
 	if _, err = jobs.Succeed(ctx, job.ID, `{"outputName":"clip.mkv"}`); err != nil {
 		t.Fatal(err)
+	}
+	finished, err := jobs.Get(ctx, job.ID)
+	if err != nil || finished.Revision != 3 {
+		t.Fatalf("finished job revision = %d, %v", finished.Revision, err)
+	}
+	updatedCursor, err := jobs.BatchCursor(ctx, job.BatchID)
+	if err != nil || updatedCursor == batchCursor || len(updatedCursor) > 256 {
+		t.Fatalf("batch cursor = %q after %q, %v", updatedCursor, batchCursor, err)
+	}
+	stableCursor, err := jobs.BatchCursor(ctx, job.BatchID)
+	if err != nil || stableCursor != updatedCursor {
+		t.Fatalf("unchanged batch cursor = %q, want %q, %v", stableCursor, updatedCursor, err)
+	}
+	cancelled, err := jobs.Cancel(ctx, job.ID)
+	if err != nil || cancelled.Revision != 3 {
+		t.Fatalf("terminal no-op changed revision: %#v, %v", cancelled, err)
 	}
 	state, progress, err := jobs.Batch(ctx, "b_000000000001")
 	if err != nil || state != store.JobSucceeded || progress != 1 {
@@ -52,6 +80,84 @@ func TestUnifiedJobsTransitionsAndDerivedBatch(t *testing.T) {
 	}
 	if _, err = jobs.Create(ctx, store.Job{ID: "j_000000000003", BatchID: "b_000000000003", Kind: store.JobScan, ProjectID: "p", RequestJSON: `{}`}); err == nil {
 		t.Fatal("scan project reference accepted")
+	}
+}
+
+func TestJobRevisionMigrationBackfillsExistingRows(t *testing.T) {
+	database, err := db.OpenDatabase(t.Context(), t.TempDir()+"/legacy-jobs.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = database.Close() }()
+	if _, err := database.ExecContext(t.Context(), `ALTER TABLE jobs DROP COLUMN revision`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := database.ExecContext(t.Context(), `INSERT INTO jobs (id,batch_id,kind,state,request_json,created_at,updated_at) VALUES ('j_legacyjob001','b_legacyjob001','library_scan','queued','{}','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Migrate(t.Context(), database); err != nil {
+		t.Fatal(err)
+	}
+	jobs, err := store.NewJobsStore(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := jobs.Get(t.Context(), "j_legacyjob001")
+	if err != nil || job.Revision != 1 {
+		t.Fatalf("backfilled job = %#v, %v", job, err)
+	}
+	if err := store.Migrate(t.Context(), database); err != nil {
+		t.Fatalf("reapply migration: %v", err)
+	}
+}
+
+func TestJobRevisionSurvivesDatabaseReopen(t *testing.T) {
+	path := t.TempDir() + "/revisions.db"
+	database, err := db.OpenDatabase(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	jobs, err := store.NewJobsStore(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := jobs.Create(t.Context(), store.Job{ID: "j_revisionrestart1", BatchID: "b_revisionrestart1", Kind: store.JobScan, RequestJSON: `{}`}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := jobs.Start(t.Context(), "j_revisionrestart1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := db.OpenDatabase(t.Context(), path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := reopened.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	jobs, err = store.NewJobsStore(reopened)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, err := jobs.Get(t.Context(), "j_revisionrestart1")
+	if err != nil || job.Revision != 2 {
+		t.Fatalf("reopened job = %#v, %v", job, err)
+	}
+	if recovered, err := jobs.Recover(t.Context()); err != nil || recovered != 1 {
+		t.Fatalf("recovery after reopen = %d, %v", recovered, err)
+	}
+	job, err = jobs.Get(t.Context(), "j_revisionrestart1")
+	if err != nil || job.Revision != 3 || job.ErrorCode.String != "interrupted_by_restart" {
+		t.Fatalf("recovered reopened job = %#v, %v", job, err)
 	}
 }
 
@@ -245,9 +351,12 @@ func TestUnifiedJobsCancellationFailureAndRestartRecovery(t *testing.T) {
 		t.Fatalf("recovery = %d, %v", recovered, err)
 	}
 	for _, id := range []string{"j_000000000006", "j_000000000007"} {
-		if job, err := jobs.Get(ctx, id); err != nil || job.State != store.JobFailed || !job.ErrorCode.Valid || job.ErrorCode.String != "interrupted_by_restart" {
+		if job, err := jobs.Get(ctx, id); err != nil || job.State != store.JobFailed || !job.ErrorCode.Valid || job.ErrorCode.String != "interrupted_by_restart" || job.Revision != 3 {
 			t.Fatalf("recovered job = %#v, %v", job, err)
 		}
+	}
+	if recovered, err := jobs.Recover(ctx); err != nil || recovered != 0 {
+		t.Fatalf("second recovery = %d, %v", recovered, err)
 	}
 }
 

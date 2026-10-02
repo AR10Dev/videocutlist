@@ -147,7 +147,7 @@ func readCommandAdmission(ctx context.Context, queryer admissionQueryer, command
 	}
 	result := CommandAdmissionResult{Jobs: make([]Job, 0, len(references))}
 	for _, id := range references {
-		job, err := scanUnifiedJob(queryer.QueryRowContext(ctx, `SELECT id,batch_id,kind,COALESCE(project_id,''),COALESCE(project_item_id,''),COALESCE(proposal_id,''),COALESCE(credential_id,''),state,request_json,result_json,error_code,created_at,updated_at FROM jobs WHERE id=?`, id))
+		job, err := scanUnifiedJob(queryer.QueryRowContext(ctx, `SELECT id,batch_id,kind,COALESCE(project_id,''),COALESCE(project_item_id,''),COALESCE(proposal_id,''),COALESCE(credential_id,''),state,request_json,result_json,error_code,created_at,updated_at,revision FROM jobs WHERE id=?`, id))
 		if err != nil {
 			return CommandAdmissionResult{}, fmt.Errorf("load admitted command job: %w", err)
 		}
