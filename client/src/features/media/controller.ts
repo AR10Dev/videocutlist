@@ -14,6 +14,7 @@ import {
   type Setter,
 } from "solid-js";
 import type { Job } from "../../generated/effect-api";
+import { apiErrorCode, apiErrorStatus, uncertainCommandFailure } from "../../api";
 import { useServerAtom, type ServerState } from "../app/server";
 
 type Media = EffectApiTypes.Media;
@@ -44,25 +45,6 @@ function generatedMutation<Arg, A, E>(
         release();
       }),
   );
-}
-
-function errorStatus(error: unknown, seen = new Set<object>()): number | undefined {
-  if (!error || typeof error !== "object" || seen.has(error)) return;
-  seen.add(error);
-  if ("status" in error && typeof error.status === "number") return error.status;
-  for (const nested of [
-    "cause" in error ? error.cause : undefined,
-    "reason" in error ? error.reason : undefined,
-    "response" in error ? error.response : undefined,
-  ]) {
-    const status = errorStatus(nested, seen);
-    if (status !== undefined) return status;
-  }
-}
-
-function uncertainRequest(error: unknown): boolean {
-  const status = errorStatus(error);
-  return status === undefined || status === 0 || status >= 500;
 }
 
 export function createLibraryController(server: ServerState, setStatus: Setter<string>) {
@@ -222,7 +204,6 @@ export function createLibraryController(server: ServerState, setStatus: Setter<s
           server.refreshMedia();
         }),
       ),
-      Effect.map((job) => ({ status: 202, job })),
     );
   });
   const refreshResult = useAtomValue(() => refreshCommand);
@@ -281,10 +262,19 @@ export function createLibraryController(server: ServerState, setStatus: Setter<s
       await startRefresh(key);
       uncertainRefreshKey = undefined;
     } catch (error) {
-      uncertainRefreshKey = uncertainRequest(error) ? key : undefined;
-      const status = errorStatus(error);
-      if (status === 403) setStatus("You are not allowed to refresh media.");
-      else if (status === 429)
+      uncertainRefreshKey = uncertainCommandFailure(error, [
+        "origin_forbidden",
+        "library_busy",
+        "invalid_idempotency_key",
+        "idempotency_conflict",
+      ])
+        ? key
+        : undefined;
+      const code = apiErrorCode(error);
+      const status = apiErrorStatus(error);
+      if (status === 403 || code === "origin_forbidden")
+        setStatus("You are not allowed to refresh media.");
+      else if (status === 429 || code === "library_busy")
         setStatus("Media refresh is already in progress. Try again shortly.");
       else setStatus("Media refresh failed. Try again.");
       return;

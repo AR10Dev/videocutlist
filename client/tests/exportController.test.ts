@@ -1,7 +1,7 @@
 import type * as EffectApiTypes from "../src/generated/effect-api";
 import { RegistryContext, RegistryProvider } from "@effect/atom-solid";
 import { createComponent, createRoot, createSignal, untrack, useContext } from "solid-js";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ApiClient, NativeMediaApiClient } from "../src/api";
 import { createServerState } from "../src/features/app/server";
 import { createExportController } from "../src/features/export/controller";
@@ -85,7 +85,9 @@ async function withExportController(
     destinationsResponse?: Promise<Response>;
     nextDestinationsResponse?: () => Promise<Response>;
     exportResponses?: Response[];
-    onExportHeaders?: (headers: Headers) => void;
+    retryResponses?: Response[];
+    onExportHeaders?: (headers: Headers, body: string | undefined) => void;
+    onRetryRequest?: (request: { path: string; key: string; body: string | undefined }) => void;
     onApiRequest?: (path: string) => void;
     onBatchEvent?: (path: string, signal?: AbortSignal) => Promise<Response>;
   } = {},
@@ -102,6 +104,16 @@ async function withExportController(
   globalThis.fetch = async (input, init) => {
     const requestUrl = new URL(input instanceof Request ? input.url : String(input));
     const method = init?.method ?? (input instanceof Request ? input.method : "GET");
+    const headers = new Headers(input instanceof Request ? input.headers : undefined);
+    new Headers(init?.headers).forEach((value, name) => headers.set(name, value));
+    const body =
+      typeof init?.body === "string"
+        ? init.body
+        : init?.body instanceof Uint8Array
+          ? new TextDecoder().decode(init.body)
+          : input instanceof Request && input.body
+            ? await input.clone().text()
+            : undefined;
     await options.onRequest?.(method, requestUrl.pathname);
     if (method === "DELETE" && /^\/api\/v2\/batches\/[^/]+$/.test(requestUrl.pathname))
       return new Response(null, { status: 204 });
@@ -124,8 +136,20 @@ async function withExportController(
       return options.preflightFailure
         ? Response.json({ error: options.preflightFailure }, { status: 400 })
         : Response.json({ allowed: true, selection: [], findings: [] });
+    if (/^\/api\/v2\/jobs\/[^/]+\/retry$/.test(requestUrl.pathname) && method === "POST") {
+      options.onRetryRequest?.({
+        path: requestUrl.pathname,
+        key: headers.get("Idempotency-Key") ?? "",
+        body,
+      });
+      const response = options.retryResponses?.shift();
+      if (response) return response;
+      return Response.json(batch("queued", 0.1, [job("j_exportretry0001", "queued", 1)]), {
+        status: 202,
+      });
+    }
     if (requestUrl.pathname.endsWith("/exports") && method === "POST") {
-      options.onExportHeaders?.(new Headers(init?.headers));
+      options.onExportHeaders?.(headers, body);
       const response = options.exportResponses?.shift();
       if (response) return response;
       return Response.json(
@@ -178,7 +202,6 @@ async function withExportController(
           const [dirty, setDirty] = createSignal(options.dirty ?? false);
           const [projectItems, setProjectItems] = createSignal<EditableProjectItem[]>([]);
           controller = createExportController({
-            api,
             server: createServerState(api, registry, configuration),
             selected: () => options.selected,
             projectId: () => "p_exportstatus0001",
@@ -450,6 +473,111 @@ describe("export controller aggregate status", () => {
       },
     );
   });
+  it("redelivers an unfamiliar generated export failure with the same key and body", async () => {
+    const media: EffectApiTypes.Media = {
+      id: `m_${"m".repeat(43)}`,
+      name: "clip.mp4",
+      durationMs: 2_000,
+      sizeBytes: 1,
+      container: "mp4",
+      streams: {},
+      etag: "v1",
+    };
+    const attempts: Array<{ key: string; body: string | undefined }> = [];
+    const events: string[] = [];
+    await withExportController(
+      batch("succeeded", 1, [job("j_exportstatus0001", "succeeded", 2)]),
+      async (controller) => {
+        await vi.waitFor(() => expect(events.length).toBeGreaterThan(0));
+        await controller.exportProject();
+        await controller.exportProject();
+        expect(attempts).toHaveLength(2);
+        expect(attempts[0].key).toBeTruthy();
+        expect(attempts[1]).toEqual(attempts[0]);
+        expect(JSON.parse(attempts[0].body ?? "{}")).toMatchObject({ projectRevision: 1 });
+      },
+      {
+        initialBatch: batch("succeeded", 1, [job("j_exportstatus0001", "succeeded", 1)]),
+        selected: media,
+        projectItems: [exportItem(media)],
+        dirty: false,
+        exportResponses: [
+          Response.json(
+            {
+              error: {
+                code: "upstream_timeout",
+                message: "Try again.",
+                requestId: "r-export-timeout",
+              },
+            },
+            { status: 500 },
+          ),
+          Response.json(
+            { batchId, jobs: [job("j_exportfresh0001", "queued", 1)] },
+            { status: 202 },
+          ),
+        ],
+        onExportHeaders: (headers, body) =>
+          attempts.push({ key: headers.get("Idempotency-Key") ?? "", body }),
+        onApiRequest: (path) => {
+          if (path.endsWith("/events")) events.push(path);
+        },
+      },
+    );
+  });
+
+  it("redelivers an unfamiliar generated retry failure with the same key and operation", async () => {
+    const media: EffectApiTypes.Media = {
+      id: `m_${"m".repeat(43)}`,
+      name: "clip.mp4",
+      durationMs: 2_000,
+      sizeBytes: 1,
+      container: "mp4",
+      streams: {},
+      etag: "v1",
+    };
+    const failedJob = job("j_exportstatus0001", "failed", 1);
+    const attempts: Array<{ path: string; key: string; body: string | undefined }> = [];
+    const events: string[] = [];
+    await withExportController(
+      batch("failed", 1, [failedJob]),
+      async (controller) => {
+        await vi.waitFor(() => expect(events.length).toBeGreaterThan(0));
+        await controller.retryChildJob(failedJob.id, batchId);
+        await controller.retryChildJob(failedJob.id, batchId);
+        expect(attempts).toHaveLength(2);
+        expect(attempts[0].key).toBeTruthy();
+        expect(attempts[1]).toEqual(attempts[0]);
+        expect(attempts[0].path).toBe(`/api/v2/jobs/${failedJob.id}/retry`);
+        expect(attempts[0].body).toBeUndefined();
+      },
+      {
+        initialBatch: batch("failed", 1, [failedJob]),
+        selected: media,
+        exportResponses: [],
+        retryResponses: [
+          Response.json(
+            {
+              error: {
+                code: "upstream_timeout",
+                message: "Try again.",
+                requestId: "r-retry-timeout",
+              },
+            },
+            { status: 500 },
+          ),
+          Response.json(batch("queued", 0.1, [job("j_exportretry0001", "queued", 1)]), {
+            status: 202,
+          }),
+        ],
+        onRetryRequest: (request) => attempts.push(request),
+        onApiRequest: (path) => {
+          if (path.endsWith("/events")) events.push(path);
+        },
+      },
+    );
+  });
+
   it("preserves generated capacity errors and uses a fresh key for each definite-failure retry", async () => {
     const media: EffectApiTypes.Media = {
       id: `m_${"m".repeat(43)}`,

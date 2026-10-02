@@ -6,7 +6,7 @@ import * as Schema from "effect/Schema";
 import * as AsyncResult from "effect/reactivity/AsyncResult";
 import * as Atom from "effect/reactivity/Atom";
 import * as AtomRegistry from "effect/reactivity/AtomRegistry";
-import { ApiFailure, runEffect } from "../../api";
+import { ApiFailure, runEffect, uncertainCommandFailure } from "../../api";
 import {
   DetectionInput as DetectionInputSchema,
   DetectionJob as DetectionJobSchema,
@@ -69,34 +69,6 @@ function generatedMutation<Arg, A, E>(
   );
 }
 
-function errorStatus(error: unknown): number | undefined {
-  if (!error || typeof error !== "object") return;
-  if ("status" in error && typeof error.status === "number") return error.status;
-  const reason = "reason" in error ? error.reason : undefined;
-  if (reason && typeof reason === "object" && "response" in reason) {
-    const response = reason.response;
-    if (
-      response &&
-      typeof response === "object" &&
-      "status" in response &&
-      typeof response.status === "number"
-    )
-      return response.status;
-  }
-  const cause = "cause" in error ? error.cause : undefined;
-  return cause === error ? undefined : errorStatus(cause);
-}
-
-function errorCode(error: unknown): string | undefined {
-  if (!error || typeof error !== "object") return;
-  if ("code" in error && typeof error.code === "string") return error.code;
-  const nested = "error" in error ? error.error : undefined;
-  if (nested && typeof nested === "object" && "code" in nested && typeof nested.code === "string")
-    return nested.code;
-  const cause = "cause" in error ? error.cause : undefined;
-  return cause === error ? undefined : errorCode(cause);
-}
-
 function mutableDetectionJob(job: GeneratedDetectionJob): DetectionJob {
   const { candidates, ...fields } = job;
   return {
@@ -108,10 +80,14 @@ function mutableDetectionJob(job: GeneratedDetectionJob): DetectionJob {
 }
 
 function isUncertainSubmission(error: unknown): boolean {
-  const status = errorStatus(error);
-  return status === undefined
-    ? errorCode(error) === undefined || errorCode(error) === "internal_error"
-    : status >= 500;
+  return uncertainCommandFailure(error, [
+    "invalid_idempotency_key",
+    "invalid_detection",
+    "detection_busy",
+    "stale_project",
+    "origin_forbidden",
+    "idempotency_conflict",
+  ]);
 }
 
 type DetectionDependencies = {
