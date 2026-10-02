@@ -162,7 +162,7 @@ it("redelivers an uncertain detection submission with its original key and valid
           submissions.length === 1
             ? Response.json(
                 { error: { code: "upstream_timeout", message: "Retry", requestId: "r1" } },
-                { status: 503 },
+                { status: 500 },
               )
             : Response.json(queuedDetectionJob, { status: 202 }),
         );
@@ -190,8 +190,8 @@ it("redelivers an uncertain detection submission with its original key and valid
   });
 });
 
-it("uses a fresh key after a definite generated detection rejection", async () => {
-  const submissions: Array<{ key: string | null; body: string }> = [];
+it("uses a fresh key after generated detection capacity rejection", async () => {
+  const submissions: Array<{ key: string | null; target: string; body: string }> = [];
   let acceptedJob: EffectApiTypes.DetectionJob | undefined;
   const api: ApiClient = {
     url: (path) => path,
@@ -199,6 +199,7 @@ it("uses a fresh key after a definite generated detection rejection", async () =
       if (path.endsWith("/detections") && init?.method === "POST") {
         submissions.push({
           key: new Headers(init.headers).get("Idempotency-Key"),
+          target: path.split("/")[1]!,
           body: String(init.body),
         });
         if (submissions.length === 1)
@@ -206,12 +207,12 @@ it("uses a fresh key after a definite generated detection rejection", async () =
             Response.json(
               {
                 error: {
-                  code: "idempotency_conflict",
-                  message: "Key was used for another command.",
-                  requestId: "r-detection-conflict",
+                  code: "detection_busy",
+                  message: "Detection capacity is full.",
+                  requestId: "r-detection-busy",
                 },
               },
-              { status: 409 },
+              { status: 429 },
             ),
           );
         acceptedJob = queuedDetectionJob;
@@ -226,6 +227,7 @@ it("uses a fresh key after a definite generated detection rejection", async () =
     await controller.startDetection("silence", { noiseDb: -35 });
     await controller.startDetection("silence", { noiseDb: -35 });
     expect(submissions).toHaveLength(2);
+    expect(submissions[1].target).toBe(submissions[0].target);
     expect(submissions[1].body).toBe(submissions[0].body);
     expect(submissions[0].key).toBeTruthy();
     expect(submissions[1].key).toBeTruthy();
@@ -251,7 +253,7 @@ it("uses a fresh key for an uncertain identical command sent to another project"
           return Promise.resolve(
             Response.json(
               { error: { code: "internal_error", message: "Retry", requestId: "r1" } },
-              { status: 503 },
+              { status: 500 },
             ),
           );
         acceptedJob = { ...queuedDetectionJob, projectId: target };
