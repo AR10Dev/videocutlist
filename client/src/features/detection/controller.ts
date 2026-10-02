@@ -80,7 +80,7 @@ function mutableDetectionJob(job: GeneratedDetectionJob): DetectionJob {
 }
 
 function isUncertainSubmission(error: unknown): boolean {
-  return uncertainCommandFailure(error);
+  return uncertainCommandFailure(error, ["idempotency_conflict"]);
 }
 
 type DetectionDependencies = {

@@ -363,6 +363,18 @@ describe("settings controller", () => {
       .mockRejectedValueOnce(new TypeError("connection lost"))
       .mockResolvedValueOnce(
         Response.json(
+          {
+            error: {
+              code: "gateway_timeout_unfamiliar",
+              message: "Try again.",
+              requestId: "r-rescan-timeout",
+            },
+          },
+          { status: 500 },
+        ),
+      )
+      .mockResolvedValueOnce(
+        Response.json(
           { id: "j_000000000001", state: "queued", progress: 0, indexed: 0 },
           { status: 202 },
         ),
@@ -379,10 +391,15 @@ describe("settings controller", () => {
     expect(fetch).toHaveBeenCalledTimes(1);
     await state.rescanLibrary();
     await state.rescanLibrary();
+    await state.rescanLibrary();
 
     expect(
       fetch.mock.calls.map(([, init]) => new Headers(init?.headers).get("Idempotency-Key")),
-    ).toEqual(["scan-key-1", "scan-key-1", "scan-key-2"]);
+    ).toEqual(["scan-key-1", "scan-key-1", "scan-key-1", "scan-key-2"]);
+    expect(fetch.mock.calls.map(([, init]) => init?.body)).toEqual(["", "", "", ""]);
+    expect(fetch.mock.calls.every(([url]) => String(url).endsWith("/settings/media/refresh"))).toBe(
+      true,
+    );
   });
 
   it("uses a fresh key after a definite media-refresh rejection", async () => {

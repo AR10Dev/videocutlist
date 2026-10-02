@@ -204,7 +204,6 @@ export function createLibraryController(server: ServerState, setStatus: Setter<s
           server.refreshMedia();
         }),
       ),
-      Effect.map((job) => ({ status: 202, job })),
     );
   });
   const refreshResult = useAtomValue(() => refreshCommand);
@@ -263,7 +262,12 @@ export function createLibraryController(server: ServerState, setStatus: Setter<s
       await startRefresh(key);
       uncertainRefreshKey = undefined;
     } catch (error) {
-      uncertainRefreshKey = uncertainCommandFailure(error, ["origin_forbidden", "library_busy"])
+      uncertainRefreshKey = uncertainCommandFailure(error, [
+        "origin_forbidden",
+        "library_busy",
+        "invalid_idempotency_key",
+        "idempotency_conflict",
+      ])
         ? key
         : undefined;
       const code = apiErrorCode(error);

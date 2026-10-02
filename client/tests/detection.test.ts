@@ -190,6 +190,49 @@ it("redelivers an uncertain detection submission with its original key and valid
   });
 });
 
+it("uses a fresh key after a definite generated detection rejection", async () => {
+  const submissions: Array<{ key: string | null; body: string }> = [];
+  let acceptedJob: EffectApiTypes.DetectionJob | undefined;
+  const api: ApiClient = {
+    url: (path) => path,
+    request: (path, init) => {
+      if (path.endsWith("/detections") && init?.method === "POST") {
+        submissions.push({
+          key: new Headers(init.headers).get("Idempotency-Key"),
+          body: String(init.body),
+        });
+        if (submissions.length === 1)
+          return Promise.resolve(
+            Response.json(
+              {
+                error: {
+                  code: "idempotency_conflict",
+                  message: "Key was used for another command.",
+                  requestId: "r-detection-conflict",
+                },
+              },
+              { status: 409 },
+            ),
+          );
+        acceptedJob = queuedDetectionJob;
+        return Promise.resolve(Response.json(acceptedJob, { status: 202 }));
+      }
+      if (path.endsWith("/events") && acceptedJob) return Promise.resolve(jobEvent(acceptedJob));
+      return Promise.resolve(Response.json({}));
+    },
+    assetRequest: () => Promise.resolve(Response.json({})),
+  };
+  await withDetection(api, async (controller) => {
+    await controller.startDetection("silence", { noiseDb: -35 });
+    await controller.startDetection("silence", { noiseDb: -35 });
+    expect(submissions).toHaveLength(2);
+    expect(submissions[1].body).toBe(submissions[0].body);
+    expect(submissions[0].key).toBeTruthy();
+    expect(submissions[1].key).toBeTruthy();
+    expect(submissions[1].key).not.toBe(submissions[0].key);
+  });
+});
+
 it("uses a fresh key for an uncertain identical command sent to another project", async () => {
   const secondProjectId = "p_000000000002";
   const submissions: Array<{ key: string | null; target: string; body: string }> = [];

@@ -54,10 +54,9 @@ function isUncertainRequestError(error: unknown): boolean {
   return uncertainCommandFailure(error, [
     "origin_forbidden",
     "library_busy",
-    "invalid_settings",
-    "deployment_settings_read_only",
-    "settings_revision_conflict",
+    "invalid_idempotency_key",
     "idempotency_conflict",
+    "refresh_unavailable",
   ]);
 }
 
@@ -253,11 +252,14 @@ export function createSettingsController(api: ApiClient, server?: ServerState) {
     const mutation = server?.generatedApi?.mutation("default", "refreshSettingsMedia");
     return mutation
       ? generatedMutation(mutation, { headers: { "Idempotency-Key": key } }).pipe(
-          Effect.map(() => 202),
-          Effect.mapError((error) => {
-            uncertainRescanKey = isUncertainRequestError(error) ? key : undefined;
-            return new Error("Media library could not be rescanned. Check mounts and permissions.");
-          }),
+          Effect.tap(() => Effect.sync(() => (uncertainRescanKey = undefined))),
+          Effect.asVoid,
+          Effect.mapError(
+            (error) =>
+              new Error("Media library could not be rescanned. Check mounts and permissions.", {
+                cause: error,
+              }),
+          ),
         )
       : Effect.fail(new Error("Generated settings API is not configured."));
   });
@@ -457,24 +459,14 @@ export function createSettingsController(api: ApiClient, server?: ServerState) {
     const key = uncertainRescanKey ?? globalThis.crypto.randomUUID();
     setServerSettingsStatus("Rescanning media library…");
     try {
-      const status = await execute(rescan, key);
-      if (status >= 500) uncertainRescanKey = key;
-      else uncertainRescanKey = undefined;
-      if (disposed) return;
-      setServerSettingsStatus(
-        status >= 200 && status < 300
-          ? "Media library rescan started."
-          : "Media library could not be rescanned. Check mounts and permissions.",
-      );
+      await execute(rescan, key);
+      if (!disposed) setServerSettingsStatus("Media library rescan started.");
     } catch (error) {
-      if (
-        !(
-          error instanceof Error &&
-          error.message === "Media library could not be rescanned. Check mounts and permissions."
-        )
-      )
-        uncertainRescanKey = isUncertainRequestError(error) ? key : undefined;
-      if (!disposed) setServerSettingsStatus(publicError(error, "Media library rescan failed."));
+      uncertainRescanKey = isUncertainRequestError(error) ? key : undefined;
+      if (!disposed)
+        setServerSettingsStatus(
+          "Media library could not be rescanned. Check mounts and permissions.",
+        );
     }
   };
 

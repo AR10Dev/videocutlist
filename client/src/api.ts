@@ -55,7 +55,7 @@ export function apiErrorStatus(error: unknown, seen = new Set<object>()): number
 
 export function uncertainCommandFailure(error: unknown, rejectionCodes: readonly string[] = []) {
   const status = apiErrorStatus(error);
-  if (status !== undefined) return status === 0 || status >= 500;
+  if (status !== undefined) return !(status >= 400 && status < 500);
   const code = apiErrorCode(error);
   return code === undefined || !rejectionCodes.includes(code);
 }

@@ -9,6 +9,7 @@ import {
   MAX_INTERCHANGE_FILE_BYTES,
   readApiError,
   runEffect,
+  uncertainCommandFailure,
   validInterchangeFileSize,
 } from "../src/api";
 import { createServerState, readServerAtom } from "../src/features/app/server";
@@ -59,6 +60,20 @@ describe("client API boundary", () => {
         ),
       ).toEqual({ code: "http_error", message: "Try again.", requestId: "r-2" });
     }
+  });
+  it("keeps malformed, transport, and unfamiliar errors uncertain without code-to-status guesses", () => {
+    expect(uncertainCommandFailure(new TypeError("connection lost"))).toBe(true);
+    expect(uncertainCommandFailure({ error: { code: 42 } })).toBe(true);
+    expect(uncertainCommandFailure({ error: { code: "bad_request" } })).toBe(true);
+    expect(uncertainCommandFailure({ error: { code: "unexpected_timeout" } })).toBe(true);
+    expect(uncertainCommandFailure({ status: 409, code: "unexpected_timeout" })).toBe(false);
+    expect(uncertainCommandFailure({ status: 302, code: "bad_request" })).toBe(true);
+    expect(uncertainCommandFailure({ status: Number.NaN, code: "bad_request" })).toBe(true);
+    expect(
+      uncertainCommandFailure({ error: { code: "idempotency_conflict" } }, [
+        "idempotency_conflict",
+      ]),
+    ).toBe(false);
   });
   it("bounds interchange files before reading them", () => {
     expect(validInterchangeFileSize(MAX_INTERCHANGE_FILE_BYTES)).toBe(true);

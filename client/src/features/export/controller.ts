@@ -340,13 +340,22 @@ export function createExportController(deps: {
         body: EffectApiTypes.ExportSubmissionInput;
       }
     | undefined;
-  const isUncertainCommandFailure = (error: unknown) =>
+  const isUncertainExportFailure = (error: unknown) =>
     uncertainCommandFailure(error, [
       "export_busy",
+      "idempotency_conflict",
+      "invalid_idempotency_key",
       "invalid_export",
-      "revision_conflict",
-      "destination_not_found",
-      "media_not_found",
+      "stale_project",
+      "origin_forbidden",
+    ]);
+  const isUncertainRetryFailure = (error: unknown) =>
+    uncertainCommandFailure(error, [
+      "idempotency_conflict",
+      "invalid_idempotency_key",
+      "job_not_retryable",
+      "not_found",
+      "origin_forbidden",
     ]);
   const refreshBatches = () => registry.refresh(batchListAtom);
   const refreshQueue = () => refreshBatches();
@@ -712,7 +721,7 @@ export function createExportController(deps: {
                 payload: submissionBody,
               }).pipe(
                 Effect.mapError((error) => {
-                  uncertainExport = isUncertainCommandFailure(error)
+                  uncertainExport = isUncertainExportFailure(error)
                     ? { key, body: submissionBody }
                     : undefined;
                   if (error instanceof Error) return error;
@@ -915,7 +924,7 @@ export function createExportController(deps: {
           headers: { "Idempotency-Key": key },
         }).pipe(
           Effect.mapError((error) => {
-            if (isUncertainCommandFailure(error)) uncertainRetries.set(id, { key, body });
+            if (isUncertainRetryFailure(error)) uncertainRetries.set(id, { key, body });
             else uncertainRetries.delete(id);
             return error instanceof Error ? error : new Error("Export retry failed.");
           }),

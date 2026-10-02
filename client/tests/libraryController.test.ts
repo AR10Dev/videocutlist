@@ -24,6 +24,7 @@ type LibrarySurface = {
   scanActive: () => boolean;
   cancellingImport: () => boolean;
   cancelImport: () => Promise<void>;
+  status: Accessor<string>;
 };
 
 const item = (name: string): EffectApiTypes.Media => ({
@@ -88,13 +89,13 @@ async function withLibrary(
           get children() {
             untrack(() => {
               const registry = useContext(RegistryContext);
-              const [, setStatus] = createSignal("");
+              const [status, setStatus] = createSignal("");
               const library = createLibraryController(
                 createServerState(api, registry, workspaceConfiguration),
                 setStatus,
               );
               queueMicrotask(() => {
-                void exercise(library).then(
+                void exercise({ ...library, status }).then(
                   () => {
                     dispose();
                     resolve();
@@ -119,13 +120,30 @@ async function withLibrary(
 describe("library controller", () => {
   it("retains the key for uncertain scan redelivery and rotates it for a new command", async () => {
     const originalFetch = globalThis.fetch;
-    const keys: string[] = [];
+    const attempts: Array<{
+      path: string;
+      key: string;
+      body: string | undefined;
+    }> = [];
     let submits = 0;
-    globalThis.fetch = async (_input, init) => {
-      keys.push(new Headers(init?.headers).get("Idempotency-Key") ?? "");
+    globalThis.fetch = async (input, init) => {
+      attempts.push({
+        path: new URL(input instanceof Request ? input.url : String(input)).pathname,
+        key: new Headers(init?.headers).get("Idempotency-Key") ?? "",
+        body: typeof init?.body === "string" ? init.body : undefined,
+      });
       if (submits++ === 0) throw new TypeError("connection lost");
       if (submits === 2)
-        return Response.json({ error: { code: "internal_error" } }, { status: 500 });
+        return Response.json(
+          {
+            error: {
+              code: "gateway_timeout_unfamiliar",
+              message: "Try again.",
+              requestId: "r-library-timeout",
+            },
+          },
+          { status: 500 },
+        );
       return Response.json(
         { id: "j_abcdefghijkl", state: "queued", progress: 0, indexed: 0 },
         { status: 202 },
@@ -158,12 +176,89 @@ describe("library controller", () => {
           await library.refreshMedia();
           await vi.waitFor(() => expect(library.importJob()?.state).toBe("succeeded"));
           await library.refreshMedia();
-          const commandKeys = keys.filter(Boolean);
-          expect(commandKeys).toHaveLength(4);
-          expect(commandKeys[0]).toMatch(/^[A-Za-z0-9_-]{1,128}$/);
-          expect(commandKeys[1]).toBe(commandKeys[0]);
-          expect(commandKeys[2]).toBe(commandKeys[1]);
-          expect(commandKeys[3]).not.toBe(commandKeys[2]);
+          expect(attempts).toHaveLength(4);
+          expect(attempts[0].path).toBe("/api/v2/media/refresh");
+          expect(attempts[0].key).toMatch(/^[A-Za-z0-9_-]{1,128}$/);
+          expect(attempts[1]).toEqual(attempts[0]);
+          expect(attempts[2]).toEqual(attempts[0]);
+          expect(attempts[3].key).not.toBe(attempts[2].key);
+          expect(attempts.every(({ body }) => body === undefined)).toBe(true);
+        },
+        { serverBaseUrl: "http://localhost", authentication: { type: "none" } },
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it.each([
+    { code: "origin_forbidden", httpStatus: 403, feedback: "not allowed" },
+    { code: "library_busy", httpStatus: 429, feedback: "already in progress" },
+  ])(
+    "shows actionable generated refresh feedback for $code",
+    async ({ code, httpStatus, feedback }) => {
+      const originalFetch = globalThis.fetch;
+      globalThis.fetch = async () =>
+        Response.json(
+          { error: { code, message: "Rejected.", requestId: "r-library-rejection" } },
+          { status: httpStatus },
+        );
+      try {
+        await withLibrary(
+          (path) =>
+            path === "media/status"
+              ? Promise.resolve(Response.json({ state: "ready_empty", message: "Ready" }))
+              : Promise.resolve(page([])),
+          async (library) => {
+            await library.refreshMedia();
+            expect(library.status()).toContain(feedback);
+          },
+          { serverBaseUrl: "http://localhost", authentication: { type: "none" } },
+        );
+      } finally {
+        globalThis.fetch = originalFetch;
+      }
+    },
+  );
+
+  it("does not infer a rejection status from an unfamiliar generated error code", async () => {
+    const originalFetch = globalThis.fetch;
+    const attempts: Array<{ key: string; body: string | undefined }> = [];
+    let submits = 0;
+    globalThis.fetch = async (_input, init) => {
+      attempts.push({
+        key: new Headers(init?.headers).get("Idempotency-Key") ?? "",
+        body: typeof init?.body === "string" ? init.body : undefined,
+      });
+      if (submits++ === 0)
+        return Response.json(
+          {
+            error: {
+              code: "unfamiliar_rate_limit",
+              message: "Try again.",
+              requestId: "r-unfamiliar-rate-limit",
+            },
+          },
+          { status: 429 },
+        );
+      return Response.json(
+        { id: "j_abcdefghijkl", state: "queued", progress: 0, indexed: 0 },
+        { status: 202 },
+      );
+    };
+    try {
+      await withLibrary(
+        (path) =>
+          path === "media/status"
+            ? Promise.resolve(Response.json({ state: "ready_empty", message: "Ready" }))
+            : Promise.resolve(page([])),
+        async (library) => {
+          await library.refreshMedia();
+          expect(library.status()).toBe("Media refresh failed. Try again.");
+          await library.refreshMedia();
+          expect(attempts).toHaveLength(2);
+          expect(attempts[0].key).toBeTruthy();
+          expect(attempts[1]).toEqual(attempts[0]);
         },
         { serverBaseUrl: "http://localhost", authentication: { type: "none" } },
       );
