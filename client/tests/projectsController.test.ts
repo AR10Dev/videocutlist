@@ -111,7 +111,6 @@ describe("projects controller", () => {
       const [timeline, setTimeline] = createSignal(
         createTimelineHistory({ playheadMs: 0, inMs: 0, outMs: 0, segments: [], zoom: 1 }),
       );
-      const [knownMedia, setMedia] = createSignal<components["schemas"]["Media"][]>([]);
       const [, setRecent] = createSignal<{ id: string; label: string; lastOpened: number }[]>([]);
       const [, setMuted] = createSignal(false);
       const [, setExportMode] = createSignal<"merge" | "separate">("merge");
@@ -147,7 +146,6 @@ describe("projects controller", () => {
         setSelected,
         setTimeline,
         setPreviewCenterMs: () => undefined,
-        setMedia,
         setRecent,
         settings: () => defaultSettings,
         setMuted,
@@ -204,7 +202,6 @@ describe("projects controller", () => {
       expect(projectId()).toBe("p_currentproject");
       expect(projectName()).toBe(change === "an edit" ? "Unsaved edit" : "Editing");
       if (change === "a media switch") expect(selected()?.id).toBe("m_" + "b".repeat(43));
-      expect(knownMedia()).toEqual([]);
       expect(timeline().present.segments).toEqual([]);
       controller.dispose();
       registry.dispose();
@@ -303,7 +300,6 @@ describe("projects controller", () => {
     const [, setSelectedExportItems] = createSignal<string[]>([]);
     const [, setActiveItemId] = createSignal<string | undefined>(item.id);
     const [timeline, setTimeline] = createSignal(item.timeline);
-    const [, setMedia] = createSignal<components["schemas"]["Media"][]>([media]);
     const [, setRecent] = createSignal<{ id: string; label: string; lastOpened: number }[]>([]);
     const [, setMuted] = createSignal(false);
     const [, setExportMode] = createSignal<"merge" | "separate">("merge");
@@ -338,7 +334,6 @@ describe("projects controller", () => {
       setSelected,
       setTimeline,
       setPreviewCenterMs: () => undefined,
-      setMedia,
       setRecent,
       settings: () => defaultSettings,
       setMuted,
@@ -408,7 +403,6 @@ describe("projects controller", () => {
     const [, setSelectedExportItems] = createSignal<string[]>([]);
     const [, setActiveItemId] = createSignal<string | undefined>(item.id);
     const [, setTimeline] = createSignal(item.timeline);
-    const [knownMedia, setMedia] = createSignal<components["schemas"]["Media"][]>([media]);
     const [, setRecent] = createSignal<{ id: string; label: string; lastOpened: number }[]>([]);
     const [, setMuted] = createSignal(false);
     const [, setExportMode] = createSignal<"merge" | "separate">("separate");
@@ -505,7 +499,6 @@ describe("projects controller", () => {
       setSelected: () => undefined,
       setTimeline,
       setPreviewCenterMs: () => undefined,
-      setMedia,
       setRecent,
       settings: () => defaultSettings,
       setMuted,
@@ -593,9 +586,7 @@ describe("projects controller", () => {
     globalThis.fetch = originalFetch;
     void setProjectName;
     void setRevision;
-    void knownMedia;
     void setTimeline;
-    void setMedia;
     void editorVersion;
   });
 });

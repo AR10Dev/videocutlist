@@ -6,7 +6,6 @@ import * as AtomRegistry from "effect/reactivity/AtomRegistry";
 import * as AtomHttpApi from "effect/reactivity/AtomHttpApi";
 import { createMemo, type Accessor } from "solid-js";
 import {
-  apiJson,
   ApiFailure,
   createApiClient,
   createNativeHttpClientLayer,
@@ -19,7 +18,9 @@ import {
   Batch as BatchSchema,
   Job as JobSchema,
   type Batch,
+  type FolderPage as GeneratedFolderPage,
   type Job,
+  type LibraryStatus as GeneratedLibraryStatus,
   type Project,
   type ProjectPage,
 } from "../../generated/effect-api";
@@ -27,12 +28,37 @@ import { observeSnapshots } from "../queue/jobStream";
 
 type Media = components["schemas"]["Media"];
 
+function errorStatus(error: unknown, seen = new Set<object>()): number | undefined {
+  if (!error || typeof error !== "object" || seen.has(error)) return;
+  seen.add(error);
+  if ("status" in error && typeof error.status === "number") return error.status;
+  for (const nested of [
+    "cause" in error ? error.cause : undefined,
+    "reason" in error ? error.reason : undefined,
+    "response" in error ? error.response : undefined,
+  ]) {
+    const status = errorStatus(nested, seen);
+    if (status !== undefined) return status;
+  }
+}
+
 export interface ServerState {
   readonly api: ApiClient;
   readonly registry: AtomRegistry.AtomRegistry;
   readonly runtime: Atom.AtomRuntime<never>;
   readonly generatedApi?: ReturnType<typeof createGeneratedApi>;
-  readonly media: (id: string) => Atom.Atom<AsyncResult.AsyncResult<Media, Error>>;
+  readonly media: (
+    id: string,
+    revision?: number,
+  ) => Atom.Atom<AsyncResult.AsyncResult<Media, Error>>;
+  readonly mediaTree: (
+    folderId: string | undefined,
+    cursor: string | undefined,
+    revision: number,
+  ) => Atom.Atom<AsyncResult.AsyncResult<GeneratedFolderPage, unknown>>;
+  readonly mediaLibraryStatus: (
+    revision: number,
+  ) => Atom.Atom<AsyncResult.AsyncResult<GeneratedLibraryStatus, unknown>>;
   readonly project: (id: string) => Atom.Atom<AsyncResult.AsyncResult<Project, unknown>>;
   readonly projectPage: (query: {
     limit?: number;
@@ -172,34 +198,91 @@ export function createServerState(
     if (!generatedApi) throw new Error("Generated project API is not configured.");
     return generatedApi.query("default", "listProjects", { query });
   };
-  const media = Atom.family((id: string) =>
-    runtime
+  const mediaTree = Atom.family((key: string) => {
+    const [folderId, cursor, revision] = JSON.parse(key) as [string | null, string | null, number];
+    if (!generatedApi) throw new Error("Generated media API is not configured.");
+    return generatedApi
+      .query("default", "browseMediaTree", {
+        query: {
+          ...(folderId !== null ? { folderId } : {}),
+          ...(cursor !== null ? { cursor } : {}),
+        },
+        reactivityKeys: [`media:${revision}`],
+        timeToLive: "5 minutes",
+      })
+      .pipe(
+        Atom.swr({ staleTime: 0, revalidateOnMount: true, revalidateOnFocus: true }),
+      ) as Atom.Atom<AsyncResult.AsyncResult<GeneratedFolderPage, unknown>>;
+  });
+  const mediaLibraryStatus = Atom.family((revision: number) => {
+    if (!generatedApi) throw new Error("Generated media API is not configured.");
+    return generatedApi
+      .query("default", "mediaLibraryStatus", {
+        reactivityKeys: [`media:${revision}`],
+        timeToLive: "5 minutes",
+      })
+      .pipe(
+        Atom.swr({ staleTime: 0, revalidateOnMount: true, revalidateOnFocus: true }),
+      ) as Atom.Atom<AsyncResult.AsyncResult<GeneratedLibraryStatus, unknown>>;
+  });
+  const metadata = Atom.family((key: string) => {
+    const [id] = JSON.parse(key) as [string, number];
+    if (!generatedApi) throw new Error("Generated media API is not configured.");
+    return runtime
       .atom((get) => {
         get(mediaRevision);
-        return apiJson<Media>(api, `media/${encodeURIComponent(id)}`).pipe(
+        let attempt = 0;
+        return Effect.suspend(() => {
+          const query = generatedApi.query("default", "getMedia", {
+            params: { mediaId: id },
+            reactivityKeys: [`media-metadata:${id}:${attempt++}`],
+            timeToLive: "0 seconds",
+          });
+          return Effect.acquireUseRelease(
+            Effect.sync(() => registry.mount(query)),
+            () => AtomRegistry.getResult(registry, query, { suspendOnWaiting: true }),
+            (release) => Effect.sync(release),
+          ) as Effect.Effect<Media, unknown>;
+        }).pipe(
+          Effect.catchCause((cause) => {
+            if (Cause.hasInterrupts(cause)) return Effect.failCause(cause);
+            const error = Cause.squash(cause);
+            return Effect.fail(
+              error instanceof Error
+                ? error
+                : new Error("Metadata request failed.", { cause: error }),
+            );
+          }),
           Effect.retry({ times: 3, schedule: Schedule.exponential("1 second") }),
-          Effect.mapError(
-            (error) =>
-              new Error(
-                error instanceof ApiFailure
-                  ? `Metadata request failed (${error.status}).`
-                  : error.message,
-                { cause: error },
-              ),
-          ),
+          Effect.mapError((error) => {
+            const status = error instanceof ApiFailure ? error.status : errorStatus(error);
+            return new Error(
+              status ? `Metadata request failed (${status}).` : "Metadata request failed.",
+              { cause: error },
+            );
+          }),
         );
       })
       .pipe(
         Atom.setIdleTTL("5 minutes"),
         Atom.swr({ staleTime: 0, revalidateOnMount: true, revalidateOnFocus: true }),
-      ),
-  );
+      );
+  });
+  const media = (id: string, revision = registry.get(mediaRevision)) =>
+    metadata(JSON.stringify([id, revision]));
+  const libraryTree = (
+    folderId: string | undefined,
+    cursor: string | undefined,
+    revision: number,
+  ) => mediaTree(JSON.stringify([folderId ?? null, cursor ?? null, revision]));
   return {
     api,
     registry,
     runtime,
     generatedApi,
     media,
+    mediaTree: libraryTree,
+    mediaLibraryStatus,
     project,
     projectPage,
     observeJob,
@@ -220,7 +303,9 @@ export function createServerState(
 }
 
 /** Solid observes the native result; it does not maintain another server-data cache. */
-export function useServerAtom<A>(atom: Accessor<Atom.Atom<AsyncResult.AsyncResult<A, Error>>>) {
+export function useServerAtom<A, E = Error>(
+  atom: Accessor<Atom.Atom<AsyncResult.AsyncResult<A, E>>>,
+) {
   const result = useAtomValue(atom);
   const value = createMemo(() => Option.getOrUndefined(AsyncResult.value(result())));
   const error = createMemo(() => {

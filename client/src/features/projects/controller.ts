@@ -71,7 +71,6 @@ export type ProjectsControllerDeps = {
   setSelected: Setter<Media | undefined>;
   setTimeline: Setter<TimelineHistory>;
   setPreviewCenterMs: (ms: number) => void;
-  setMedia: Setter<Media[]>;
   setRecent: Setter<{ id: string; label: string; lastOpened: number }[]>;
   settings: Accessor<AppSettings>;
   setMuted: Setter<boolean>;
@@ -424,10 +423,6 @@ export function createProjectsController(deps: ProjectsControllerDeps) {
         deps.setFilenameTemplate(
           first.exportOptions.filenameTemplate ?? deps.settings().filenameTemplate,
         );
-        deps.setMedia((known) => [
-          ...known,
-          ...restored.map((x) => x.media).filter((x) => !known.some((k) => k.id === x.id)),
-        ]);
         deps.setDirty(Boolean(imported));
         setSaveState(imported ? "unsaved" : "saved");
         if (!imported) {

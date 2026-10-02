@@ -64,35 +64,55 @@ async function withLibrary(
     request,
     assetRequest: () => Promise.resolve(Response.json({})),
   };
-  await new Promise<void>((resolve, reject) => {
-    createRoot((dispose) => {
-      createComponent(RegistryProvider, {
-        get children() {
-          untrack(() => {
-            const registry = useContext(RegistryContext);
-            const [, setStatus] = createSignal("");
-            const library = createLibraryController(
-              createServerState(api, registry, configuration),
-              setStatus,
-            );
-            queueMicrotask(() => {
-              void exercise(library).then(
-                () => {
-                  dispose();
-                  resolve();
-                },
-                (error: unknown) => {
-                  dispose();
-                  reject(error);
-                },
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (input, init) => {
+    const url = new URL(input instanceof Request ? input.url : String(input));
+    if (
+      url.pathname.endsWith("/api/v2/media/tree") ||
+      url.pathname.endsWith("/api/v2/media/status")
+    ) {
+      const path = url.pathname.replace(/^.*\/api\/v2\//, "") + url.search;
+      return request(path, init);
+    }
+    return originalFetch(input, init);
+  };
+  const workspaceConfiguration = configuration ?? {
+    serverBaseUrl: "http://localhost",
+    authentication: { type: "none" as const },
+  };
+  try {
+    await new Promise<void>((resolve, reject) => {
+      createRoot((dispose) => {
+        createComponent(RegistryProvider, {
+          get children() {
+            untrack(() => {
+              const registry = useContext(RegistryContext);
+              const [, setStatus] = createSignal("");
+              const library = createLibraryController(
+                createServerState(api, registry, workspaceConfiguration),
+                setStatus,
               );
+              queueMicrotask(() => {
+                void exercise(library).then(
+                  () => {
+                    dispose();
+                    resolve();
+                  },
+                  (error: unknown) => {
+                    dispose();
+                    reject(error);
+                  },
+                );
+              });
             });
-          });
-          return null;
-        },
+            return null;
+          },
+        });
       });
     });
-  });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 }
 
 describe("library controller", () => {
@@ -137,11 +157,12 @@ describe("library controller", () => {
           await library.refreshMedia();
           await vi.waitFor(() => expect(library.importJob()?.state).toBe("succeeded"));
           await library.refreshMedia();
-          expect(keys).toHaveLength(4);
-          expect(keys[0]).toMatch(/^[A-Za-z0-9_-]{1,128}$/);
-          expect(keys[1]).toBe(keys[0]);
-          expect(keys[2]).toBe(keys[1]);
-          expect(keys[3]).not.toBe(keys[2]);
+          const commandKeys = keys.filter(Boolean);
+          expect(commandKeys).toHaveLength(4);
+          expect(commandKeys[0]).toMatch(/^[A-Za-z0-9_-]{1,128}$/);
+          expect(commandKeys[1]).toBe(commandKeys[0]);
+          expect(commandKeys[2]).toBe(commandKeys[1]);
+          expect(commandKeys[3]).not.toBe(commandKeys[2]);
         },
         { serverBaseUrl: "http://localhost", authentication: { type: "none" } },
       );

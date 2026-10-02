@@ -51,9 +51,9 @@ describe("workspace server atoms", () => {
       serverBaseUrl: "https://example.test",
       authentication: { type: "none" as const },
     };
-    const api = createApiClient(
-      configuration,
-      (_url, init) =>
+    vi.stubGlobal(
+      "fetch",
+      (_input: RequestInfo | URL, init?: RequestInit) =>
         new Promise<Response>((_resolve, reject) => {
           init?.signal?.addEventListener(
             "abort",
@@ -66,12 +66,64 @@ describe("workspace server atoms", () => {
           requestStarted();
         }),
     );
+    const api = createApiClient(configuration);
     const registry = AtomRegistry.make();
     const server = createServerState(api, registry, configuration);
-    registry.mount(server.media("m_current"));
+    registry.mount(server.media(`m_${"a".repeat(43)}`));
     await started;
     registry.dispose();
     expect(aborted).toBe(true);
+    vi.unstubAllGlobals();
+  });
+
+  it("owns canonical generated library reads and replaces their identities on refresh", async () => {
+    const fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      expect(new Headers(init?.headers).get("Authorization")).toBe("Bearer library-token");
+      const url = String(input);
+      if (url.endsWith("/media/tree"))
+        return Response.json({ folders: [], items: [], nextCursor: null });
+      if (url.endsWith("/media/status"))
+        return Response.json({ state: "ready_empty", message: "No media" });
+      throw new Error(`Unexpected generated request: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetch);
+    const configuration = {
+      serverBaseUrl: "https://example.test/deployment",
+      authentication: { type: "bearer" as const, token: "library-token" },
+    };
+    const registry = AtomRegistry.make();
+    const server = createServerState(createApiClient(configuration), registry, configuration);
+    const revision = registry.get(server.mediaRevision);
+    const first = server.mediaTree(undefined, undefined, revision);
+    expect(server.mediaTree(undefined, undefined, revision)).toBe(first);
+    expect(server.mediaTree("folder-a", "cursor-a", revision)).toBe(
+      server.mediaTree("folder-a", "cursor-a", revision),
+    );
+    expect(server.mediaTree("folder-a", "cursor-a", revision)).not.toBe(
+      server.mediaTree("folder-a", "cursor-b", revision),
+    );
+    const mediaId = `m_${"a".repeat(43)}`;
+    const firstMetadata = server.media(mediaId, revision);
+    expect(server.media(mediaId, revision)).toBe(firstMetadata);
+    registry.mount(first);
+    await expect(
+      Effect.runPromise(AtomRegistry.getResult(registry, first, { suspendOnWaiting: true })),
+    ).resolves.toMatchObject({ items: [] });
+    const status = server.mediaLibraryStatus(revision);
+    registry.mount(status);
+    await expect(
+      Effect.runPromise(AtomRegistry.getResult(registry, status, { suspendOnWaiting: true })),
+    ).resolves.toMatchObject({ state: "ready_empty" });
+    expect(fetch).toHaveBeenCalledTimes(2);
+
+    server.refreshMedia();
+    const refreshedRevision = registry.get(server.mediaRevision);
+    const refreshed = server.mediaTree(undefined, undefined, refreshedRevision);
+    expect(refreshed).not.toBe(first);
+    expect(server.media(mediaId, refreshedRevision)).not.toBe(firstMetadata);
+    expect(server.mediaLibraryStatus(refreshedRevision)).not.toBe(status);
+    registry.dispose();
+    vi.unstubAllGlobals();
   });
 
   it("resolves a generated API atom through the workspace registry with shared auth policy", async () => {
@@ -206,6 +258,72 @@ describe("workspace server atoms", () => {
       browser.removeEventListener(authenticationRequiredEvent, onAuthRequired);
       vi.unstubAllGlobals();
       delete browser.VIDEOCUTLIST_CONFIG;
+    }
+  });
+
+  it("retries generated metadata after interruptible 1, 2, and 4 second delays", async () => {
+    vi.useFakeTimers();
+    const attempts: number[] = [];
+    const metadata = {
+      id: `m_${"a".repeat(43)}`,
+      name: "clip.mp4",
+      durationMs: 1000,
+      sizeBytes: 10,
+      container: "mp4",
+      streams: {},
+      etag: "v1",
+    };
+    vi.stubGlobal("fetch", async () => {
+      attempts.push(Date.now());
+      if (attempts.length < 4)
+        return Response.json(
+          { error: { code: "internal_error", message: "Try again", requestId: "r-test" } },
+          { status: 503 },
+        );
+      return Response.json(metadata);
+    });
+    const configuration = {
+      serverBaseUrl: "https://example.test",
+      authentication: { type: "none" as const },
+    };
+    const registry = AtomRegistry.make();
+    const server = createServerState(createApiClient(configuration), registry, configuration);
+    const atom = server.media(metadata.id);
+    registry.mount(atom);
+    const result = Effect.runPromise(
+      AtomRegistry.getResult(registry, atom, { suspendOnWaiting: true }),
+    );
+    const flush = async () => {
+      for (let index = 0; index < 12; index++) await Promise.resolve();
+    };
+    try {
+      await flush();
+      expect(attempts).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(999);
+      await flush();
+      expect(attempts).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(1);
+      await flush();
+      expect(attempts).toHaveLength(2);
+      await vi.advanceTimersByTimeAsync(1999);
+      await flush();
+      expect(attempts).toHaveLength(2);
+      await vi.advanceTimersByTimeAsync(1);
+      await flush();
+      expect(attempts).toHaveLength(3);
+      await vi.advanceTimersByTimeAsync(3999);
+      await flush();
+      expect(attempts).toHaveLength(3);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(result).resolves.toMatchObject({ id: metadata.id });
+      expect(attempts).toHaveLength(4);
+      expect(attempts[1] - attempts[0]).toBe(1000);
+      expect(attempts[2] - attempts[1]).toBe(2000);
+      expect(attempts[3] - attempts[2]).toBe(4000);
+    } finally {
+      registry.dispose();
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
     }
   });
 

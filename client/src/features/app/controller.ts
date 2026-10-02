@@ -1,4 +1,4 @@
-import { RegistryContext } from "@effect/atom-solid";
+import { RegistryContext, useAtomValue } from "@effect/atom-solid";
 import * as AsyncResult from "effect/reactivity/AsyncResult";
 import * as Atom from "effect/reactivity/Atom";
 import { createEffect, createSignal, onCleanup, useContext } from "solid-js";
@@ -277,7 +277,6 @@ export function createWorkspaceController() {
   const libraryFeature = createLibraryController(server, setStatus);
   const {
     media,
-    setMedia,
     nextCursor,
     folders,
     activeFolder,
@@ -290,15 +289,13 @@ export function createWorkspaceController() {
   const refreshMedia = async () => {
     await refreshLibraryMedia();
     const refreshed = media().find((item) => item.id === selected()?.id);
-    if (refreshed) {
-      server.registry.refresh(server.media(refreshed.id));
-      setSelected(refreshed);
-    }
+    if (refreshed) setSelected(refreshed);
   };
+  const mediaRevision = useAtomValue(() => server.mediaRevision);
   const noMedia = Atom.make(AsyncResult.initial<Media, Error>());
   const selectedMediaAtom = () => {
     const id = selected()?.id;
-    return id ? server.media(id) : noMedia;
+    return id ? server.media(id, mediaRevision()) : noMedia;
   };
   const selectedMedia = useServerAtom(selectedMediaAtom);
   createEffect(() => {
@@ -461,7 +458,6 @@ export function createWorkspaceController() {
     setSelected,
     setTimeline,
     setPreviewCenterMs,
-    setMedia,
     setRecent,
     settings,
     setMuted,

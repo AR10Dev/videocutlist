@@ -3,22 +3,26 @@ import { Effect } from "effect";
 import * as AsyncResult from "effect/reactivity/AsyncResult";
 import * as Atom from "effect/reactivity/Atom";
 import * as AtomRegistry from "effect/reactivity/AtomRegistry";
-import { createEffect, createSignal, on, onCleanup, type Setter } from "solid-js";
-import { apiJson, apiRequest } from "../../api";
+import {
+  createEffect,
+  createRoot,
+  createSignal,
+  on,
+  onCleanup,
+  type Accessor,
+  type Setter,
+} from "solid-js";
 import type { components } from "../../generated/api";
 import type { Job } from "../../generated/effect-api";
-import { readServerAtom, useServerAtom, type ServerState } from "../app/server";
+import { useServerAtom, type ServerState } from "../app/server";
 
 type Media = components["schemas"]["Media"];
-type FolderPage = components["schemas"]["FolderPage"];
-type LibraryStatus = components["schemas"]["LibraryStatus"];
+type PageResult = import("../../generated/effect-api").FolderPage;
 type ImportJob = Pick<Job, "id" | "state" | "errorCode"> & {
   progress: number;
   indexed?: number;
   validationErrors?: string[];
 };
-
-type LibraryPage = { page: FolderPage; library?: LibraryStatus };
 
 const isActiveImport = (job: { state: string } | undefined) =>
   job?.state === "queued" || job?.state === "running";
@@ -62,70 +66,67 @@ function uncertainRequest(error: unknown): boolean {
 }
 
 export function createLibraryController(server: ServerState, setStatus: Setter<string>) {
-  const { api, registry, runtime } = server;
+  const { registry, runtime } = server;
   const revision = useAtomValue(() => server.mediaRevision);
-  // JSON tuples are stable primitive family keys; a revision never reuses pre-refresh pages.
-  const pageFamily = Atom.family((key: string) => {
-    const [folderId, cursor] = JSON.parse(key) as [string | null, string | null, number];
-    const params = new URLSearchParams();
-    if (folderId) params.set("folderId", folderId);
-    if (cursor) params.set("cursor", cursor);
-    const path = `media/tree${params.size ? `?${params}` : ""}`;
-    return runtime
-      .atom(
-        Effect.gen(function* () {
-          const page = yield* apiJson<FolderPage>(api, path);
-          if (folderId || cursor) return { page };
-          const response = yield* apiRequest(api, "media/status");
-          const library = response.ok
-            ? yield* Effect.tryPromise({
-                try: () => response.json() as Promise<LibraryStatus>,
-                catch: (error) =>
-                  error instanceof Error ? error : new Error("Media status could not be loaded."),
-              })
-            : undefined;
-          return { page, library };
-        }),
-      )
-      .pipe(
-        Atom.setIdleTTL("5 minutes"),
-        Atom.swr({ staleTime: 0, revalidateOnMount: true, revalidateOnFocus: true }),
-      );
-  });
-  const pageAtom = (folderId?: string, cursor?: string) =>
-    pageFamily(JSON.stringify([folderId ?? null, cursor ?? null, revision()]));
-
-  const [media, setMedia] = createSignal<Media[]>([]);
-  const [nextCursor, setNextCursor] = createSignal<string>();
-  const [folders, setFolders] = createSignal<{ id: string; label: string }[]>([]);
   const [activeFolder, setActiveFolder] = createSignal<string>();
   const [pendingCursor, setPendingCursor] = createSignal<string>();
-  const [libraryStatus, setLibraryStatus] = createSignal<LibraryStatus>();
+  const [loadedCursors, setLoadedCursors] = createSignal<string[]>([]);
   const [actionError, setActionError] = createSignal("");
   const [jobId, setJobId] = createSignal<string>();
   const [observationPending, setObservationPending] = createSignal(false);
+  const firstPage = useServerAtom<PageResult, unknown>(() =>
+    server.mediaTree(activeFolder(), undefined, revision()),
+  );
+  const morePage = useServerAtom<PageResult, unknown>(() =>
+    server.mediaTree(activeFolder(), pendingCursor(), revision()),
+  );
+  const library = useServerAtom<import("../../generated/effect-api").LibraryStatus, unknown>(() =>
+    server.mediaLibraryStatus(revision()),
+  );
+  const pageSubscriptions = new Map<
+    string,
+    { value: Accessor<AsyncResult.AsyncResult<PageResult, unknown>>; dispose: () => void }
+  >();
+  const subscribePage = (folderId: string | undefined, cursor: string) => {
+    const key = JSON.stringify([folderId ?? null, cursor, revision()]);
+    const existing = pageSubscriptions.get(key);
+    if (existing) return existing.value;
+    const atom = server.mediaTree(folderId, cursor, revision());
+    let value!: Accessor<AsyncResult.AsyncResult<PageResult, unknown>>;
+    let dispose!: () => void;
+    createRoot((rootDispose) => {
+      dispose = rootDispose;
+      const [result, setResult] = createSignal(registry.get(atom));
+      value = result;
+      onCleanup(registry.subscribe(atom, setResult, { immediate: true }));
+    });
+    pageSubscriptions.set(key, { value, dispose });
+    return value;
+  };
+  const disposePages = () => {
+    for (const page of pageSubscriptions.values()) page.dispose();
+    pageSubscriptions.clear();
+  };
   createEffect(
     on(
       revision,
       () => {
+        disposePages();
+        setLoadedCursors([]);
         setPendingCursor(undefined);
-        setMedia([]);
-        setNextCursor(undefined);
-        setFolders([]);
       },
       { defer: true },
     ),
   );
-
-  const firstPage = useServerAtom<LibraryPage>(() => pageAtom(activeFolder()));
-  const morePage = useServerAtom<LibraryPage>(() => pageAtom(activeFolder(), pendingCursor()));
+  createEffect(() => {
+    activeFolder();
+    disposePages();
+    setLoadedCursors([]);
+    setPendingCursor(undefined);
+  });
   createEffect(() => {
     const result = firstPage.result();
     if (result.waiting || !AsyncResult.isSuccess(result)) return;
-    if (result.value.library) setLibraryStatus(result.value.library);
-    setFolders(result.value.page.folders);
-    setMedia(result.value.page.items);
-    setNextCursor(result.value.page.nextCursor ?? undefined);
     if (!activeFolder()) setStatus("Choose media to begin.");
   });
   createEffect(() => {
@@ -133,15 +134,41 @@ export function createLibraryController(server: ServerState, setStatus: Setter<s
     if (!cursor) return;
     const result = morePage.result();
     if (result.waiting || !AsyncResult.isSuccess(result)) return;
-    setFolders(result.value.page.folders);
-    setMedia((items) => [...items, ...result.value.page.items]);
-    setNextCursor(result.value.page.nextCursor ?? undefined);
+    subscribePage(activeFolder(), cursor);
+    setLoadedCursors((cursors) => (cursors.includes(cursor) ? cursors : [...cursors, cursor]));
     setPendingCursor(undefined);
   });
   createEffect(() => {
     const error = pendingCursor() ? morePage.error() : firstPage.error();
     if (error) setStatus(error.message);
   });
+  const folders = () => firstPage.value()?.folders ?? [];
+  const media = () => {
+    const initial = firstPage.value()?.items ?? [];
+    // SAFETY: generated FolderPage media items match the OpenAPI components media shape.
+    return [
+      ...initial,
+      ...loadedCursors().flatMap((cursor) => {
+        const result = pageSubscriptions
+          .get(JSON.stringify([activeFolder() ?? null, cursor, revision()]))
+          ?.value();
+        return result && AsyncResult.isSuccess(result) ? result.value.items : [];
+      }),
+    ] as unknown as Media[];
+  };
+  const nextCursor = () => {
+    const cursor = loadedCursors().at(-1);
+    if (cursor) {
+      const result = pageSubscriptions
+        .get(JSON.stringify([activeFolder() ?? null, cursor, revision()]))
+        ?.value();
+      return result && AsyncResult.isSuccess(result)
+        ? (result.value.nextCursor ?? undefined)
+        : undefined;
+    }
+    return firstPage.value()?.nextCursor ?? undefined;
+  };
+  const libraryStatus = () => library.value();
 
   const scan = useServerAtom<Job>(() => {
     const id = jobId();
@@ -212,6 +239,7 @@ export function createLibraryController(server: ServerState, setStatus: Setter<s
   const startCancel = useAtomSet(() => cancelCommand, { mode: "promise" });
   const cancellingImport = () => observationPending() || cancelResult().waiting;
   onCleanup(() => {
+    disposePages();
     registry.set(refreshCommand, Atom.Interrupt);
     registry.set(cancelCommand, Atom.Interrupt);
   });
@@ -219,25 +247,14 @@ export function createLibraryController(server: ServerState, setStatus: Setter<s
   const loadFolder = (folderId?: string, cursor?: string) => {
     setActionError("");
     if (cursor) {
-      const page = pageAtom(folderId, cursor);
+      const page = server.mediaTree(folderId, cursor, revision());
       if (AsyncResult.isFailure(registry.get(page))) registry.refresh(page);
       if (pendingCursor() !== cursor) setPendingCursor(cursor);
       return;
     }
     setPendingCursor(undefined);
     setActiveFolder(folderId);
-    const page = pageAtom(folderId);
-    const current = registry.get(page);
-    if (AsyncResult.isFailure(current)) registry.refresh(page);
-    if (AsyncResult.isSuccess(current) && !current.waiting) {
-      setFolders(current.value.page.folders);
-      setMedia(current.value.page.items);
-      setNextCursor(current.value.page.nextCursor ?? undefined);
-    } else {
-      setMedia([]);
-      setNextCursor(undefined);
-      setStatus("Loading media…");
-    }
+    setStatus("Loading media…");
   };
 
   const libraryMessage = () => {
@@ -272,24 +289,7 @@ export function createLibraryController(server: ServerState, setStatus: Setter<s
       else setStatus("Media refresh failed. Try again.");
       return;
     }
-    const requestedRevision = registry.get(server.mediaRevision);
-    try {
-      const refreshed = await Effect.runPromise(
-        readServerAtom(server, pageFamily(JSON.stringify([null, null, requestedRevision]))),
-      );
-      if (
-        requestedRevision === registry.get(server.mediaRevision) &&
-        activeFolder() === undefined
-      ) {
-        if (refreshed.library) setLibraryStatus(refreshed.library);
-        setFolders(refreshed.page.folders);
-        setMedia(refreshed.page.items);
-        setNextCursor(refreshed.page.nextCursor ?? undefined);
-        setStatus("Choose media to begin.");
-      }
-    } catch {
-      setStatus("Media refresh failed. Try again.");
-    }
+    if (activeFolder() === undefined) setStatus("Choose media to begin.");
   };
 
   const cancelImport = async () => {
@@ -307,21 +307,20 @@ export function createLibraryController(server: ServerState, setStatus: Setter<s
 
   return {
     media,
-    setMedia,
     nextCursor,
-    setNextCursor,
     folders,
-    setFolders,
     activeFolder,
     setActiveFolder,
     loadingMore: () => Boolean(pendingCursor() && morePage.waiting()),
     refreshing,
     libraryStatus,
-    setLibraryStatus,
     loadFolder,
     libraryMessage,
     libraryError: () =>
-      actionError() || (pendingCursor() ? morePage.error() : firstPage.error())?.message || "",
+      actionError() ||
+      library.error()?.message ||
+      (pendingCursor() ? morePage.error() : firstPage.error())?.message ||
+      "",
     importJob,
     scanActive,
     cancellingImport,
