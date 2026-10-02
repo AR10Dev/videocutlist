@@ -17,6 +17,9 @@ var migration string
 //go:embed migrations/002_command_admissions.sql
 var commandAdmissionsMigration string
 
+//go:embed migrations/003_job_revisions.sql
+var jobRevisionsMigration string
+
 // Migrate creates the durable job schema.
 func Migrate(ctx context.Context, db *sql.DB) error {
 	if db == nil {
@@ -42,8 +45,19 @@ func Migrate(ctx context.Context, db *sql.DB) error {
 	if _, err := db.ExecContext(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS jobs_proposal_item ON jobs (proposal_id, project_item_id) WHERE proposal_id IS NOT NULL`); err != nil {
 		return err
 	}
-	_, err := db.ExecContext(ctx, commandAdmissionsMigration)
-	return err
+	if _, err := db.ExecContext(ctx, commandAdmissionsMigration); err != nil {
+		return err
+	}
+	var revisionPresent int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('jobs') WHERE name = 'revision'`).Scan(&revisionPresent); err != nil {
+		return err
+	}
+	if revisionPresent == 0 {
+		if _, err := db.ExecContext(ctx, jobRevisionsMigration); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 var (
@@ -83,6 +97,7 @@ type Job struct {
 	RequestJSON                           string
 	ResultJSON, ErrorCode                 sql.NullString
 	CreatedAt, UpdatedAt                  time.Time
+	Revision                              int64
 }
 
 type JobsStore struct{ db *sql.DB }
@@ -107,7 +122,7 @@ func (s *JobsStore) Create(ctx context.Context, job Job) (Job, error) {
 }
 
 func (s *JobsStore) Get(ctx context.Context, id string) (Job, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id,batch_id,kind,COALESCE(project_id,''),COALESCE(project_item_id,''),COALESCE(proposal_id,''),COALESCE(credential_id,''),state,request_json,result_json,error_code,created_at,updated_at FROM jobs WHERE id=?`, id)
+	row := s.db.QueryRowContext(ctx, `SELECT id,batch_id,kind,COALESCE(project_id,''),COALESCE(project_item_id,''),COALESCE(proposal_id,''),COALESCE(credential_id,''),state,request_json,result_json,error_code,created_at,updated_at,revision FROM jobs WHERE id=?`, id)
 	return scanUnifiedJob(row)
 }
 
@@ -145,7 +160,7 @@ func (s *JobsStore) FailWithResult(ctx context.Context, id, result, code string)
 
 func (s *JobsStore) transition(ctx context.Context, id string, from, to JobState, resultJSON, errorCode sql.NullString) (Job, error) {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	r, err := s.db.ExecContext(ctx, `UPDATE jobs SET state=?,result_json=?,error_code=?,updated_at=? WHERE id=? AND state=?`, to, resultJSON, errorCode, now, id, from)
+	r, err := s.db.ExecContext(ctx, `UPDATE jobs SET state=?,result_json=?,error_code=?,updated_at=?,revision=revision+1 WHERE id=? AND state=?`, to, resultJSON, errorCode, now, id, from)
 	if err != nil {
 		return Job{}, err
 	}
@@ -189,7 +204,7 @@ func (s *JobsStore) Batch(ctx context.Context, batchID string) (JobState, float6
 
 func (s *JobsStore) Recover(ctx context.Context) (int64, error) {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	r, err := s.db.ExecContext(ctx, `UPDATE jobs SET state=?,error_code=?,updated_at=? WHERE state=?`, JobFailed, "interrupted_by_restart", now, JobRunning)
+	r, err := s.db.ExecContext(ctx, `UPDATE jobs SET state=?,error_code=?,updated_at=?,revision=revision+1 WHERE state=?`, JobFailed, "interrupted_by_restart", now, JobRunning)
 	if err != nil {
 		return 0, err
 	}
@@ -208,7 +223,7 @@ type unifiedJobScanner interface{ Scan(...any) error }
 func scanUnifiedJob(row unifiedJobScanner) (Job, error) {
 	var j Job
 	var c, u string
-	err := row.Scan(&j.ID, &j.BatchID, &j.Kind, &j.ProjectID, &j.ProjectItemID, &j.ProposalID, &j.CredentialID, &j.State, &j.RequestJSON, &j.ResultJSON, &j.ErrorCode, &c, &u)
+	err := row.Scan(&j.ID, &j.BatchID, &j.Kind, &j.ProjectID, &j.ProjectItemID, &j.ProposalID, &j.CredentialID, &j.State, &j.RequestJSON, &j.ResultJSON, &j.ErrorCode, &c, &u, &j.Revision)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Job{}, ErrJobNotFound
 	}

@@ -2,12 +2,14 @@ package jobs
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 )
 
 func (s *JobsStore) ListByBatch(ctx context.Context, batchID string) (result []Job, err error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,batch_id,kind,COALESCE(project_id,''),COALESCE(project_item_id,''),COALESCE(proposal_id,''),COALESCE(credential_id,''),state,request_json,result_json,error_code,created_at,updated_at FROM jobs WHERE batch_id=? ORDER BY created_at,id`, batchID)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,batch_id,kind,COALESCE(project_id,''),COALESCE(project_item_id,''),COALESCE(proposal_id,''),COALESCE(credential_id,''),state,request_json,result_json,error_code,created_at,updated_at,revision FROM jobs WHERE batch_id=? ORDER BY created_at,id`, batchID)
 	if err != nil {
 		return nil, err
 	}
@@ -43,8 +45,38 @@ func (s *JobsStore) ListByBatch(ctx context.Context, batchID string) (result []J
 	return result, nil
 }
 
+// BatchCursor is a deterministic, resource-scoped digest of sorted child IDs,
+// revisions, and states. It identifies a snapshot, not an event history.
+func (s *JobsStore) BatchCursor(ctx context.Context, batchID string) (string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id,revision,state FROM jobs WHERE batch_id=? ORDER BY id`, batchID)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = rows.Close() }()
+	hash := sha256.New()
+	_, _ = fmt.Fprintf(hash, "%s\x00", batchID)
+	var count int
+	for rows.Next() {
+		var id string
+		var revision int64
+		var state JobState
+		if err := rows.Scan(&id, &revision, &state); err != nil {
+			return "", err
+		}
+		_, _ = fmt.Fprintf(hash, "%s\x00%d\x00%s\x00", id, revision, state)
+		count++
+	}
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	if count == 0 {
+		return "", ErrJobNotFound
+	}
+	return "b2_" + hex.EncodeToString(hash.Sum(nil)), nil
+}
+
 func (s *JobsStore) ListByProposal(ctx context.Context, proposalID string) ([]Job, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id,batch_id,kind,COALESCE(project_id,''),COALESCE(project_item_id,''),COALESCE(proposal_id,''),COALESCE(credential_id,''),state,request_json,result_json,error_code,created_at,updated_at FROM jobs WHERE proposal_id=? ORDER BY created_at,id`, proposalID)
+	rows, err := s.db.QueryContext(ctx, `SELECT id,batch_id,kind,COALESCE(project_id,''),COALESCE(project_item_id,''),COALESCE(proposal_id,''),COALESCE(credential_id,''),state,request_json,result_json,error_code,created_at,updated_at,revision FROM jobs WHERE proposal_id=? ORDER BY created_at,id`, proposalID)
 	if err != nil {
 		return nil, err
 	}

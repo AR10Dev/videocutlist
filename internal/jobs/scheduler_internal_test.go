@@ -17,6 +17,30 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+func TestSchedulerClaimAdvancesJobRevision(t *testing.T) {
+	database := openSchedulerTestDatabase(t)
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	jobs, err := NewJobsStore(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := jobs.Create(t.Context(), Job{ID: "j_claimrevision1", BatchID: "b_claimrevision1", Kind: JobScan, RequestJSON: `{}`}); err != nil {
+		t.Fatal(err)
+	}
+	scheduler, err := NewScheduler(jobs, SchedulerConfig{QueueCapacity: 1, WorkerLimit: 1}, func(context.Context, Job) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	claimed, err := scheduler.claim(t.Context())
+	if err != nil || claimed.Revision != 2 {
+		t.Fatalf("claimed job revision = %d, %v", claimed.Revision, err)
+	}
+}
+
 func waitForJobState(t *testing.T, jobs *JobsStore, id string, want JobState) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
@@ -38,7 +62,7 @@ func openSchedulerTestDatabase(t *testing.T) *sql.DB {
 		t.Fatal(err)
 	}
 	db.SetMaxOpenConns(1)
-	if _, err := db.Exec(`PRAGMA busy_timeout = 5000; CREATE TABLE jobs (id TEXT PRIMARY KEY, batch_id TEXT NOT NULL, kind TEXT NOT NULL, project_id TEXT, project_item_id TEXT, proposal_id TEXT, credential_id TEXT, state TEXT NOT NULL, request_json TEXT NOT NULL, result_json TEXT, error_code TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`); err != nil {
+	if _, err := db.Exec(`PRAGMA busy_timeout = 5000; CREATE TABLE jobs (id TEXT PRIMARY KEY, batch_id TEXT NOT NULL, kind TEXT NOT NULL, project_id TEXT, project_item_id TEXT, proposal_id TEXT, credential_id TEXT, state TEXT NOT NULL, request_json TEXT NOT NULL, result_json TEXT, error_code TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 1)`); err != nil {
 		t.Fatal(err)
 	}
 	return db
