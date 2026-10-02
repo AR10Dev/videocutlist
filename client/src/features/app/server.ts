@@ -80,22 +80,30 @@ export function createServerState(
     if (initial && initial.id !== id) throw new Error("Job snapshot does not match its identity.");
     let atom = jobAtoms.get(id);
     if (!atom) {
-      let latestRevision = initial?.revision ?? 0;
-      atom = runtime.atom<Job, Error>(
-        observeSnapshots<Job, Job>(api, `jobs/${encodeURIComponent(id)}/events`, JobSchema).pipe(
-          Stream.filter((snapshot) => {
-            if (
-              snapshot.id !== id ||
-              locallyCancelledJobs.has(id) ||
-              snapshot.revision <= latestRevision
-            )
-              return false;
-            latestRevision = snapshot.revision;
-            return true;
-          }),
-        ),
-        initial ? { initialValue: initial } : undefined,
-      );
+      const terminal = initial && ["succeeded", "failed", "cancelled"].includes(initial.state);
+      if (terminal) {
+        atom = Atom.make(AsyncResult.success(initial));
+      } else {
+        let latestRevision = initial?.revision ?? 0;
+        let terminal = false;
+        atom = runtime.atom<Job, Error>(
+          observeSnapshots<Job, Job>(api, `jobs/${encodeURIComponent(id)}/events`, JobSchema).pipe(
+            Stream.filter((snapshot) => {
+              if (
+                snapshot.id !== id ||
+                locallyCancelledJobs.has(id) ||
+                terminal ||
+                snapshot.revision <= latestRevision
+              )
+                return false;
+              latestRevision = snapshot.revision;
+              terminal = ["succeeded", "failed", "cancelled"].includes(snapshot.state);
+              return true;
+            }),
+          ),
+          initial ? { initialValue: initial } : undefined,
+        );
+      }
       jobAtoms.set(id, atom);
     }
     return atom;

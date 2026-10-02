@@ -223,9 +223,11 @@ describe("workspace server atoms", () => {
       async (input: RequestInfo | URL) =>
         new Response(
           String(input).includes("/batches/")
-            ? `event: snapshot\nid: cursor-2\ndata: ${JSON.stringify(batch)}\n\n`
+            ? `event: snapshot\nid: cursor-2\ndata: ${JSON.stringify(batch)}\n\n` +
+                `event: snapshot\nid: cursor-3\ndata: ${JSON.stringify({ ...batch, state: "running", progress: 0.5 })}\n\n`
             : `event: snapshot\nid: cursor-1\ndata: ${JSON.stringify({ ...job, id: "j_other", state: "running" })}\n\n` +
-                `event: snapshot\nid: cursor-2\ndata: ${JSON.stringify(job)}\n\n`,
+                `event: snapshot\nid: cursor-2\ndata: ${JSON.stringify(job)}\n\n` +
+                `event: snapshot\nid: cursor-3\ndata: ${JSON.stringify({ ...job, state: "running", revision: 3 })}\n\n`,
           { headers: { "Content-Type": "text/event-stream" } },
         ),
     );
@@ -249,6 +251,33 @@ describe("workspace server atoms", () => {
       Effect.runPromise(AtomRegistry.getResult(registry, batchAtom, { suspendOnWaiting: true })),
     ).resolves.toMatchObject({ batchId: "b_one", state: "succeeded" });
     expect(fetch).toHaveBeenCalledTimes(2);
+    registry.dispose();
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps terminal job seeds stable without opening an unnecessary stream", async () => {
+    const terminal: Job = {
+      id: "j_seed_terminal",
+      type: "export",
+      state: "succeeded",
+      revision: 2,
+      createdAt: "2025-01-01T00:00:00Z",
+      updatedAt: "2025-01-01T00:00:01Z",
+    };
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+    const configuration = {
+      serverBaseUrl: "https://example.test",
+      authentication: { type: "none" as const },
+    };
+    const registry = AtomRegistry.make();
+    const server = createServerState(createApiClient(configuration), registry, configuration);
+    const atom = server.observeJob(terminal.id, terminal);
+    expect(server.observeJob(terminal.id)).toBe(atom);
+    await expect(
+      Effect.runPromise(AtomRegistry.getResult(registry, atom, { suspendOnWaiting: true })),
+    ).resolves.toEqual(terminal);
+    expect(fetch).not.toHaveBeenCalled();
     registry.dispose();
     vi.unstubAllGlobals();
   });
