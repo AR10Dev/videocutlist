@@ -8,7 +8,7 @@ import {
   type Accessor,
 } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
-import type { ApiClient } from "../src/api";
+import type { ApiClient, NativeMediaApiClient } from "../src/api";
 import { createServerState } from "../src/features/app/server";
 import { createLibraryController } from "../src/features/media/controller";
 import type { components } from "../src/generated/api";
@@ -59,10 +59,11 @@ async function withLibrary(
   exercise: (library: LibrarySurface) => Promise<void>,
   configuration?: Parameters<typeof createServerState>[2],
 ) {
-  const api: ApiClient = {
+  const api: ApiClient & Pick<NativeMediaApiClient, "mediaRequest"> = {
     url: (path) => path,
     request,
     assetRequest: () => Promise.resolve(Response.json({})),
+    mediaRequest: () => Promise.reject(new Error("Unexpected media attachment request")),
   };
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (input, init) => {

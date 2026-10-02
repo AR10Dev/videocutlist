@@ -2,7 +2,7 @@ import { Effect } from "effect";
 import * as AtomRegistry from "effect/reactivity/AtomRegistry";
 import { createSignal } from "solid-js";
 import { describe, expect, it } from "vitest";
-import type { ApiClient } from "../src/api";
+import type { ApiClient, NativeMediaApiClient } from "../src/api";
 import { createServerState, readServerAtom } from "../src/features/app/server";
 import { createTimelineHistory } from "../src/features/editor/timeline";
 import { createProjectsController } from "../src/features/projects/controller";
@@ -52,10 +52,11 @@ describe("projects controller", () => {
         nextCursor: "opaque-next-page",
       });
     };
-    const api: ApiClient = {
+    const api: ApiClient & Pick<NativeMediaApiClient, "mediaRequest"> = {
       url: (path) => path,
       request: () => Promise.reject(new Error("Unexpected legacy request")),
       assetRequest: () => Promise.reject(new Error("Unexpected asset request")),
+      mediaRequest: () => Promise.reject(new Error("Unexpected media attachment request")),
     };
     const registry = AtomRegistry.make();
     const server = createServerState(api, registry, {
@@ -95,10 +96,11 @@ describe("projects controller", () => {
       };
       const request: ApiClient["request"] = (path) =>
         path.startsWith("projects/") ? projectResponse : Promise.resolve(Response.json(media));
-      const api: ApiClient = {
+      const api: ApiClient & Pick<NativeMediaApiClient, "mediaRequest"> = {
         url: (path) => path,
         request,
         assetRequest: () => Promise.resolve(Response.json({})),
+        mediaRequest: () => Promise.reject(new Error("Unexpected media attachment request")),
       };
       const [selected, setSelected] = createSignal<components["schemas"]["Media"]>();
       const [projectId, setProjectId] = createSignal("p_currentproject");
@@ -266,7 +268,7 @@ describe("projects controller", () => {
       if (url.endsWith(`/api/v2/media/${media.id}`)) return Response.json(media);
       return new Response(null, { status: 404 });
     };
-    const api: ApiClient = {
+    const api: ApiClient & Pick<NativeMediaApiClient, "mediaRequest"> = {
       url: (path) => path,
       request: (path, init) => {
         if (path === "projects/p_conflict-load1" && init?.method === "PUT")
@@ -290,6 +292,7 @@ describe("projects controller", () => {
         return Promise.reject(new Error(`Unexpected request: ${path}`));
       },
       assetRequest: () => Promise.resolve(Response.json({})),
+      mediaRequest: () => Promise.reject(new Error("Unexpected media attachment request")),
     };
     const [selected, setSelected] = createSignal<components["schemas"]["Media"] | undefined>(media);
     const [projectId, setProjectId] = createSignal("p_conflict-load1");
@@ -469,10 +472,11 @@ describe("projects controller", () => {
       }
       return Response.json(media);
     };
-    const api: ApiClient = {
+    const api: ApiClient & Pick<NativeMediaApiClient, "mediaRequest"> = {
       url: (path) => path,
       request: () => Promise.reject(new Error("Unexpected legacy request")),
       assetRequest: () => Promise.resolve(Response.json({})),
+      mediaRequest: () => Promise.reject(new Error("Unexpected media attachment request")),
     };
     const registry = AtomRegistry.make();
     const configuration = {

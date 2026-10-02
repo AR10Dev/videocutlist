@@ -4,6 +4,7 @@ import {
   newProjectId,
   parseProjectJson,
   parseProjectRecovery,
+  projectJson,
   recentProjects,
 } from "../src/features/projects/lifecycle";
 
@@ -68,9 +69,17 @@ describe("project lifecycle helpers", () => {
     expect(parseProjectRecovery({ ...recovery, items: [] })).toBeUndefined();
   });
 
-  it("rejects project interchange by its existing UTF-16 file-text bound", () => {
-    expect(() => parseProjectJson(" ".repeat(1_000_001))).toThrow("too large");
-    expect(() => parseProjectJson("🎬".repeat(500_001))).toThrow("too large");
+  it("rejects interchange JSON above the 1 MiB UTF-8 byte limit", () => {
+    expect(() => projectJson({ value: "🎬".repeat(262_145) })).toThrow("too large");
+    const oversized = JSON.stringify({
+      mediaId: "legacy-media-id",
+      segments: [],
+      uiState: {},
+      label: "🎬".repeat(262_145),
+    });
+    expect(oversized.length).toBeLessThan(1_000_000);
+    expect(new TextEncoder().encode(oversized).byteLength).toBeGreaterThan(1 << 20);
+    expect(() => parseProjectJson(oversized)).toThrow("too large");
   });
 
   it("only confirms dirty changes", () => {

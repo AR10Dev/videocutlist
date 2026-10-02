@@ -101,7 +101,7 @@ async function withDetection(
           untrack(() => {
             const registry = useContext(RegistryContext);
             controller = createDetectionController(
-              createServerState(api, registry, configuration),
+              createServerState({ ...api, mediaRequest: api.request }, registry, configuration),
               {
                 selected: overrides.selected ?? (() => detectionMedia),
                 activeItemId: overrides.activeItemId ?? (() => "i_detection"),

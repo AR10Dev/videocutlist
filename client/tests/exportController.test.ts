@@ -1,7 +1,7 @@
 import { RegistryContext, RegistryProvider } from "@effect/atom-solid";
 import { createComponent, createRoot, createSignal, untrack, useContext } from "solid-js";
 import { describe, expect, it } from "vitest";
-import type { ApiClient } from "../src/api";
+import type { ApiClient, NativeMediaApiClient } from "../src/api";
 import { createServerState } from "../src/features/app/server";
 import { createExportController } from "../src/features/export/controller";
 import type { EditableProjectItem } from "../src/features/projects/model";
@@ -63,7 +63,7 @@ async function withExportController(
     job("j_exportstatus0001", "succeeded", 1),
     job("j_exportstatus0002", "running", 1),
   ]);
-  const api: ApiClient = {
+  const api: ApiClient & Pick<NativeMediaApiClient, "mediaRequest"> = {
     url: (path) => path,
     request: async (path, init) => {
       if (path === "batches?limit=50")
@@ -83,6 +83,7 @@ async function withExportController(
       throw new Error(`Unexpected API request: ${path} (${init?.method ?? "GET"})`);
     },
     assetRequest: () => Promise.reject(new Error("Unexpected asset request")),
+    mediaRequest: () => Promise.reject(new Error("Unexpected media attachment request")),
   };
   const configuration = {
     serverBaseUrl: "http://localhost",

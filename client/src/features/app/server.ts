@@ -11,6 +11,7 @@ import {
   createNativeHttpClientLayer,
   type ApiClient,
   type ClientConfiguration,
+  type NativeMediaApiClient,
 } from "../../api";
 import { VideoCutListApi } from "../../generated/effect-api";
 import type { components } from "../../generated/api";
@@ -43,7 +44,7 @@ function errorStatus(error: unknown, seen = new Set<object>()): number | undefin
 }
 
 export interface ServerState {
-  readonly api: ApiClient;
+  readonly api: ApiClient & Pick<NativeMediaApiClient, "mediaRequest">;
   readonly registry: AtomRegistry.AtomRegistry;
   readonly runtime: Atom.AtomRuntime<never>;
   readonly generatedApi?: ReturnType<typeof createGeneratedApi>;
@@ -89,7 +90,7 @@ function createGeneratedApi(configuration: ClientConfiguration) {
 }
 
 export function createServerState(
-  api: ApiClient,
+  api: ApiClient & Pick<NativeMediaApiClient, "mediaRequest">,
   registry: AtomRegistry.AtomRegistry,
   configuration?: ClientConfiguration,
 ) {

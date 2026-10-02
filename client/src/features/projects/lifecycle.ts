@@ -46,9 +46,11 @@ export const recentProjects = (value: unknown): RecentProject[] => {
 export const confirmDiscard = (dirty: boolean, confirm: () => boolean) => !dirty || confirm();
 
 export const projectJson = (project: unknown): string => {
-  if (!project || typeof project !== "object" || JSON.stringify(project).length > 1_000_000)
+  if (!project || typeof project !== "object") throw new Error("Project is too large or invalid.");
+  const text = JSON.stringify(project);
+  if (new TextEncoder().encode(text).byteLength > 1 << 20)
     throw new Error("Project is too large or invalid.");
-  return JSON.stringify(project);
+  return text;
 };
 
 const jsonObject = Schema.Record(Schema.String, Schema.Unknown);
@@ -143,7 +145,8 @@ export const parseProjectRecovery = (value: unknown): ProjectRecovery | undefine
 };
 
 export const parseProjectJson = (text: string): Record<string, unknown> => {
-  if (text.length > 1_000_000) throw new Error("Project file is too large.");
+  if (new TextEncoder().encode(text).byteLength > 1 << 20)
+    throw new Error("Project file is too large.");
   let value: unknown;
   try {
     value = JSON.parse(text);
