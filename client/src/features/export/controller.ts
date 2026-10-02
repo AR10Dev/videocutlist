@@ -8,18 +8,14 @@ import {
 } from "solid-js";
 import { useAtomSet, useAtomValue } from "@effect/atom-solid";
 import { Cause, Effect, Exit } from "effect";
+import * as Schema from "effect/Schema";
 import * as AsyncResult from "effect/reactivity/AsyncResult";
 import * as Atom from "effect/reactivity/Atom";
-import {
-  ApiFailure,
-  apiJson,
-  apiRequest,
-  readApiError,
-  runEffect,
-  type ApiClient,
-} from "../../api";
-import { pollAtom, readServerAtom, useServerAtom, type ServerState } from "../app/server";
+import * as AtomRegistry from "effect/reactivity/AtomRegistry";
+import { ApiFailure, apiJson, runEffect, type ApiClient } from "../../api";
+import { readServerAtom, useServerAtom, type ServerState } from "../app/server";
 import type { components } from "../../generated/api";
+import { Batch as BatchSchema } from "../../generated/effect-api";
 import type { EditableProjectItem, ExportContainer } from "../projects/model";
 import type { Segment } from "../preview/model";
 import { validFilenameTemplateLength, type AppSettings } from "../settings/model";
@@ -27,6 +23,7 @@ import { exportFailureMessage } from "../queue/jobUi";
 import {
   isBatchActive,
   isJobActive,
+  idempotencyKeyForAttempt,
   parseBatchExportSubmission,
   selectBatchJob,
 } from "./queueResponse";
@@ -210,78 +207,84 @@ export function createExportController(deps: {
     preflightVersion++;
   };
 
-  const batchListAtom = pollAtom(
-    runtime,
+  const batchListAtom = runtime.atom(
     apiJson<components["schemas"]["BatchPage"]>(deps.api, "batches?limit=50"),
-    (page) => page.items?.some(isBatchActive) ?? false,
-    1000,
   );
   const batchList = useServerAtom(() => batchListAtom);
-  const batchProgressAtoms = Atom.family((id: string) =>
-    pollAtom(
-      runtime,
-      apiJson<Batch>(deps.api, `batches/${encodeURIComponent(id)}`),
-      isBatchActive,
-      1000,
-    ),
-  );
-  const jobStatusAtoms = Atom.family((id: string) =>
-    pollAtom(
-      runtime,
-      apiJson<ExportJob>(deps.api, `jobs/${encodeURIComponent(id)}`),
-      isJobActive,
-      1000,
-    ),
-  );
   const emptyBatch = Atom.make(AsyncResult.initial<Batch, Error>());
   const emptyJob = Atom.make(AsyncResult.initial<ExportJob, Error>());
   const batchProgress = useServerAtom(() =>
-    batchId() ? batchProgressAtoms(batchId()!) : emptyBatch,
+    batchId() ? deps.server.observeBatch(batchId()!) : emptyBatch,
   );
   const exportStatusResult = useServerAtom(() =>
-    exportJob()?.id ? jobStatusAtoms(exportJob()!.id) : emptyJob,
+    exportJob()?.id ? deps.server.observeJob(exportJob()!.id, exportJob()) : emptyJob,
   );
   const destinationAtom = runtime.atom(apiJson<DestinationResponse>(deps.api, "destinations"));
   const destinationResult = useServerAtom(() => destinationAtom);
+  const generatedMutation = <Arg, A, E>(
+    atom: Atom.AtomResultFn<Arg, A, E>,
+    argument: Arg,
+  ): Effect.Effect<A, E> =>
+    Effect.acquireUseRelease(
+      Effect.sync(() => registry.mount(atom)),
+      () => {
+        registry.set(atom, argument);
+        return AtomRegistry.getResult(registry, atom, { suspendOnWaiting: true });
+      },
+      (release) =>
+        Effect.sync(() => {
+          registry.set(atom, Atom.Reset);
+          release();
+        }),
+    );
   const cancelBatchCommands = Atom.family((id: string) =>
-    runtime.fn(() =>
-      Effect.flatMap(
-        apiRequest(deps.api, `batches/${encodeURIComponent(id)}`, { method: "DELETE" }),
-        (response) =>
-          response.ok
-            ? Effect.succeed(undefined)
-            : Effect.fail(new Error("Export batch could not be cancelled.")),
-      ),
-    ),
+    runtime.fn(() => {
+      const cancel = deps.server.generatedApi?.mutation("default", "cancelBatch");
+      return cancel
+        ? generatedMutation(cancel, { params: { batchId: id } }).pipe(
+            Effect.mapError(() => new Error("Export batch could not be cancelled.")),
+          )
+        : Effect.fail(new Error("Generated export API is not configured."));
+    }),
   );
   const cancelChildCommands = Atom.family((id: string) =>
-    runtime.fn(() =>
-      Effect.gen(function* () {
-        const response = yield* apiRequest(deps.api, `jobs/${encodeURIComponent(id)}`, {
-          method: "DELETE",
-        });
-        if (!response.ok) {
-          const error = yield* Effect.tryPromise({
-            try: () => readApiError(response, "Export job could not be cancelled. Try again."),
-            catch: (cause) =>
-              cause instanceof Error ? cause : new Error("Export job could not be cancelled."),
-          });
-          return yield* Effect.fail(new Error(error.message));
-        }
-      }),
-    ),
+    runtime.fn(() => {
+      const cancel = deps.server.generatedApi?.mutation("default", "cancelJob");
+      return cancel
+        ? generatedMutation(cancel, { params: { jobId: id } }).pipe(
+            Effect.mapError(() => new Error("Export job could not be cancelled. Try again.")),
+          )
+        : Effect.fail(new Error("Generated export API is not configured."));
+    }),
   );
-  const retryChildCommands = Atom.family((id: string) =>
-    runtime.fn(() =>
-      apiJson<Batch>(deps.api, `jobs/${encodeURIComponent(id)}/retry`, { method: "POST" }),
-    ),
-  );
-  const refreshBatches = () => registry.refresh(batchListAtom);
-  const refreshQueue = (id?: string, jobId?: string) => {
-    refreshBatches();
-    if (id && id === batchId()) registry.refresh(batchProgressAtoms(id));
-    if (jobId && jobId === exportJob()?.id) registry.refresh(jobStatusAtoms(jobId));
+  const uncertainRetries = new Map<string, { key: string; body: { jobId: string } }>();
+  let uncertainExport:
+    | {
+        key: string;
+        body: components["schemas"]["ExportSubmissionInput"];
+      }
+    | undefined;
+  const isUncertainCommandFailure = (error: unknown): boolean => {
+    if (!error || typeof error !== "object") return true;
+    if ("status" in error && typeof error.status === "number") return error.status >= 500;
+    if ("error" in error && error.error && typeof error.error === "object") {
+      const envelope = error.error;
+      if ("code" in envelope && typeof envelope.code === "string")
+        return envelope.code === "internal_error";
+    }
+    if ("code" in error && typeof error.code === "string") return error.code === "internal_error";
+    if ("reason" in error && error.reason && typeof error.reason === "object") {
+      const reason = error.reason;
+      if ("response" in reason && reason.response && typeof reason.response === "object") {
+        const response = reason.response;
+        if ("status" in response && typeof response.status === "number")
+          return response.status >= 500;
+      }
+    }
+    return true;
   };
+  const refreshBatches = () => registry.refresh(batchListAtom);
+  const refreshQueue = () => refreshBatches();
   const markChildJobPending = (id: string, pending: boolean) => {
     setPendingChildJobs((current) => {
       const next = new Set(current);
@@ -362,7 +365,8 @@ export function createExportController(deps: {
       cancellationResponseIsStale("batch", next.batchId, next.state)
     )
       return;
-    const guarded = protectCancellation(next);
+    // SAFETY: SSE's generated schema has already validated this readonly snapshot.
+    const guarded = protectCancellation(next as unknown as Batch);
     setBatchJobs(guarded.jobs);
     setExportRevision(guarded.projectRevision);
     setExportJob(selectBatchJob(guarded.jobs));
@@ -384,7 +388,8 @@ export function createExportController(deps: {
         (cancelledChildJobs.has(next.id) || cancelledBatches.has(batchId() ?? "")))
     )
       return;
-    setExportJob(next);
+    // SAFETY: SSE's generated schema has already validated this readonly snapshot.
+    setExportJob(next as unknown as ExportJob);
     setExportStatus(
       next.state === "queued"
         ? "Export queued."
@@ -512,7 +517,6 @@ export function createExportController(deps: {
     pendingBatchCancellations.clear();
     for (const id of pendingChildJobs()) {
       registry.set(cancelChildCommands(id), Atom.Interrupt);
-      registry.set(retryChildCommands(id), Atom.Interrupt);
     }
     setPendingChildJobs(new Set<string>());
     setExportCancellation();
@@ -670,17 +674,30 @@ export function createExportController(deps: {
           return;
         }
         setExportStatus("Creating clips…");
-        const response = yield* Effect.exit(
-          apiJson<unknown>(deps.api, `projects/${encodeURIComponent(context.projectId)}/exports`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ itemIds: context.input.itemIds }),
-          }),
+        const submissionBody: components["schemas"]["ExportSubmissionInput"] = {
+          projectRevision: savedRevision,
+          itemIds: context.input.itemIds,
+        };
+        const key = idempotencyKeyForAttempt(uncertainExport, submissionBody, () =>
+          globalThis.crypto.randomUUID(),
         );
-        if (!workflowCurrent()) {
-          stopForStaleContext();
-          return;
-        }
+        const create = deps.server.generatedApi?.mutation("default", "createExport");
+        const response = yield* Effect.exit(
+          create
+            ? generatedMutation(create, {
+                params: { projectId: context.projectId },
+                headers: { "Idempotency-Key": key },
+                payload: submissionBody,
+              }).pipe(
+                Effect.mapError((error) => {
+                  uncertainExport = isUncertainCommandFailure(error)
+                    ? { key, body: submissionBody }
+                    : undefined;
+                  return error instanceof Error ? error : new Error("Export request failed.");
+                }),
+              )
+            : Effect.fail(new Error("Generated export API is not configured.")),
+        );
         if (Exit.isFailure(response)) {
           const failure = Cause.squash(response.cause);
           if (failure instanceof ApiFailure) {
@@ -697,6 +714,7 @@ export function createExportController(deps: {
           return;
         }
         const submission = parseBatchExportSubmission(response.value);
+        uncertainExport = undefined;
         if (!workflowCurrent()) {
           stopForStaleContext();
           return;
@@ -715,6 +733,8 @@ export function createExportController(deps: {
           },
           ...current.filter((batch) => batch.batchId !== submission.batchId),
         ]);
+        deps.server.observeBatch(submission.batchId);
+        for (const seed of submission.jobs) deps.server.observeJob(seed.id, seed);
         refreshBatches();
         const job = selectBatchJob(submission.jobs);
         if (job) setExportJob(job);
@@ -751,6 +771,7 @@ export function createExportController(deps: {
     const job = [...batchJobs(), ...(currentBatch?.jobs ?? [])].find(isJobActive) ?? exportJob();
     if (!job || !currentBatchId || !isJobActive(job) || exportCancellationPending()) return;
     const generation = ++cancellationGeneration;
+    deps.server.setBatchLocallyCancelled(currentBatchId, true);
     const command = cancelBatchCommands(currentBatchId);
     registry.set(command, undefined);
     setExportCancellationPending(true);
@@ -768,11 +789,12 @@ export function createExportController(deps: {
       if (currentJob && isJobActive(currentJob))
         setExportJob({ ...currentJob, state: "cancelled" });
       setExportStatus("Export batch cancellation requested.");
-      refreshQueue(currentBatchId, job.id);
+      refreshQueue();
     } catch (error) {
+      deps.server.setBatchLocallyCancelled(currentBatchId, false);
       if (generation === cancellationGeneration) {
         setExportCancellation();
-        refreshQueue(currentBatchId, job.id);
+        refreshQueue();
         setExportStatus(
           error instanceof Error ? error.message : "Export could not be cancelled. Try again.",
         );
@@ -793,6 +815,7 @@ export function createExportController(deps: {
     if (pendingBatchCancellations.has(id)) return;
     pendingBatchCancellations.add(id);
     const generation = childJobContextGeneration;
+    deps.server.setBatchLocallyCancelled(id, true);
     try {
       const command = cancelBatchCommands(id);
       registry.set(command, undefined);
@@ -801,6 +824,7 @@ export function createExportController(deps: {
       cancelledBatches.add(id);
       setBatches((items) => items.map((batch) => protectCancellation(batch)));
     } catch (error) {
+      deps.server.setBatchLocallyCancelled(id, false);
       if (generation === childJobContextGeneration)
         setExportStatus(
           error instanceof Error ? error.message : "Export batch could not be cancelled.",
@@ -808,7 +832,7 @@ export function createExportController(deps: {
     } finally {
       if (generation === childJobContextGeneration) {
         pendingBatchCancellations.delete(id);
-        refreshQueue(id);
+        refreshQueue();
       }
     }
   };
@@ -825,6 +849,7 @@ export function createExportController(deps: {
     if (!beginChildJobAction(id)) return;
     const jobBatchId = childJobBatchId(id, requestedBatchId);
     const context = childJobContext();
+    deps.server.setJobLocallyCancelled(id, true);
     try {
       const command = cancelChildCommands(id);
       registry.set(command, undefined);
@@ -843,12 +868,13 @@ export function createExportController(deps: {
       }
       setExportStatus("Export job cancellation requested.");
     } catch (error) {
+      deps.server.setJobLocallyCancelled(id, false);
       if (childJobActionIsCurrent(id, context))
         setExportStatus(
           error instanceof Error ? error.message : "Export job could not be cancelled. Try again.",
         );
     } finally {
-      if (childJobActionIsCurrent(id, context)) refreshQueue(jobBatchId, id);
+      if (childJobActionIsCurrent(id, context)) refreshQueue();
       if (context.generation === childJobContextGeneration) markChildJobPending(id, false);
     }
   };
@@ -858,9 +884,30 @@ export function createExportController(deps: {
     const context = childJobContext();
     let retriedBatch: Batch | undefined;
     try {
-      const command = retryChildCommands(id);
-      registry.set(command, undefined);
-      retriedBatch = await runEffect(readServerAtom(deps.server, command));
+      const body = { jobId: id };
+      const key = idempotencyKeyForAttempt(uncertainRetries.get(id), body, () =>
+        globalThis.crypto.randomUUID(),
+      );
+      const retry = deps.server.generatedApi?.mutation("default", "retryJob");
+      if (!retry) throw new Error("Generated export API is not configured.");
+      const result = await runEffect(
+        generatedMutation(retry, {
+          params: { jobId: id },
+          headers: { "Idempotency-Key": key },
+        }).pipe(
+          Effect.mapError((error) => {
+            if (isUncertainCommandFailure(error)) uncertainRetries.set(id, { key, body });
+            else uncertainRetries.delete(id);
+            return error instanceof Error ? error : new Error("Export retry failed.");
+          }),
+        ),
+      );
+      const validatedBatch = Schema.decodeUnknownSync(BatchSchema)(result);
+      uncertainRetries.delete(id);
+      deps.server.observeBatch(validatedBatch.batchId, validatedBatch);
+      // SAFETY: Generated readonly DTO collections are projected into the mutable OpenAPI UI model.
+      retriedBatch = validatedBatch as unknown as Batch;
+      for (const seed of retriedBatch.jobs) deps.server.observeJob(seed.id, seed);
       if (!childJobActionIsCurrent(id, context)) return;
       setBatches((items) => [
         retriedBatch!,
@@ -882,7 +929,7 @@ export function createExportController(deps: {
           error instanceof Error ? error.message : "Export job could not be retried. Try again.",
         );
     } finally {
-      if (childJobActionIsCurrent(id, context)) refreshQueue(jobBatchId, id);
+      if (childJobActionIsCurrent(id, context)) refreshQueue();
       if (context.generation === childJobContextGeneration) markChildJobPending(id, false);
     }
   };
