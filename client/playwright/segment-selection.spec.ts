@@ -3346,10 +3346,17 @@ test("delayed cancellation cannot overwrite a replacement export", async ({ page
   const delayed = new Promise<void>((resolve) => {
     releaseCancelAck = resolve;
   });
-  let signalOldTerminal!: () => void;
-  const oldTerminalRequest = new Promise<void>((resolve) => (signalOldTerminal = resolve));
+  let signalOldEventsStarted!: () => void;
+  const oldEventsStarted = new Promise<void>((resolve) => (signalOldEventsStarted = resolve));
   let releaseOldTerminal!: () => void;
   const oldTerminalRelease = new Promise<void>((resolve) => (releaseOldTerminal = resolve));
+  let signalOldTerminalDelivered!: () => void;
+  const oldTerminalDelivered = new Promise<void>(
+    (resolve) => (signalOldTerminalDelivered = resolve),
+  );
+  let signalDeleteStarted!: () => void;
+  const deleteStarted = new Promise<void>((resolve) => (signalDeleteStarted = resolve));
+  const ordering: string[] = [];
   let exports = 0;
   const queuedBatches = new Map<string, EffectApiTypes.Batch>();
   let oldTerminal!: EffectApiTypes.Batch;
@@ -3403,16 +3410,23 @@ test("delayed cancellation cannot overwrite a replacement export", async ({ page
     const id = new URL(route.request().url()).pathname.split("/")[4]!;
     const batch = queuedBatches.get(id);
     if (id === "b_oldexport001") {
-      signalOldTerminal();
+      signalOldEventsStarted();
       await oldTerminalRelease;
-      return route.fulfill(batchEvent(oldTerminal));
+      await route.fulfill(batchEvent(oldTerminal));
+      ordering.push("old-terminal-delivered");
+      signalOldTerminalDelivered();
+      return;
     }
     return batch ? route.fulfill(batchEvent(batch)) : route.fulfill({ status: 404 });
   });
   await page.route(`${apiOrigin}/api/v2/batches/b_oldexport001`, async (route) => {
     if (route.request().method() === "DELETE") {
+      ordering.push("delete-started");
+      signalDeleteStarted();
       await delayed;
-      return route.fulfill({ status: 204 });
+      const response = await route.fulfill({ status: 204 });
+      ordering.push("delete-acknowledged");
+      return response;
     }
     return route.fulfill({ status: 404 });
   });
@@ -3432,15 +3446,32 @@ test("delayed cancellation cannot overwrite a replacement export", async ({ page
   await openTask(page, "Export");
   await page.getByRole("button", { name: "Create clips" }).click();
   await expect(page.getByText("Export queued.")).toBeVisible();
+  await oldEventsStarted;
+  const deleteResponse = page.waitForResponse(
+    (response) =>
+      response.request().method() === "DELETE" &&
+      new URL(response.url()).pathname === "/api/v2/batches/b_oldexport001",
+  );
   await page.getByRole("button", { name: "Cancel export" }).click();
+  await deleteStarted;
+  releaseCancelAck();
+  await deleteResponse;
   await openTask(page, "Export");
   await page.getByRole("button", { name: "Create clips" }).click();
   await expect(page.getByText("Export queued.")).toBeVisible();
-  await oldTerminalRequest;
-  releaseCancelAck();
-  releaseOldTerminal();
-  await expect(page.getByText("Export cancelled.")).toHaveCount(0);
   const currentBatch = page.getByRole("region", { name: "Current batch" });
+  await expect(currentBatch.locator(".export-job-card")).toContainText("replacement-export.mp4");
+  await expect(currentBatch.locator(".export-job-card")).toContainText("j_new");
+  ordering.push("replacement-owner-active");
+  releaseOldTerminal();
+  await oldTerminalDelivered;
+  expect(ordering).toEqual([
+    "delete-started",
+    "delete-acknowledged",
+    "replacement-owner-active",
+    "old-terminal-delivered",
+  ]);
+  await expect(page.getByText("Export cancelled.")).toHaveCount(0);
   await expect(currentBatch.locator(".export-job-card")).toContainText("replacement-export.mp4");
   await expect(currentBatch.locator(".export-job-card")).toContainText("j_new");
   await expect(currentBatch.locator(".export-job-result")).toHaveCount(0);

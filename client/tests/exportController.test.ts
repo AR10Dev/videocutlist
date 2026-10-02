@@ -79,7 +79,7 @@ async function withExportController(
     dirty?: boolean;
     revision?: number;
     saveProject?: () => Promise<EffectApiTypes.Project | undefined>;
-    onRequest?: (method: string, path: string) => void;
+    onRequest?: (method: string, path: string) => void | Promise<void>;
     preflightFailure?: EffectApiTypes.Error["error"];
     batchListResponse?: Promise<Response>;
     destinationsResponse?: Promise<Response>;
@@ -87,6 +87,7 @@ async function withExportController(
     exportResponses?: Response[];
     onExportHeaders?: (headers: Headers) => void;
     onApiRequest?: (path: string) => void;
+    onBatchEvent?: (path: string, signal?: AbortSignal) => Promise<Response>;
   } = {},
 ) {
   const originalStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
@@ -101,7 +102,9 @@ async function withExportController(
   globalThis.fetch = async (input, init) => {
     const requestUrl = new URL(input instanceof Request ? input.url : String(input));
     const method = init?.method ?? (input instanceof Request ? input.method : "GET");
-    options.onRequest?.(method, requestUrl.pathname);
+    await options.onRequest?.(method, requestUrl.pathname);
+    if (method === "DELETE" && /^\/api\/v2\/batches\/[^/]+$/.test(requestUrl.pathname))
+      return new Response(null, { status: 204 });
     if (requestUrl.pathname === "/api/v2/batches" && method === "GET")
       return (
         options.batchListResponse ??
@@ -143,6 +146,8 @@ async function withExportController(
     url: (path) => path,
     request: async (path, init) => {
       options.onApiRequest?.(path);
+      if (path.endsWith("/events") && options.onBatchEvent)
+        return options.onBatchEvent(path, init?.signal ?? undefined);
       if (path === `batches/${batchId}/events`) {
         const data = [
           "id: export-status-1",
@@ -494,6 +499,149 @@ describe("export controller aggregate status", () => {
         onExportHeaders: (headers) => keys.push(headers.get("Idempotency-Key") ?? ""),
         onApiRequest: (path) => {
           if (path.endsWith("/events")) events.push(path);
+        },
+      },
+    );
+  });
+  it("keeps replacement ownership after consuming a cancelled batch's late terminal snapshot", async () => {
+    const media: EffectApiTypes.Media = {
+      id: `m_${"m".repeat(43)}`,
+      name: "clip.mp4",
+      durationMs: 2_000,
+      sizeBytes: 1,
+      container: "mp4",
+      streams: {},
+      etag: "v1",
+    };
+    const oldBatchId = "b_oldreplacement001";
+    const newBatchId = "b_newreplacement001";
+    const oldJob: Job = { ...job("j_oldreplacement001", "queued", 1), batchId: oldBatchId };
+    const newJob: Job = { ...job("j_newreplacement001", "queued", 1), batchId: newBatchId };
+    const oldTerminal: Batch = {
+      ...batch("succeeded", 1, [
+        {
+          ...oldJob,
+          state: "succeeded",
+          revision: 2,
+          progress: 1,
+          result: {
+            outputName: "late-old-export.mkv",
+            sizeBytes: 42,
+            retainUntil: "2026-08-20T12:00:00Z",
+            destinationKind: "download",
+          },
+          verified: true,
+        },
+      ]),
+      batchId: oldBatchId,
+    };
+    let signalDeleteStarted!: () => void;
+    const deleteStarted = new Promise<void>((resolve) => (signalDeleteStarted = resolve));
+    let releaseDeleteAck!: () => void;
+    const deleteAck = new Promise<void>((resolve) => (releaseDeleteAck = resolve));
+    let signalOldEventStarted!: () => void;
+    const oldEventStarted = new Promise<void>((resolve) => (signalOldEventStarted = resolve));
+    let releaseOldTerminal!: () => void;
+    const oldTerminalRelease = new Promise<void>((resolve) => (releaseOldTerminal = resolve));
+    let signalOldTerminalDelivered!: () => void;
+    const oldTerminalDelivered = new Promise<void>(
+      (resolve) => (signalOldTerminalDelivered = resolve),
+    );
+    let resolveBatchList!: (response: Response) => void;
+    const batchListResponse = new Promise<Response>((resolve) => (resolveBatchList = resolve));
+    const streamResponse = (snapshot: Batch) =>
+      new Response(
+        [
+          "id: late-replacement-snapshot",
+          "event: snapshot",
+          `data: ${JSON.stringify(snapshot)}`,
+          "",
+          "",
+        ].join("\n"),
+        { headers: { "Content-Type": "text/event-stream" } },
+      );
+    await withExportController(
+      batch("succeeded", 1, [job("j_exportstatus0001", "succeeded", 2)]),
+      async (controller) => {
+        const deadline = Date.now() + 2_000;
+        while (controller.preflightPending()) {
+          if (Date.now() >= deadline) throw new Error("Initial preflight did not finish.");
+          await new Promise((resolve) => setTimeout(resolve, 1));
+        }
+        await controller.exportProject();
+        await oldEventStarted;
+        const cancellation = controller.cancelExport();
+        await deleteStarted;
+        releaseDeleteAck();
+        await cancellation;
+        await controller.exportProject();
+        expect(controller.batchId()).toBe(newBatchId);
+        expect(controller.batchJobs().map(({ id }) => id)).toEqual([newJob.id]);
+        resolveBatchList(
+          Response.json({
+            items: [
+              {
+                ...batch("queued", 0, [oldJob]),
+                batchId: oldBatchId,
+                projectId: "p_exportstatus0001",
+              },
+              {
+                ...batch("queued", 0, [newJob]),
+                batchId: newBatchId,
+                projectId: "p_exportstatus0001",
+              },
+            ],
+            nextCursor: null,
+          }),
+        );
+
+        releaseOldTerminal();
+        await oldTerminalDelivered;
+        const settledDeadline = Date.now() + 2_000;
+        let consumedOldTerminal: Batch | undefined;
+        while (!consumedOldTerminal?.jobs[0]?.result) {
+          consumedOldTerminal = controller.batches().find(({ batchId }) => batchId === oldBatchId);
+          if (Date.now() >= settledDeadline)
+            throw new Error(
+              "The old terminal snapshot was delivered but not consumed by its atom.",
+            );
+          await new Promise((resolve) => setTimeout(resolve, 1));
+        }
+        expect(consumedOldTerminal.jobs[0]?.result?.outputName).toBe("late-old-export.mkv");
+        expect(controller.batchId()).toBe(newBatchId);
+        expect(controller.batchJobs().map(({ id }) => id)).toEqual([newJob.id]);
+        expect(
+          controller.batchJobs().some(({ result }) => result?.outputName === "late-old-export.mkv"),
+        ).toBe(false);
+      },
+      {
+        initialBatch: batch("succeeded", 1, [job("j_exportstatus0001", "succeeded", 1)]),
+        batchListResponse,
+        selected: media,
+        projectItems: [exportItem(media)],
+        exportResponses: [
+          Response.json({ batchId: oldBatchId, jobs: [oldJob] }, { status: 202 }),
+          Response.json({ batchId: newBatchId, jobs: [newJob] }, { status: 202 }),
+        ],
+        onRequest: (method, path) => {
+          if (method === "DELETE" && path === `/api/v2/batches/${oldBatchId}`) {
+            signalDeleteStarted();
+            return deleteAck;
+          }
+        },
+        onBatchEvent: async (path) => {
+          if (path === `batches/${oldBatchId}/events`) {
+            signalOldEventStarted();
+            await oldTerminalRelease;
+            signalOldTerminalDelivered();
+            return streamResponse(oldTerminal);
+          }
+          const snapshot = {
+            ...batch("queued", 0, [newJob]),
+            batchId: newBatchId,
+            projectId: "p_exportstatus0001",
+          };
+          return streamResponse(snapshot);
         },
       },
     );
