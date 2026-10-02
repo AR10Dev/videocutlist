@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { createApiClient } from "../src/api";
+import { createServerState } from "../src/features/app/server";
+import * as AtomRegistry from "effect/reactivity/AtomRegistry";
 import { createSettingsController } from "../src/features/settings/controller";
 import { validRuntimeSettingsInput } from "../src/features/settings/model";
 import type { components } from "../src/generated/api";
@@ -37,14 +39,56 @@ const mcp = {
   proposals: [],
 } satisfies components["schemas"]["MCPSettingsResponse"];
 
+const credential = (id: string) => ({
+  id,
+  tokenIdentifier: "token-id",
+  name: "Test key",
+  permissions: ["media:read"],
+  mediaScope: { kind: "all" as const },
+  projectScope: { kind: "all" as const },
+  unattendedExports: false,
+  createdAt: "2026-01-01T00:00:00Z",
+  status: "active" as const,
+});
+const proposal = (id: string) => ({
+  id,
+  credentialId: "key-1",
+  projectRevision: 1,
+  snapshots: [],
+  findings: [],
+  allowed: true,
+  requiresReencoding: false,
+  accuracy: "frame_exact" as const,
+  destinationId: "download",
+  expiresAt: "2026-01-02T00:00:00Z",
+  createdAt: "2026-01-01T00:00:00Z",
+});
+
 const cleanups: Array<() => void> = [];
 function controller(fetch: typeof globalThis.fetch) {
   vi.stubGlobal("localStorage", { getItem: () => null });
+  vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
+    const request = new Request(input, init);
+    const body =
+      request.method === "GET" || request.method === "HEAD"
+        ? undefined
+        : await request.clone().text();
+    // SAFETY: the generated client is configured with the fixed example.test origin in this test.
+    return fetch(request.url, {
+      method: request.method,
+      headers: request.headers,
+      body,
+      signal: request.signal,
+    });
+  });
+  const configuration = {
+    serverBaseUrl: "https://example.test",
+    authentication: { type: "none" as const },
+  };
+  const api = createApiClient(configuration, fetch);
   const state = createSettingsController(
-    createApiClient(
-      { serverBaseUrl: "https://example.test", authentication: { type: "none" } },
-      fetch,
-    ),
+    api,
+    createServerState(api, AtomRegistry.make(), configuration),
   );
   cleanups.push(state.dispose);
   return state;
@@ -210,11 +254,11 @@ describe("settings controller", () => {
       .mockResolvedValueOnce(
         Response.json({
           ...mcp,
-          proposals: [{ id: "ep_first" }],
+          proposals: [proposal("ep_first")],
           proposalNextCursor: "ep_first",
         }),
       )
-      .mockResolvedValueOnce(Response.json({ ...mcp, proposals: [{ id: "ep_second" }] }));
+      .mockResolvedValueOnce(Response.json({ ...mcp, proposals: [proposal("ep_second")] }));
     const state = controller(fetch);
     await state.loadMCPSettings();
     await state.loadMCPSettings(undefined, state.mcpSettings()?.proposalNextCursor);
@@ -232,16 +276,16 @@ describe("settings controller", () => {
       .mockResolvedValueOnce(
         Response.json({
           ...mcp,
-          credentials: [{ id: "key-first" }],
+          credentials: [credential("key-first")],
           nextCursor: "key-first",
-          proposals: [{ id: "ep-pending" }],
+          proposals: [proposal("ep-pending")],
           proposalNextCursor: "ep-pending",
         }),
       )
       .mockResolvedValueOnce(
         Response.json({
           ...mcp,
-          credentials: [{ id: "key-second" }],
+          credentials: [credential("key-second")],
         }),
       );
     const state = controller(fetch);
@@ -280,14 +324,14 @@ describe("settings controller", () => {
   it("retains the last MCP page when refresh fails, then clears the error on recovery", async () => {
     const fetch = vi
       .fn<typeof globalThis.fetch>()
-      .mockResolvedValueOnce(Response.json({ ...mcp, credentials: [{ id: "first" }] }))
+      .mockResolvedValueOnce(Response.json({ ...mcp, credentials: [credential("first")] }))
       .mockResolvedValueOnce(
         Response.json(
           { error: { code: "permission_denied", message: "Internal detail", requestId: "r3" } },
           { status: 403 },
         ),
       )
-      .mockResolvedValueOnce(Response.json({ ...mcp, credentials: [{ id: "second" }] }));
+      .mockResolvedValueOnce(Response.json({ ...mcp, credentials: [credential("second")] }));
     const state = controller(fetch);
     expect(await state.loadMCPSettings()).toBe(true);
     expect(await state.loadMCPSettings()).toBe(false);
@@ -297,6 +341,27 @@ describe("settings controller", () => {
     expect(await state.loadMCPSettings()).toBe(true);
     expect(state.mcpSettings()?.credentials.map((item) => item.id)).toEqual(["second"]);
     expect(state.mcpLoadError()).toBe("");
+  });
+
+  it("redelivers an uncertain media refresh only on explicit action with the same key", async () => {
+    vi.stubGlobal("crypto", {
+      randomUUID: vi.fn().mockReturnValueOnce("scan-key-1").mockReturnValueOnce("scan-key-2"),
+    });
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockRejectedValueOnce(new TypeError("connection lost"))
+      .mockResolvedValueOnce(Response.json({ id: "job-1" }, { status: 202 }))
+      .mockResolvedValueOnce(Response.json({ id: "job-2" }, { status: 202 }));
+    const state = controller(fetch);
+
+    await state.rescanLibrary();
+    expect(fetch).toHaveBeenCalledTimes(1);
+    await state.rescanLibrary();
+    await state.rescanLibrary();
+
+    expect(
+      fetch.mock.calls.map(([, init]) => new Headers(init?.headers).get("Idempotency-Key")),
+    ).toEqual(["scan-key-1", "scan-key-1", "scan-key-2"]);
   });
 
   it("reports refresh failure after revocation without suggesting a second revoke", async () => {
@@ -323,7 +388,7 @@ describe("settings controller", () => {
     let releaseRefresh!: (response: Response) => void;
     const fetch = vi
       .fn<typeof globalThis.fetch>()
-      .mockResolvedValueOnce(Response.json({ id: "key-1", secret: "once-only" }))
+      .mockResolvedValueOnce(Response.json({ ...credential("key-1"), secret: "once-only" }))
       .mockImplementationOnce(
         () =>
           new Promise((resolve) => {
@@ -348,6 +413,35 @@ describe("settings controller", () => {
     expect(state.revealedMCPSecret()).toBe("");
     expect(state.mcpStatus()).toContain("disclosure was dismissed");
     expect(state.mcpSettings()?.credentials).toEqual([]);
+  });
+
+  it("discards a credential response that arrives after closing settings", async () => {
+    let releaseCreate!: (response: Response) => void;
+    const fetch = vi
+      .fn<typeof globalThis.fetch>()
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            releaseCreate = resolve;
+          }),
+      )
+      .mockResolvedValueOnce(Response.json(mcp));
+    const state = controller(fetch);
+    state.setSettingsOpen(true);
+    const creation = state.createMCPCredential({
+      name: "Demo",
+      permissions: [],
+      mediaScope: { kind: "all" },
+      projectScope: { kind: "all" },
+    });
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1));
+    state.setSettingsOpen(false);
+    releaseCreate(Response.json({ ...credential("key-1"), secret: "never-show-late" }));
+
+    expect(await creation).toBe(true);
+    expect(state.revealedMCPSecret()).toBe("");
+    expect(state.mcpStatus()).toBe("");
+    expect(JSON.stringify(state.settings())).not.toContain("never-show-late");
   });
 
   it("interrupts in-flight commands on disposal without republishing late settings", async () => {

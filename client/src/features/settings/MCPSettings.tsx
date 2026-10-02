@@ -374,7 +374,7 @@ export function MCPSettings() {
                                 <p>
                                   Effective output ranges:{" "}
                                   {exportRanges(
-                                    snapshot.item.segments,
+                                    [...snapshot.item.segments],
                                     snapshot.item.exportOptions.selection ?? "segments",
                                     snapshot.source.durationMs,
                                   )
