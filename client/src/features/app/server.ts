@@ -47,7 +47,7 @@ export interface ServerState {
   readonly api: ApiClient & Pick<NativeMediaApiClient, "mediaRequest">;
   readonly registry: AtomRegistry.AtomRegistry;
   readonly runtime: Atom.AtomRuntime<never>;
-  readonly generatedApi?: ReturnType<typeof createGeneratedApi>;
+  readonly generatedApi: ReturnType<typeof createGeneratedApi>;
   readonly media: (
     id: string,
     revision?: number,
@@ -92,9 +92,9 @@ function createGeneratedApi(configuration: ClientConfiguration) {
 export function createServerState(
   api: ApiClient & Pick<NativeMediaApiClient, "mediaRequest">,
   registry: AtomRegistry.AtomRegistry,
-  configuration?: ClientConfiguration,
+  configuration: ClientConfiguration,
 ) {
-  const generatedApi = configuration ? createGeneratedApi(configuration) : undefined;
+  const generatedApi = createGeneratedApi(configuration);
   const runtime = Atom.runtime(Layer.empty);
   const mediaRevision = Atom.make(0);
   const mountedJobs = new Set<string>();
@@ -191,17 +191,12 @@ export function createServerState(
     }
     return atom;
   };
-  const project = (id: string) => {
-    if (!generatedApi) throw new Error("Generated project API is not configured.");
-    return generatedApi.query("default", "getProject", { params: { projectId: id } });
-  };
-  const projectPage = (query: { limit?: number; cursor?: string }) => {
-    if (!generatedApi) throw new Error("Generated project API is not configured.");
-    return generatedApi.query("default", "listProjects", { query });
-  };
+  const project = (id: string) =>
+    generatedApi.query("default", "getProject", { params: { projectId: id } });
+  const projectPage = (query: { limit?: number; cursor?: string }) =>
+    generatedApi.query("default", "listProjects", { query });
   const mediaTree = Atom.family((key: string) => {
     const [folderId, cursor, revision] = JSON.parse(key) as [string | null, string | null, number];
-    if (!generatedApi) throw new Error("Generated media API is not configured.");
     return generatedApi
       .query("default", "browseMediaTree", {
         query: {
@@ -216,7 +211,6 @@ export function createServerState(
       ) as Atom.Atom<AsyncResult.AsyncResult<GeneratedFolderPage, unknown>>;
   });
   const mediaLibraryStatus = Atom.family((revision: number) => {
-    if (!generatedApi) throw new Error("Generated media API is not configured.");
     return generatedApi
       .query("default", "mediaLibraryStatus", {
         reactivityKeys: [`media:${revision}`],
@@ -228,7 +222,6 @@ export function createServerState(
   });
   const metadata = Atom.family((key: string) => {
     const [id] = JSON.parse(key) as [string, number];
-    if (!generatedApi) throw new Error("Generated media API is not configured.");
     return runtime
       .atom((get) => {
         get(mediaRevision);

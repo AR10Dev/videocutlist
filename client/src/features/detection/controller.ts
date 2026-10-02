@@ -226,26 +226,22 @@ export function createDetectionController(
   });
   let uncertainSubmission: DetectionSubmissionAttempt | undefined;
   const submit = runtime.fn((input: { key: string; projectId: string; body: DetectionInput }) => {
-    const mutation = server.generatedApi?.mutation("default", "createDetection");
-    return mutation
-      ? generatedMutation(registry, mutation, {
-          params: { projectId: input.projectId },
-          headers: { "Idempotency-Key": input.key },
-          payload: input.body,
-        }).pipe(
-          Effect.mapError((error) => new Error("Detection submission failed.", { cause: error })),
-        )
-      : Effect.fail(new Error("Generated detection API is not configured."));
+    const mutation = server.generatedApi.mutation("default", "createDetection");
+    return generatedMutation(registry, mutation, {
+      params: { projectId: input.projectId },
+      headers: { "Idempotency-Key": input.key },
+      payload: input.body,
+    }).pipe(
+      Effect.mapError((error) => new Error("Detection submission failed.", { cause: error })),
+    );
   });
   const cancel = runtime.fn((id: string) => {
-    const mutation = server.generatedApi?.mutation("default", "cancelJob");
-    return mutation
-      ? generatedMutation(registry, mutation, { params: { jobId: id } }).pipe(
-          Effect.mapError(
-            (error) => new Error("Job could not be cancelled. Try again.", { cause: error }),
-          ),
-        )
-      : Effect.fail(new Error("Generated detection API is not configured."));
+    const mutation = server.generatedApi.mutation("default", "cancelJob");
+    return generatedMutation(registry, mutation, { params: { jobId: id } }).pipe(
+      Effect.mapError(
+        (error) => new Error("Job could not be cancelled. Try again.", { cause: error }),
+      ),
+    );
   });
   const [status, setStatus] = createSignal<AsyncResult.AsyncResult<Job, Error>>(
     AsyncResult.initial<Job, Error>(),

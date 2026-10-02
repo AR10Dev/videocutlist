@@ -101,11 +101,11 @@ public API contracts.
 - Effect 4 and `@effect/atom-solid` own asynchronous commands and server-resource
   atoms. Each authenticated workspace has its own registry; reconnecting disposes
   the old registry rather than sharing cached results across sessions.
-- Feature controllers compose native Effect workflows. Polling uses interruptible
-  `Effect.sleep` and publishes native `AsyncResult` values, stops at terminal
-  results, and recovers transient read failures. Media revision atoms invalidate
-  library pages and metadata together. Do not introduce Query-style key or
-  invalidation adapters.
+- Feature controllers compose native Effect workflows. Workspace-owned job and
+  batch observations use authenticated SSE; transient reconnects preserve the
+  latest resource state and observation stops at terminal results or workspace
+  disposal. Media revision atoms invalidate library pages and metadata together.
+  Do not introduce Query-style key or invalidation adapters.
   Metadata reads retain up to three retries after the first attempt, with
   interruptible exponential delays of 1, 2, and 4 seconds; exhausted HTTP failures
   identify their status and remain explicitly retryable.
@@ -116,12 +116,15 @@ public API contracts.
 - Solid owners interrupt scoped preview, thumbnail, and download effects. Effect
   finalizers release readers, listeners, message ports, and object URLs. Export
   downloads remain service-worker streams rather than page-sized blobs.
-- Zod validates public error envelopes, browser preferences/recovery, imported
-  project JSON, and untyped export submissions. Preserve the existing UTF-8 and
-  UTF-16 bounds at these seams. Go remains responsible for business rules and
-  authorization; generated OpenAPI types remain the HTTP contract.
-- The Effect packages are pinned together to `4.0.0-rc.118`; atom APIs are
-  evolving. Upgrade them as a coordinated, separately verified change, using
+- Effect Schema validates generated JSON API responses and browser-owned
+  persistence/interchange boundaries; native transport adapters validate media
+  and event-stream payloads. Preserve existing UTF-8 and UTF-16 bounds. Go remains
+  responsible for business rules and authorization; the checked-in OpenAPI
+  contract remains authoritative.
+- The Effect packages are pinned together to stable `4.0.0`. Solid owns
+  immediate interaction, Effect atoms own server resources, native HTTP owns
+  media/SSE transport, and Go owns authorization and durable state. Upgrade the
+  coordinated Effect packages only with compatibility verification; use
   `@effect/vitest` for deterministic Effect clock/lifetime behavior where needed.
 
 Please use a clear commit or pull-request title and include relevant test
