@@ -46,19 +46,34 @@ const detectionMedia: components["schemas"]["Media"] = {
   etag: "v1",
 };
 const queuedDetectionJob: components["schemas"]["DetectionJob"] = {
-  id: "j_detection",
+  id: "j_012345678901",
   type: "detection",
   state: "queued",
   mediaId: detectionMedia.id,
-  projectId: "p_detection",
+  projectId: "p_000000000001",
   projectRevision: 1,
   kind: "silence",
+};
+const jobEvent = (job: components["schemas"]["DetectionJob"], revision = 1) => {
+  const snapshot = {
+    ...job,
+    revision,
+    createdAt: "2026-01-01T00:00:00Z",
+    updatedAt: "2026-01-01T00:00:00Z",
+  };
+  return new Response(`id: ${revision}\nevent: snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`, {
+    headers: { "Content-Type": "text/event-stream" },
+  });
 };
 async function withDetection(
   api: ApiClient,
   exercise: (
     controller: DetectionController,
-    state: { setRevision: (value: number) => void; editorVersion: () => number },
+    state: {
+      setRevision: (value: number) => void;
+      editorVersion: () => number;
+      setProjectId: (value: string) => void;
+    },
   ) => Promise<void>,
   overrides: {
     selected?: () => components["schemas"]["Media"] | undefined;
@@ -69,45 +84,59 @@ async function withDetection(
   await new Promise<void>((resolve, reject) => {
     createRoot((dispose) => {
       const [revision, setRevision] = createSignal(1);
+      const [projectId, setProjectId] = createSignal(queuedDetectionJob.projectId);
       const [editorVersion, setEditorVersion] = createSignal(0);
       const [segments, setSegments] = createSignal<components["schemas"]["Segment"][]>([]);
       let controller!: DetectionController;
+      const configuration = {
+        serverBaseUrl: "https://example.test",
+        authentication: { type: "none" as const },
+      };
+      vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = new URL(input instanceof Request ? input.url : input.toString());
+        return api.request(url.pathname.replace(/^\/api\/v2\//, "") + url.search, init);
+      });
       createComponent(RegistryProvider, {
         get children() {
           untrack(() => {
             const registry = useContext(RegistryContext);
-            controller = createDetectionController(createServerState(api, registry), {
-              selected: overrides.selected ?? (() => detectionMedia),
-              activeItemId: overrides.activeItemId ?? (() => "i_detection"),
-              projectId: () => queuedDetectionJob.projectId,
-              revision,
-              editorVersion,
-              saveConflict: () => false,
-              segments,
-              saveProject:
-                overrides.saveProject ??
-                (() =>
-                  Promise.resolve({
-                    id: queuedDetectionJob.projectId,
-                    revision: revision(),
-                  } as components["schemas"]["Project"])),
-              updateSegments: (value) => {
-                setSegments(value);
-                setEditorVersion((version) => version + 1);
+            controller = createDetectionController(
+              createServerState(api, registry, configuration),
+              {
+                selected: overrides.selected ?? (() => detectionMedia),
+                activeItemId: overrides.activeItemId ?? (() => "i_detection"),
+                projectId,
+                revision,
+                editorVersion,
+                saveConflict: () => false,
+                segments,
+                saveProject:
+                  overrides.saveProject ??
+                  (() =>
+                    Promise.resolve({
+                      id: projectId(),
+                      revision: revision(),
+                    } as components["schemas"]["Project"])),
+                updateSegments: (value) => {
+                  setSegments(value);
+                  setEditorVersion((version) => version + 1);
+                },
               },
-            });
+            );
           });
           return null;
         },
       });
       queueMicrotask(() => {
-        void exercise(controller, { setRevision, editorVersion }).then(
+        void exercise(controller, { setRevision, editorVersion, setProjectId }).then(
           () => {
             dispose();
+            vi.unstubAllGlobals();
             resolve();
           },
           (error: unknown) => {
             dispose();
+            vi.unstubAllGlobals();
             reject(error);
           },
         );
@@ -115,6 +144,94 @@ async function withDetection(
     });
   });
 }
+
+it("redelivers an uncertain detection submission with its original key and validated body", async () => {
+  const submissions: Array<{ key: string | null; target: string; body: string }> = [];
+  const api: ApiClient = {
+    url: (path) => path,
+    request: (path, init) => {
+      if (path.endsWith("/detections") && init?.method === "POST") {
+        submissions.push({
+          key: new Headers(init.headers).get("Idempotency-Key"),
+          target: path.split("/")[1]!,
+          body: String(init.body),
+        });
+        return Promise.resolve(
+          submissions.length === 1
+            ? Response.json(
+                { error: { code: "internal_error", message: "Retry", requestId: "r1" } },
+                { status: 503 },
+              )
+            : Response.json(queuedDetectionJob, { status: 202 }),
+        );
+      }
+      if (path.endsWith("/events")) return Promise.resolve(jobEvent(queuedDetectionJob));
+      return Promise.resolve(Response.json({}));
+    },
+    assetRequest: () => Promise.resolve(Response.json({})),
+  };
+  await withDetection(api, async (controller) => {
+    await controller.startDetection("silence", { noiseDb: -35 });
+    await controller.startDetection("silence", { noiseDb: -35 });
+    expect(submissions).toHaveLength(2);
+    expect(submissions[0].key).toBeTruthy();
+    expect(submissions[0].key).toMatch(/^[A-Za-z0-9_-]{1,128}$/);
+    expect(submissions[1]).toEqual(submissions[0]);
+    expect(submissions[0].target).toBe(queuedDetectionJob.projectId);
+    expect(JSON.parse(submissions[0].body)).toMatchObject({
+      mediaId: detectionMedia.id,
+      projectItemId: "i_detection",
+      projectRevision: 1,
+      kind: "silence",
+      noiseDb: -35,
+    });
+  });
+});
+
+it("uses a fresh key for an uncertain identical command sent to another project", async () => {
+  const secondProjectId = "p_000000000002";
+  const submissions: Array<{ key: string | null; target: string; body: string }> = [];
+  let acceptedJob: components["schemas"]["DetectionJob"] | undefined;
+  const api: ApiClient = {
+    url: (path) => path,
+    request: (path, init) => {
+      if (path.endsWith("/detections") && init?.method === "POST") {
+        const target = path.split("/")[1]!;
+        submissions.push({
+          key: new Headers(init.headers).get("Idempotency-Key"),
+          target,
+          body: String(init.body),
+        });
+        if (submissions.length === 1)
+          return Promise.resolve(
+            Response.json(
+              { error: { code: "internal_error", message: "Retry", requestId: "r1" } },
+              { status: 503 },
+            ),
+          );
+        acceptedJob = { ...queuedDetectionJob, projectId: target };
+        return Promise.resolve(Response.json(acceptedJob, { status: 202 }));
+      }
+      if (path.endsWith("/events") && acceptedJob) return Promise.resolve(jobEvent(acceptedJob));
+      return Promise.resolve(Response.json({}));
+    },
+    assetRequest: () => Promise.resolve(Response.json({})),
+  };
+  await withDetection(api, async (controller, { setProjectId }) => {
+    await controller.startDetection("silence", { noiseDb: -35 });
+    setProjectId(secondProjectId);
+    await controller.startDetection("silence", { noiseDb: -35 });
+    expect(submissions).toHaveLength(2);
+    expect(submissions.map(({ target }) => target)).toEqual([
+      queuedDetectionJob.projectId,
+      secondProjectId,
+    ]);
+    expect(submissions[0].body).toBe(submissions[1].body);
+    expect(submissions[0].key).toMatch(/^[A-Za-z0-9_-]{1,128}$/);
+    expect(submissions[1].key).toMatch(/^[A-Za-z0-9_-]{1,128}$/);
+    expect(submissions[1].key).not.toBe(submissions[0].key);
+  });
+});
 
 it("preserves a local detection cancellation over stale status responses", async () => {
   let releaseDelete!: (response: Response) => void;
@@ -136,7 +253,9 @@ it("preserves a local detection cancellation over stale status responses", async
           markDeleteStarted();
         });
       }
-      if (path === `jobs/${queuedDetectionJob.id}`) {
+      if (path.startsWith("projects/") && init?.method === "POST")
+        return Promise.resolve(Response.json(queuedDetectionJob, { status: 202 }));
+      if (path === `jobs/${queuedDetectionJob.id}/events`) {
         return new Promise<Response>((resolve) => {
           releaseStatus = resolve;
           markStatusStarted();
@@ -147,15 +266,108 @@ it("preserves a local detection cancellation over stale status responses", async
     assetRequest: () => Promise.resolve(Response.json({})),
   };
   await withDetection(api, async (controller) => {
-    controller.setDetectionJob(queuedDetectionJob);
+    await controller.startDetection("silence");
+    await statusStarted;
+    const cancellation = controller.cancelDetection();
+    const cancellationProgress = await Promise.race([
+      deleteStarted.then(() => "delete"),
+      cancellation.then(() => "done"),
+    ]);
+    expect(cancellationProgress, controller.detectionStatus()).toBe("delete");
+    releaseStatus(jobEvent(queuedDetectionJob));
+    releaseDelete(new Response(null, { status: 204 }));
+    await cancellation;
+    expect(controller.detectionJob()).toBeUndefined();
+    expect(controller.detectionStatus()).toBe("Detection cancellation requested.");
+  });
+});
+
+it("clears optimistic cancellation when the delete fails", async () => {
+  let eventRequests = 0;
+  const api: ApiClient = {
+    url: (path) => path,
+    request: (path, init) => {
+      if (path.endsWith("/detections") && init?.method === "POST")
+        return Promise.resolve(Response.json(queuedDetectionJob, { status: 202 }));
+      if (path.endsWith("/events")) {
+        eventRequests++;
+        return Promise.resolve(
+          eventRequests === 1 ? jobEvent(queuedDetectionJob) : new Response(null, { status: 503 }),
+        );
+      }
+      if (path === `jobs/${queuedDetectionJob.id}` && init?.method === "DELETE")
+        return Promise.resolve(
+          Response.json(
+            { error: { code: "unavailable", message: "Delete unavailable", requestId: "r1" } },
+            { status: 503 },
+          ),
+        );
+      return Promise.resolve(Response.json({}));
+    },
+    assetRequest: () => Promise.resolve(Response.json({})),
+  };
+  await withDetection(api, async (controller) => {
+    await controller.startDetection("silence");
+    await vi.waitFor(() => expect(controller.detectionJob()?.state).toBe("queued"));
+    await controller.cancelDetection();
+    expect(controller.detectionJob()?.state).toBe("queued");
+    expect(controller.detectionStatus()).not.toBe("Detection cancellation requested.");
+  });
+});
+
+it("keeps a terminal SSE result that arrives before the cancellation acknowledgement", async () => {
+  let releaseDelete!: (response: Response) => void;
+  let releaseStatus!: (response: Response) => void;
+  let markDeleteStarted!: () => void;
+  let markStatusStarted!: () => void;
+  const deleteStarted = new Promise<void>((resolve) => {
+    markDeleteStarted = resolve;
+  });
+  const statusStarted = new Promise<void>((resolve) => {
+    markStatusStarted = resolve;
+  });
+  const resultCandidate = {
+    id: "c_terminal",
+    mediaId: detectionMedia.id,
+    projectId: queuedDetectionJob.projectId,
+    projectRevision: 1,
+    startMs: 25,
+    endMs: 35,
+    source: "silence" as const,
+  };
+  const api: ApiClient = {
+    url: (path) => path,
+    request: (path, init) => {
+      if (path === `jobs/${queuedDetectionJob.id}` && init?.method === "DELETE")
+        return new Promise<Response>((resolve) => {
+          releaseDelete = resolve;
+          markDeleteStarted();
+        });
+      if (path.startsWith("projects/") && init?.method === "POST")
+        return Promise.resolve(Response.json(queuedDetectionJob, { status: 202 }));
+      if (path === `jobs/${queuedDetectionJob.id}/events`)
+        return new Promise<Response>((resolve) => {
+          releaseStatus = resolve;
+          markStatusStarted();
+        });
+      return Promise.resolve(Response.json({}));
+    },
+    assetRequest: () => Promise.resolve(Response.json({})),
+  };
+  await withDetection(api, async (controller) => {
+    await controller.startDetection("silence");
     await statusStarted;
     const cancellation = controller.cancelDetection();
     await deleteStarted;
-    releaseStatus(Response.json(queuedDetectionJob));
+    releaseStatus(
+      jobEvent({ ...queuedDetectionJob, state: "succeeded", candidates: [resultCandidate] }),
+    );
+    await vi.waitFor(() => expect(controller.detectionJob()?.state).toBe("succeeded"));
     releaseDelete(new Response(null, { status: 204 }));
     await cancellation;
-    expect(controller.detectionJob()?.state).toBe("cancelled");
-    expect(controller.detectionStatus()).toBe("Detection cancelled.");
+    expect(controller.detectionJob()?.state).toBe("succeeded");
+    expect(controller.detectionCandidates()).toEqual([resultCandidate]);
+    expect(controller.detectionStatus()).toContain("candidates found");
   });
 });
 
@@ -172,11 +384,15 @@ it("accepts successive candidates across its own saved revisions but rejects ext
   const completed = { ...queuedDetectionJob, state: "succeeded" as const, candidates };
   const api: ApiClient = {
     url: (path) => path,
-    request: () => Promise.resolve(Response.json(completed)),
+    request: (path, init) =>
+      path.endsWith("/detections") && init?.method === "POST"
+        ? Promise.resolve(Response.json(queuedDetectionJob, { status: 202 }))
+        : Promise.resolve(jobEvent(completed, 2)),
     assetRequest: () => Promise.resolve(Response.json({})),
   };
   await withDetection(api, async (controller, { setRevision, editorVersion }) => {
     await controller.startDetection("silence");
+    await vi.waitFor(() => expect(controller.detectionJob()?.state).toBe("succeeded"));
     expect(controller.acceptDetection(candidates[0]).accepted).toHaveLength(1);
     expect(editorVersion()).toBe(1);
     setRevision(2);
@@ -225,7 +441,7 @@ it("does not submit detection when the source changes during the required save",
   );
 });
 
-it("recovers a failed status update and offers the completed candidates for review", async () => {
+it("reconnects after a transient status failure and offers completed candidates for review", async () => {
   const candidate = {
     id: "c_recovered",
     mediaId: detectionMedia.id,
@@ -238,7 +454,9 @@ it("recovers a failed status update and offers the completed candidates for revi
   let requests = 0;
   const api: ApiClient = {
     url: (path) => path,
-    request: () => {
+    request: (path, init) => {
+      if (path.endsWith("/detections") && init?.method === "POST")
+        return Promise.resolve(Response.json(queuedDetectionJob, { status: 202 }));
       requests++;
       return Promise.resolve(
         requests === 1
@@ -246,17 +464,17 @@ it("recovers a failed status update and offers the completed candidates for revi
               { error: { code: "unavailable", message: "Status unavailable", requestId: "r1" } },
               { status: 503 },
             )
-          : Response.json({ ...queuedDetectionJob, state: "succeeded", candidates: [candidate] }),
+          : jobEvent({ ...queuedDetectionJob, state: "succeeded", candidates: [candidate] }, 2),
       );
     },
     assetRequest: () => Promise.resolve(Response.json({})),
   };
   await withDetection(api, async (controller) => {
-    controller.setDetectionJob(queuedDetectionJob);
-    await vi.waitFor(() => expect(controller.detectionQueryError()).toBe("Status unavailable"));
+    await controller.startDetection("silence");
     await vi.waitFor(() => expect(controller.detectionJob()?.state).toBe("succeeded"), {
       timeout: 2_000,
     });
+    expect(requests).toBe(2);
     expect(controller.detectionCandidates()).toEqual([candidate]);
     expect(controller.detectionQueryError()).toBe("");
     expect(controller.acceptDetection(candidate).accepted).toHaveLength(1);
@@ -279,7 +497,7 @@ it("rejects completed candidates after changing the active project item", async 
     url: (path) => path,
     request: (path, init) =>
       path.startsWith("projects/") && init?.method === "POST"
-        ? Promise.resolve(Response.json(queuedDetectionJob))
+        ? Promise.resolve(Response.json(queuedDetectionJob, { status: 202 }))
         : new Promise<Response>((resolve) => {
             completeStatus = resolve;
           }),
@@ -292,7 +510,7 @@ it("rejects completed candidates after changing the active project item", async 
       await vi.waitFor(() => expect(completeStatus).toBeTypeOf("function"));
       setActiveItemId("i_other");
       completeStatus(
-        Response.json({ ...queuedDetectionJob, state: "succeeded", candidates: [candidate] }),
+        jobEvent({ ...queuedDetectionJob, state: "succeeded", candidates: [candidate] }, 2),
       );
       await vi.waitFor(() => expect(controller.detectionJob()?.state).toBe("succeeded"));
       expect(controller.acceptDetection(candidate).skipped[0]?.reason).toBe("stale");
