@@ -7,7 +7,7 @@ import {
   type Accessor,
   type Setter,
 } from "solid-js";
-import { useAtomSet, useAtomValue } from "@effect/atom-solid";
+import { useAtomSet } from "@effect/atom-solid";
 import { Cause, Effect, Exit } from "effect";
 import * as Schema from "effect/Schema";
 import * as AsyncResult from "effect/reactivity/AsyncResult";
@@ -236,15 +236,6 @@ export function createExportController(deps: {
     return ids;
   };
   const [streamIndexes, setStreamIndexes] = createSignal<number[]>([]);
-  const destinationsAtom = Atom.make<Destination[]>([]);
-  const destinationCapabilitiesAtom = Atom.make<components["schemas"]["DestinationCapabilities"]>({
-    saveBesideSource: false,
-  });
-  const destinations = useAtomValue(() => destinationsAtom);
-  const destinationCapabilities = useAtomValue(() => destinationCapabilitiesAtom);
-  const setDestinations = (value: Destination[]) => registry.set(destinationsAtom, value);
-  const setDestinationCapabilities = (value: components["schemas"]["DestinationCapabilities"]) =>
-    registry.set(destinationCapabilitiesAtom, value);
   const [preflightError, setPreflightError] = createSignal("");
   const [destinationId, setDestinationId] = createSignal(lastDestinationId() ?? "download");
   const [destinationStatus, setDestinationStatus] = createSignal("");
@@ -317,6 +308,15 @@ export function createExportController(deps: {
   const batchList = useServerAtom(() => batchListAtom);
   const destinationAtom = generatedApi.query("default", "listDestinations", {});
   const destinationResult = useServerAtom(() => destinationAtom);
+  const destinations = createMemo<Destination[]>(() => [
+    ...(destinationResult.value()?.destinations ?? []),
+  ]);
+  const destinationCapabilities = createMemo(
+    () =>
+      destinationResult.value()?.capabilities ?? {
+        saveBesideSource: false,
+      },
+  );
   const cancelBatchCommands = Atom.family((id: string) =>
     runtime.fn(() => {
       const cancel = deps.server.generatedApi?.mutation("default", "cancelBatch");
@@ -473,17 +473,6 @@ export function createExportController(deps: {
       deps.server.refreshMedia();
       refreshBatches();
     }
-  });
-  createEffect(() => {
-    const value = destinationResult.value();
-    if (!value) return;
-    const configured = Array.isArray(value.destinations) ? value.destinations : [];
-    setDestinations(configured);
-    setDestinationCapabilities(
-      value.capabilities ?? {
-        saveBesideSource: configured.some((item) => item.kind === "source_adjacent"),
-      },
-    );
   });
   createEffect(() => {
     const configured = destinations().filter(
