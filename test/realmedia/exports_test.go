@@ -185,7 +185,9 @@ func TestProductionExportsJobsAndOutputs(t *testing.T) {
 			t.Fatalf("preflight selection=%v allowed=%v", checked.Selection, checked.Allowed)
 		}
 		preflight.Body.Close()
-		response := p.requestBody(t, "POST", "/api/v2/projects/"+projectID+"/exports", map[string]any{"itemIds": payload["itemIds"]})
+		submission := map[string]any{"itemIds": payload["itemIds"], "projectRevision": revision}
+		response := p.requestCommand(t, "POST", "/api/v2/projects/"+projectID+"/exports", submission)
+		assertCommandProjectRevision(t, response, revision)
 		var submitted struct {
 			BatchID string `json:"batchId"`
 			Jobs    []struct {
@@ -286,7 +288,7 @@ func TestProductionExportsJobsAndOutputs(t *testing.T) {
 			if final["state"] != "failed" {
 				t.Fatalf("hybrid batch state=%v", final["state"])
 			}
-			retry := p.request(t, "POST", "/api/v2/jobs/"+jobID+"/retry")
+			retry := p.requestCommand(t, "POST", "/api/v2/jobs/"+jobID+"/retry", nil)
 			if retry.StatusCode != http.StatusAccepted {
 				retry.Body.Close()
 				t.Fatalf("hybrid retry status=%d", retry.StatusCode)
@@ -406,7 +408,7 @@ func TestProductionExportsJobsAndOutputs(t *testing.T) {
 			t.Fatalf("terminal cancellation status=%d", terminalDelete.StatusCode)
 		}
 		terminalDelete.Body.Close()
-		retry := p.request(t, "POST", "/api/v2/jobs/"+jobID+"/retry")
+		retry := p.requestCommand(t, "POST", "/api/v2/jobs/"+jobID+"/retry", nil)
 		if retry.StatusCode != http.StatusConflict {
 			retry.Body.Close()
 			t.Fatalf("successful retry status=%d", retry.StatusCode)
