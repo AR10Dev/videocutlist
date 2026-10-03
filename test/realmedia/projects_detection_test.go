@@ -92,7 +92,13 @@ func TestProjectsInterchangeAndDetectionUseProductionProcess(t *testing.T) {
 	for _, kind := range []string{"silence", "black", "scene"} {
 		request := map[string]any{"mediaId": m.ID, "projectItemId": itemID, "projectRevision": project.Revision, "kind": kind, "sourceFingerprint": m.ETag, "minDurationMs": 100}
 		var job realJob
-		p.json(t, http.MethodPost, "/api/v2/projects/"+projectID+"/detections", request, http.StatusAccepted, &job)
+		response := p.requestCommand(t, http.MethodPost, "/api/v2/projects/"+projectID+"/detections", request)
+		assertCommandProjectRevision(t, response, project.Revision)
+		if response.StatusCode != http.StatusAccepted || json.NewDecoder(response.Body).Decode(&job) != nil {
+			response.Body.Close()
+			t.Fatalf("%s detection submission status=%d", kind, response.StatusCode)
+		}
+		response.Body.Close()
 		waitFor(t, 45*time.Second, func() bool {
 			p.jsonNoFail(t, http.MethodGet, "/api/v2/jobs/"+job.ID, nil, http.StatusOK, &job)
 			return job.State == "succeeded"
@@ -112,7 +118,13 @@ func TestProjectsInterchangeAndDetectionUseProductionProcess(t *testing.T) {
 	}
 	cancelRequest := map[string]any{"mediaId": m.ID, "projectItemId": itemID, "projectRevision": project.Revision, "kind": "scene", "sourceFingerprint": m.ETag, "minDurationMs": 100}
 	var cancelled realJob
-	p.json(t, http.MethodPost, "/api/v2/projects/"+projectID+"/detections", cancelRequest, http.StatusAccepted, &cancelled)
+	response := p.requestCommand(t, http.MethodPost, "/api/v2/projects/"+projectID+"/detections", cancelRequest)
+	assertCommandProjectRevision(t, response, project.Revision)
+	if response.StatusCode != http.StatusAccepted || json.NewDecoder(response.Body).Decode(&cancelled) != nil {
+		response.Body.Close()
+		t.Fatalf("cancellation detection submission status=%d", response.StatusCode)
+	}
+	response.Body.Close()
 	waitFor(t, 10*time.Second, func() bool {
 		p.jsonNoFail(t, http.MethodGet, "/api/v2/jobs/"+cancelled.ID, nil, http.StatusOK, &cancelled)
 		return cancelled.State == "running"
@@ -131,12 +143,19 @@ func TestProjectsInterchangeAndDetectionUseProductionProcess(t *testing.T) {
 		return cancelled.State == "cancelled"
 	})
 	badDetection := map[string]any{"mediaId": m.ID, "projectItemId": itemID, "projectRevision": project.Revision, "kind": "scene", "sourceFingerprint": "stale"}
-	var staleJob realJob
-	p.json(t, http.MethodPost, "/api/v2/projects/"+projectID+"/detections", badDetection, http.StatusAccepted, &staleJob)
-	waitFor(t, 45*time.Second, func() bool {
-		p.jsonNoFail(t, http.MethodGet, "/api/v2/jobs/"+staleJob.ID, nil, http.StatusOK, &staleJob)
-		return staleJob.State == "failed"
-	})
+	response = p.requestCommand(t, http.MethodPost, "/api/v2/projects/"+projectID+"/detections", badDetection)
+	assertCommandProjectRevision(t, response, project.Revision)
+	var staleError struct {
+		Error struct {
+			Code      string `json:"code"`
+			RequestID string `json:"requestId"`
+		} `json:"error"`
+	}
+	if response.StatusCode != http.StatusConflict || json.NewDecoder(response.Body).Decode(&staleError) != nil || staleError.Error.Code != "stale_project" || staleError.Error.RequestID == "" || response.Header.Get("X-Request-ID") != staleError.Error.RequestID {
+		response.Body.Close()
+		t.Fatalf("stale detection response status=%d error=%+v", response.StatusCode, staleError.Error)
+	}
+	response.Body.Close()
 	var unchanged realProject
 	p.json(t, http.MethodGet, "/api/v2/projects/"+projectID, nil, http.StatusOK, &unchanged)
 	if unchanged.Revision != project.Revision || len(unchanged.Items) != len(project.Items) {
