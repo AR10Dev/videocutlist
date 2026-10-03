@@ -2,7 +2,7 @@ import type * as EffectApiTypes from "../../generated/effect-api";
 import { RegistryContext, useAtomValue } from "@effect/atom-solid";
 import * as AsyncResult from "effect/reactivity/AsyncResult";
 import * as Atom from "effect/reactivity/Atom";
-import { createEffect, createSignal, onCleanup, useContext } from "solid-js";
+import { createEffect, createRoot, createSignal, onCleanup, useContext } from "solid-js";
 import { createApiClient, resolveBrowserConfiguration } from "../../api";
 import { createPreviewController } from "../preview/controller";
 import { createProjectItem, moveProjectItem, type EditableProjectItem } from "../projects/model";
@@ -291,6 +291,58 @@ export function createWorkspaceController() {
     if (refreshed) setSelected(refreshed);
   };
   const mediaRevision = useAtomValue(() => server.mediaRevision);
+  const projectMedia = new Map<
+    string,
+    { value: () => AsyncResult.AsyncResult<Media, Error>; dispose: () => void }
+  >();
+  let projectMediaContext = "";
+  createEffect(() => {
+    const context = `${projectId()}::${mediaRevision()}`;
+    const ids = new Set(projectItems().map((item) => item.media.id));
+    if (context !== projectMediaContext) {
+      for (const resource of projectMedia.values()) resource.dispose();
+      projectMedia.clear();
+      projectMediaContext = context;
+    }
+    for (const [id, resource] of projectMedia) {
+      if (ids.has(id)) continue;
+      resource.dispose();
+      projectMedia.delete(id);
+    }
+    for (const id of ids) {
+      if (projectMedia.has(id)) continue;
+      const atom = server.media(id, mediaRevision());
+      let value!: () => AsyncResult.AsyncResult<Media, Error>;
+      let dispose!: () => void;
+      createRoot((rootDispose) => {
+        const [result, setResult] = createSignal(server.registry.get(atom));
+        value = result;
+        const unmount = server.registry.mount(atom);
+        const unsubscribe = server.registry.subscribe(atom, setResult, { immediate: true });
+        dispose = () => {
+          unsubscribe();
+          unmount();
+          rootDispose();
+        };
+      });
+      projectMedia.set(id, { value, dispose });
+    }
+  });
+  onCleanup(() => {
+    for (const resource of projectMedia.values()) resource.dispose();
+    projectMedia.clear();
+  });
+  const visibleMedia = () => {
+    const items = [...media()];
+    const ids = new Set(items.map((item) => item.id));
+    for (const item of projectItems()) {
+      if (ids.has(item.media.id)) continue;
+      const result = projectMedia.get(item.media.id)?.value();
+      items.push(result && AsyncResult.isSuccess(result) ? result.value : item.media);
+      ids.add(item.media.id);
+    }
+    return items;
+  };
   const noMedia = Atom.make(AsyncResult.initial<Media, Error>());
   const selectedMediaAtom = () => {
     const id = selected()?.id;
@@ -480,6 +532,7 @@ export function createWorkspaceController() {
   return {
     server,
     library: libraryFeature,
+    visibleMedia,
     editorStatus: editorFeature.editorStatus,
     setEditorStatus: editorFeature.setEditorStatus,
     media,

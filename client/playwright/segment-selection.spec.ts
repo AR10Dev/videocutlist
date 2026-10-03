@@ -3590,9 +3590,18 @@ test("load fetches project media directly and corrupt recents do not block start
     }),
   );
   let outsideMediaReads = 0;
+  let refreshes = 0;
+  await page.route(`${apiOrigin}/api/v2/media/refresh`, (route) => {
+    refreshes += 1;
+    return route.fulfill({ status: 202, json: refreshAcknowledgement() });
+  });
   await page.route(`${apiOrigin}/api/v2/media/${outsideMedia.id}`, (route) => {
     outsideMediaReads += 1;
-    return route.fulfill({ json: outsideMedia });
+    return route.fulfill({
+      json: refreshes
+        ? { ...outsideMedia, name: "outside-refreshed.mp4", etag: "v2" }
+        : outsideMedia,
+    });
   });
   await page.route(`${apiOrigin}/media/v2/media/${outsideMedia.id}/thumbnails**`, (route) =>
     route.fulfill({ headers: { "content-type": "image/png" }, body: "outside-png-fixture" }),
@@ -3623,6 +3632,13 @@ test("load fetches project media directly and corrupt recents do not block start
     page.locator(".media-list").getByRole("button", { name: /outside.mp4/ }),
   ).toBeVisible();
   await expect(page.locator(".media-list")).toContainText("outside.mp4");
+  await page.getByRole("button", { name: "Refresh media" }).click();
+  await expect(page.locator(".media-list")).toContainText("outside-refreshed.mp4");
+  await page
+    .locator(".media-list")
+    .getByRole("button", { name: /outside-refreshed.mp4/ })
+    .click();
+  await expect(page.getByLabel("Selected media")).toContainText("outside-refreshed.mp4");
 });
 
 test("loads cursor pages once and removes Load more at the end", async ({ page }) => {

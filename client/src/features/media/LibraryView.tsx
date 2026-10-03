@@ -81,7 +81,7 @@ export function LibraryView() {
   const [explorerOpen, setExplorerOpen] = createSignal(false);
   const {
     library,
-    media,
+    visibleMedia,
     selected,
     folders,
     activeFolder,
@@ -185,7 +185,7 @@ export function LibraryView() {
           )}
         </For>
       </Show>
-      <Show when={!selected() && media().length === 0 && !library.libraryError()}>
+      <Show when={!selected() && visibleMedia().length === 0 && !library.libraryError()}>
         <div class="library-setup" role="region" aria-label="Media library status">
           <p role="status">{libraryMessage()}</p>
         </div>
@@ -222,7 +222,7 @@ export function LibraryView() {
             <span class="folder-label">Videos in folder</span>
           </Show>
           <ul class="media-list" aria-label="Media list">
-            <For each={media()}>
+            <For each={visibleMedia()}>
               {(item) => (
                 <li>
                   <button
