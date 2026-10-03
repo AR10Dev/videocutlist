@@ -333,8 +333,13 @@ export function createWorkspaceController() {
     projectMedia.clear();
   });
   const visibleMedia = () => {
-    const items = [...media()];
-    const ids = new Set(items.map((item) => item.id));
+    const items: Media[] = [];
+    const ids = new Set<string>();
+    for (const item of media()) {
+      if (ids.has(item.id)) continue;
+      ids.add(item.id);
+      items.push(item);
+    }
     for (const item of projectItems()) {
       if (ids.has(item.media.id)) continue;
       const result = projectMedia.get(item.media.id)?.value();

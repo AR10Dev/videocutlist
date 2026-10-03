@@ -3657,7 +3657,7 @@ test("loads cursor pages once and removes Load more at the end", async ({ page }
     return route.fulfill({
       json: {
         folders: [],
-        items: [media, secondMedia],
+        items: [media, media, secondMedia],
         nextCursor: null,
       } satisfies EffectApiTypes.FolderPage,
     });
@@ -3667,9 +3667,9 @@ test("loads cursor pages once and removes Load more at the end", async ({ page }
   await page.getByRole("button", { name: "Load more" }).click();
   await expect(page.getByRole("button", { name: /second.mp4/ })).toBeVisible();
   await expect(page.getByRole("button", { name: "Load more" })).toHaveCount(0);
-  expect(
-    await page.locator(".media-list").getByRole("button", { name: "Select camera.mp4" }).count(),
-  ).toBeGreaterThan(0);
+  await expect(
+    page.locator(".media-list").getByRole("button", { name: "Select camera.mp4" }),
+  ).toHaveCount(1);
 });
 
 test("keeps the first page after a later-page failure and permits retry", async ({ page }) => {
