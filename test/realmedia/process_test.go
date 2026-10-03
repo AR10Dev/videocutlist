@@ -107,14 +107,14 @@ func TestProductionProcessMediaAndDerivedAssets(t *testing.T) {
 	}
 	resp.Body.Close()
 	for _, path := range []string{"/api/v2/media/refresh", "/api/v2/settings/media/refresh"} {
-		resp := p.request(t, http.MethodPost, path)
+		resp := p.requestCommand(t, http.MethodPost, path, nil)
 		if resp.StatusCode != http.StatusAccepted {
 			resp.Body.Close()
 			t.Fatalf("POST %s status=%d", path, resp.StatusCode)
 		}
 		resp.Body.Close()
 	}
-	resp = p.request(t, http.MethodPost, "/api/v2/media/import")
+	resp = p.requestCommand(t, http.MethodPost, "/api/v2/media/import", nil)
 	var importJob struct {
 		ID string `json:"id"`
 	}

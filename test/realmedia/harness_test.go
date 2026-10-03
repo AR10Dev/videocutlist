@@ -5,6 +5,7 @@ package realmedia
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -379,6 +380,55 @@ func (p *process) checkRedaction(value string) {
 
 func (p *process) request(t *testing.T, method, path string) *http.Response {
 	return p.requestBody(t, method, path, nil)
+}
+
+// requestCommand sends one intentional command with a fresh key; it never retries.
+func (p *process) requestCommand(t *testing.T, method, path string, body any) *http.Response {
+	t.Helper()
+	key := freshIdempotencyKey(t)
+	var payload io.Reader
+	if body != nil {
+		data, err := json.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		payload = bytes.NewReader(data)
+	}
+	response := p.requestHeaders(t, method, path, payload, map[string]string{"Idempotency-Key": key})
+	if response.Request.Header.Get("Idempotency-Key") != key {
+		response.Body.Close()
+		t.Fatal("command request did not carry its fresh idempotency key")
+	}
+	return response
+}
+
+func freshIdempotencyKey(t *testing.T) string {
+	t.Helper()
+	var key [16]byte
+	if n, err := rand.Read(key[:]); err != nil || n != len(key) {
+		t.Fatalf("generate idempotency key: read %d bytes: %v", n, err)
+	}
+	key[6] = key[6]&0x0f | 0x40
+	key[8] = key[8]&0x3f | 0x80
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", key[0:4], key[4:6], key[6:8], key[8:10], key[10:16])
+}
+
+func assertCommandProjectRevision(t *testing.T, response *http.Response, expected int64) {
+	t.Helper()
+	if response.Request.GetBody == nil {
+		t.Fatal("command request body cannot be inspected")
+	}
+	body, err := response.Request.GetBody()
+	if err != nil {
+		t.Fatalf("read command request body: %v", err)
+	}
+	defer body.Close()
+	var command struct {
+		ProjectRevision int64 `json:"projectRevision"`
+	}
+	if err := json.NewDecoder(body).Decode(&command); err != nil || command.ProjectRevision != expected {
+		t.Fatalf("command project revision=%d, want %d (decode error %v)", command.ProjectRevision, expected, err)
+	}
 }
 
 func (p *process) requestBody(t *testing.T, method, path string, body any) *http.Response {

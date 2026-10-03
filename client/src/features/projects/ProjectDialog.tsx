@@ -102,8 +102,7 @@ export function ProjectDialog(props: { onClose: () => void }) {
           if (workspace.dirty() && !(await workspace.projects.saveProject()))
             throw new Error("Save the project before importing a cut list.");
           if (!isCurrent(operation)) return;
-          const mutation = workspace.server.generatedApi?.mutation("default", "importInterchange");
-          if (!mutation) throw new Error("Generated project API is not configured.");
+          const mutation = workspace.server.generatedApi.mutation("default", "importInterchange");
           const release = workspace.server.registry.mount(mutation);
           try {
             workspace.server.registry.set(mutation, {
