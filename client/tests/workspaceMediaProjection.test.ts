@@ -1,4 +1,5 @@
 import type * as EffectApiTypes from "../src/generated/effect-api";
+import type * as Atom from "effect/reactivity/Atom";
 import { RegistryContext, RegistryProvider } from "@effect/atom-solid";
 import { createComponent, createRoot, untrack, useContext } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -93,28 +94,51 @@ function memoryStorage(): Storage {
   };
 }
 
-function until(check: () => boolean): Promise<void> {
+function until(
+  check: () => boolean,
+  describe: () => string = () => "workspace state",
+): Promise<void> {
   const started = Date.now();
   return new Promise((resolve, reject) => {
     const poll = () => {
       if (check()) resolve();
-      else if (Date.now() - started > 5000)
-        reject(new Error("Timed out waiting for workspace state."));
+      else if (Date.now() - started > 3000)
+        reject(new Error(`Timed out waiting for ${describe()}.`));
       else setTimeout(poll, 0);
     };
     poll();
   });
 }
 
+type ProjectMediaLifecycle = {
+  mounts: number;
+  mountReleases: number;
+  subscriptions: number;
+  subscriptionReleases: number;
+  listenerNotifications: number;
+  notificationsAfterRelease: number;
+};
+
+type DeferredMetadataResponse = {
+  deliver: (response: Response) => void;
+  handedOff: Promise<void>;
+};
+
+function expectProjectMediaReleased(lifecycle: ProjectMediaLifecycle) {
+  expect(lifecycle.mounts).toBeGreaterThan(0);
+  expect(lifecycle.subscriptions).toBe(lifecycle.mounts);
+  expect(lifecycle.mountReleases).toBe(lifecycle.mounts);
+  expect(lifecycle.subscriptionReleases).toBe(lifecycle.subscriptions);
+}
+
 function mountWorkspace(options: {
   pageItems?: Media[];
   projects: Project[];
-  currentMedia: (id: string, calls: number) => Media;
+  currentMedia: (id: string) => Media;
 }) {
-  const pending = new Map<string, Array<(response: Response) => void>>();
-  const aborted = new Map<string, number>();
-  const calls = new Map<string, number>();
+  const pending = new Map<string, DeferredMetadataResponse[]>();
   const deferredIDs = new Set<string>();
+  let saveRequests = 0;
   const projects = new Map(options.projects.map((entry) => [entry.id, entry]));
   vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = new URL(String(input));
@@ -129,25 +153,42 @@ function mountWorkspace(options: {
     if (url.pathname === "/api/v2/batches") return Response.json({ items: [], nextCursor: null });
     if (url.pathname.startsWith("/api/v2/projects/")) {
       const found = projects.get(url.pathname.split("/").at(-1) ?? "");
-      return found ? Response.json(found) : new Response(null, { status: 404 });
+      if (!found) return new Response(null, { status: 404 });
+      if (init?.method === "PUT") {
+        saveRequests += 1;
+        const input = JSON.parse(String(init.body)) as Omit<
+          Project,
+          "id" | "updatedAt" | "revision"
+        >;
+        return Response.json({
+          ...found,
+          ...input,
+          revision: found.revision + 1,
+          updatedAt: "2026-01-02T00:00:00Z",
+        });
+      }
+      return Response.json(found);
     }
     const metadataPrefix = "/api/v2/media/";
     if (url.pathname.startsWith(metadataPrefix) && url.pathname !== `${metadataPrefix}tree`) {
       const id = decodeURIComponent(url.pathname.slice(metadataPrefix.length));
-      const count = (calls.get(id) ?? 0) + 1;
-      calls.set(id, count);
-      if (deferredIDs.has(id))
-        return new Promise<Response>((resolve) => {
-          const queue = pending.get(id) ?? [];
-          queue.push(resolve);
-          pending.set(id, queue);
-          init?.signal?.addEventListener(
-            "abort",
-            () => aborted.set(id, (aborted.get(id) ?? 0) + 1),
-            { once: true },
-          );
+      if (deferredIDs.has(id)) {
+        let acknowledgeHandoff!: () => void;
+        const handedOff = new Promise<void>((resolve) => {
+          acknowledgeHandoff = resolve;
         });
-      return Response.json(options.currentMedia(id, count));
+        const response = new Promise<Response>((resolve) => {
+          const queue = pending.get(id) ?? [];
+          queue.push({ deliver: resolve, handedOff });
+          pending.set(id, queue);
+        });
+        return response.then(async (value) => {
+          await value.clone().arrayBuffer();
+          acknowledgeHandoff();
+          return value;
+        });
+      }
+      return Response.json(options.currentMedia(id));
     }
     return new Response(null, { status: 404 });
   });
@@ -158,6 +199,8 @@ function mountWorkspace(options: {
   }) as unknown as Window;
   vi.stubGlobal("window", browser);
   vi.stubGlobal("localStorage", memoryStorage());
+  const trackedProjectAtoms = new Map<object, ProjectMediaLifecycle>();
+  const mountingProjectAtoms = new Set<object>();
   let controller!: WorkspaceController;
   let dispose!: () => void;
   createRoot((rootDispose) => {
@@ -167,6 +210,62 @@ function mountWorkspace(options: {
         untrack(() => {
           useContext(RegistryContext);
           controller = createWorkspaceController();
+          const registry = controller.server.registry;
+          const originalMount = registry.mount.bind(registry);
+          Object.defineProperty(registry, "mount", {
+            configurable: true,
+            value: <A>(atom: Atom.Atom<A>) => {
+              const lifecycle = trackedProjectAtoms.get(atom);
+              if (!lifecycle) return originalMount(atom);
+              lifecycle.mounts += 1;
+              mountingProjectAtoms.add(atom);
+              let release: () => void;
+              try {
+                release = originalMount(atom);
+              } finally {
+                mountingProjectAtoms.delete(atom);
+              }
+              let released = false;
+              return () => {
+                if (!released) {
+                  released = true;
+                  lifecycle.mountReleases += 1;
+                }
+                release();
+              };
+            },
+          });
+          const originalSubscribe = registry.subscribe.bind(registry);
+          Object.defineProperty(registry, "subscribe", {
+            configurable: true,
+            value: <A>(
+              atom: Atom.Atom<A>,
+              listener: (value: A) => void,
+              options?: { readonly immediate?: boolean },
+            ) => {
+              const lifecycle = trackedProjectAtoms.get(atom);
+              if (!lifecycle || mountingProjectAtoms.has(atom))
+                return originalSubscribe(atom, listener, options);
+              let released = false;
+              const unsubscribe = originalSubscribe(
+                atom,
+                (value) => {
+                  lifecycle.listenerNotifications += 1;
+                  if (released) lifecycle.notificationsAfterRelease += 1;
+                  listener(value);
+                },
+                options,
+              );
+              lifecycle.subscriptions += 1;
+              return () => {
+                if (!released) {
+                  released = true;
+                  lifecycle.subscriptionReleases += 1;
+                }
+                unsubscribe();
+              };
+            },
+          });
         });
         return null;
       },
@@ -176,25 +275,37 @@ function mountWorkspace(options: {
   return {
     controller,
     dispose,
-    calls,
-    aborts: (id: string) => aborted.get(id) ?? 0,
+    saveRequests: () => saveRequests,
     defer(id: string) {
       deferredIDs.add(id);
     },
-    resolveDeferred(id: string, value: Media) {
+    async resolveDeferred(id: string, value: Media) {
       deferredIDs.delete(id);
       const queue = pending.get(id) ?? [];
       pending.delete(id);
-      for (const resolve of queue) resolve(Response.json(value));
+      for (const request of queue) request.deliver(Response.json(value));
+      await Promise.all(queue.map((request) => request.handedOff));
     },
     pendingCount: (id: string) => pending.get(id)?.length ?? 0,
+    watchProjectMedia(id: string, revision: number): ProjectMediaLifecycle {
+      const lifecycle: ProjectMediaLifecycle = {
+        mounts: 0,
+        mountReleases: 0,
+        subscriptions: 0,
+        subscriptionReleases: 0,
+        listenerNotifications: 0,
+        notificationsAfterRelease: 0,
+      };
+      trackedProjectAtoms.set(controller.server.media(id, revision), lifecycle);
+      return lifecycle;
+    },
   };
 }
 
 describe("workspace project media projection", () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it("keeps page-first ordering and canonical refresh separate from project/editor persistence", async () => {
+  it("keeps clean viewing separate from dirty project/editor persistence", async () => {
     const pageID = mediaID("p");
     const overlapID = mediaID("o");
     const secondID = mediaID("b");
@@ -229,6 +340,52 @@ describe("workspace project media projection", () => {
       expect(controller.visibleMedia()[1]?.name).toBe("page-overlap.mp4");
       expect(controller.visibleMedia().filter((item) => item.id === secondID)).toHaveLength(1);
 
+      expect(controller.dirty()).toBe(false);
+      const cleanState = {
+        items: controller.editableItems().map((item) => ({
+          media: item.media,
+          persisted: serializeProjectItem(item),
+        })),
+        timeline: controller.timeline(),
+        revision: controller.revision(),
+      };
+      let autosaveSchedules = 0;
+      const scheduleAutosave = controller.projects.scheduleAutosave;
+      controller.projects.scheduleAutosave = () => {
+        autosaveSchedules += 1;
+        scheduleAutosave();
+      };
+      refreshed = true;
+      controller.server.refreshMedia();
+      await until(
+        () => controller.visibleMedia().find((item) => item.id === secondID)?.etag === "v2",
+      );
+      expect(controller.dirty()).toBe(false);
+      expect(autosaveSchedules).toBe(0);
+      controller.chooseMedia(controller.visibleMedia().find((item) => item.id === thirdID)!);
+      await until(
+        () => controller.selected()?.id === thirdID && controller.selected()?.etag === "v2",
+      );
+      expect(controller.dirty()).toBe(false);
+      expect(autosaveSchedules).toBe(0);
+      controller.chooseMedia(controller.visibleMedia().find((item) => item.id === secondID)!);
+      await until(
+        () => controller.selected()?.id === secondID && controller.selected()?.etag === "v2",
+      );
+      expect(controller.dirty()).toBe(false);
+      expect(autosaveSchedules).toBe(0);
+      expect(controller.revision()).toBe(cleanState.revision);
+      expect(
+        controller.editableItems().map((item) => ({
+          media: item.media,
+          persisted: serializeProjectItem(item),
+        })),
+      ).toEqual(cleanState.items);
+      expect(controller.timeline()).toEqual(cleanState.timeline);
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      expect(autosaveSchedules).toBe(0);
+      expect(harness.saveRequests()).toBe(0);
+
       controller.projects.scheduleAutosave = () => undefined;
       controller.updateTimeline({
         segments: [{ id: "s_projection-one", startMs: 100, endMs: 200 }],
@@ -240,18 +397,21 @@ describe("workspace project media projection", () => {
         ],
       });
       expect(controller.dirty()).toBe(true);
-      const before = {
+      const dirtyState = {
         items: controller.editableItems().map((item) => ({
           media: item.media,
           persisted: serializeProjectItem(item),
         })),
+        fingerprints: controller.projectItems().map(({ id, media: source }) => ({
+          id,
+          mediaID: source.id,
+          etag: source.etag,
+        })),
         timeline: controller.timeline(),
         revision: controller.revision(),
-        dirty: controller.dirty(),
       };
       expect(controller.timeline().past).toHaveLength(2);
 
-      refreshed = true;
       controller.server.refreshMedia();
       await until(
         () => controller.visibleMedia().find((item) => item.id === secondID)?.etag === "v2",
@@ -265,15 +425,22 @@ describe("workspace project media projection", () => {
         () => controller.selected()?.id === secondID && controller.selected()?.etag === "v2",
       );
 
-      expect(controller.dirty()).toBe(before.dirty);
-      expect(controller.revision()).toBe(before.revision);
+      expect(controller.dirty()).toBe(true);
+      expect(controller.revision()).toBe(dirtyState.revision);
       expect(
         controller.editableItems().map((item) => ({
           media: item.media,
           persisted: serializeProjectItem(item),
         })),
-      ).toEqual(before.items);
-      expect(controller.timeline()).toEqual(before.timeline);
+      ).toEqual(dirtyState.items);
+      expect(controller.timeline()).toEqual(dirtyState.timeline);
+      expect(
+        controller.projectItems().map(({ id, media: source }) => ({
+          id,
+          mediaID: source.id,
+          etag: source.etag,
+        })),
+      ).toEqual(dirtyState.fingerprints);
       expect(controller.projectItems().find((item) => item.media.id === secondID)?.media.etag).toBe(
         "v1",
       );
@@ -283,12 +450,13 @@ describe("workspace project media projection", () => {
     }
   });
 
-  it("detaches old metadata on project replacement and item removal", async () => {
-    const oldID = mediaID("a");
-    const nextID = mediaID("n");
+  it("releases unselected project media resources on replacement and removal", async () => {
+    const oldSelectedID = mediaID("s");
+    const oldUnselectedID = mediaID("a");
+    const nextSelectedID = mediaID("n");
     const removedID = mediaID("r");
-    const oldProject = project(projectID("oldproject"), [oldID]);
-    const replacement = project(projectID("newproject"), [nextID, removedID]);
+    const oldProject = project(projectID("oldproject"), [oldSelectedID, oldUnselectedID]);
+    const replacement = project(projectID("newproject"), [nextSelectedID, removedID]);
     const harness = mountWorkspace({
       projects: [oldProject, replacement],
       currentMedia: (id) => media(id, `${id.slice(0, 5)}.mp4`),
@@ -296,53 +464,107 @@ describe("workspace project media projection", () => {
     const { controller } = harness;
     try {
       await controller.projects.loadProject(oldProject.id);
-      harness.defer(oldID);
+      const replacementRevision =
+        controller.server.registry.get(controller.server.mediaRevision) + 1;
+      const replacedLifecycle = harness.watchProjectMedia(oldUnselectedID, replacementRevision);
+      // The tracked source is not selected, so these are project-display lifecycle handles.
+      expect(controller.selected()?.id).toBe(oldSelectedID);
+      harness.defer(oldUnselectedID);
       controller.server.refreshMedia();
-      await until(() => harness.pendingCount(oldID) > 0);
+      await until(
+        () =>
+          replacedLifecycle.mounts === 1 &&
+          replacedLifecycle.subscriptions === 1 &&
+          harness.pendingCount(oldUnselectedID) > 0,
+        () =>
+          `replacement resource lifecycle ${JSON.stringify(replacedLifecycle)}, pending=${harness.pendingCount(oldUnselectedID)}, revision=${controller.server.registry.get(controller.server.mediaRevision)}`,
+      );
       await controller.projects.loadProject(replacement.id);
-      await until(() => controller.visibleMedia().some((item) => item.id === removedID));
-      harness.resolveDeferred(oldID, media(oldID, "late-replaced.mp4", "late"));
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      expect(controller.visibleMedia().map((item) => item.id)).toEqual([nextID, removedID]);
+      expectProjectMediaReleased(replacedLifecycle);
+      expect(controller.visibleMedia().map((item) => item.id)).toEqual([nextSelectedID, removedID]);
+      const notificationsBeforeLateReplacementResponse = replacedLifecycle.listenerNotifications;
+      await harness.resolveDeferred(
+        oldUnselectedID,
+        media(oldUnselectedID, "late-replaced.mp4", "late"),
+      );
+      expect(replacedLifecycle.listenerNotifications).toBe(
+        notificationsBeforeLateReplacementResponse,
+      );
+      expect(replacedLifecycle.notificationsAfterRelease).toBe(0);
       expect(controller.visibleMedia().some((item) => item.name === "late-replaced.mp4")).toBe(
         false,
       );
 
+      const removalRevision = controller.server.registry.get(controller.server.mediaRevision) + 1;
+      const removedLifecycle = harness.watchProjectMedia(removedID, removalRevision);
+      expect(controller.selected()?.id).toBe(nextSelectedID);
       harness.defer(removedID);
       controller.server.refreshMedia();
-      await until(() => harness.pendingCount(removedID) > 0);
+      await until(
+        () =>
+          removedLifecycle.mounts === 1 &&
+          removedLifecycle.subscriptions === 1 &&
+          harness.pendingCount(removedID) > 0,
+        () =>
+          `removal resource lifecycle ${JSON.stringify(removedLifecycle)}, pending=${harness.pendingCount(removedID)}, revision=${controller.server.registry.get(controller.server.mediaRevision)}`,
+      );
+      const notificationsBeforeRemoval = removedLifecycle.listenerNotifications;
       controller.removeProjectItem(itemID(2));
       await until(() => !controller.visibleMedia().some((item) => item.id === removedID));
-      harness.resolveDeferred(removedID, media(removedID, "late-removed.mp4", "late"));
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      expect(controller.visibleMedia().map((item) => item.id)).toEqual([nextID]);
+      expectProjectMediaReleased(removedLifecycle);
+      await harness.resolveDeferred(removedID, media(removedID, "late-removed.mp4", "late"));
+      expect(removedLifecycle.listenerNotifications).toBe(notificationsBeforeRemoval);
+      expect(removedLifecycle.notificationsAfterRelease).toBe(0);
+      expect(controller.visibleMedia().map((item) => item.id)).toEqual([nextSelectedID]);
       expect(controller.dirty()).toBe(true);
     } finally {
       harness.dispose();
     }
   });
 
-  it("disposes active project metadata subscriptions and ignores late completion", async () => {
-    const sourceID = mediaID("d");
-    const saved = project(projectID("disposedproject"), [sourceID]);
+  it("releases unselected project media resources before workspace registry disposal", async () => {
+    const selectedID = mediaID("d");
+    const unselectedID = mediaID("u");
+    const saved = project(projectID("disposedproject"), [selectedID, unselectedID]);
     const harness = mountWorkspace({
       projects: [saved],
-      currentMedia: (id) => media(id, "original.mp4", "original-etag"),
+      currentMedia: (id) => media(id, `${id.slice(0, 5)}.mp4`, "original-etag"),
     });
     const { controller } = harness;
-    await controller.projects.loadProject(saved.id);
-    harness.defer(sourceID);
-    controller.server.refreshMedia();
-    await until(() => harness.pendingCount(sourceID) > 0);
-    const beforeDispose = controller
-      .visibleMedia()
-      .map(({ id, name, etag }) => ({ id, name, etag }));
-    harness.dispose();
-    expect(harness.aborts(sourceID)).toBeGreaterThan(0);
-    harness.resolveDeferred(sourceID, media(sourceID, "late-after-disposal.mp4", "late"));
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(controller.visibleMedia().map(({ id, name, etag }) => ({ id, name, etag }))).toEqual(
-      beforeDispose,
-    );
+    let disposed = false;
+    try {
+      await controller.projects.loadProject(saved.id);
+      const revision = controller.server.registry.get(controller.server.mediaRevision) + 1;
+      const lifecycle = harness.watchProjectMedia(unselectedID, revision);
+      expect(controller.selected()?.id).toBe(selectedID);
+      harness.defer(unselectedID);
+      controller.server.refreshMedia();
+      await until(
+        () =>
+          lifecycle.mounts === 1 &&
+          lifecycle.subscriptions === 1 &&
+          harness.pendingCount(unselectedID) > 0,
+        () =>
+          `disposal resource lifecycle ${JSON.stringify(lifecycle)}, pending=${harness.pendingCount(unselectedID)}, revision=${controller.server.registry.get(controller.server.mediaRevision)}`,
+      );
+      const notificationsBeforeDisposal = lifecycle.listenerNotifications;
+      const beforeDispose = controller
+        .visibleMedia()
+        .map(({ id, name, etag }) => ({ id, name, etag }));
+      harness.dispose();
+      disposed = true;
+      expectProjectMediaReleased(lifecycle);
+      await harness.resolveDeferred(
+        unselectedID,
+        media(unselectedID, "late-after-disposal.mp4", "late"),
+      );
+      expect(lifecycle.listenerNotifications).toBe(notificationsBeforeDisposal);
+      expect(lifecycle.notificationsAfterRelease).toBe(0);
+      expect(controller.visibleMedia().map(({ id, name, etag }) => ({ id, name, etag }))).toEqual(
+        beforeDispose,
+      );
+    } finally {
+      if (!disposed) harness.dispose();
+    }
   });
 });
