@@ -19,43 +19,7 @@ API v2 is a breaking replacement; there is no `/api/v1` compatibility facade.
   deployment/protocol endpoints. Project document `schemaVersion` and local
   recovery formats are unchanged by the API protocol version.
 
-## Client generation and ownership
-
-The client pins Effect, atom-solid, platform-browser and the OpenAPI generator to
-stable `4.0.0`. Run `devenv shell -- pnpm --dir client run api:generate` after
-changing `docs/contracts/api.openapi.yaml`, and check in the resulting
-`client/src/generated/effect-api.ts`; do not edit it manually. The generator
-selects JSON operations from the full authoritative contract. Native media/file
-and SSE transport is deliberately not a second generated DTO pipeline.
-
-`client/src/api.ts` owns shared URL/auth/error policy. The workspace owns one
-registry and generated resource identity; feature controllers own local editor
-interaction and command intent. Observing or disposing a resource does not cancel
-a durable server job. A deliberate cancellation is a separate command. Browser
-preferences and project recovery never contain tokens or MCP credentials.
-
-## Browser persistence disposition (ticket 06)
-
-Retain the existing synchronous, best-effort browser storage rather than replacing
-it with `KeyValueStore`/`Atom.kvs` solely for API consistency. This satisfies the
-conditional adoption requirement: no demonstrated preference-wiring reduction
-preserves all existing behavior.
-
-- Panel restoration parses each field independently, keeps valid siblings when a
-  field is malformed, clamps widths to the viewport, and resets collapse state on
-  initial display. Its Solid effect already owns the necessary layout state.
-- Preview flags have existing raw `"true"`/`"false"` encodings and synchronous
-  initial values; settings and recovery have field defaults and legacy JSON
-  compatibility. Storage denial is nonfatal.
-- In the installed Effect 4.0.0 implementation, `Atom.kvs` uses schema-store
-  encoding, mounts read/write atoms in an atom runtime, and writes defaults for a
-  missing key. Reproducing partial-field recovery, initial layout normalization,
-  and exact legacy strings still needs custom codecs/error policy and the Solid
-  state bridge. A raw `KeyValueStore` wrapper likewise adds Effect execution around
-  the same get/set calls; it does not remove their domain policy.
-
-Reconsider native persistence only when a real shared atom-owned preference needs
-it and a compatibility test demonstrates unchanged keys, formats, synchronous
-initialization, partial defaults and storage-denial behavior. Existing settings,
-panel, preview and recovery tests remain the regression boundary. This disposition
-does not change the protocol ADR or project/recovery schema versions.
+For endpoint shapes, authentication, and response details, see the
+[HTTP API contract](api.openapi.yaml). Upgrade separately hosted browser clients
+and API integrations together with the server; older v1 clients cannot use v2
+routes.

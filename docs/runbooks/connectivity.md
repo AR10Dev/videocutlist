@@ -32,7 +32,7 @@ authentication unless the LAN itself is the complete access boundary.
 
 ## Tailscale Serve (optional)
 
-Keep VideoCutlist on loopback and use the [Tailscale example](tailscale/README.md)
+Keep VideoCutlist on loopback and use the [Tailscale example](tailscale.md)
 for private HTTPS. Serve is a transport choice, not an application dependency,
 and Funnel is never enabled.
 
@@ -62,5 +62,5 @@ browser origin in `VIDEOCUTLIST_ALLOWED_ORIGINS` when cross-origin, and bearer o
 trusted-proxy authentication. Do not expose the raw VideoCutlist listener directly
 to the public internet.
 
-See the [generic reverse-proxy contract](../reverse-proxy/README.md) before
+See the [reverse-proxy guide](reverse-proxy.md) before
 enabling `trusted_proxy` authentication.

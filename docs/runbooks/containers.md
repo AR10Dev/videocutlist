@@ -232,7 +232,7 @@ Keep the host binding local unless remote exposure is deliberate:
    firewall, and TLS controls above. `auth=none` is for a trusted local
    single-user boundary, not a LAN or internet listener.
 
-See the [reverse-proxy contract](../../deployments/reverse-proxy/README.md) for
+See the [reverse-proxy guide](reverse-proxy.md) for
 proxy-specific constraints.
 
 Browser export downloads stream through a same-origin service worker at

@@ -4,14 +4,11 @@ Guides for installing, using, and maintaining VideoCutlist.
 
 ## Getting started
 
-- [Container deployment](runbooks/containers.md)
+- [Overview and installation](overview.md)
+- [Deployment and settings](runbooks/containers.md)
 - [Operations](runbooks/operations.md)
-- [Connectivity examples](../deployments/connectivity-examples/README.md)
-
-## Developing
-
-- [Contributor setup and checks](../CONTRIBUTING.md)
-- [Protocol v2 and test-retention completion](runbooks/implementation-completion.md)
+- [Connectivity examples](runbooks/connectivity.md)
+- [Security policy](security.md)
 
 ## Editing and exporting
 
@@ -32,12 +29,12 @@ re-encoding and hybrid smart cuts are experimental; hybrid cuts require compatib
 H.264 constant-frame-rate MKV sources and MKV output. Native exports require Linux
 or macOS; other platforms reject export before encoding begins.
 
-
 ## Integrations and project files
 
 - [HTTP API](contracts/api.openapi.yaml)
 - [Project JSON format](contracts/project-schema.json)
-- [MCP client access](../README.md#mcp-clients)
+- [API v2 migration for integrations](contracts/api-v2-migration.md)
+- [MCP client access](overview.md#mcp-clients)
 
 MCP export proposals allow up to 20 project items and 100 ranges per item. Each
 selected clip may be at most 10 minutes, with at most 30 minutes selected in total.

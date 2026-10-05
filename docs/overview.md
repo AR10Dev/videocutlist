@@ -18,32 +18,13 @@ MP4, or MOV files. Original-media filesystem paths never leave the server.
 
 ## Requirements
 
-Enter `devenv shell` for the project-local Go, gopls, golangci-lint, Node, pnpm,
-FFmpeg, ShellCheck, shfmt, and Hadolint toolchain.
-
-You still need Docker or Podman with Compose for container checks.
-
-## Run locally
-
-```bash
-DATA_DIR="$(mktemp -d)"
-# Replace /path/to/media with the local directory containing originals.
-make client-install
-make build
-VIDEOCUTLIST_DATABASE_PATH="$DATA_DIR/videocutlist.db" \
-VIDEOCUTLIST_CACHE_DIR="$DATA_DIR/cache" \
-VIDEOCUTLIST_EXPORT_DIR="$DATA_DIR/exports" \
-VIDEOCUTLIST_MEDIA_ROOTS_JSON='{"media":"/path/to/media"}' \
-  go run ./cmd/videocutlist
-```
+Use Docker or Podman with Compose for container deployment, or install the server
+binary with FFmpeg and FFprobe for native deployment.
 
 The server listens on `127.0.0.1:8787` by default. Run it as a dedicated
-non-root account with read access to the absolute media root and write access to
-only the database, cache, and export directories. See the [deployment and
-settings guide](docs/runbooks/containers.md) for native permissions and
-container-visible mount paths. Release builds embed the bundled client in the Go
-binary and serve it from the same origin. Local development builds serve the
-generated `client/dist` directory.
+non-root account with read access to the media root and write access only to the
+database, cache, and export directories. See the [deployment and settings
+guide](runbooks/containers.md) for native permissions and container mount paths.
 
 ## Deploy with Docker or Podman
 
@@ -66,7 +47,7 @@ Open <http://127.0.0.1:8787> and enter the generated bearer token from your priv
 again. Never commit that file or put the token in a URL or frontend build.
 The host port binding is loopback-only; the container listener requires
 authentication even for local publishing. See the [container deployment
-guide](docs/runbooks/containers.md) for directory permissions and remote TLS.
+guide](runbooks/containers.md) for directory permissions and remote TLS.
 
 ## MCP clients
 
@@ -86,40 +67,12 @@ authentication; plain HTTP is rejected for non-loopback clients.
 embedding an artifact in the MCP response. Fetch it with the same bearer token;
 each download rechecks the credential, scope, and revocation state.
 
-## Repository at a glance
-
-| Location | What you will find |
-| --- | --- |
-| `cmd/videocutlist/` | Go server entry point and startup wiring |
-| `internal/` | Go application code and infrastructure |
-| `client/` | SolidJS/TypeScript frontend and its pnpm tooling |
-| `docs/` | Guides and API contracts |
-| `test/` | Cross-package and media workflow tests |
-
-For setup and checks, use the [contributor guide](CONTRIBUTING.md).
-
-## Development
-
-```bash
-make client-install
-make check             # lint, tests, and production build
-make smoke             # check plus browser tests
-make test-real-media   # opt-in production process and FFmpeg verification
-make clean             # remove generated output, preserving dependencies and local data
-```
-
-CI and release validation install the same `make check` prerequisites as the
-development shell: golangci-lint v2.13.1, shfmt v3.13.1, and ShellCheck.
-Both workflows run `make check`; the CI browser job separately runs `make e2e`.
-CI limits browser tests to two concurrent workers to keep the Vite development
-server responsive on the hosted runner.
-
 ## Documentation
 
-See the [documentation index](docs/README.md).
+See the [documentation index](README.md).
 
 ## Security
 
 VideoCutlist handles paths to original media and should not be exposed directly
-to the public internet. Review the [security policy](SECURITY.md) before
+to the public internet. Review the [security policy](security.md) before
 configuring network access.
