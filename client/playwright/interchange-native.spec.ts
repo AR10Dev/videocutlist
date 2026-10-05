@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { expect, test } from "@playwright/test";
 
 const serverBase = "http://127.0.0.1:8787/deploy";
@@ -21,13 +22,9 @@ async function openProjectTools(page: import("@playwright/test").Page) {
 
 test("imports text through generated v2 control and downloads native interchange attachments", async ({
   page,
-}) => {
+}, testInfo) => {
   const importRequests: { path: string; contentType: string | undefined; body: string }[] = [];
-  const nativeRequests: {
-    path: string;
-    contentType: string | undefined;
-    disposition: string | undefined;
-  }[] = [];
+  const nativeRequests: { path: string }[] = [];
   let savedProject: Record<string, unknown> | undefined;
   await page.addInitScript((base) => {
     window.VIDEOCUTLIST_CONFIG = {
@@ -37,6 +34,7 @@ test("imports text through generated v2 control and downloads native interchange
     const create = URL.createObjectURL.bind(URL);
     const revoke = URL.revokeObjectURL.bind(URL);
     window.__interchangeUrls = { created: [], revoked: [] };
+    window.__interchangeBlobs = [];
     window.__heldInterchange = { enabled: false, started: false, cancelled: false };
     const originalFetch = window.fetch.bind(window);
     window.fetch = async (input, init) => {
@@ -64,8 +62,12 @@ test("imports text through generated v2 control and downloads native interchange
       if (
         object instanceof Blob &&
         (object.type.startsWith("text/csv") || object.type.startsWith("text/plain"))
-      )
+      ) {
         window.__interchangeUrls.created.push(url);
+        void object
+          .text()
+          .then((text) => window.__interchangeBlobs.push({ type: object.type, text }));
+      }
       return url;
     };
     URL.revokeObjectURL = (url) => {
@@ -140,11 +142,7 @@ test("imports text through generated v2 control and downloads native interchange
       return route.fulfill({ json: savedProject });
     if (url.pathname.startsWith("/deploy/media/v2/projects/")) {
       const format = url.pathname.endsWith("/csv") ? "csv" : "chapters";
-      nativeRequests.push({
-        path: `${url.pathname}${url.search}`,
-        contentType: format === "csv" ? "text/csv; charset=utf-8" : "text/plain; charset=utf-8",
-        disposition: `attachment; filename="cutlist.${format}"`,
-      });
+      nativeRequests.push({ path: `${url.pathname}${url.search}` });
       return route.fulfill({
         headers: {
           "Content-Type":
@@ -213,21 +211,38 @@ test("imports text through generated v2 control and downloads native interchange
   await expect(page.getByText("Cut list import failed.", { exact: true })).toBeVisible();
   expect(savedProject).toMatchObject({ schemaVersion: 2, revision: 3 });
 
-  const csvDownload = page.waitForEvent("download");
+  const csvDownloadPromise = page.waitForEvent("download");
   await page.getByRole("button", { name: "Download CSV cut list" }).click();
-  expect((await csvDownload).suggestedFilename()).toBe("cutlist.csv");
-  const chapterDownload = page.waitForEvent("download");
+  const csvDownload = await csvDownloadPromise;
+  expect(csvDownload.suggestedFilename()).toBe("cutlist.csv");
+  const csvPath = testInfo.outputPath("native-interchange.csv");
+  await csvDownload.saveAs(csvPath);
+  expect(await readFile(csvPath, "utf8")).toBe(
+    "start,end,label\n00:00:00.500,00:00:01.500,Opening\n",
+  );
+  const chapterDownloadPromise = page.waitForEvent("download");
   await page.getByRole("button", { name: "Download chapters" }).click();
-  expect((await chapterDownload).suggestedFilename()).toBe("cutlist.chapters");
+  const chapterDownload = await chapterDownloadPromise;
+  expect(chapterDownload.suggestedFilename()).toBe("cutlist.chapters");
+  const chaptersPath = testInfo.outputPath("native-interchange.chapters");
+  await chapterDownload.saveAs(chaptersPath);
+  expect(await readFile(chaptersPath, "utf8")).toBe("00:00:00.500 --> 00:00:01.500 Opening\n");
   expect(nativeRequests).toHaveLength(2);
   expect(nativeRequests.map(({ path }) => path.startsWith("/deploy/media/v2/projects/"))).toEqual([
     true,
     true,
   ]);
   expect(nativeRequests.map(({ path }) => path.includes("?itemId=i_"))).toEqual([true, true]);
-  expect(nativeRequests.map(({ contentType, disposition }) => [contentType, disposition])).toEqual([
-    ["text/csv; charset=utf-8", 'attachment; filename="cutlist.csv"'],
-    ["text/plain; charset=utf-8", 'attachment; filename="cutlist.chapters"'],
+  await expect.poll(() => page.evaluate(() => window.__interchangeBlobs.length)).toBe(2);
+  expect(await page.evaluate(() => window.__interchangeBlobs)).toEqual([
+    {
+      type: "text/csv; charset=utf-8",
+      text: "start,end,label\n00:00:00.500,00:00:01.500,Opening\n",
+    },
+    {
+      type: "text/plain; charset=utf-8",
+      text: "00:00:00.500 --> 00:00:01.500 Opening\n",
+    },
   ]);
   await expect.poll(() => page.evaluate(() => window.__interchangeUrls.revoked.length)).toBe(2);
   const urls = await page.evaluate(() => window.__interchangeUrls);
@@ -245,6 +260,7 @@ test("imports text through generated v2 control and downloads native interchange
 declare global {
   interface Window {
     __interchangeUrls: { created: string[]; revoked: string[] };
+    __interchangeBlobs: { type: string; text: string }[];
     __heldInterchange: { enabled: boolean; started: boolean; cancelled: boolean };
   }
 }

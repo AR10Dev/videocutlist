@@ -114,15 +114,23 @@ func TestDetectionCommandReplayAfterEditAndRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer scheduler.Shutdown(context.Background())
-	defer database.Close()
+	defer func() {
+		if err := scheduler.Shutdown(context.Background()); err != nil {
+			t.Error(err)
+		}
+	}()
+	defer func() {
+		if err := database.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	useCase.Scheduler, useCase.UnifiedJobs = scheduler, jobs
 	replayed, err := useCase.Submit(t.Context(), "p_detection", "detection-key", detectionCommandRequest())
 	if err != nil || replayed.ID != original.ID {
 		t.Fatalf("replay = %+v, %v; want original %s", replayed, err, original.ID)
 	}
 	if project.reads != 1 || media.reads.Load() != 1 {
-		t.Fatalf("replay revalidated project/media: reads=%d/%d", project.reads, media.reads)
+		t.Fatalf("replay revalidated project/media: reads=%d/%d", project.reads, media.reads.Load())
 	}
 }
 

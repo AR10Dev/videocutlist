@@ -68,6 +68,9 @@ test("requests library thumbnails only when their rows become visible", async ({
     name: `clip-${index}.mp4`,
     durationMs: 1000,
     container: "mp4",
+    sizeBytes: 1000,
+    streams: {},
+    etag: "fixture",
   }));
   const requested = new Set<string>();
   await page.setViewportSize({ width: 1280, height: 720 });
@@ -78,11 +81,11 @@ test("requests library thumbnails only when their rows become visible", async ({
         json: { state: "ready_with_media", message: "Media library is ready." },
       });
     if (path === "/api/v2/media/tree") return route.fulfill({ json: { folders: [], items } });
-    if (path.endsWith("/thumbnails")) {
-      requested.add(path.split("/")[4]);
-      return route.fulfill({ status: 404 });
-    }
     if (path === "/api/v2/destinations") return route.fulfill({ json: { destinations: [] } });
+    return route.fulfill({ status: 404 });
+  });
+  await page.route(`${apiOrigin}/media/v2/media/*/thumbnails*`, async (route) => {
+    requested.add(new URL(route.request().url()).pathname.split("/")[4]);
     return route.fulfill({ status: 404 });
   });
   await page.goto("/");
@@ -115,7 +118,15 @@ test("browses folders, paginates within the active folder, and returns to root",
           json: {
             folders: [{ id: "f_" + "x".repeat(43), label: "Clips" }],
             items: [
-              { id: "m_" + "a".repeat(43), name: "root.mp4", durationMs: 1000, container: "mp4" },
+              {
+                id: "m_" + "a".repeat(43),
+                name: "root.mp4",
+                durationMs: 1000,
+                container: "mp4",
+                sizeBytes: 1000,
+                streams: {},
+                etag: "fixture",
+              },
             ],
           },
         });
@@ -124,7 +135,15 @@ test("browses folders, paginates within the active folder, and returns to root",
           json: {
             folders: [],
             items: [
-              { id: "m_" + "b".repeat(43), name: "clip-1.mp4", durationMs: 1000, container: "mp4" },
+              {
+                id: "m_" + "b".repeat(43),
+                name: "clip-1.mp4",
+                durationMs: 1000,
+                container: "mp4",
+                sizeBytes: 1000,
+                streams: {},
+                etag: "fixture",
+              },
             ],
             nextCursor: "m_" + "c".repeat(43),
           },
@@ -133,7 +152,15 @@ test("browses folders, paginates within the active folder, and returns to root",
         json: {
           folders: [],
           items: [
-            { id: "m_" + "d".repeat(43), name: "clip-2.mp4", durationMs: 1000, container: "mp4" },
+            {
+              id: "m_" + "d".repeat(43),
+              name: "clip-2.mp4",
+              durationMs: 1000,
+              container: "mp4",
+              sizeBytes: 1000,
+              streams: {},
+              etag: "fixture",
+            },
           ],
         },
       });
@@ -149,18 +176,54 @@ test("browses folders, paginates within the active folder, and returns to root",
   await expect(page.getByRole("button", { name: "Select clip-2.mp4" })).toBeVisible();
   await page.getByRole("button", { name: /All media/ }).click();
   await expect(page.getByRole("button", { name: "Select root.mp4" })).toBeVisible();
-  expect(treeRequests).toEqual([
+  expect(treeRequests.slice(0, 3)).toEqual([
     "",
     "?folderId=f_" + "x".repeat(43),
     "?folderId=f_" + "x".repeat(43) + "&cursor=m_" + "c".repeat(43),
-    "",
   ]);
+  // An idle root atom may be collected before returning; only root may refetch.
+  expect(treeRequests.slice(3).every((query) => query === "")).toBe(true);
+  expect(treeRequests.length).toBeLessThanOrEqual(4);
 });
 
 test("ignores a delayed folder response after refresh returns to root", async ({ page }) => {
   let releaseFolder!: () => void;
   const folderPending = new Promise<void>((resolve) => (releaseFolder = resolve));
+  let finishFolderRoute!: () => void;
+  const folderRouteFinished = new Promise<void>((resolve) => (finishFolderRoute = resolve));
   let folderRequest = false;
+  await page.addInitScript(() => {
+    window.__lateFolderResponseConsumed = 0;
+    const fetchOriginal = window.fetch.bind(window);
+    window.fetch = async (input, init) => {
+      const response = await fetchOriginal(input, init);
+      const inputUrl = input instanceof Request ? input.url : String(input);
+      const url = new URL(inputUrl, window.location.href);
+      if (url.pathname !== "/api/v2/media/tree" || !url.searchParams.has("folderId"))
+        return response;
+      const reader = response.body?.getReader();
+      if (!reader) return response;
+      const body = new ReadableStream<Uint8Array>({
+        async pull(controller) {
+          const result = await reader.read();
+          if (result.done) {
+            window.__lateFolderResponseConsumed++;
+            controller.close();
+            return;
+          }
+          controller.enqueue(result.value);
+        },
+        cancel(reason) {
+          return reader.cancel(reason);
+        },
+      });
+      return new Response(body, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers,
+      });
+    };
+  });
   await page.route(`${apiOrigin}/api/v2/**`, async (route) => {
     const url = new URL(route.request().url());
     if (url.pathname === "/api/v2/media/status")
@@ -171,27 +234,45 @@ test("ignores a delayed folder response after refresh returns to root", async ({
       const folder = url.searchParams.get("folderId");
       if (folder && !folderRequest) {
         folderRequest = true;
-        await folderPending;
-        return route.fulfill({
-          json: {
-            folders: [],
-            items: [
-              {
-                id: "m_" + "o".repeat(43),
-                name: "old-folder.mp4",
-                durationMs: 1000,
-                container: "mp4",
-              },
-            ],
-          },
-        });
+        try {
+          await folderPending;
+          await route.fulfill({
+            json: {
+              folders: [],
+              items: [
+                {
+                  id: "m_" + "o".repeat(43),
+                  name: "old-folder.mp4",
+                  durationMs: 1000,
+                  container: "mp4",
+                  sizeBytes: 1000,
+                  streams: {},
+                  etag: "fixture",
+                },
+              ],
+            },
+          });
+        } finally {
+          finishFolderRoute();
+        }
+        return;
       }
       return route.fulfill({
         json: {
           folders: folder ? [] : [{ id: "f_" + "x".repeat(43), label: "Clips" }],
           items: folder
             ? []
-            : [{ id: "m_" + "r".repeat(43), name: "root.mp4", durationMs: 1000, container: "mp4" }],
+            : [
+                {
+                  id: "m_" + "r".repeat(43),
+                  name: "root.mp4",
+                  durationMs: 1000,
+                  container: "mp4",
+                  sizeBytes: 1000,
+                  streams: {},
+                  etag: "fixture",
+                },
+              ],
         },
       });
     }
@@ -218,13 +299,30 @@ test("ignores a delayed folder response after refresh returns to root", async ({
       return route.fulfill({ json: { destinations: [] } });
     return route.fulfill({ status: 404 });
   });
-  await page.goto("/");
-  await page.getByRole("button", { name: "Clips" }).click();
-  await page.getByRole("button", { name: "Refresh media" }).click();
-  await expect(page.getByRole("button", { name: "Select root.mp4" })).toBeVisible();
-  releaseFolder();
-  await expect(page.getByRole("button", { name: "Select old-folder.mp4" })).toHaveCount(0);
+  try {
+    await page.goto("/");
+    await page.getByRole("button", { name: "Clips" }).click();
+    await expect.poll(() => folderRequest).toBe(true);
+    await page.getByRole("button", { name: "Refresh media" }).click();
+    await expect(page.getByRole("button", { name: "Select root.mp4" })).toBeVisible();
+    releaseFolder();
+    await expect.poll(() => page.evaluate(() => window.__lateFolderResponseConsumed)).toBe(1);
+    await page.evaluate(
+      () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())),
+    );
+    await expect(page.getByRole("button", { name: "Select root.mp4" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Select old-folder.mp4" })).toHaveCount(0);
+  } finally {
+    releaseFolder();
+    if (folderRequest) await folderRouteFinished;
+  }
 });
+
+declare global {
+  interface Window {
+    __lateFolderResponseConsumed: number;
+  }
+}
 
 test("loads status once and refreshes it after a rescan", async ({ page }) => {
   let statusRequests = 0;

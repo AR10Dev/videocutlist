@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"reflect"
 	"syscall"
 	"testing"
 	"time"
@@ -85,8 +86,20 @@ func TestProjectsInterchangeAndDetectionUseProductionProcess(t *testing.T) {
 		if project.Revision < 2 {
 			t.Fatalf("%s import did not increment revision: %d", format, project.Revision)
 		}
-		bad := []byte("start,end,label\n999:00,999:01,bad\n")
-		p.json(t, http.MethodPost, "/api/v2/projects/"+projectID+"/interchange/csv?itemId="+itemID, bad, http.StatusBadRequest, nil)
+	}
+	var beforeBadCSV realProject
+	p.json(t, http.MethodGet, "/api/v2/projects/"+projectID, nil, http.StatusOK, &beforeBadCSV)
+	badCSV := p.raw(t, http.MethodPost, "/api/v2/projects/"+projectID+"/interchange/csv?itemId="+itemID, []byte("start,end,label\n999:00,999:01,bad\n"))
+	if badCSV.StatusCode != http.StatusBadRequest {
+		data, _ := io.ReadAll(badCSV.Body)
+		badCSV.Body.Close()
+		t.Fatalf("out-of-range CSV status=%d want=%d: %s", badCSV.StatusCode, http.StatusBadRequest, data)
+	}
+	badCSV.Body.Close()
+	var afterBadCSV realProject
+	p.json(t, http.MethodGet, "/api/v2/projects/"+projectID, nil, http.StatusOK, &afterBadCSV)
+	if !reflect.DeepEqual(afterBadCSV, beforeBadCSV) {
+		t.Fatalf("rejected out-of-range CSV changed project: before=%+v after=%+v", beforeBadCSV, afterBadCSV)
 	}
 
 	for _, kind := range []string{"silence", "black", "scene"} {

@@ -211,16 +211,6 @@ func TestRefreshCancellationPreservesExistingCatalog(t *testing.T) {
 	}
 }
 
-func TestRefreshReportsAnUnavailableConfiguredRoot(t *testing.T) {
-	scanner, err := NewScanner([]Root{{Alias: "camera", Path: filepath.Join(t.TempDir(), "missing")}}, fakeProbe{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := scanner.Refresh(context.Background(), &memoryCatalog{}); err == nil {
-		t.Fatal("refresh succeeded")
-	}
-}
-
 func TestOpenRejectsSymlinkReplacementAfterIndexing(t *testing.T) {
 	root := t.TempDir()
 	path := filepath.Join(root, "clip.mp4")

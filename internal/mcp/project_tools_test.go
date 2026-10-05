@@ -135,20 +135,42 @@ func TestProjectToolsScopeCreationAndRevisionConflict(t *testing.T) {
 		t.Fatalf("created project grant = %#v, err=%v", credential.ProjectScope, err)
 	}
 
-	updated := serve(handler, sessionRequest(`{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"update_cutlist","arguments":{"projectId":"`+createdID+`","expectedRevision":1,"operations":[{"type":"add","itemId":"`+createdProjectItemID(t, service, createdID)+`","position":0,"segment":{"startMs":100,"endMs":200,"included":true}}]}}}`, secret, session))
+	updated := serve(handler, sessionRequest(`{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"update_cutlist","arguments":{"projectId":"`+createdID+`","expectedRevision":1,"operations":[{"type":"add","itemId":"`+createdProjectItemID(t, service, createdID)+`","position":0,"segment":{"startMs":100,"endMs":200,"included":true}},{"type":"add","itemId":"`+createdProjectItemID(t, service, createdID)+`","position":1,"segment":{"startMs":300,"endMs":400,"included":true}}]}}}`, secret, session))
 	if updated.Code != 200 || !contains(updated.Body.String(), "Cutlist updated.") {
 		t.Fatalf("cutlist update = %s", updated.Body.String())
 	}
-	itemID, segmentID := createdProjectSegment(t, service, createdID)
-	for _, request := range []string{
-		`{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"update_cutlist","arguments":{"projectId":"` + createdID + `","expectedRevision":2,"operations":[{"type":"adjust","itemId":"` + itemID + `","segmentId":"` + segmentID + `","segment":{"id":"` + segmentID + `","startMs":150,"endMs":250,"included":true}}]}}}`,
-		`{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"update_cutlist","arguments":{"projectId":"` + createdID + `","expectedRevision":3,"operations":[{"type":"reorder","itemId":"` + itemID + `","segmentIds":["` + segmentID + `"]}]}}}`,
-		`{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"update_cutlist","arguments":{"projectId":"` + createdID + `","expectedRevision":4,"operations":[{"type":"remove","itemId":"` + itemID + `","segmentId":"` + segmentID + `"}]}}}`,
-	} {
-		response := serve(handler, sessionRequest(request, secret, session))
-		if response.Code != 200 || !contains(response.Body.String(), "Cutlist updated.") {
-			t.Fatalf("cutlist operation = %s", response.Body.String())
-		}
+	itemID := createdProjectItemID(t, service, createdID)
+	project, err := service.Get(t.Context(), createdID)
+	if err != nil || len(project.Items) != 1 || len(project.Items[0].Segments) != 2 {
+		t.Fatalf("created cutlist = %#v, err=%v", project, err)
+	}
+	firstID, secondID := project.Items[0].Segments[0].ID, project.Items[0].Segments[1].ID
+	if project.Items[0].Segments[0].StartMS != 100 || project.Items[0].Segments[0].EndMS != 200 || project.Items[0].Segments[1].StartMS != 300 || project.Items[0].Segments[1].EndMS != 400 {
+		t.Fatalf("added segments = %#v", project.Items[0].Segments)
+	}
+	adjusted := serve(handler, sessionRequest(`{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"update_cutlist","arguments":{"projectId":"`+createdID+`","expectedRevision":2,"operations":[{"type":"adjust","itemId":"`+itemID+`","segmentId":"`+firstID+`","segment":{"id":"`+firstID+`","startMs":150,"endMs":250,"included":true}}]}}}`, secret, session))
+	if adjusted.Code != 200 || !contains(adjusted.Body.String(), "Cutlist updated.") {
+		t.Fatalf("adjust cutlist = %s", adjusted.Body.String())
+	}
+	project, err = service.Get(t.Context(), createdID)
+	if err != nil || project.Revision != 3 || project.Items[0].Segments[0].StartMS != 150 || project.Items[0].Segments[0].EndMS != 250 {
+		t.Fatalf("adjusted cutlist = %#v, err=%v", project, err)
+	}
+	reordered := serve(handler, sessionRequest(`{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"update_cutlist","arguments":{"projectId":"`+createdID+`","expectedRevision":3,"operations":[{"type":"reorder","itemId":"`+itemID+`","segmentIds":["`+secondID+`","`+firstID+`"]}]}}}`, secret, session))
+	if reordered.Code != 200 || !contains(reordered.Body.String(), "Cutlist updated.") {
+		t.Fatalf("reorder cutlist = %s", reordered.Body.String())
+	}
+	project, err = service.Get(t.Context(), createdID)
+	if err != nil || project.Revision != 4 || project.Items[0].Segments[0].ID != secondID || project.Items[0].Segments[1].ID != firstID {
+		t.Fatalf("reordered cutlist = %#v, err=%v", project, err)
+	}
+	removed := serve(handler, sessionRequest(`{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"update_cutlist","arguments":{"projectId":"`+createdID+`","expectedRevision":4,"operations":[{"type":"remove","itemId":"`+itemID+`","segmentId":"`+firstID+`"}]}}}`, secret, session))
+	if removed.Code != 200 || !contains(removed.Body.String(), "Cutlist updated.") {
+		t.Fatalf("remove cutlist = %s", removed.Body.String())
+	}
+	project, err = service.Get(t.Context(), createdID)
+	if err != nil || project.Revision != 5 || len(project.Items[0].Segments) != 1 || project.Items[0].Segments[0].ID != secondID {
+		t.Fatalf("removed cutlist = %#v, err=%v", project, err)
 	}
 	stale := serve(handler, sessionRequest(`{"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"update_cutlist","arguments":{"projectId":"`+createdID+`","expectedRevision":1,"operations":[{"type":"remove","itemId":"`+itemID+`","segmentId":"s_missing"}]}}}`, secret, session))
 	if stale.Code != 200 || !contains(stale.Body.String(), `"error":"stale_revision"`) || !contains(stale.Body.String(), "Reload the project and retry.") {
@@ -261,15 +283,6 @@ func createdProjectItemID(t *testing.T, service *projectToolsService, id string)
 		t.Fatalf("created project = %#v, %v", project, err)
 	}
 	return project.Items[0].ID
-}
-
-func createdProjectSegment(t *testing.T, service *projectToolsService, id string) (string, string) {
-	t.Helper()
-	project, err := service.Get(t.Context(), id)
-	if err != nil || len(project.Items) != 1 || len(project.Items[0].Segments) != 1 {
-		t.Fatalf("created project segment = %#v, %v", project, err)
-	}
-	return project.Items[0].ID, project.Items[0].Segments[0].ID
 }
 
 func projectToolsCredentials(t *testing.T) (*mcp.CredentialStore, string) {

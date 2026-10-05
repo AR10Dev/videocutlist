@@ -52,7 +52,11 @@ func TestJobEventStreamStalledSocketWriteDeadlineReleasesCapacity(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer stalled.Close()
+	defer func() {
+		if err := stalled.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	stalledTCP := stalled.(*net.TCPConn)
 	if err := stalledTCP.SetReadBuffer(4096); err != nil {
 		t.Fatal(err)
@@ -83,7 +87,11 @@ func TestJobEventStreamStalledSocketWriteDeadlineReleasesCapacity(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer terminal.Close()
+	defer func() {
+		if err := terminal.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	if _, err := io.WriteString(terminal, "GET /api/v2/jobs/j_aaaaaaaaaaaa/events HTTP/1.1\r\nHost: api.test\r\nConnection: close\r\n\r\n"); err != nil {
 		t.Fatal(err)
 	}

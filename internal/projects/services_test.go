@@ -7,10 +7,12 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"videocutlist/internal/db"
@@ -18,14 +20,20 @@ import (
 	"videocutlist/internal/projects/model"
 )
 
+type browseContextKey struct{}
+
 type catalogStub struct {
-	refreshes  int
-	refreshErr error
-	browse     FolderPage
+	refreshes                  int
+	refreshErr                 error
+	browse                     FolderPage
+	browseContext              context.Context
+	browseFolder, browseCursor string
+	browseLimit                int
 }
 
 func (c *catalogStub) List(context.Context, string, int) (MediaPage, error) { return MediaPage{}, nil }
-func (c *catalogStub) Browse(context.Context, string, string, int) (FolderPage, error) {
+func (c *catalogStub) Browse(ctx context.Context, folder, cursor string, limit int) (FolderPage, error) {
+	c.browseContext, c.browseFolder, c.browseCursor, c.browseLimit = ctx, folder, cursor, limit
 	return c.browse, nil
 }
 func (c *catalogStub) Get(context.Context, string) (Media, error) { return Media{}, nil }
@@ -121,7 +129,11 @@ func TestMediaImportCommandReplaysAcrossRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer reopened.Close()
+	defer func() {
+		if err := reopened.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	reopenedJobs, err := jobqueue.NewJobsStore(reopened)
 	if err != nil {
 		t.Fatal(err)
@@ -142,7 +154,11 @@ func TestMediaImportCapacityFailureLeavesNoCommandRecord(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer database.Close()
+	defer func() {
+		if err := database.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	jobs, err := jobqueue.NewJobsStore(database)
 	if err != nil {
 		t.Fatal(err)
@@ -167,22 +183,84 @@ func TestMediaImportCapacityFailureLeavesNoCommandRecord(t *testing.T) {
 
 func TestMediaBrowseForwardsToCatalog(t *testing.T) {
 	want := FolderPage{Folders: []FolderNode{{ID: "f_opaque", Label: "clips"}}}
-	useCase := &MediaUseCase{Catalog: &catalogStub{browse: want}, Configured: true}
-	got, err := useCase.Browse(context.Background(), "f_parent", "m_cursor", 25)
+	catalog := &catalogStub{browse: want}
+	useCase := &MediaUseCase{Catalog: catalog, Configured: true}
+	ctx := context.WithValue(context.Background(), browseContextKey{}, "request")
+	got, err := useCase.Browse(ctx, "f_parent", "m_cursor", 25)
 	if err != nil || len(got.Folders) != 1 || got.Folders[0].ID != want.Folders[0].ID {
 		t.Fatalf("browse = %#v, err = %v", got, err)
+	}
+	if catalog.browseContext != ctx || catalog.browseFolder != "f_parent" || catalog.browseCursor != "m_cursor" || catalog.browseLimit != 25 {
+		t.Fatalf("browse arguments context=%v folder=%q cursor=%q limit=%d", catalog.browseContext, catalog.browseFolder, catalog.browseCursor, catalog.browseLimit)
+	}
+}
+
+type blockingRefreshCatalog struct {
+	catalogStub
+	started  chan struct{}
+	release  chan struct{}
+	finished chan struct{}
+}
+
+func (c *blockingRefreshCatalog) Refresh(ctx context.Context) error {
+	defer close(c.finished)
+	close(c.started)
+	select {
+	case <-c.release:
+		c.refreshes++
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
 func TestMediaRefreshIsSynchronous(t *testing.T) {
-	catalog := &catalogStub{}
-	useCase := &MediaUseCase{Catalog: catalog, Configured: true}
-	if err := useCase.RefreshMedia(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if catalog.refreshes != 1 {
-		t.Fatalf("refreshes = %d", catalog.refreshes)
-	}
+	synctest.Test(t, func(t *testing.T) {
+		catalog := &blockingRefreshCatalog{started: make(chan struct{}), release: make(chan struct{}), finished: make(chan struct{})}
+		useCase := &MediaUseCase{Catalog: catalog, Configured: true}
+		release := sync.OnceFunc(func() { close(catalog.release) })
+		returned := make(chan error, 1)
+		finished := make(chan struct{})
+		defer func() {
+			release()
+			select {
+			case <-catalog.finished:
+			case <-time.After(time.Second):
+				t.Error("refresh stub did not finish after release")
+			}
+			select {
+			case <-finished:
+			case <-time.After(time.Second):
+				t.Error("RefreshMedia call did not finish after release")
+			}
+		}()
+		go func() { returned <- useCase.RefreshMedia(t.Context()); close(finished) }()
+		select {
+		case <-catalog.started:
+		case <-time.After(time.Second):
+			t.Fatal("catalog refresh did not start")
+		}
+		// Settle every runnable goroutine before checking whether the caller returned.
+		// An asynchronous wrapper cannot hide behind a descheduled completion send.
+		synctest.Wait()
+		select {
+		case err := <-returned:
+			t.Fatalf("refresh returned before catalog finished: %v", err)
+		default:
+		}
+		release()
+		select {
+		case <-finished:
+		case <-time.After(time.Second):
+			t.Fatal("RefreshMedia did not return after catalog release")
+		}
+		if err := <-returned; err != nil {
+			t.Fatal(err)
+		}
+		if catalog.refreshes != 1 {
+			t.Fatalf("refreshes = %d", catalog.refreshes)
+		}
+	})
 }
 
 type boundedRecoveryCatalog struct {
@@ -266,8 +344,15 @@ type projectsStub struct {
 	document model.Document
 }
 
+func cloneProjectDocument(document model.Document) model.Document {
+	encoded, _ := json.Marshal(document)
+	var clone model.Document
+	_ = json.Unmarshal(encoded, &clone)
+	return clone
+}
+
 func (p *projectsStub) Get(context.Context, string) (ProjectRecord, error) {
-	return ProjectRecord{Document: p.document, Revision: p.revision, UpdatedAt: time.Now()}, nil
+	return ProjectRecord{Document: cloneProjectDocument(p.document), Revision: p.revision, UpdatedAt: time.Now()}, nil
 }
 func (p *projectsStub) Save(_ context.Context, _ string, revision int64, document model.Document) (ProjectRecord, error) {
 	if revision != p.revision {
@@ -275,8 +360,8 @@ func (p *projectsStub) Save(_ context.Context, _ string, revision int64, documen
 	}
 	p.saves++
 	p.revision++
-	p.document = document
-	return ProjectRecord{Document: document, Revision: p.revision, UpdatedAt: time.Now()}, nil
+	p.document = cloneProjectDocument(document)
+	return ProjectRecord{Document: cloneProjectDocument(document), Revision: p.revision, UpdatedAt: time.Now()}, nil
 }
 
 func TestProjectUseCaseSavesValidatedBatchAtomically(t *testing.T) {
@@ -309,19 +394,23 @@ func TestProjectUseCaseSavesValidatedBatchAtomically(t *testing.T) {
 	if _, err := useCase.Create(ctx, "p_aaaaaaaaaaaa", stale); !errors.Is(err, store.ErrRevisionConflict) || repository.saves != 2 {
 		t.Fatalf("duplicate create = %v, saves = %d", err, repository.saves)
 	}
-	bad := ProjectInput{Revision: resaved.Revision, Document: resaved.Document}
+	persistedBeforeRejections := cloneProjectDocument(repository.document)
+	bad := ProjectInput{Revision: resaved.Revision, Document: cloneProjectDocument(resaved.Document)}
 	bad.Items[1].Segments[0].EndMS = 1_001
 	if _, err := useCase.Save(ctx, "p_aaaaaaaaaaaa", bad); err == nil || repository.saves != 2 {
 		t.Fatalf("out-of-range save = %v, saves = %d", err, repository.saves)
 	}
-	bad.Items[1].Segments[0].EndMS = 900
+	if got, err := useCase.Get(ctx, "p_aaaaaaaaaaaa"); err != nil || !reflect.DeepEqual(got.Document, persistedBeforeRejections) {
+		t.Fatalf("out-of-range rejection changed document: %#v err=%v", got.Document, err)
+	}
+	bad = ProjectInput{Revision: resaved.Revision, Document: cloneProjectDocument(resaved.Document)}
 	bad.Items[1].MediaID = "m_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	if _, err := useCase.Save(ctx, "p_aaaaaaaaaaaa", bad); err == nil {
 		t.Fatalf("missing media save = %v, saves = %d", err, repository.saves)
 	} else if itemErr, ok := errors.AsType[*ProjectItemError](err); !ok || itemErr.ItemID != bad.Items[1].ID || itemErr.Code != "media_unavailable" || repository.saves != 2 {
 		t.Fatalf("missing media save = %v, saves = %d", err, repository.saves)
 	}
-	if got, err := useCase.Get(ctx, "p_aaaaaaaaaaaa"); err != nil || got.Revision != 2 || len(got.Items) != 2 {
+	if got, err := useCase.Get(ctx, "p_aaaaaaaaaaaa"); err != nil || got.Revision != 2 || len(got.Items) != 2 || !reflect.DeepEqual(got.Document, persistedBeforeRejections) {
 		t.Fatalf("stored project = %#v, err = %v", got, err)
 	}
 }

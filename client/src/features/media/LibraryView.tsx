@@ -79,21 +79,10 @@ function MediaThumbnail(props: { item: Media; api: ApiClient }) {
 export function LibraryView() {
   const api = createApiClient(resolveBrowserConfiguration());
   const [explorerOpen, setExplorerOpen] = createSignal(false);
-  const {
-    library,
-    visibleMedia,
-    selected,
-    folders,
-    activeFolder,
-    nextCursor,
-    loadingMore,
-    refreshing,
-    libraryMessage,
-    status,
-    refreshMedia,
-    loadFolder,
-    chooseMedia,
-  } = useWorkspace();
+  const workspace = useWorkspace();
+  const { library, visibleMedia, selected, status, chooseMedia, refreshMedia } = workspace;
+  const { folders, activeFolder, nextCursor, loadingMore, refreshing, libraryMessage, loadFolder } =
+    library;
   return (
     <section
       class="media-panel"

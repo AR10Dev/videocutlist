@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -47,18 +48,74 @@ func TestServiceRunUsesSharedProcessCapacity(t *testing.T) {
 
 func TestPublishDoesNotPublishAfterCancellationWhileLocked(t *testing.T) {
 	dir := t.TempDir()
+	assetDir := filepath.Join(dir, "assets")
+	if err := os.WriteFile(assetDir, []byte("block publication"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	s := &Service{CacheDir: dir, MaxBytes: 1024}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
 	s.mu.Lock()
+	locked := true
+	unlock := func() {
+		if locked {
+			locked = false
+			s.mu.Unlock()
+		}
+	}
 	done := make(chan error, 1)
+	joined := false
+	defer func() {
+		cancel()
+		unlock()
+		if !joined {
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Error("publish goroutine did not exit")
+			}
+		}
+	}()
 	go func() { done <- s.publish(ctx, "key", ".png", []byte("png")) }()
+	waitForBlockedMutex(t, "(*Service).publish")
 	cancel()
-	s.mu.Unlock()
-	if err := <-done; !errors.Is(err, context.Canceled) {
+	unlock()
+	err := <-done
+	joined = true
+	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("publish error = %v, want cancellation", err)
 	}
-	if _, err := os.Stat(filepath.Join(dir, "assets", "key.png")); !os.IsNotExist(err) {
-		t.Fatalf("cancelled publish created cache artifact: %v", err)
+	if _, err := os.Lstat(filepath.Join(assetDir, "key.png")); err == nil {
+		t.Fatal("cancelled publish created cache artifact")
+	}
+	if body, err := os.ReadFile(assetDir); err != nil || string(body) != "block publication" {
+		t.Fatalf("publication blocker changed: %q, %v", body, err)
+	}
+}
+
+func waitForBlockedMutex(t *testing.T, function string) {
+	t.Helper()
+	deadline := time.NewTimer(time.Second)
+	defer deadline.Stop()
+	for {
+		stacks := make([]byte, 1<<20)
+		n := runtime.Stack(stacks, true)
+		blocked := false
+		for _, stack := range strings.Split(string(stacks[:n]), "goroutine ") {
+			if strings.Contains(stack, "[sync.Mutex.Lock]") && strings.Contains(stack, function) {
+				blocked = true
+				break
+			}
+		}
+		if blocked {
+			return
+		}
+		select {
+		case <-deadline.C:
+			t.Fatalf("goroutine did not block at %s; stack snapshot:\n%s", function, stacks[:n])
+		default:
+			runtime.Gosched()
+		}
 	}
 }
 
@@ -189,6 +246,9 @@ func TestWaveformPartitionsFloat32Samples(t *testing.T) {
 	result, err := s.Waveform(t.Context(), spec)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(result.Peaks) != 16 {
+		t.Fatalf("peak count = %d, want 16", len(result.Peaks))
 	}
 	for i, peak := range result.Peaks {
 		want := float64(i+1) / 32

@@ -77,15 +77,23 @@ describe("project interchange attachments", () => {
     });
   });
 
-  it("cancels and releases a replaced native response reader", async () => {
+  it("cancels an active native response read and releases its reader", async () => {
     let canceled = false;
-    let enqueue!: (value: Uint8Array) => void;
+    let startBlockedRead!: () => void;
+    let releasePull!: () => void;
+    const blockedReadStarted = new Promise<void>((resolve) => {
+      startBlockedRead = resolve;
+    });
     const body = new ReadableStream<Uint8Array>({
-      start(controller) {
-        enqueue = (value) => controller.enqueue(value);
+      pull() {
+        startBlockedRead();
+        return new Promise<void>((resolve) => {
+          releasePull = resolve;
+        });
       },
       cancel() {
         canceled = true;
+        releasePull?.();
       },
     });
     const api = { mediaRequest: async () => new Response(body) };
@@ -97,10 +105,18 @@ describe("project interchange attachments", () => {
       "csv",
       abort.signal,
     );
-    enqueue(new TextEncoder().encode("start,end,label\n"));
-    abort.abort();
-    await expect(reading).rejects.toMatchObject({ name: "AbortError" });
-    expect(canceled).toBe(true);
+    try {
+      await blockedReadStarted;
+      expect(body.locked).toBe(true);
+      abort.abort();
+      await expect(reading).rejects.toMatchObject({ name: "AbortError" });
+      expect(canceled).toBe(true);
+      expect(body.locked).toBe(false);
+    } finally {
+      abort.abort();
+      releasePull?.();
+      await reading.catch(() => undefined);
+    }
   });
 
   it("bounds native attachment buffering", async () => {

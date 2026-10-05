@@ -64,7 +64,7 @@ export function EditorView(props: {
           <>
             <div class="selected-media-summary" aria-label="Selected media">
               <strong>{item().name}</strong>
-              <span>{formatTime(item().durationMs, workspace.duration())}</span>
+              <span>{formatTime(item().durationMs, workspace.editor.duration())}</span>
             </div>
             <Show when={workspace.metadataError()}>
               {(message) => (
@@ -96,27 +96,28 @@ export function EditorView(props: {
               </div>
             </Show>
             <p id="timeline-description" class="sr-only">
-              Playhead {formatTime(workspace.playheadMs(), workspace.duration())}. In marker{" "}
-              {workspace.editingInMs() === undefined
+              Playhead {formatTime(workspace.editor.playheadMs(), workspace.editor.duration())}. In
+              marker{" "}
+              {workspace.editor.editingInMs() === undefined
                 ? "unset"
-                : formatTime(workspace.editingInMs()!, workspace.duration())}
+                : formatTime(workspace.editor.editingInMs()!, workspace.editor.duration())}
               . Out marker{" "}
-              {workspace.editingOutMs() === undefined
+              {workspace.editor.editingOutMs() === undefined
                 ? "unset"
-                : formatTime(workspace.editingOutMs()!, workspace.duration())}
+                : formatTime(workspace.editor.editingOutMs()!, workspace.editor.duration())}
               .{" "}
-              {workspace.present().segments.length
-                ? `${workspace.present().segments.length} cuts selected.`
+              {workspace.editor.present().segments.length
+                ? `${workspace.editor.present().segments.length} cuts selected.`
                 : "No cuts selected."}
             </p>
-            <Show when={workspace.assetStatus()}>
+            <Show when={workspace.preview.assetStatus()}>
               {(message) => (
                 <div class="alert alert-info mb-2" role="status">
                   <span>{message()}</span>
                   <button
                     class="btn btn-ghost btn-xs"
                     type="button"
-                    onClick={workspace.retryAssets}
+                    onClick={workspace.preview.retryAssets}
                   >
                     Retry assets
                   </button>
@@ -127,9 +128,9 @@ export function EditorView(props: {
             <p class="asset-capability" role="status" aria-label="Keyframe snapping availability">
               Keyframe snapping unavailable; authoritative source timestamps are not exposed.
             </p>
-            <Show when={workspace.editorStatus()}>
+            <Show when={workspace.editor.editorStatus()}>
               <p class="control-help" role="alert">
-                {workspace.editorStatus()}
+                {workspace.editor.editorStatus()}
               </p>
             </Show>
           </>

@@ -94,26 +94,62 @@ func TestPreviewCancellationAfterFirstByte(t *testing.T) {
 		}
 	})
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 	running, err := (ffmpegrunner.Runner{Path: filepath.Join(root, "test", "harness", "fake-ffmpeg.sh"), GracePeriod: 100 * time.Millisecond}).Start(ctx, source, model.PreviewSpec{DurationMS: 1, Width: 16, Height: 16, FPS: 1})
 	if err != nil {
+		cancel()
 		t.Fatal(err)
 	}
-	buf := make([]byte, 16)
-	if _, err := running.Stdout.Read(buf); err != nil {
-		t.Fatal(err)
-	}
-	completed := make(chan error, 1)
-	go func() { completed <- running.Wait() }()
+	waitDone := make(chan struct{})
+	var waitErr error
+	go func() {
+		waitErr = running.Wait()
+		close(waitDone)
+	}()
+	readDone := make(chan struct{})
+	readResult := make(chan struct {
+		n   int
+		err error
+	}, 1)
+	go func() {
+		buf := make([]byte, 16)
+		n, readErr := running.Stdout.Read(buf)
+		readResult <- struct {
+			n   int
+			err error
+		}{n: n, err: readErr}
+		close(readDone)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		_ = running.Stdout.Close()
+		select {
+		case <-waitDone:
+		case <-time.After(time.Second):
+			t.Error("preview producer was not reaped during cleanup")
+		}
+		select {
+		case <-readDone:
+		case <-time.After(time.Second):
+			t.Error("preview byte read did not unblock during cleanup")
+		}
+	})
 	select {
-	case err := <-completed:
-		t.Fatalf("producer exited before first preview bytes were observable: %v", err)
+	case result := <-readResult:
+		if result.err != nil || result.n == 0 {
+			t.Fatalf("first preview read = %d bytes, %v", result.n, result.err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("preview producer did not emit its first byte")
+	}
+	select {
+	case <-waitDone:
+		t.Fatalf("producer exited before first preview bytes were observable: %v", waitErr)
 	default:
 	}
 	cancel()
 	select {
-	case err := <-completed:
-		if err == nil {
+	case <-waitDone:
+		if waitErr == nil {
 			t.Fatal("expected cancellation")
 		}
 	case <-time.After(time.Second):

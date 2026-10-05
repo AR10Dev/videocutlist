@@ -1,5 +1,10 @@
 import type * as EffectApiTypes from "../src/generated/effect-api";
 import { expect, test, type Page } from "@playwright/test";
+import {
+  mediaFixture as media,
+  secondMediaFixture as secondMedia,
+  sseSnapshotFrame,
+} from "./fixtures";
 import * as Schema from "effect/Schema";
 import {
   DetectionInput as DetectionInputSchema,
@@ -22,26 +27,6 @@ const jobTimestamps = {
   updatedAt: "2026-08-20T12:00:00Z",
 } satisfies Pick<EffectApiTypes.Job, "createdAt" | "updatedAt">;
 
-const media: EffectApiTypes.Media = {
-  id: "m_0123456789012345678901234567890123456789012",
-  name: "camera.mp4",
-  durationMs: 10_000,
-  sizeBytes: 1000,
-  container: "mp4",
-  streams: {
-    tracks: [
-      { index: 0, type: "video", codec: "h264" },
-      { index: 1, type: "audio", codec: "aac", language: "eng" },
-      { index: 2, type: "subtitle", codec: "ass", language: "eng" },
-    ],
-  },
-  etag: "v1",
-};
-const secondMedia = {
-  ...media,
-  id: "m_second-012345678901234567890123456789012345",
-  name: "second.mp4",
-};
 const serverSettings = {
   revision: 1,
   schemaVersion: 1,
@@ -118,8 +103,89 @@ function batchEvent(batch: EffectApiTypes.Batch) {
   return {
     status: 200,
     headers: { "content-type": "text/event-stream", "cache-control": "no-cache" },
-    body: `id: batch-${batch.batchId}-${Math.max(...batch.jobs.map((job) => job.revision))}\nevent: snapshot\ndata: ${JSON.stringify(batch)}\n\n`,
+    body: sseSnapshotFrame(
+      `batch-${batch.batchId}-${Math.max(...batch.jobs.map((job) => job.revision))}`,
+      batch,
+    ),
   };
+}
+
+type LateApiResponseObservation = {
+  requestURL: string;
+  requestSignalPresent: boolean;
+  requestAborted: boolean;
+  responseURL: string;
+  responseStatus: number;
+  responseReceived: boolean;
+  observerSettled: boolean;
+  observerError: string;
+};
+
+async function installUncooperativeLateApiResponseObserver(page: Page, expectedPath: string) {
+  await page.addInitScript((path: string) => {
+    const observation = {
+      requestURL: "",
+      requestSignalPresent: false,
+      requestAborted: false,
+      responseURL: "",
+      responseStatus: 0,
+      responseReceived: false,
+      observerSettled: false,
+      observerError: "",
+    };
+    Object.defineProperty(window, "__lateApiResponseObservation", { value: observation });
+    const nativeFetch = window.fetch.bind(window);
+    window.fetch = async (input, init) => {
+      const inputURL = input instanceof Request ? input.url : String(input);
+      const url = new URL(inputURL, window.location.href);
+      if (url.pathname !== path) return nativeFetch(input, init);
+      const requestSignal = input instanceof Request ? input.signal : init?.signal;
+      observation.requestURL = url.href;
+      observation.requestSignalPresent = requestSignal !== undefined && requestSignal !== null;
+      observation.requestAborted = requestSignal?.aborted ?? false;
+      requestSignal?.addEventListener(
+        "abort",
+        () => {
+          observation.requestAborted = true;
+        },
+        { once: true },
+      );
+      const isolatedSignal = new AbortController().signal;
+      const isolatedInput =
+        input instanceof Request ? new Request(input, { ...init, signal: isolatedSignal }) : input;
+      const response = await nativeFetch(isolatedInput, { ...init, signal: isolatedSignal });
+      observation.responseURL = response.url;
+      observation.responseStatus = response.status;
+      observation.responseReceived = true;
+      const reader = response.clone().body?.getReader();
+      if (!reader) {
+        observation.observerSettled = true;
+        return response;
+      }
+      void (async () => {
+        try {
+          while (true) {
+            const result = await reader.read();
+            if (result.done) break;
+          }
+        } catch (error) {
+          observation.observerError = String(error);
+        } finally {
+          observation.observerSettled = true;
+        }
+      })();
+      return response;
+    };
+  }, expectedPath);
+}
+
+function readLateApiResponseObservation(page: Page) {
+  return page.evaluate(() => {
+    const observation = (
+      window as Window & { __lateApiResponseObservation?: LateApiResponseObservation }
+    ).__lateApiResponseObservation;
+    return observation ?? null;
+  });
 }
 
 function detectionSnapshot(job: DetectionJob, revision: number) {
@@ -133,7 +199,7 @@ function detectionEvent(job: DetectionJob, revision: number, cursor = "1") {
   return {
     status: 200,
     headers: { "content-type": "text/event-stream" },
-    body: `id: ${cursor}\nevent: snapshot\ndata: ${JSON.stringify(detectionSnapshot(job, revision))}\n\n`,
+    body: sseSnapshotFrame(cursor, detectionSnapshot(job, revision)),
   };
 }
 
@@ -203,6 +269,22 @@ async function saveProject(page: Page) {
   await page.getByRole("button", { name: "Save project from project header", exact: true }).click();
   expect((await (await saved).json()).revision).toBeGreaterThan(0);
   await expect(page.getByRole("status", { name: "Project status" })).toHaveText("Saved");
+}
+
+async function saveProjectAndCaptureRevision(page: Page) {
+  const saved = page.waitForResponse(
+    (response) =>
+      response.request().method() === "PUT" &&
+      /\/api\/v2\/projects\/p_[^/]+$/.test(new URL(response.url()).pathname),
+  );
+  await saveProject(page);
+  const response = await saved;
+  const incomplete = await response.finished();
+  if (incomplete) throw incomplete;
+  return {
+    request: response.request(),
+    project: Schema.decodeUnknownSync(ProjectSchema)(await response.json()),
+  };
 }
 
 test.beforeEach(async ({ page }) => {
@@ -573,7 +655,7 @@ test("desktop and narrow layouts keep the explorer and primary actions reachable
   }
 });
 
-test("desktop workbench fixes the viewport and lets both sidebars resize and scroll", async ({
+test("desktop workbench fixes the viewport and styles sidebar resize and overflow regions", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1280, height: 600 });
@@ -766,6 +848,32 @@ test("active, looping, and ordered segment preview use bounded modes", async ({ 
   await page.keyboard.press("Escape");
   await create(800, 1200);
 
+  const orderedPreviewWindows: {
+    requestURL: string;
+    sourceStartMs: number;
+    offsetMs: number;
+  }[] = [];
+  await page.route(`${apiOrigin}/media/v2/media/${media.id}/preview**`, (route) => {
+    const center = new URL(route.request().url()).searchParams.get("centerMs") ?? "0";
+    orderedPreviewWindows.push({
+      requestURL: route.request().url(),
+      sourceStartMs: 0,
+      offsetMs: Number(center),
+    });
+    return route.fulfill({
+      headers: {
+        "content-type": "video/mp4",
+        "Access-Control-Expose-Headers":
+          "X-Preview-Start, X-Preview-Duration, X-Preview-Offset, X-Preview-Cache, X-Request-ID",
+        "X-Preview-Start": "0",
+        "X-Preview-Duration": "5000",
+        "X-Preview-Offset": center,
+        "X-Preview-Cache": "hit",
+        "X-Request-ID": `ordered-${center}`,
+      },
+      body: "fragment",
+    });
+  });
   const video = page.getByLabel("Preview player");
   await video.evaluate((element) => {
     const player = element as HTMLVideoElement;
@@ -803,6 +911,62 @@ test("active, looping, and ordered segment preview use bounded modes", async ({ 
   await page.getByRole("button", { name: "Preview selected segments" }).click();
   await expect(video).toHaveAttribute("data-playback-mode", "ordered-segments");
   await expect(video).toHaveAttribute("data-playback-intent", "playing");
+  await expect(video).toHaveAttribute("data-preview-offset", "100");
+  await video.evaluate((element) => {
+    const player = element as HTMLVideoElement;
+    player.currentTime = 0.7;
+    player.dispatchEvent(new Event("timeupdate"));
+  });
+  await expect(video).toHaveAttribute("data-preview-offset", "800");
+  await expect(playhead).toHaveValue("800");
+  const preview = await video.elementHandle();
+  if (!preview) throw new Error("The ordered preview element was not mounted.");
+  const previewElement = await preview.evaluate((element) => {
+    const player = element as HTMLVideoElement;
+    return {
+      currentElement: element === document.querySelector('video[aria-label="Preview player"]'),
+      src: player.src,
+      connected: element.isConnected,
+      offsetMs: player.dataset.previewOffset,
+      readyState: player.readyState,
+      currentTime: player.currentTime,
+    };
+  });
+  expect(previewElement.src).toMatch(/^blob:/);
+  expect(previewElement).toMatchObject({
+    currentElement: true,
+    connected: true,
+    offsetMs: "800",
+    currentTime: 0.8,
+  });
+  const previewWindow = orderedPreviewWindows.at(-1);
+  if (!previewWindow) throw new Error("The ordered preview response was not observed.");
+  expect(previewWindow.sourceStartMs).toBe(0);
+  expect(previewWindow.offsetMs).toBe(800);
+  expect(new URL(previewWindow.requestURL).searchParams.get("centerMs")).toBe("800");
+  const eventObservation = await preview.evaluate((element) => {
+    const player = element as HTMLVideoElement;
+    const eventType = "timeupdate";
+    player.currentTime = 1.2;
+    player.dispatchEvent(new Event(eventType));
+    return {
+      currentElement: element === document.querySelector('video[aria-label="Preview player"]'),
+      src: player.src,
+      connected: element.isConnected,
+      offsetMs: player.dataset.previewOffset,
+      readyState: player.readyState,
+      eventType,
+      currentTime: player.currentTime,
+    };
+  });
+  expect(eventObservation).toEqual({
+    ...previewElement,
+    eventType: "timeupdate",
+    currentTime: 1.2,
+  });
+  expect(previewWindow.sourceStartMs + eventObservation.currentTime * 1000).toBe(1200);
+  await expect(playhead).toHaveValue("1200");
+  await expect(video).toHaveAttribute("data-playback-intent", "paused");
 });
 
 test("header distinguishes unsaved, dirty, and saved project states", async ({ page }) => {
@@ -813,14 +977,20 @@ test("header distinguishes unsaved, dirty, and saved project states", async ({ p
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   await page.getByLabel("Timeline playhead").fill("100");
   await page.getByRole("button", { name: "Set in" }).click();
+  await page.getByLabel("Timeline playhead").fill("700");
+  await page.getByRole("button", { name: "Set out" }).click();
   await saveProject(page);
   await expect(page.locator(".project-sidebar-header strong")).toHaveText("Untitled project");
+  await expect(status).toContainText("Saved");
+  await page.getByLabel("Label cut 1").fill("Changed after save");
+  await expect(status).toContainText("Unsaved changes");
+  await saveProject(page);
   await expect(status).toContainText("Saved");
   await page.getByLabel("Timeline playhead").fill("200");
   await expect(status).toContainText("Saved");
 });
 
-test("browser theme selection persists and keeps focusable controls readable", async ({ page }) => {
+test("browser theme selection persists and keeps Settings controls focusable", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).click();
   const theme = page.getByLabel("Theme");
@@ -1365,9 +1535,53 @@ test("detection observes snapshots, previews, and supports sequential keyboard r
   page,
 }) => {
   const eventCursors: string[] = [];
+  let submittedDetection: DetectionInput | undefined;
+  let detectionProjectId: string | undefined;
   page.on("request", (request) => {
-    if (new URL(request.url()).pathname.endsWith("/events"))
+    const url = new URL(request.url());
+    if (url.pathname.endsWith("/events"))
       eventCursors.push(request.headers()["last-event-id"] ?? "");
+    if (request.method() === "POST" && url.pathname.endsWith("/detections")) {
+      submittedDetection = Schema.decodeUnknownSync(DetectionInputSchema)(request.postDataJSON());
+      detectionProjectId = url.pathname.split("/")[4];
+    }
+  });
+  await page.route(`${apiOrigin}/api/v2/jobs/j_detection-silence-*/events`, (route) => {
+    const jobId = new URL(route.request().url()).pathname.split("/")[4]!;
+    const submitted = submittedDetection;
+    if (!submitted || !detectionProjectId) throw new Error("Detection event had no submitted job.");
+    const candidates: DetectionJob["candidates"] = [
+      {
+        id: "c_review-sequence1",
+        mediaId: submitted.mediaId,
+        projectId: detectionProjectId,
+        projectRevision: submitted.projectRevision,
+        startMs: 1000,
+        endMs: 1500,
+        source: "silence",
+      },
+      {
+        id: "c_review-sequence2",
+        mediaId: submitted.mediaId,
+        projectId: detectionProjectId,
+        projectRevision: submitted.projectRevision,
+        startMs: 2000,
+        endMs: 2500,
+        source: "silence",
+      },
+    ];
+    const running = route.request().headers()["last-event-id"] === undefined;
+    const job: DetectionJob = {
+      id: jobId,
+      type: "detection",
+      state: running ? "running" : "succeeded",
+      mediaId: submitted.mediaId,
+      projectId: detectionProjectId,
+      projectRevision: submitted.projectRevision,
+      kind: "silence",
+      ...(running ? {} : { candidates }),
+    };
+    return route.fulfill(detectionEvent(job, running ? 1 : 2, running ? "1" : "2"));
   });
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
@@ -1378,7 +1592,7 @@ test("detection observes snapshots, previews, and supports sequential keyboard r
   await page.getByRole("button", { name: "Find pauses" }).click();
   await expect(page.getByText("Detection running.", { exact: true })).toBeVisible();
   await expect(
-    page.getByText("1 candidates found. Review each before accepting.", { exact: true }),
+    page.getByText("2 candidates found. Review each before accepting.", { exact: true }),
   ).toBeVisible();
   await expect(page.getByText("Detection complete", { exact: true })).toBeVisible();
   expect(eventCursors).toEqual(["", "1"]);
@@ -1388,14 +1602,23 @@ test("detection observes snapshots, previews, and supports sequential keyboard r
     "active-segment",
   );
   await expect(page.getByLabel("Preview player")).toHaveAttribute("data-preview-offset", "1000");
-  await page.getByRole("button", { name: "Dismiss" }).click();
+  await page
+    .getByLabel("Detection candidates")
+    .getByRole("listitem")
+    .nth(0)
+    .getByRole("button", { name: "Dismiss" })
+    .click();
   await expect(page.getByText("Candidate dismissed.", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Find pauses" }).click();
   await expect(
-    page.getByText("1 candidates found. Review each before accepting.", { exact: true }),
+    page.getByText("2 candidates found. Review each before accepting.", { exact: true }),
   ).toBeVisible();
-  await page.getByLabel("Detection candidates").getByRole("listitem").focus();
+  const candidates = page.getByLabel("Detection candidates").getByRole("listitem");
+  await candidates.nth(0).focus();
   await page.keyboard.press("a");
+  await expect(candidates).toHaveCount(1);
+  await expect(candidates.nth(0)).toContainText("00:02.000");
+  await expect(candidates.nth(0)).toBeFocused();
   await expect(
     page.getByText("Candidate accepted; save the project to persist it.", { exact: true }),
   ).toBeVisible();
@@ -1532,7 +1755,7 @@ test("bulk detection acceptance skips unsafe candidates and undoes as one edit",
   await expect(page.getByText(/0 selected/)).toBeVisible();
 });
 
-test("scene changes remain points with bounded preview, seek, and dismiss", async ({ page }) => {
+test("scene changes remain point-only with preview seek and dismissal", async ({ page }) => {
   let sceneJob: DetectionJob | undefined;
   let sceneResult: DetectionJob | undefined;
   await page.route(`${apiOrigin}/api/v2/projects/*/detections`, (route) => {
@@ -1836,9 +2059,69 @@ test("loads timeline assets for the visible range and keeps editing available on
   await expect(page.locator("canvas.timeline-canvas")).toHaveCount(1);
 });
 
-test("MVP browser behavior: list, metadata, settle, cancel, offset, markers, restore, and stale protection", async ({
+test("browser workflow loads metadata, settles preview, edits markers, loads saved project, and confines API requests", async ({
   page,
 }) => {
+  let obsoletePreviewStarted!: () => void;
+  const obsoletePreviewStart = new Promise<void>((resolve) => (obsoletePreviewStarted = resolve));
+  let releaseObsoletePreview!: () => void;
+  const obsoletePreviewRelease = new Promise<void>((resolve) => (releaseObsoletePreview = resolve));
+  await page.addInitScript((mediaID: string) => {
+    const observation: {
+      requestURL?: string;
+      requestAborted?: boolean;
+      responseReceived: boolean;
+      bodyCancelled: boolean;
+    } = { responseReceived: false, bodyCancelled: false };
+    Object.defineProperty(window, "__latePreviewObservation", { value: observation });
+    const nativeFetch = window.fetch.bind(window);
+    window.fetch = async (input, init) => {
+      const inputUrl = input instanceof Request ? input.url : String(input);
+      const url = new URL(inputUrl, window.location.href);
+      const obsolete =
+        url.pathname === `/media/v2/media/${mediaID}/preview` &&
+        url.searchParams.get("centerMs") === "1000";
+      const requestSignal = input instanceof Request ? input.signal : init?.signal;
+      const response = await nativeFetch(input, obsolete ? { ...init, signal: undefined } : init);
+      if (obsolete) {
+        observation.requestURL = url.href;
+        observation.requestAborted = requestSignal?.aborted ?? false;
+        observation.responseReceived = true;
+        const body = response.body;
+        if (body) {
+          const cancel = body.cancel.bind(body);
+          Object.defineProperty(body, "cancel", {
+            configurable: true,
+            value: (reason?: unknown) => {
+              observation.bodyCancelled = true;
+              return cancel(reason);
+            },
+          });
+        }
+      }
+      return response;
+    };
+  }, media.id);
+  await page.route(`${apiOrigin}/media/v2/media/${media.id}/preview**`, async (route) => {
+    const center = new URL(route.request().url()).searchParams.get("centerMs") ?? "0";
+    if (center === "1000") {
+      obsoletePreviewStarted();
+      await obsoletePreviewRelease;
+    }
+    await route.fulfill({
+      headers: {
+        "content-type": "video/mp4",
+        "Access-Control-Expose-Headers":
+          "X-Preview-Start, X-Preview-Duration, X-Preview-Offset, X-Preview-Cache, X-Request-ID",
+        "X-Preview-Start": "0",
+        "X-Preview-Duration": "8000",
+        "X-Preview-Offset": center,
+        "X-Preview-Cache": "hit",
+        "X-Request-ID": `mvp-preview-${center}`,
+      },
+      body: "fragment",
+    });
+  });
   const requestOrigins: string[] = [];
   page.on("request", (request) => {
     if (/(?:\/api\/v2\/|\/media\/v2\/)/.test(new URL(request.url()).pathname))
@@ -1854,11 +2137,34 @@ test("MVP browser behavior: list, metadata, settle, cancel, offset, markers, res
   const playhead = page.getByLabel("Timeline playhead");
   await expect(playhead).toHaveAttribute("max", "10000"); // 2 metadata loads
   await playhead.fill("1000");
-  await expect(page.getByText("Loading preview…")).not.toBeVisible();
-  await page.waitForTimeout(220);
+  await obsoletePreviewStart;
   await expect(page.getByText("Loading preview…")).toBeVisible(); // 3 request waits for the 200 ms settle debounce
   await playhead.fill("2000");
-  await expect(page.getByLabel("Preview player")).toHaveAttribute("data-preview-offset", "2000"); // 4 stale request is cancelled/ignored; 5 preview begins; 6 returned offset is used
+  await expect(page.getByLabel("Preview player")).toHaveAttribute("data-preview-offset", "2000");
+  releaseObsoletePreview();
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const observed = (
+          window as Window & {
+            __latePreviewObservation?: {
+              requestURL?: string;
+              requestAborted?: boolean;
+              responseReceived: boolean;
+              bodyCancelled: boolean;
+            };
+          }
+        ).__latePreviewObservation;
+        return observed ?? { responseReceived: false, bodyCancelled: false };
+      }),
+    )
+    .toEqual({
+      requestURL: expect.stringContaining("centerMs=1000"),
+      requestAborted: true,
+      responseReceived: true,
+      bodyCancelled: true,
+    });
+  await expect(page.getByLabel("Preview player")).toHaveAttribute("data-preview-offset", "2000"); // 4 stale response body is disposed; 5 current preview remains selected
 
   await playhead.fill("100");
   await page.getByRole("button", { name: "Set in" }).click();
@@ -1874,7 +2180,7 @@ test("MVP browser behavior: list, metadata, settle, cancel, offset, markers, res
   await saveProject(page); // 7 markers save
 
   await loadProject(page, "p_demo-project");
-  await expect(page.locator(".project-sidebar-header strong")).toHaveText("Demo project"); // 8 project restores after reload
+  await expect(page.locator(".project-sidebar-header strong")).toHaveText("Demo project"); // 8 loading the saved project restores its state
   await openTask(page, "Cuts");
   await expect(page.getByLabel("Label cut 1")).toHaveValue("restored");
   expect(requestOrigins).not.toHaveLength(0);
@@ -1883,11 +2189,23 @@ test("MVP browser behavior: list, metadata, settle, cancel, offset, markers, res
 });
 
 test("keeps playback position, markers, and undo history synchronized", async ({ page }) => {
+  let previewComplete!: () => void;
+  const previewCompleted = new Promise<void>((resolve) => (previewComplete = resolve));
+  page.on("requestfinished", (request) => {
+    if (new URL(request.url()).pathname.endsWith("/preview")) previewComplete();
+  });
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
-  await page.waitForTimeout(300);
-
-  await page.getByLabel("Preview player").evaluate((video) => {
+  await addSelectedMediaToProject(page);
+  await previewCompleted;
+  const video = page.getByLabel("Preview player");
+  await expect(video).toHaveAttribute("data-preview-offset", "0");
+  await video.evaluate((element) => {
+    const player = element as HTMLVideoElement;
+    player.play = () => Promise.resolve();
+    player.pause = () => undefined;
+  });
+  await video.evaluate((video) => {
     const player = video as HTMLVideoElement;
     player.currentTime = 2.5;
     player.dispatchEvent(new Event("timeupdate"));
@@ -1896,9 +2214,15 @@ test("keeps playback position, markers, and undo history synchronized", async ({
   await expect(page.getByRole("button", { name: "Undo" })).toHaveCount(0);
   await page.getByRole("button", { name: "Set in" }).click();
   await expect(page.locator("#timeline-description")).toContainText("In marker 00:02.500");
+  await page.getByLabel("Timeline playhead").fill("3000");
+  await page.getByRole("button", { name: "Set out" }).click();
+  await expect(page.locator(".cut-row[data-segment-id]")).toHaveCount(1);
+  await page.getByRole("heading", { name: "Timeline", exact: true }).focus();
+  await page.keyboard.press("ControlOrMeta+z");
+  await expect(page.locator(".cut-row[data-segment-id]")).toHaveCount(0);
 });
 
-test("shows a safe preview failure and maps markers from the watched preview", async ({ page }) => {
+test("maps markers from the nonzero watched-preview start", async ({ page }) => {
   await page.route(`${apiOrigin}/media/v2/media/${media.id}/preview**`, (route) =>
     route.fulfill({
       headers: {
@@ -1936,9 +2260,10 @@ test("mutes in the browser without rebuilding the server preview", async ({ page
   await expect(page.getByText("Loading preview…")).not.toBeVisible();
   const requestsBeforeMute = previewRequests;
 
+  await page.clock.install();
   await page.getByRole("button", { name: "Mute preview" }).click();
   await expect(page.getByLabel("Preview player")).toHaveJSProperty("muted", true);
-  await page.waitForTimeout(300);
+  await page.clock.fastForward(250);
 
   expect(previewRequests).toBe(requestsBeforeMute);
 });
@@ -2084,6 +2409,8 @@ test("renews whole-media playback without dirtying viewing state and honors paus
 
 test("ignores a stale renewal response after a manual seek", async ({ page }) => {
   const previewRequests: string[] = [];
+  let renewalFinishedResolve!: () => void;
+  const renewalFinished = new Promise<void>((resolve) => (renewalFinishedResolve = resolve));
   let renewalStartedResolve!: () => void;
   const renewalStarted = new Promise<void>((resolve) => {
     renewalStartedResolve = resolve;
@@ -2092,6 +2419,55 @@ test("ignores a stale renewal response after a manual seek", async ({ page }) =>
   const renewalReleased = new Promise<void>((resolve) => {
     releaseRenewal = resolve;
   });
+  let renewalRouteReached = false;
+  await page.addInitScript((mediaID: string) => {
+    const observation = {
+      requestURL: "",
+      requestAborted: false,
+      responseURL: "",
+      responseReceived: false,
+      bodyCancelled: false,
+    };
+    Object.defineProperty(window, "__lateRenewalObservation", { value: observation });
+    const nativeFetch = window.fetch.bind(window);
+    window.fetch = async (input, init) => {
+      const inputURL = input instanceof Request ? input.url : String(input);
+      const url = new URL(inputURL, window.location.href);
+      const obsolete =
+        url.pathname === `/media/v2/media/${mediaID}/preview` &&
+        url.searchParams.get("centerMs") === "7250";
+      if (!obsolete) return nativeFetch(input, init);
+      const requestSignal = input instanceof Request ? input.signal : init?.signal;
+      observation.requestURL = url.href;
+      observation.requestAborted = requestSignal?.aborted ?? false;
+      requestSignal?.addEventListener(
+        "abort",
+        () => {
+          observation.requestAborted = true;
+        },
+        { once: true },
+      );
+      const isolatedSignal = new AbortController().signal;
+      const isolatedInput =
+        input instanceof Request ? new Request(input, { ...init, signal: isolatedSignal }) : input;
+      const response = await nativeFetch(isolatedInput, { ...init, signal: isolatedSignal });
+      observation.responseURL = response.url;
+      observation.requestAborted = requestSignal?.aborted ?? observation.requestAborted;
+      observation.responseReceived = true;
+      const body = response.body;
+      if (body) {
+        const cancel = body.cancel.bind(body);
+        Object.defineProperty(body, "cancel", {
+          configurable: true,
+          value: (reason?: unknown) => {
+            observation.bodyCancelled = true;
+            return cancel(reason);
+          },
+        });
+      }
+      return response;
+    };
+  }, media.id);
   page.on("request", (request) => {
     if (new URL(request.url()).pathname.endsWith("/preview")) previewRequests.push(request.url());
   });
@@ -2099,50 +2475,98 @@ test("ignores a stale renewal response after a manual seek", async ({ page }) =>
     const url = new URL(route.request().url());
     const center = url.searchParams.get("centerMs") ?? "0";
     if (center === "7250") {
+      renewalRouteReached = true;
       renewalStartedResolve();
       await renewalReleased;
     }
-    return route.fulfill({
-      headers: {
-        "content-type": "video/mp4",
-        "Access-Control-Expose-Headers":
-          "X-Preview-Start, X-Preview-Duration, X-Preview-Offset, X-Preview-Cache, X-Request-ID",
-        "X-Preview-Start": "0",
-        "X-Preview-Duration": "8000",
-        "X-Preview-Offset": center,
-        "X-Preview-Cache": "hit",
-        "X-Request-ID": `preview-${center}`,
-      },
-      body: "fragment",
+    try {
+      await route.fulfill({
+        headers: {
+          "content-type": "video/mp4",
+          "Access-Control-Expose-Headers":
+            "X-Preview-Start, X-Preview-Duration, X-Preview-Offset, X-Preview-Cache, X-Request-ID",
+          "X-Preview-Start": "0",
+          "X-Preview-Duration": "8000",
+          "X-Preview-Offset": center,
+          "X-Preview-Cache": "hit",
+          "X-Request-ID": `preview-${center}`,
+        },
+        body: "fragment",
+      });
+    } finally {
+      if (center === "7250") renewalFinishedResolve();
+    }
+  });
+  try {
+    await page.goto("/");
+    await page.getByRole("button", { name: /camera.mp4/ }).click();
+    const video = page.getByLabel("Preview player");
+    await video.evaluate((element) => {
+      const player = element as HTMLVideoElement;
+      player.play = () => Promise.resolve();
+      player.pause = () => undefined;
     });
-  });
-  await page.goto("/");
-  await page.getByRole("button", { name: /camera.mp4/ }).click();
-  const video = page.getByLabel("Preview player");
-  await video.evaluate((element) => {
-    const player = element as HTMLVideoElement;
-    player.play = () => Promise.resolve();
-    player.pause = () => undefined;
-  });
-  await expect.poll(() => previewRequests.length).toBe(1);
-  await page.getByRole("button", { name: "Play preview" }).click();
-  await video.evaluate((element) => {
-    const player = element as HTMLVideoElement;
-    player.currentTime = 7.25;
-    player.dispatchEvent(new Event("timeupdate"));
-  });
-  await renewalStarted;
-  const playhead = page.getByLabel("Timeline playhead");
-  await playhead.fill("3000");
-  await expect
-    .poll(() =>
-      previewRequests.some((request) => new URL(request).searchParams.get("centerMs") === "3000"),
-    )
-    .toBeTruthy();
-  releaseRenewal();
-  await expect(video).toHaveAttribute("data-preview-offset", "3000");
-  await expect(playhead).toHaveValue("3000");
-  expect(new URL(previewRequests.at(-1)!).searchParams.get("centerMs")).toBe("3000");
+    await expect.poll(() => previewRequests.length).toBe(1);
+    await page.getByRole("button", { name: "Play preview" }).click();
+    await video.evaluate((element) => {
+      const player = element as HTMLVideoElement;
+      player.currentTime = 7.25;
+      player.dispatchEvent(new Event("timeupdate"));
+    });
+    await renewalStarted;
+    const playhead = page.getByLabel("Timeline playhead");
+    await playhead.fill("3000");
+    await expect
+      .poll(() =>
+        previewRequests.some((request) => new URL(request).searchParams.get("centerMs") === "3000"),
+      )
+      .toBeTruthy();
+    await expect(video).toHaveAttribute("data-preview-offset", "3000");
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const observation = (
+            window as Window & {
+              __lateRenewalObservation?: { requestAborted: boolean };
+            }
+          ).__lateRenewalObservation;
+          return observation?.requestAborted ?? false;
+        }),
+      )
+      .toBe(true);
+    releaseRenewal();
+    await renewalFinished;
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const observation = (
+            window as Window & {
+              __lateRenewalObservation?: {
+                requestURL: string;
+                requestAborted: boolean;
+                responseURL: string;
+                responseReceived: boolean;
+                bodyCancelled: boolean;
+              };
+            }
+          ).__lateRenewalObservation;
+          return observation ?? null;
+        }),
+      )
+      .toEqual({
+        requestURL: expect.stringContaining("centerMs=7250"),
+        requestAborted: true,
+        responseURL: expect.stringContaining("/preview"),
+        responseReceived: true,
+        bodyCancelled: true,
+      });
+    await expect(video).toHaveAttribute("data-preview-offset", "3000");
+    await expect(playhead).toHaveValue("3000");
+    expect(new URL(previewRequests.at(-1)!).searchParams.get("centerMs")).toBe("3000");
+  } finally {
+    releaseRenewal();
+    if (renewalRouteReached) await renewalFinished;
+  }
 });
 
 test("stops whole-media playback at media duration after the final window", async ({ page }) => {
@@ -2272,7 +2696,8 @@ test("shows unsupported preview guidance without making a preview request", asyn
       "Preview is unavailable in this browser. Use the I and O keyboard shortcuts to set markers manually.",
     ),
   ).toBeVisible();
-  await page.waitForTimeout(250);
+  await page.clock.install();
+  await page.clock.fastForward(250);
   expect(previewRequests).toBe(0);
 });
 
@@ -2383,8 +2808,14 @@ test("save reports an optimistic revision conflict", async ({ page }) => {
 test("exports the saved segments, observes a safe batch result, and shows warnings", async ({
   page,
 }) => {
-  const requests: string[] = [];
-  page.on("request", (request) => requests.push(new URL(request.url()).pathname));
+  const completedProjectSaves = new Set<import("@playwright/test").Request>();
+  page.on("requestfinished", (request) => {
+    if (
+      request.method() === "PUT" &&
+      /\/api\/v2\/projects\/p_[^/]+$/.test(new URL(request.url()).pathname)
+    )
+      completedProjectSaves.add(request);
+  });
   const queuedJob = exportJobSnapshot({
     id: "j_export",
     batchId: "b_export000001",
@@ -2425,7 +2856,11 @@ test("exports the saved segments, observes a safe batch result, and shows warnin
   await page.route(`${apiOrigin}/api/v2/projects/*/exports`, async (route) => {
     const request = route.request();
     expect(request.method()).toBe("POST");
-    validateExportRequest(request);
+    const input = validateExportRequest(request);
+    if (!savedProject) throw new Error("Export started before its project save completed.");
+    expect(completedProjectSaves.has(savedProject.request)).toBe(true);
+    expect(new URL(request.url()).pathname.split("/")[4]).toBe(savedProject.project.id);
+    expect(input.projectRevision).toBe(savedProject.project.revision);
     await route.fulfill({ status: 202, json: exportSubmission("b_export000001", [queuedJob]) });
   });
   await page.route(`${apiOrigin}/api/v2/batches/b_export000001/events`, async (route) => {
@@ -2451,15 +2886,12 @@ test("exports the saved segments, observes a safe batch result, and shows warnin
     "aria-pressed",
     "true",
   );
-  await saveProject(page);
+  const savedProject = await saveProjectAndCaptureRevision(page);
   await openTask(page, "Export");
   await page.getByRole("button", { name: "Create clips" }).click();
   await expect(page.getByText("Export complete.")).toBeVisible({
     timeout: 4_000,
   });
-  expect(requests.findIndex((path) => /\/projects\/p_[^/]+$/.test(path))).toBeLessThan(
-    requests.findIndex((path) => path.endsWith("/exports")),
-  );
   const currentBatch = page.getByRole("region", { name: "Current batch" });
   const result = currentBatch.locator(".export-job-result");
   await expect(result).toContainText("camera-cut.mkv");
@@ -2470,10 +2902,11 @@ test("exports the saved segments, observes a safe batch result, and shows warnin
   await expect(
     currentBatch.locator(".export-job-subdetails").filter({ hasText: "Warnings and review notes" }),
   ).toContainText("earlier keyframe");
-  await expect(page.locator("main")).not.toContainText("/private/export");
 });
 
-test("reviews preflight blockers and only enables eligible downloads", async ({ page }) => {
+test("reviews preflight stream selection and blocks ineligible export submission", async ({
+  page,
+}) => {
   let requestedStreamIndexes: number[] | undefined;
   await page.route(`${apiOrigin}/api/v2/projects/*/exports/preflight`, (route) => {
     requestedStreamIndexes = route.request().postDataJSON().streamIndexes;
@@ -3086,48 +3519,106 @@ test("mixed batch keeps a later active child selected and preserves output order
 });
 
 test("delayed project loads cannot replace a newer editor", async ({ page }) => {
+  let loadStarted!: () => void;
+  const loadStart = new Promise<void>((resolve) => (loadStarted = resolve));
+  let loadCompleted!: () => void;
+  const loadComplete = new Promise<void>((resolve) => (loadCompleted = resolve));
   let release!: () => void;
   const delayed = new Promise<void>((resolve) => {
     release = resolve;
   });
+  let loadRouteReached = false;
+  await installUncooperativeLateApiResponseObserver(page, "/api/v2/projects/p_race-load012");
   await page.route(`${apiOrigin}/api/v2/projects/p_race-load012`, async (route) => {
+    loadRouteReached = true;
+    loadStarted();
     await delayed;
-    await route
-      .fulfill({
+    try {
+      await route.fulfill({
         json: projectSnapshot("p_race-load012", 1, {
           revision: 0,
           schemaVersion: 2,
           name: "Race load",
           items: [{ id: itemId, mediaId: media.id, segments: [], exportOptions: {} }],
         }),
-      })
-      .catch(() => {});
+      });
+    } finally {
+      loadCompleted();
+    }
   });
-  await page.goto("/");
-  await page.getByRole("button", { name: /camera.mp4/ }).click();
-  await addSelectedMediaToProject(page);
-  await openTask(page, "Project");
-  await loadProject(page, "p_race-load012");
-  page.once("dialog", (dialog) => dialog.accept());
-  await newProject(page);
-  release();
-  await expect(page.getByRole("heading", { name: "Choose a video to begin" })).toBeVisible();
-  await expect(page.getByText("Project loaded.")).toHaveCount(0);
+  try {
+    await page.goto("/", { waitUntil: "domcontentloaded" });
+    await page.getByRole("button", { name: /camera.mp4/ }).click();
+    await addSelectedMediaToProject(page);
+    await openTask(page, "Project");
+    await loadProject(page, "p_race-load012");
+    await loadStart;
+    page.once("dialog", (dialog) => dialog.accept());
+    await newProject(page);
+    await expect(page.getByRole("heading", { name: "Choose a video to begin" })).toBeVisible();
+    await expect
+      .poll(async () => (await readLateApiResponseObservation(page))?.requestAborted ?? false)
+      .toBe(true);
+    release();
+    await loadComplete;
+    await expect
+      .poll(() => readLateApiResponseObservation(page))
+      .toEqual({
+        requestURL: expect.stringContaining("/api/v2/projects/p_race-load012"),
+        requestSignalPresent: true,
+        requestAborted: true,
+        responseURL: expect.stringContaining("/api/v2/projects/p_race-load012"),
+        responseStatus: 200,
+        responseReceived: true,
+        observerSettled: true,
+        observerError: "",
+      });
+    await expect(page.getByRole("heading", { name: "Choose a video to begin" })).toBeVisible();
+    await expect(page.getByText("Project loaded.")).toHaveCount(0);
+  } finally {
+    release();
+    if (loadRouteReached) await loadComplete;
+  }
 });
 
-test("delayed saves stay dirty and cannot launch obsolete exports", async ({ page }) => {
+test("delayed saves cannot launch an obsolete export after a durable edit", async ({ page }) => {
   let saves = 0;
+  const saveBodies: ProjectInput[] = [];
+  const completedProjectSaves = new Set<import("@playwright/test").Request>();
+  const savedProject: { value?: Awaited<ReturnType<typeof saveProjectAndCaptureRevision>> } = {};
+  let preflights = 0;
   let exports = 0;
+  page.on("requestfinished", (request) => {
+    if (
+      request.method() === "PUT" &&
+      /\/api\/v2\/projects\/p_[^/]+$/.test(new URL(request.url()).pathname)
+    )
+      completedProjectSaves.add(request);
+  });
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname.endsWith("/exports/preflight")) preflights += 1;
+  });
   let release!: () => void;
   const delayed = new Promise<void>((resolve) => {
     release = resolve;
   });
+  let projectID = "";
+  let releaseSecond!: () => void;
+  const delayedSecond = new Promise<void>((resolve) => (releaseSecond = resolve));
+  let secondSaveStarted!: () => void;
+  const secondSaveStart = new Promise<void>((resolve) => (secondSaveStarted = resolve));
   await page.route(`${apiOrigin}/api/v2/projects/*`, async (route) => {
     if (route.request().method() !== "PUT") return route.fallback();
     saves += 1;
+    projectID = new URL(route.request().url()).pathname.split("/")[4]!;
     const body = Schema.decodeUnknownSync(ProjectInputSchema)(route.request().postDataJSON());
+    saveBodies.push(body);
     if (saves === 1) await delayed;
-    return route.fulfill({ json: projectSnapshot("p_save-race012", saves, body) });
+    if (saves === 2) {
+      secondSaveStarted();
+      await delayedSecond;
+    }
+    return route.fulfill({ json: projectSnapshot(projectID, saves, body) });
   });
   const queuedJob = exportJobSnapshot({
     id: "j_new",
@@ -3137,25 +3628,34 @@ test("delayed saves stay dirty and cannot launch obsolete exports", async ({ pag
     revision: 1,
     progress: 0,
   });
-  const queuedBatch = exportBatchSnapshot({
-    batchId: "b_newexport001",
-    projectId: "p_save-race012",
-    projectRevision: 1,
-    state: "queued",
-    progress: 0,
-    jobs: [queuedJob],
-  });
+  const queuedBatch = (projectId: string) =>
+    exportBatchSnapshot({
+      batchId: "b_newexport001",
+      projectId,
+      projectRevision: 1,
+      state: "queued",
+      progress: 0,
+      jobs: [queuedJob],
+    });
   await page.route(`${apiOrigin}/api/v2/projects/*/exports`, (route) => {
     exports += 1;
-    validateExportRequest(route.request());
+    const input = validateExportRequest(route.request());
+    if (savedProject.value) {
+      expect(completedProjectSaves.has(savedProject.value.request)).toBe(true);
+      expect(new URL(route.request().url()).pathname.split("/")[4]).toBe(
+        savedProject.value.project.id,
+      );
+      expect(input.projectRevision).toBe(savedProject.value.project.revision);
+    }
     return route.fulfill({
       status: 202,
       json: exportSubmission("b_newexport001", [queuedJob]),
     });
   });
-  await page.route(`${apiOrigin}/api/v2/batches/b_newexport001/events`, (route) =>
-    route.fulfill(batchEvent(queuedBatch)),
-  );
+  await page.route(`${apiOrigin}/api/v2/batches/b_newexport001/events`, (route) => {
+    if (!projectID) throw new Error("Batch event arrived before a project was saved.");
+    return route.fulfill(batchEvent(queuedBatch(projectID)));
+  });
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
   await addSelectedMediaToProject(page);
@@ -3171,15 +3671,34 @@ test("delayed saves stay dirty and cannot launch obsolete exports", async ({ pag
   );
   await page.getByRole("button", { name: "Save project from project header", exact: true }).click();
   await openTask(page, "Export");
-  await expect(page.getByRole("button", { name: "Create clips" })).toBeEnabled();
-  await page.getByLabel("Timeline playhead").fill("1");
+  const createClips = page.getByRole("button", { name: "Create clips" });
+  await expect(createClips).toBeEnabled();
+  await createClips.click();
+  await expect.poll(() => exports).toBe(0);
+  await openTask(page, "Cuts");
+  await page.getByLabel("Label cut 1").fill("changed while save was pending");
+  await openTask(page, "Export");
   release();
-  await page.waitForTimeout(50);
+  await secondSaveStart;
+  await expect.poll(() => saves).toBe(2);
+  await expect.poll(() => exports).toBe(0);
+  expect(saveBodies[1]?.items[0]?.segments[0]?.label).toBe("changed while save was pending");
+  await expect(page.getByLabel("Project status")).toContainText("Saving");
+  releaseSecond();
+  await expect.poll(() => saves).toBeGreaterThan(1);
+  await expect(
+    page.getByText("Create clips stopped because the project changed. Save again and retry.", {
+      exact: true,
+    }),
+  ).toBeVisible();
+  expect(preflights).toBe(0);
   expect(exports).toBe(0);
-  await saveProject(page);
+  savedProject.value = await saveProjectAndCaptureRevision(page);
   await openTask(page, "Export");
   await page.getByRole("button", { name: "Create clips" }).click();
   await expect(page.getByText("Export queued.")).toBeVisible();
+  expect(exports).toBe(1);
+  expect(preflights).toBeGreaterThan(0);
 });
 
 test("a delayed old-project save stays silent after New and the new project saves at revision zero", async ({
@@ -3281,10 +3800,14 @@ test("unmounting a deferred export save cannot start export, poll, or remember a
   });
   let exports = 0;
   let polls = 0;
+  let batchEvents = 0;
+  let saveCompleted!: () => void;
+  const saveComplete = new Promise<void>((resolve) => (saveCompleted = resolve));
   context.on("request", (request) => {
     const path = new URL(request.url()).pathname;
     if (path.endsWith("/exports")) exports += 1;
     if (path.includes("/jobs/")) polls += 1;
+    if (path.includes("/batches/") && path.endsWith("/events")) batchEvents += 1;
   });
   await page.route(`${apiOrigin}/api/v2/projects/*`, async (route) => {
     if (route.request().method() !== "PUT") return route.fallback();
@@ -3292,6 +3815,7 @@ test("unmounting a deferred export save cannot start export, poll, or remember a
     saveStarted();
     await delayed;
     await route.fulfill({ json: projectSnapshot("p_unmount-save12", 1, input) }).catch(() => {});
+    saveCompleted();
   });
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
@@ -3306,15 +3830,17 @@ test("unmounting a deferred export save cannot start export, poll, or remember a
     "aria-pressed",
     "true",
   );
-  await page.getByRole("button", { name: "Save project from project header", exact: true }).click();
+  await openTask(page, "Export");
+  await page.getByRole("button", { name: "Create clips" }).click();
   await saveStart;
   await page.close();
   release();
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  await saveComplete;
   const next = await context.newPage();
   await next.goto("/");
   expect(exports).toBe(0);
   expect(polls).toBe(0);
+  expect(batchEvents).toBe(0);
   await expect
     .poll(() => next.evaluate(() => localStorage.getItem("videocutlist.recent-projects.v1")))
     .toBeNull();
@@ -3324,32 +3850,71 @@ test("unmounting a deferred export save cannot start export, poll, or remember a
 test("stale selection metadata cannot replace a refresh or newer selection status", async ({
   page,
 }) => {
+  let metadataStarted!: () => void;
+  const metadataStart = new Promise<void>((resolve) => (metadataStarted = resolve));
+  let metadataCompleted!: () => void;
+  const metadataComplete = new Promise<void>((resolve) => (metadataCompleted = resolve));
   let release!: () => void;
   const delayed = new Promise<void>((resolve) => {
     release = resolve;
   });
+  let metadataRouteReached = false;
+  await installUncooperativeLateApiResponseObserver(page, `/api/v2/media/${media.id}`);
   await page.route(`${apiOrigin}/api/v2/media/${media.id}`, async (route) => {
+    metadataRouteReached = true;
+    metadataStarted();
     await delayed;
-    return route.fulfill({ status: 500 }).catch(() => {});
+    try {
+      await route.fulfill({ status: 500 });
+    } finally {
+      metadataCompleted();
+    }
   });
-  await page.goto("/");
-  await page.getByRole("button", { name: /camera.mp4/ }).click();
-  page.once("dialog", (dialog) => dialog.accept());
-  await page.getByRole("button", { name: /second.mp4/ }).click();
-  await page.getByRole("button", { name: "Refresh media" }).click();
-  release();
-  await addSelectedMediaToProject(page);
-  await expect(page.getByLabel("Selected media")).toContainText("second.mp4");
-  await expect(page.getByRole("button", { name: "Add to project" })).toHaveCount(0);
-  await expect(page.getByText(/Metadata request failed/)).toHaveCount(0);
+  try {
+    await page.goto("/");
+    await page.getByRole("button", { name: /camera.mp4/ }).click();
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.getByRole("button", { name: /second.mp4/ }).click();
+    await page.getByRole("button", { name: "Refresh media" }).click();
+    await metadataStart;
+    await expect(page.getByLabel("Selected media")).toContainText("second.mp4");
+    await expect
+      .poll(async () => (await readLateApiResponseObservation(page))?.requestAborted ?? false)
+      .toBe(true);
+    release();
+    await metadataComplete;
+    await expect
+      .poll(() => readLateApiResponseObservation(page))
+      .toEqual({
+        requestURL: expect.stringContaining(`/api/v2/media/${media.id}`),
+        requestSignalPresent: true,
+        requestAborted: true,
+        responseURL: expect.stringContaining(`/api/v2/media/${media.id}`),
+        responseStatus: 500,
+        responseReceived: true,
+        observerSettled: true,
+        observerError: "",
+      });
+    await addSelectedMediaToProject(page);
+    await expect(page.getByLabel("Selected media")).toContainText("second.mp4");
+    await expect(page.getByRole("button", { name: "Add to project" })).toHaveCount(0);
+    await expect(page.getByText(/Metadata request failed/)).toHaveCount(0);
+  } finally {
+    release();
+    if (metadataRouteReached) await metadataComplete;
+  }
 });
 
 test("refresh metadata cannot restore an old selection", async ({ page }) => {
   let refreshed = false;
+  let requestStarted!: () => void;
+  const requestStart = new Promise<void>((resolve) => (requestStarted = resolve));
+  let requestCompleted!: () => void;
+  const requestComplete = new Promise<void>((resolve) => (requestCompleted = resolve));
   let release!: () => void;
-  const delayed = new Promise<void>((resolve) => {
-    release = resolve;
-  });
+  const delayed = new Promise<void>((resolve) => (release = resolve));
+  let requestRouteReached = false;
+  await installUncooperativeLateApiResponseObserver(page, `/api/v2/media/${media.id}`);
   await page.route(`${apiOrigin}/api/v2/media**`, async (route) => {
     const url = new URL(route.request().url());
     if (url.pathname === "/api/v2/media/refresh") {
@@ -3370,21 +3935,51 @@ test("refresh metadata cannot restore an old selection", async ({ page }) => {
         },
       });
     if (url.pathname === `/api/v2/media/${media.id}` && refreshed) {
+      requestRouteReached = true;
+      requestStarted();
       await delayed;
-      return route.fulfill({ json: media });
+      try {
+        await route.fulfill({ json: media });
+      } finally {
+        requestCompleted();
+      }
+      return;
     }
     return route.fallback();
   });
-  await page.goto("/");
-  await page.getByRole("button", { name: /camera.mp4/ }).click();
-  await page.getByRole("button", { name: "Refresh media" }).click();
-  await expect(page.getByRole("button", { name: /second.mp4/ })).toBeVisible();
-  page.once("dialog", (dialog) => dialog.accept());
-  await page.getByRole("button", { name: /second.mp4/ }).click();
-  release();
-  await addSelectedMediaToProject(page);
-  await expect(page.getByLabel("Selected media")).toContainText("second.mp4");
-  await expect(page.getByRole("button", { name: "Add to project" })).toHaveCount(0);
+  try {
+    await page.goto("/");
+    await page.getByRole("button", { name: /camera.mp4/ }).click();
+    await page.getByRole("button", { name: "Refresh media" }).click();
+    await requestStart;
+    await expect(page.getByRole("button", { name: /second.mp4/ })).toBeVisible();
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.getByRole("button", { name: /second.mp4/ }).click();
+    await expect(page.getByLabel("Selected media")).toContainText("second.mp4");
+    await expect
+      .poll(async () => (await readLateApiResponseObservation(page))?.requestURL ?? "")
+      .toContain(`/api/v2/media/${media.id}`);
+    release();
+    await requestComplete;
+    await expect
+      .poll(() => readLateApiResponseObservation(page))
+      .toEqual({
+        requestURL: expect.stringContaining(`/api/v2/media/${media.id}`),
+        requestSignalPresent: true,
+        requestAborted: false,
+        responseURL: expect.stringContaining(`/api/v2/media/${media.id}`),
+        responseStatus: 200,
+        responseReceived: true,
+        observerSettled: true,
+        observerError: "",
+      });
+    await addSelectedMediaToProject(page);
+    await expect(page.getByLabel("Selected media")).toContainText("second.mp4");
+    await expect(page.getByRole("button", { name: "Add to project" })).toHaveCount(0);
+  } finally {
+    release();
+    if (requestRouteReached) await requestComplete;
+  }
 });
 
 test("delayed cancellation cannot overwrite a replacement export", async ({ page }) => {
@@ -3531,15 +4126,25 @@ test("new projects reset the editor and dirty changes need confirmation", async 
   page.on("request", (request) => {
     if (
       request.method() === "GET" &&
-      /\/api\/v1\/projects\/p_[^/]+$/.test(new URL(request.url()).pathname)
+      /\/api\/v2\/projects\/p_[^/]+$/.test(new URL(request.url()).pathname)
     )
       projectLoads += 1;
   });
-  page.once("dialog", (dialog) => dialog.dismiss());
+  let discardConfirmation!: () => void;
+  const discardConfirmed = new Promise<void>((resolve) => (discardConfirmation = resolve));
+  const handleLoadDialog = (dialog: import("@playwright/test").Dialog) => {
+    if (dialog.type() === "prompt") void dialog.accept("p_demo-project");
+    else {
+      void dialog.dismiss();
+      discardConfirmation();
+    }
+  };
+  page.on("dialog", handleLoadDialog);
   await openTask(page, "Project");
   await page.locator(".project-menu > summary").click();
   await page.getByRole("button", { name: "Load project" }).click();
-  await page.waitForTimeout(50);
+  await discardConfirmed;
+  page.off("dialog", handleLoadDialog);
   expect(projectLoads).toBe(0);
   await page.getByRole("button", { name: /second.mp4/ }).click();
   await addSelectedMediaToProject(page);
@@ -3642,9 +4247,11 @@ test("load fetches project media directly and corrupt recents do not block start
 });
 
 test("loads cursor pages once and removes Load more at the end", async ({ page }) => {
+  const cursors: string[] = [];
   await page.route(`${apiOrigin}/api/v2/media/tree**`, async (route) => {
     const url = new URL(route.request().url());
     expect(route.request().method()).toBe("GET");
+    cursors.push(url.searchParams.get("cursor") ?? "");
     if (!url.searchParams.get("cursor"))
       return route.fulfill({
         json: {
@@ -3667,6 +4274,7 @@ test("loads cursor pages once and removes Load more at the end", async ({ page }
   await page.getByRole("button", { name: "Load more" }).click();
   await expect(page.getByRole("button", { name: /second.mp4/ })).toBeVisible();
   await expect(page.getByRole("button", { name: "Load more" })).toHaveCount(0);
+  expect(cursors).toEqual(["", "next/+="]);
   await expect(
     page.locator(".media-list").getByRole("button", { name: "Select camera.mp4" }),
   ).toHaveCount(1);
@@ -3716,17 +4324,6 @@ test("refresh replaces the first page and selected metadata", async ({ page }) =
       return route.fulfill({
         json: { folders: [], items: refreshes ? [refreshed] : [media], nextCursor: null },
       });
-    if (refreshes && (url.pathname.endsWith("/thumbnails") || url.pathname.endsWith("/waveform"))) {
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      return route.fulfill(
-        url.pathname.endsWith("/thumbnails")
-          ? {
-              headers: { "content-type": "image/png" },
-              body: "refreshed-png-fixture",
-            }
-          : { json: { startMs: 0, durationMs: 10000, peaks: [0.2, 0.6] } },
-      );
-    }
     return route.fallback();
   });
   await page.goto("/");
@@ -3770,6 +4367,8 @@ for (const [status, message] of [
 }
 
 test("covers the responsive workspace and keyboard editing workflow", async ({ page }) => {
+  // Four navigations plus the complete keyboard journey share this one test budget.
+  test.setTimeout(60_000);
   const keyboardJob = exportJobSnapshot({
     id: "j_keyboard-flow01",
     batchId: "b_keyboard-flow01",
@@ -3883,6 +4482,35 @@ test("covers the responsive workspace and keyboard editing workflow", async ({ p
 });
 
 test("keeps the preview stable and exposes familiar playback controls", async ({ page }) => {
+  let delayedPreviewStarted!: () => void;
+  const delayedPreviewStart = new Promise<void>((resolve) => (delayedPreviewStarted = resolve));
+  let releaseDelayedPreview!: () => void;
+  const delayedPreviewRelease = new Promise<void>((resolve) => (releaseDelayedPreview = resolve));
+  let delayedPreviewCompleted!: () => void;
+  const delayedPreviewComplete = new Promise<void>(
+    (resolve) => (delayedPreviewCompleted = resolve),
+  );
+  await page.route(`${apiOrigin}/media/v2/media/${media.id}/preview**`, async (route) => {
+    const center = new URL(route.request().url()).searchParams.get("centerMs") ?? "0";
+    if (center === "1000") {
+      delayedPreviewStarted();
+      await delayedPreviewRelease;
+    }
+    await route.fulfill({
+      headers: {
+        "content-type": "video/mp4",
+        "Access-Control-Expose-Headers":
+          "X-Preview-Start, X-Preview-Duration, X-Preview-Offset, X-Preview-Cache, X-Request-ID",
+        "X-Preview-Start": center,
+        "X-Preview-Duration": "8000",
+        "X-Preview-Offset": center,
+        "X-Preview-Cache": "hit",
+        "X-Request-ID": `stable-preview-${center}`,
+      },
+      body: "fragment",
+    });
+    if (center === "1000") delayedPreviewCompleted();
+  });
   await page.goto("/");
   await page.getByRole("button", { name: /camera.mp4/ }).click();
 
@@ -3895,9 +4523,11 @@ test("keeps the preview stable and exposes familiar playback controls", async ({
     input.value = "1000";
     input.dispatchEvent(new Event("input", { bubbles: true }));
   });
-  await page.waitForTimeout(220);
+  await delayedPreviewStart;
   await expect(page.getByText("Loading preview…")).toBeVisible();
   expect(await surface.boundingBox()).toEqual(initialBounds);
+  releaseDelayedPreview();
+  await delayedPreviewComplete;
   await expect(page.getByText("Loading preview…")).not.toBeVisible();
   expect(await surface.boundingBox()).toEqual(initialBounds);
 
@@ -4128,7 +4758,7 @@ test("persists appearance and recovers from invalid stored values", async ({ pag
   await expect(page.getByLabel("Theme")).toHaveValue("system");
 });
 
-test("covers theme contrast and selected task control states", async ({ page }) => {
+test("applies themes and styles selected task control states", async ({ page }) => {
   await page.goto("/");
   const cutsTab = page.getByRole("tab", { name: "Cuts", exact: true });
   await expect(cutsTab).toHaveAttribute("aria-selected", "true");

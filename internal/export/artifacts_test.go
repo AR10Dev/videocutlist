@@ -59,8 +59,12 @@ func TestArtifactReconcilePublishesOnlyValidatedOwnedOutput(t *testing.T) {
 	if err != nil || stored.State != jobqueue.JobSucceeded {
 		t.Fatalf("job = %#v, err = %v", stored, err)
 	}
-	if _, _, err := artifacts.Open(job.ID, 0, time.Now()); err != nil {
+	opened, _, err := artifacts.Open(job.ID, 0, time.Now())
+	if err != nil {
 		t.Fatalf("reconciled artifact unavailable: %v", err)
+	}
+	if err := opened.Close(); err != nil {
+		t.Fatalf("close reconciled artifact: %v", err)
 	}
 	if _, err := os.Stat(manifest); err != nil {
 		t.Fatalf("manifest was not retained as restart evidence: %v", err)
@@ -503,7 +507,8 @@ func TestArtifactStoreCleanupPreservesReplacedOwnedOutput(t *testing.T) {
 	artifacts := NewArtifactStore()
 	artifacts.Put("j_replaced_output", []Artifact{{Path: output, Name: "published.mkv", Kind: KindDownload, Expires: expiry}})
 	artifacts.RegisterManifest("j_replaced_output", manifest)
-	if err := os.Remove(output); err != nil {
+	replaced := filepath.Join(dir, "original.mkv")
+	if err := os.Rename(output, replaced); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(output, []byte("not owned"), 0o600); err != nil {

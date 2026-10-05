@@ -11,7 +11,7 @@ const media = {
   etag: "v1",
 };
 
-test("project save ignores playback and unfinished cuts but persists undo", async ({ page }) => {
+test("project save ignores playhead and unfinished cuts but persists undo", async ({ page }) => {
   const writes: unknown[] = [];
   await page.addInitScript(() => {
     window.VIDEOCUTLIST_CONFIG = {
@@ -46,6 +46,7 @@ test("project save ignores playback and unfinished cuts but persists undo", asyn
     return route.fulfill({ status: 404 });
   });
 
+  await page.clock.install();
   await page.goto("/");
   await page.getByRole("button", { name: /camera\.mp4/ }).click();
   await page.getByRole("button", { name: "Add to project" }).click();
@@ -60,7 +61,7 @@ test("project save ignores playback and unfinished cuts but persists undo", asyn
 
   await page.getByLabel("Timeline playhead").fill("1500");
   await page.getByRole("button", { name: "Set in" }).click();
-  await page.waitForTimeout(900);
+  await page.clock.runFor(900);
   expect(writes).toHaveLength(1);
   await expect(page.getByRole("status", { name: "Project status" })).toHaveText("Saved");
 
@@ -146,11 +147,9 @@ test("project import remains dirty across conflict and recovery restores edits",
   await page.getByRole("button", { name: "New project", exact: true }).click();
   await expect(page.locator(".project-sidebar-header strong")).toHaveText("Imported edit");
   await page.locator(".project-menu > summary").click();
-  await page.getByRole("button", { name: "Project tools", exact: true }).click();
-  await page.getByRole("button", { name: "Save project", exact: true }).click();
+  await page.getByRole("button", { name: "Save project from project header", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText("Another client saved this project");
-  expect(writes[0].body).toMatchObject({ revision: 0, name: "Imported edit" });
-  await page.getByRole("button", { name: "Close project tools", exact: true }).click();
+  expect(writes[0].body).toMatchObject({ revision: 0, schemaVersion: 2, name: "Imported edit" });
   await page.getByRole("button", { name: "Save local work as new project" }).click();
   await expect.poll(() => writes.length).toBe(2);
   expect(writes[1].body).toMatchObject({ revision: 0, name: "Imported edit" });

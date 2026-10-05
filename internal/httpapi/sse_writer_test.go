@@ -117,6 +117,6 @@ func (w *deadlineRecordingWriter) FlushError() error {
 	if w.flushErr != nil {
 		return w.flushErr
 	}
-	w.ResponseRecorder.Flush()
+	w.Flush()
 	return nil
 }

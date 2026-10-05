@@ -108,24 +108,6 @@ func newProposalTestService(t *testing.T, unattended bool) (*ProposalService, *p
 	return service, projectService, mediaService, created.ID, &now
 }
 
-func TestProposalSelectsOnlyRequestedProjectItems(t *testing.T) {
-	service, projectService, _, credentialID, _ := newProposalTestService(t, false)
-	projectService.project.Items = append(projectService.project.Items, model.ProjectItem{
-		ID: "i_proposaltest02", MediaID: "m_proposaltest01",
-		Segments: []model.Segment{{StartMS: 3000, EndMS: 4000}},
-	})
-	proposal, err := service.Prepare(t.Context(), ProposalRequest{
-		CredentialID: credentialID, ProjectID: "p_proposaltest01", ProjectRevision: 1,
-		Export: projects.ExportInput{ItemIDs: []string{"i_proposaltest01"}, Mode: "merge", Selection: "segments", CutStrategy: "stream_copy_preferred", Container: "mp4", DestinationID: "download"},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(proposal.Snapshots) != 1 || proposal.Snapshots[0].Item.ID != "i_proposaltest01" {
-		t.Fatalf("proposal leaked unselected project item: %#v", proposal.Snapshots)
-	}
-}
-
 func prepareProposal(t *testing.T, service *ProposalService, credentialID string) ExportProposal {
 	t.Helper()
 	proposal, err := service.Prepare(t.Context(), ProposalRequest{
@@ -174,47 +156,66 @@ func TestProposalRequiresExactApprovalAndDuplicateExecutionReturnsSameBatch(t *t
 }
 
 func TestProposalSnapshotsOnlyExplicitlySelectedItems(t *testing.T) {
-	service, projectService, mediaService, credentialID, _ := newProposalTestService(t, false)
-	selectedID := projectService.project.Items[0].ID
-	unselected := model.ProjectItem{
-		ID:      "i_proposaltest02",
-		MediaID: "m_proposaltest02",
-		Segments: []model.Segment{{
-			StartMS: 3000,
-			EndMS:   4000,
-		}},
-	}
-	projectService.project.Items = append(projectService.project.Items, unselected)
-	mediaService.extra = map[string]projects.Media{
-		unselected.MediaID: {
-			ID:         unselected.MediaID,
-			RootID:     "root_a",
-			Name:       "unselected.mp4",
-			DurationMS: 10_000,
-			SizeBytes:  100,
-			ETag:       "source-v1",
-		},
-	}
-
-	proposal, err := service.Prepare(t.Context(), ProposalRequest{
-		CredentialID:    credentialID,
-		ProjectID:       projectService.project.ID,
-		ProjectRevision: projectService.project.Revision,
-		Export: projects.ExportInput{
-			ItemIDs:       []string{selectedID},
-			Mode:          "merge",
-			Selection:     "segments",
-			CutStrategy:   "stream_copy_preferred",
-			Container:     "mp4",
-			DestinationID: "download",
-		},
+	t.Run("shared media", func(t *testing.T) {
+		service, projectService, _, credentialID, _ := newProposalTestService(t, false)
+		projectService.project.Items = append(projectService.project.Items, model.ProjectItem{
+			ID: "i_proposaltest02", MediaID: "m_proposaltest01",
+			Segments: []model.Segment{{StartMS: 3000, EndMS: 4000}},
+		})
+		proposal, err := service.Prepare(t.Context(), ProposalRequest{
+			CredentialID: credentialID, ProjectID: projectService.project.ID, ProjectRevision: projectService.project.Revision,
+			Export: projects.ExportInput{ItemIDs: []string{"i_proposaltest01"}, Mode: "merge", Selection: "segments", CutStrategy: "stream_copy_preferred", Container: "mp4", DestinationID: "download"},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(proposal.Snapshots) != 1 || proposal.Snapshots[0].Item.ID != "i_proposaltest01" {
+			t.Fatalf("proposal leaked unselected shared-media item: %#v", proposal.Snapshots)
+		}
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(proposal.Snapshots) != 1 || proposal.Snapshots[0].Item.ID != selectedID {
-		t.Fatalf("proposal snapshots = %#v, want only %q", proposal.Snapshots, selectedID)
-	}
+	t.Run("distinct media", func(t *testing.T) {
+		service, projectService, mediaService, credentialID, _ := newProposalTestService(t, false)
+		selectedID := projectService.project.Items[0].ID
+		unselected := model.ProjectItem{
+			ID:      "i_proposaltest02",
+			MediaID: "m_proposaltest02",
+			Segments: []model.Segment{{
+				StartMS: 3000,
+				EndMS:   4000,
+			}},
+		}
+		projectService.project.Items = append(projectService.project.Items, unselected)
+		mediaService.extra = map[string]projects.Media{
+			unselected.MediaID: {
+				ID:         unselected.MediaID,
+				RootID:     "root_a",
+				Name:       "unselected.mp4",
+				DurationMS: 10_000,
+				SizeBytes:  100,
+				ETag:       "source-v1",
+			},
+		}
+
+		proposal, err := service.Prepare(t.Context(), ProposalRequest{
+			CredentialID:    credentialID,
+			ProjectID:       projectService.project.ID,
+			ProjectRevision: projectService.project.Revision,
+			Export: projects.ExportInput{
+				ItemIDs:       []string{selectedID},
+				Mode:          "merge",
+				Selection:     "segments",
+				CutStrategy:   "stream_copy_preferred",
+				Container:     "mp4",
+				DestinationID: "download",
+			},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(proposal.Snapshots) != 1 || proposal.Snapshots[0].Item.ID != selectedID {
+			t.Fatalf("proposal snapshots = %#v, want only %q", proposal.Snapshots, selectedID)
+		}
+	})
 }
 
 func TestProposalExpiryBoundaryAndChangedInputs(t *testing.T) {
@@ -269,11 +270,22 @@ func TestProposalSupportsExplicitMediaRangesWithoutProjectWrite(t *testing.T) {
 }
 
 func TestProposalUnattendedCredentialBypassesOnlyApproval(t *testing.T) {
-	service, _, _, credentialID, _ := newProposalTestService(t, true)
+	service, _, media, credentialID, _ := newProposalTestService(t, true)
 	proposal := prepareProposal(t, service, credentialID)
+
+	media.item.ETag = "source-v2"
+	if _, _, err := service.Execute(t.Context(), proposal.ID, credentialID); !errors.Is(err, ErrProposalStale) {
+		t.Fatalf("unattended execution with changed source = %v, want stale proposal", err)
+	}
+	var count int
+	if err := service.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM jobs WHERE proposal_id=? AND credential_id=?`, proposal.ID, credentialID).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("stale unattended proposal admitted %d jobs: %v", count, err)
+	}
+
+	media.item.ETag = "source-v1"
 	batch, jobs, err := service.Execute(t.Context(), proposal.ID, credentialID)
 	if err != nil || batch == "" || len(jobs) != 1 {
-		t.Fatalf("unattended execution = %q %#v %v", batch, jobs, err)
+		t.Fatalf("unattended execution without approval = %q %#v %v", batch, jobs, err)
 	}
 }
 

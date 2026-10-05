@@ -172,7 +172,7 @@ describe("client API boundary", () => {
     expect(() => api("https://video.example.com").url(path)).toThrow();
   });
 
-  it("requests library status without accepting a filesystem path", async () => {
+  it("requests library status through the public route", async () => {
     const fetch = vi.fn<typeof globalThis.fetch>(() => Promise.resolve(new Response()));
     const client = createApiClient(
       { serverBaseUrl: "https://video.example.com", authentication: { type: "none" } },

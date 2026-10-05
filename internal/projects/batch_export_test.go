@@ -547,6 +547,7 @@ func TestBatchExportRunningCancellationPropagatesContext(t *testing.T) {
 	})
 	jobs, _ := jobqueue.NewJobsStore(db)
 	started := make(chan struct{})
+	cancelObserved := make(chan struct{})
 	id := "m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	catalog := batchCatalog{media: map[string]Media{id: {ID: id, ETag: "a", SizeBytes: 1, DurationMS: 10}}}
 	var uc BatchExportUseCase
@@ -562,6 +563,7 @@ func TestBatchExportRunningCancellationPropagatesContext(t *testing.T) {
 		RunSnapshot: func(ctx context.Context, _ string, _ ExportSnapshot) (string, error) {
 			close(started)
 			<-ctx.Done()
+			close(cancelObserved)
 			return "", ctx.Err()
 		},
 	}
@@ -578,6 +580,11 @@ func TestBatchExportRunningCancellationPropagatesContext(t *testing.T) {
 	<-started
 	if err := uc.Cancel(context.Background(), batchID); err != nil {
 		t.Fatal(err)
+	}
+	select {
+	case <-cancelObserved:
+	case <-time.After(time.Second):
+		t.Fatal("export runner did not observe cancellation")
 	}
 	state, progress, err := jobs.Batch(context.Background(), batchID)
 	if err != nil || state != jobqueue.JobCancelled || progress != 1 {

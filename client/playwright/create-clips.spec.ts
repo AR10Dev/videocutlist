@@ -1,21 +1,13 @@
 import type * as EffectApiTypes from "../src/generated/effect-api";
 import { expect, test, type Page } from "@playwright/test";
+import { mediaFixture, secondMediaFixture, sseSnapshotFrame } from "./fixtures";
 
 const origin = "http://127.0.0.1:8787";
 const media = {
-  id: "m_0123456789012345678901234567890123456789012",
-  name: "camera.mp4",
-  durationMs: 10_000,
-  sizeBytes: 1000,
-  container: "mp4",
-  streams: { tracks: [{ index: 0, type: "video", codec: "h264" }] },
-  etag: "v1",
+  ...mediaFixture,
+  streams: { tracks: [{ index: 0, type: "video" as const, codec: "h264" }] },
 };
-const secondMedia = {
-  ...media,
-  id: "m_second-012345678901234567890123456789012345",
-  name: "second.mp4",
-};
+const secondMedia = { ...secondMediaFixture, streams: media.streams };
 
 async function addToProject(page: Page) {
   await page.getByRole("button", { name: "Add to project" }).click();
@@ -147,13 +139,7 @@ test("rebuilt detection sends source identity and completes candidate review", a
         "X-Accel-Buffering": "no",
         "X-Request-ID": "r-create-clips-detection",
       },
-      body: [
-        "id: j_0123456789ab:2",
-        "event: snapshot",
-        `data: ${JSON.stringify(terminal)}`,
-        "",
-        "",
-      ].join("\n"),
+      body: sseSnapshotFrame("j_0123456789ab:2", terminal),
     });
   });
   await page.route(`${origin}/api/v2/projects/*/detections`, (route) => {
@@ -570,13 +556,7 @@ test("Create clips saves a dirty revision before fresh preflight and batch submi
           "X-Accel-Buffering": "no",
           "X-Request-ID": "r-create-clips-primary-batch",
         },
-        body: [
-          `id: batch-${batchId}-2`,
-          "event: snapshot",
-          `data: ${JSON.stringify(terminalBatch)}`,
-          "",
-          "",
-        ].join("\n"),
+        body: sseSnapshotFrame(`batch-${batchId}-2`, terminalBatch),
       });
     }
     return route.fulfill({

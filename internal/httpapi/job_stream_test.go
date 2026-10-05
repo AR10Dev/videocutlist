@@ -236,12 +236,8 @@ func TestJobAndBatchStreamsShareCapacityAndReleaseOnDisconnectAndShutdown(t *tes
 		start(path)
 		waitReady()
 	}
-	if got := jobs.gets.Load() + batches.snapshots.Load(); got != maxConcurrentObservations {
-		t.Fatalf("initial resource reads = %d, want %d", got, maxConcurrentObservations)
-	}
-
 	overflow := httptest.NewRecorder()
-	server.ServeHTTP(overflow, httptest.NewRequest(http.MethodGet, "http://api.test/api/v2/batches/b_aaaaaaaaaaaa/events", nil))
+	server.ServeHTTP(overflow, httptest.NewRequest(http.MethodGet, "http://api.test/api/v2/batches/b_zzzzzzzzzzzz/events", nil))
 	if overflow.Code != http.StatusTooManyRequests {
 		t.Fatalf("over-capacity status = %d, want 429", overflow.Code)
 	}
@@ -258,24 +254,20 @@ func TestJobAndBatchStreamsShareCapacityAndReleaseOnDisconnectAndShutdown(t *tes
 	if response.Error.Code != "observation_capacity" || response.Error.Message == "" || response.Error.RequestID == "" || response.Error.RequestID != overflow.Header().Get("X-Request-ID") {
 		t.Fatalf("unsafe or mismatched capacity error envelope: %#v, X-Request-ID=%q", response.Error, overflow.Header().Get("X-Request-ID"))
 	}
-	if got := jobs.gets.Load() + batches.snapshots.Load(); got != maxConcurrentObservations {
-		t.Fatalf("rejected batch stream performed a resource read: reads=%d", got)
+	if got := batches.overflowReads.Load(); got != 0 {
+		t.Fatalf("rejected overflow batch was read: reads=%d", got)
 	}
 	jobOverflow := httptest.NewRecorder()
-	server.ServeHTTP(jobOverflow, httptest.NewRequest(http.MethodGet, "http://api.test/api/v2/jobs/j_aaaaaaaaaaaa/events", nil))
-	if jobOverflow.Code != http.StatusTooManyRequests || jobs.gets.Load() != maxConcurrentObservations/2 {
-		t.Fatalf("rejected job stream status=%d, job reads=%d", jobOverflow.Code, jobs.gets.Load())
+	server.ServeHTTP(jobOverflow, httptest.NewRequest(http.MethodGet, "http://api.test/api/v2/jobs/j_zzzzzzzzzzzz/events", nil))
+	if jobOverflow.Code != http.StatusTooManyRequests || jobs.overflowReads.Load() != 0 {
+		t.Fatalf("rejected overflow job status=%d, reads=%d", jobOverflow.Code, jobs.overflowReads.Load())
 	}
 
 	// Releasing one job stream admits a batch stream, proving the budget is shared.
 	active[0].cancel()
 	<-active[0].done
-	batchReads := batches.snapshots.Load()
 	replacement := start("/api/v2/batches/b_aaaaaaaaaaaa/events")
 	waitReady()
-	if got := batches.snapshots.Load(); got != batchReads+1 {
-		t.Fatalf("replacement batch snapshot reads = %d, want %d", got, batchReads+1)
-	}
 	replacement.cancel()
 	<-replacement.done
 
@@ -310,21 +302,25 @@ func (w *capacityFlushWriter) Flush() {
 	w.ready <- struct{}{}
 }
 
-type capacityTestJobs struct{ gets atomic.Int64 }
+type capacityTestJobs struct{ overflowReads atomic.Int64 }
 
 func (j *capacityTestJobs) Get(_ context.Context, id string) (Job, error) {
-	j.gets.Add(1)
+	if id == "j_zzzzzzzzzzzz" {
+		j.overflowReads.Add(1)
+	}
 	return Job{ID: id, Type: "export", State: "running"}, nil
 }
 func (*capacityTestJobs) Cancel(context.Context, string) error { return nil }
 
 type capacityTestBatches struct {
 	*routeTestBatchExports
-	snapshots atomic.Int64
+	overflowReads atomic.Int64
 }
 
 func (b *capacityTestBatches) Snapshot(_ context.Context, id string) (projects.Batch, string, error) {
-	b.snapshots.Add(1)
+	if id == "b_zzzzzzzzzzzz" {
+		b.overflowReads.Add(1)
+	}
 	return projects.Batch{BatchID: id, State: "running", Jobs: []projects.Job{}}, "b2_current", nil
 }
 

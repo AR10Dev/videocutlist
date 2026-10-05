@@ -58,7 +58,7 @@ func TestDetectPassesMediaDescriptorAsChildFD(t *testing.T) {
 	}
 }
 
-func TestParseDetectionCandidatesAreBounded(t *testing.T) {
+func TestParseDetectionCandidatesConvertsTimesAndAssociatesProject(t *testing.T) {
 	r := projects.DetectionRequest{MediaID: "m_test", ProjectID: "p_test", ProjectRevision: 2, Kind: model.DetectSilence}
 	got := parse(r, 10000, "[silencedetect] silence_start: 1.2\n[silencedetect] silence_end: 2.5\n")
 	if len(got) != 1 || got[0].StartMS != 1200 || got[0].EndMS != 2500 || got[0].ProjectID != r.ProjectID {

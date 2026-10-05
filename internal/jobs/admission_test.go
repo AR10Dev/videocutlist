@@ -16,7 +16,11 @@ func TestMigrateCommandAdmissionsPreservesExistingJobs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	_, err = db.Exec(`CREATE TABLE jobs (id TEXT PRIMARY KEY, batch_id TEXT NOT NULL, kind TEXT NOT NULL, project_id TEXT, project_item_id TEXT, proposal_id TEXT, credential_id TEXT, state TEXT NOT NULL, request_json TEXT NOT NULL, result_json TEXT, error_code TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
 		INSERT INTO jobs (id,batch_id,kind,state,request_json,created_at,updated_at) VALUES ('j_000000000100','b_000000000100','library_scan','queued','{}','2025-01-01T00:00:00Z','2025-01-01T00:00:00Z');`)
 	if err != nil {
@@ -81,7 +85,7 @@ func TestSchedulerCommandAdmissionIsAtomicIdempotentAndDurable(t *testing.T) {
 		}
 	}
 	for result := range results {
-		if len(result.Jobs) != 1 || result.Jobs[0].ID != admitted[0].ID {
+		if len(result.Jobs) != 1 || result.Jobs[0].ID != admitted[0].ID || result.Jobs[0].Revision != 1 {
 			t.Fatalf("admission result = %#v", result)
 		}
 		if !result.Replayed {
@@ -127,7 +131,11 @@ func TestSchedulerCommandAdmissionIsAtomicIdempotentAndDurable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	db.SetMaxOpenConns(1)
 	if err := Migrate(t.Context(), db); err != nil {
 		t.Fatal(err)

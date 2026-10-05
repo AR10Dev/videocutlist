@@ -13,7 +13,7 @@ import {
   type DetectionJob as GeneratedDetectionJob,
   type Job,
 } from "../../generated/effect-api";
-import type { ServerState } from "../app/server";
+import { runServerMutation, type ServerState } from "../app/server";
 import {
   acceptCandidates,
   type Candidate,
@@ -67,18 +67,7 @@ function generatedMutation<Arg, A, E>(
   atom: Atom.AtomResultFn<Arg, A, E>,
   arg: Arg,
 ): Effect.Effect<A, E> {
-  return Effect.acquireUseRelease(
-    Effect.sync(() => registry.mount(atom)),
-    () => {
-      registry.set(atom, arg);
-      return AtomRegistry.getResult(registry, atom, { suspendOnWaiting: true });
-    },
-    (release) =>
-      Effect.sync(() => {
-        registry.set(atom, Atom.Reset);
-        release();
-      }),
-  );
+  return runServerMutation(registry, atom, arg);
 }
 
 function mutableDetectionJob(job: GeneratedDetectionJob): DetectionJob {

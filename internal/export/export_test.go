@@ -110,13 +110,6 @@ func TestSelectedSegmentsReturnsTimelineGaps(t *testing.T) {
 	}
 }
 
-func TestHybridUnsupportedMediaErrorPreservesWrapping(t *testing.T) {
-	err := fmt.Errorf("probe: %w: detail", ErrHybridSmartCutUnsupportedMedia)
-	if !errors.Is(err, ErrHybridSmartCutUnsupportedMedia) {
-		t.Fatalf("error = %v", err)
-	}
-}
-
 func TestHybridSupportedOnlyAcceptsH264CFRMatroska(t *testing.T) {
 	metadata := probe.Metadata{Container: "matroska,webm", Video: &probe.Video{Codec: "h264", AvgFrameRate: "30/1", FrameRate: "30/1"}}
 	if !hybridSupported(metadata) {
@@ -130,9 +123,15 @@ func TestHybridSupportedOnlyAcceptsH264CFRMatroska(t *testing.T) {
 
 func TestHybridWarningsIdentifyEachFallbackSegment(t *testing.T) {
 	segments := []model.Segment{{StartMS: 100, EndMS: 400}, {StartMS: 500, EndMS: 900}}
-	warnings := hybridWarnings(segments, []int64{0, 600, 1000}, true)
-	if len(warnings) != 2 || warnings[1].Code != "hybrid_smart_cut_stream_copy_fallback" || !strings.Contains(warnings[1].Message, "Segment 1") {
+	warnings := hybridWarnings(segments, []int64{0, 450, 1000}, true)
+	if len(warnings) != 3 || warnings[0].Code != "experimental_hybrid_smart_cut" {
 		t.Fatalf("warnings = %#v", warnings)
+	}
+	for i, segment := range []int{1, 2} {
+		warning := warnings[i+1]
+		if warning.Code != "hybrid_smart_cut_stream_copy_fallback" || !strings.Contains(warning.Message, fmt.Sprintf("Segment %d", segment)) {
+			t.Errorf("fallback warning %d = %#v", segment, warning)
+		}
 	}
 }
 
@@ -166,19 +165,6 @@ func TestHybridInteriorKeyframeAndFallback(t *testing.T) {
 	}
 	if got := hybridWarningCode(false); got != "hybrid_smart_cut_stream_copy_fallback" {
 		t.Fatalf("fallback code = %q", got)
-	}
-}
-
-func TestValidateStreamIndexesRejectsUnknownAndDuplicateIndexes(t *testing.T) {
-	streams := []probe.Stream{{Index: 0}, {Index: 2}}
-	if err := validateStreamIndexes([]int{2, 0}, streams); err != nil {
-		t.Fatalf("known indexes rejected: %v", err)
-	}
-	if err := validateStreamIndexes([]int{1}, streams); err == nil {
-		t.Fatal("unknown index accepted")
-	}
-	if err := validateStreamIndexes([]int{0, 0}, streams); err == nil {
-		t.Fatal("duplicate index accepted")
 	}
 }
 

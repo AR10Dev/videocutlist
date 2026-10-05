@@ -8,6 +8,7 @@ import * as AtomHttpApi from "effect/reactivity/AtomHttpApi";
 import { createMemo, type Accessor } from "solid-js";
 import {
   ApiFailure,
+  apiErrorStatus,
   createApiClient,
   createNativeHttpClientLayer,
   type ApiClient,
@@ -28,20 +29,6 @@ import {
 import { observeSnapshots } from "../queue/jobStream";
 
 type Media = EffectApiTypes.Media;
-
-function errorStatus(error: unknown, seen = new Set<object>()): number | undefined {
-  if (!error || typeof error !== "object" || seen.has(error)) return;
-  seen.add(error);
-  if ("status" in error && typeof error.status === "number") return error.status;
-  for (const nested of [
-    "cause" in error ? error.cause : undefined,
-    "reason" in error ? error.reason : undefined,
-    "response" in error ? error.response : undefined,
-  ]) {
-    const status = errorStatus(nested, seen);
-    if (status !== undefined) return status;
-  }
-}
 
 export interface ServerState {
   readonly api: ApiClient & Pick<NativeMediaApiClient, "mediaRequest">;
@@ -249,7 +236,7 @@ export function createServerState(
           }),
           Effect.retry({ times: 3, schedule: Schedule.exponential("1 second") }),
           Effect.mapError((error) => {
-            const status = error instanceof ApiFailure ? error.status : errorStatus(error);
+            const status = error instanceof ApiFailure ? error.status : apiErrorStatus(error);
             return new Error(
               status ? `Metadata request failed (${status}).` : "Metadata request failed.",
               { cause: error },
@@ -320,5 +307,25 @@ export function readServerAtom<A, E>(
     Effect.sync(() => server.registry.mount(atom)),
     () => AtomRegistry.getResult(server.registry, atom, { suspendOnWaiting: true }),
     (release) => Effect.sync(release),
+  );
+}
+
+/** Run a generated mutation while its native registry atom is mounted. */
+export function runServerMutation<Arg, A, E>(
+  registry: AtomRegistry.AtomRegistry,
+  atom: Atom.AtomResultFn<Arg, A, E>,
+  argument: Arg,
+): Effect.Effect<A, E> {
+  return Effect.acquireUseRelease(
+    Effect.sync(() => registry.mount(atom)),
+    () => {
+      registry.set(atom, argument);
+      return AtomRegistry.getResult(registry, atom, { suspendOnWaiting: true });
+    },
+    (release) =>
+      Effect.sync(() => {
+        registry.set(atom, Atom.Reset);
+        release();
+      }),
   );
 }

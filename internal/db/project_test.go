@@ -65,7 +65,14 @@ func TestProjectStoreListReturnsOpaqueSummariesAndCursor(t *testing.T) {
 		}
 	}
 	items, next, err := projects.List(ctx, "", 1)
-	if err != nil || len(items) != 1 || next == nil || items[0].Name != "Alpha" || items[0].Revision != 1 {
+	if err != nil || len(items) != 1 || next == nil || items[0].ID != "p_aaaaaaaaaaaa" || items[0].Name != "Alpha" || items[0].Revision != 1 {
 		t.Fatalf("list = %#v, %v, %v", items, next, err)
+	}
+	if *next != "p_aaaaaaaaaaaa" {
+		t.Fatalf("cursor = %q, want last returned project ID", *next)
+	}
+	second, terminal, err := projects.List(ctx, *next, 1)
+	if err != nil || len(second) != 1 || second[0].ID != "p_bbbbbbbbbbbb" || second[0].Name != "Beta" || terminal != nil {
+		t.Fatalf("second page = %#v, cursor=%v, err=%v", second, terminal, err)
 	}
 }

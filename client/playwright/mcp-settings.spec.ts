@@ -130,20 +130,57 @@ test("settings toggle is keyboard-operable and keeps its accessible name and foc
 });
 
 test("settings revision conflicts remain visible and can be reloaded", async ({ page }) => {
-  let updateBody: unknown;
-  await page.route(`${origin}/settings`, async (route) => {
-    if (route.request().method() !== "PUT") return route.fallback();
-    updateBody = route.request().postDataJSON();
-    return route.fulfill({
-      status: 409,
-      json: {
-        error: {
-          code: "settings_revision_conflict",
-          message: "Settings changed; reload before updating.",
-          requestId: "settings-conflict-test",
-        },
+  let settingsReads = 0;
+  const updateBodies: unknown[] = [];
+  const settingsResponse = (revision: number, exportLimit: number) =>
+    ({
+      revision,
+      schemaVersion: 1,
+      updatedAt: `2026-01-01T00:00:0${revision}Z`,
+      pathsConstrained: true,
+      roots: {},
+      settings: {
+        destinations: [
+          {
+            id: "download",
+            label: "Downloads",
+            kind: "download",
+            description: "Deployment destination",
+            retention: "24h",
+          },
+        ],
+        exportLimit,
+        cacheMaxBytes: 1_000_000,
+        previewGlobalLimit: 2,
+        previewBeforeMs: 1000,
+        previewAfterMs: 1000,
+        previewMaxMs: 5000,
+        previewGridMs: 1000,
+        mediaMaxFiles: 100,
+        mediaMaxDepth: 4,
+        mcpEnabled: false,
       },
-    });
+    }) satisfies EffectApiTypes.SettingsResponse;
+  await page.route(`${origin}/settings`, async (route) => {
+    const request = route.request();
+    if (request.method() === "GET") {
+      settingsReads++;
+      return route.fulfill({ json: settingsResponse(settingsReads, settingsReads === 1 ? 1 : 3) });
+    }
+    if (request.method() !== "PUT") return route.fallback();
+    updateBodies.push(request.postDataJSON());
+    if (updateBodies.length === 1)
+      return route.fulfill({
+        status: 409,
+        json: {
+          error: {
+            code: "settings_revision_conflict",
+            message: "Settings changed; reload before updating.",
+            requestId: "settings-conflict-test",
+          },
+        },
+      });
+    return route.fulfill({ json: settingsResponse(3, 4) });
   });
   await page.goto("/");
   await page.getByRole("button", { name: "Settings", exact: true }).click();
@@ -151,13 +188,24 @@ test("settings revision conflicts remain visible and can be reloaded", async ({ 
   const concurrency = page.getByLabel("Export concurrency");
   await concurrency.fill("2");
   await concurrency.press("Tab");
-  await expect.poll(() => updateBody).toBeDefined();
+  await expect.poll(() => updateBodies.length).toBe(1);
   await expect(page.getByRole("status")).toContainText("Settings changed; reload before updating.");
-  expect(updateBody).toEqual({
+  expect(updateBodies[0]).toEqual({
     revision: 1,
     settings: expect.objectContaining({ exportLimit: 2 }),
   });
-  await expect(page.getByRole("button", { name: "Reload administrator settings" })).toBeEnabled();
+  const reload = page.getByRole("button", { name: "Reload administrator settings" });
+  await expect(reload).toBeEnabled();
+  await reload.click();
+  await expect.poll(() => settingsReads).toBe(2);
+  await expect(concurrency).toHaveValue("3");
+  await concurrency.fill("4");
+  await concurrency.press("Tab");
+  await expect.poll(() => updateBodies.length).toBe(2);
+  expect(updateBodies[1]).toEqual({
+    revision: 2,
+    settings: expect.objectContaining({ exportLimit: 4 }),
+  });
 });
 
 test("MCP refresh, pagination, exact approval, scopes and revoke remain reachable", async ({

@@ -2,13 +2,14 @@ import type * as EffectApiTypes from "../src/generated/effect-api";
 import { Effect } from "effect";
 import * as AtomRegistry from "effect/reactivity/AtomRegistry";
 import { createSignal } from "solid-js";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ApiClient, NativeMediaApiClient } from "../src/api";
 import { createServerState, readServerAtom } from "../src/features/app/server";
 import { createTimelineHistory } from "../src/features/editor/timeline";
 import { createProjectsController } from "../src/features/projects/controller";
 import type { EditableProjectItem } from "../src/features/projects/model";
 import { defaultSettings } from "../src/features/settings/model";
+import { memoryStorage } from "./memoryStorage";
 
 const media: EffectApiTypes.Media = {
   id: "m_" + "a".repeat(43),
@@ -19,20 +20,6 @@ const media: EffectApiTypes.Media = {
   streams: {},
   etag: "v1",
 };
-
-function memoryStorage(): Storage {
-  const values = new Map<string, string>();
-  return {
-    get length() {
-      return values.size;
-    },
-    clear: () => values.clear(),
-    getItem: (key) => values.get(key) ?? null,
-    key: (index) => [...values.keys()][index] ?? null,
-    removeItem: (key) => void values.delete(key),
-    setItem: (key, value) => values.set(key, value),
-  };
-}
 
 describe("projects controller", () => {
   it("reads saved-project pages through the generated project API", async () => {
@@ -79,16 +66,21 @@ describe("projects controller", () => {
   it.each(["an edit", "a media switch", "a normal project restore"])(
     "loads media through the generated resource and respects %s",
     async (change) => {
+      const originalFetch = globalThis.fetch;
+      const originalLocalStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
       Object.defineProperty(globalThis, "localStorage", {
         configurable: true,
         value: memoryStorage(),
       });
       let resolveProject!: (response: Response) => void;
+      let projectResolved = false;
       const projectResponse = new Promise<Response>((resolve) => {
-        resolveProject = resolve;
+        resolveProject = (response) => {
+          projectResolved = true;
+          resolve(response);
+        };
       });
       const generatedRequests: string[] = [];
-      const originalFetch = globalThis.fetch;
       globalThis.fetch = async (input) => {
         const url = String(input);
         generatedRequests.push(url);
@@ -168,62 +160,74 @@ describe("projects controller", () => {
         },
       });
 
-      const loading = controller.loadProject("p_loadedproject");
-      if (change === "an edit") {
-        editorVersion++;
-        setProjectName("Unsaved edit");
-      } else if (change === "a media switch") {
-        editorContext++;
-        setSelected({ ...media, id: "m_" + "b".repeat(43), name: "new.mp4" });
-      }
-      resolveProject(
-        Response.json({
-          id: "p_loadedproject",
-          revision: 1,
-          updatedAt: "2026-01-01T00:00:00Z",
-          schemaVersion: 2,
-          name: "Loaded project",
-          items: [
-            {
-              id: `i_${"l".repeat(24)}`,
-              mediaId: media.id,
-              segments: [],
-              editorState: { playheadMs: 0, zoom: 1, muted: false },
-              exportOptions: {
-                mode: "merge",
-                selection: "segments",
-                cutStrategy: "stream_copy_preferred",
-                container: "mkv",
+      let loading: Promise<void> | undefined;
+      try {
+        loading = controller.loadProject("p_loadedproject");
+        if (change === "an edit") {
+          editorVersion++;
+          setProjectName("Unsaved edit");
+        } else if (change === "a media switch") {
+          editorContext++;
+          setSelected({ ...media, id: "m_" + "b".repeat(43), name: "new.mp4" });
+        }
+        resolveProject(
+          Response.json({
+            id: "p_loadedproject",
+            revision: 1,
+            updatedAt: "2026-01-01T00:00:00Z",
+            schemaVersion: 2,
+            name: "Loaded project",
+            items: [
+              {
+                id: `i_${"l".repeat(24)}`,
+                mediaId: media.id,
+                segments: [],
+                editorState: { playheadMs: 0, zoom: 1, muted: false },
+                exportOptions: {
+                  mode: "merge",
+                  selection: "segments",
+                  cutStrategy: "stream_copy_preferred",
+                  container: "mkv",
+                },
               },
-            },
-          ],
-        }),
-      );
-      await loading;
-      globalThis.fetch = originalFetch;
+            ],
+          }),
+        );
+        await loading;
 
-      expect(
-        generatedRequests.some((url) => url.endsWith("/api/v2/projects/p_loadedproject")),
-      ).toBe(true);
-      expect(projectId(), status).toBe(
-        change === "a normal project restore" ? "p_loadedproject" : "p_currentproject",
-      );
-      expect(generatedRequests.some((url) => url.endsWith(`/api/v2/media/${media.id}`))).toBe(true);
-      expect(projectName()).toBe(
-        change === "an edit"
-          ? "Unsaved edit"
-          : change === "a normal project restore"
-            ? "Loaded project"
-            : "Editing",
-      );
-      if (change === "a media switch") expect(selected()?.id).toBe("m_" + "b".repeat(43));
-      expect(timeline().present.segments).toEqual([]);
-      controller.dispose();
-      registry.dispose();
+        expect(
+          generatedRequests.some((url) => url.endsWith("/api/v2/projects/p_loadedproject")),
+        ).toBe(true);
+        expect(projectId(), status).toBe(
+          change === "a normal project restore" ? "p_loadedproject" : "p_currentproject",
+        );
+        expect(generatedRequests.some((url) => url.endsWith(`/api/v2/media/${media.id}`))).toBe(
+          true,
+        );
+        expect(projectName()).toBe(
+          change === "an edit"
+            ? "Unsaved edit"
+            : change === "a normal project restore"
+              ? "Loaded project"
+              : "Editing",
+        );
+        if (change === "a media switch") expect(selected()?.id).toBe("m_" + "b".repeat(43));
+        expect(timeline().present.segments).toEqual([]);
+      } finally {
+        if (!projectResolved) resolveProject(new Response(null, { status: 503 }));
+        await loading?.catch(() => undefined);
+        controller.dispose();
+        registry.dispose();
+        globalThis.fetch = originalFetch;
+        if (originalLocalStorage)
+          Object.defineProperty(globalThis, "localStorage", originalLocalStorage);
+        else Reflect.deleteProperty(globalThis, "localStorage");
+      }
     },
   );
 
   it("keeps conflict choices after a failed remote reload", async () => {
+    const originalLocalStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
     Object.defineProperty(globalThis, "localStorage", {
       configurable: true,
       value: memoryStorage(),
@@ -369,26 +373,35 @@ describe("projects controller", () => {
       },
     });
 
-    await controller.saveProject();
-    expect(controller.saveConflict()).toBe(true);
-    await controller.reloadRemoteProject();
-    expect(controller.saveConflict()).toBe(true);
+    try {
+      await controller.saveProject();
+      expect(controller.saveConflict()).toBe(true);
+      await controller.reloadRemoteProject();
+      expect(controller.saveConflict()).toBe(true);
 
-    reloadFailed = false;
-    await controller.reloadRemoteProject();
-    globalThis.fetch = originalFetch;
-    expect(
-      generatedRequests.filter((url) => url.endsWith("/api/v2/projects/p_conflict-load1")),
-    ).toHaveLength(2);
-    expect(lastStatus).toBe("Project loaded.");
-    expect(controller.saveConflict()).toBe(false);
-    expect(projectName()).toBe("Remote project");
-    expect(timeline().present.segments[0]?.startMs).toBe(200);
-    controller.dispose();
-    registry.dispose();
+      reloadFailed = false;
+      await controller.reloadRemoteProject();
+      expect(
+        generatedRequests.filter((url) => url.endsWith("/api/v2/projects/p_conflict-load1")),
+      ).toHaveLength(2);
+      expect(lastStatus).toBe("Project loaded.");
+      expect(controller.saveConflict()).toBe(false);
+      expect(projectName()).toBe("Remote project");
+      expect(timeline().present.segments[0]?.startMs).toBe(200);
+    } finally {
+      controller.dispose();
+      registry.dispose();
+      globalThis.fetch = originalFetch;
+      if (originalLocalStorage)
+        Object.defineProperty(globalThis, "localStorage", originalLocalStorage);
+      else Reflect.deleteProperty(globalThis, "localStorage");
+    }
   });
 
   it("debounces saves, keeps recovery, and ignores recents storage failures", async () => {
+    const originalFetch = globalThis.fetch;
+    const originalLocalStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
+    const pendingSaves: Promise<unknown>[] = [];
     const storage = memoryStorage();
     Object.defineProperty(globalThis, "localStorage", {
       configurable: true,
@@ -436,16 +449,19 @@ describe("projects controller", () => {
     const firstSaveStarted = new Promise<void>((resolve) => {
       signalFirstSave = resolve;
     });
-    let resolveDelayedSave!: (response: Response) => void;
+    let resolveDelayedSave: (response: Response) => void = () => undefined;
     let signalDelayedSave!: () => void;
     const delayedSaveStarted = new Promise<void>((resolve) => {
       signalDelayedSave = resolve;
+    });
+    let signalQueuedAutoSave!: () => void;
+    const queuedAutoSaveStarted = new Promise<void>((resolve) => {
+      signalQueuedAutoSave = resolve;
     });
     let signalContextSave!: () => void;
     const contextSaveStarted = new Promise<void>((resolve) => {
       signalContextSave = resolve;
     });
-    const originalFetch = globalThis.fetch;
     globalThis.fetch = async (input, init) => {
       const url = new URL(String(input));
       if (url.pathname.endsWith("/projects/p_autosave123456") && init?.method === "PUT") {
@@ -456,6 +472,7 @@ describe("projects controller", () => {
         };
         submitted.push({ revision: body.revision, name: body.name });
         if (requests === 1) signalFirstSave();
+        if (requests === 3) signalQueuedAutoSave();
         const response = Response.json({
           ...body,
           id: projectId(),
@@ -531,79 +548,114 @@ describe("projects controller", () => {
       setDiagnostics: () => undefined,
       setStatus: () => undefined,
     });
-    controller.captureRecovery();
-    expect(controller.recovery()?.items[0].mediaId).toBe(media.id);
-    expect(JSON.stringify(controller.recovery())).not.toContain(media.name);
-    const persistedSetItem = storage.setItem;
-    storage.setItem = (key, value) => {
-      if (key === "videocutlist.recent-projects.v1" || key === "videocutlist.active-project.v2")
-        throw new Error("storage quota exceeded");
-      persistedSetItem(key, value);
-    };
-    controller.scheduleAutosave();
-    await firstSaveStarted;
-    expect(requests).toBe(1);
-    // An explicit save queues behind the autosave currently in flight.
-    const saving = controller.saveProject();
-    await delayedSaveStarted;
-    expect(controller.saveError()).toBe("");
-    expect(controller.recovery()).toBeUndefined();
-    // A later edit waits for the in-flight PUT and uses its returned revision.
-    setProjectName("Newer edit");
-    editorVersion++;
-    setDirty(true);
-    controller.scheduleAutosave();
-    expect(requests).toBe(2);
-    resolveDelayedSave(
-      Response.json({
-        ...delayedBody,
-        id: "p_autosave123456",
-        revision: 2,
-        updatedAt: "2026-01-01T00:00:00Z",
-      }),
-    );
-    await saving;
-    expect(submitted).toEqual([
-      { revision: 0, name: "Editing" },
-      { revision: 1, name: "Editing" },
-      { revision: 2, name: "Newer edit" },
-    ]);
-    expect(controller.saveState()).toBe("saved");
-    expect(dirty()).toBe(false);
-    setProjectName("Uncertain edit");
-    editorVersion++;
-    setDirty(true);
-    await controller.saveProject();
-    expect(requests).toBe(4);
-    expect(controller.saveState()).toBe("failed");
-    await new Promise((resolve) => setTimeout(resolve, 800));
-    expect(requests).toBe(4);
-    // A late PUT response from the previous context must not overwrite the new project.
-    const staleSave = controller.saveProject();
-    await contextSaveStarted;
-    setDirty(false);
-    controller.newProject();
-    const newID = projectId();
-    resolveDelayedSave(
-      Response.json({
-        ...delayedBody,
-        id: "p_autosave123456",
-        revision: 4,
-        updatedAt: "2026-01-01T00:00:00Z",
-      }),
-    );
-    await staleSave;
-    expect(projectId()).toBe(newID);
-    expect(projectItems()).toEqual([]);
-    expect(revision()).toBe(0);
-    expect(controller.saveState()).toBe("unsaved");
-    expect(localStorage.getItem("videocutlist.active-project.v2")).toBeNull();
-    controller.dispose();
-    registry.dispose();
-    globalThis.fetch = originalFetch;
-    void setProjectName;
-    void setRevision;
-    void setTimeline;
-    void editorVersion;
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const schedulerTurn = () => new Promise<void>((resolve) => setImmediate(resolve));
+    try {
+      controller.captureRecovery();
+      expect(controller.recovery()?.items[0].mediaId).toBe(media.id);
+      expect(JSON.stringify(controller.recovery())).not.toContain(media.name);
+      const persistedSetItem = storage.setItem;
+      storage.setItem = (key, value) => {
+        if (key === "videocutlist.recent-projects.v1" || key === "videocutlist.active-project.v2")
+          throw new Error("storage quota exceeded");
+        persistedSetItem(key, value);
+      };
+      controller.scheduleAutosave();
+      await schedulerTurn();
+      expect(vi.getTimerCount()).toBe(1);
+      await vi.advanceTimersByTimeAsync(500);
+      controller.scheduleAutosave();
+      await schedulerTurn();
+      expect(vi.getTimerCount()).toBe(1);
+      await vi.advanceTimersByTimeAsync(749);
+      expect(requests).toBe(0);
+      await vi.advanceTimersByTimeAsync(1);
+      await firstSaveStarted;
+      expect(requests).toBe(1);
+      // An explicit save queues behind the autosave currently in flight.
+      const saving = controller.saveProject();
+      pendingSaves.push(saving);
+      await delayedSaveStarted;
+      expect(controller.saveError()).toBe("");
+      expect(controller.recovery()).toBeUndefined();
+      // A later edit waits for the in-flight PUT and uses its returned revision.
+      setProjectName("Newer edit");
+      editorVersion++;
+      setDirty(true);
+      controller.scheduleAutosave();
+      await schedulerTurn();
+      expect(requests).toBe(2);
+      await vi.advanceTimersByTimeAsync(750);
+      expect(requests).toBe(2);
+      resolveDelayedSave(
+        Response.json({
+          ...delayedBody,
+          id: "p_autosave123456",
+          revision: 2,
+          updatedAt: "2026-01-01T00:00:00Z",
+        }),
+      );
+      await saving;
+      await queuedAutoSaveStarted;
+      expect(submitted).toEqual([
+        { revision: 0, name: "Editing" },
+        { revision: 1, name: "Editing" },
+        { revision: 2, name: "Newer edit" },
+      ]);
+      expect(controller.saveState()).toBe("saved");
+      expect(dirty()).toBe(false);
+      setProjectName("Uncertain edit");
+      editorVersion++;
+      setDirty(true);
+      const uncertainSave = controller.saveProject();
+      pendingSaves.push(uncertainSave);
+      await uncertainSave;
+      expect(requests).toBe(4);
+      expect(controller.saveState()).toBe("failed");
+      await vi.advanceTimersByTimeAsync(800);
+      expect(requests).toBe(4);
+      // A late PUT response from the previous context must not overwrite the new project.
+      const staleSave = controller.saveProject();
+      pendingSaves.push(staleSave);
+      await contextSaveStarted;
+      setDirty(false);
+      controller.newProject();
+      const newID = projectId();
+      resolveDelayedSave(
+        Response.json({
+          ...delayedBody,
+          id: "p_autosave123456",
+          revision: 4,
+          updatedAt: "2026-01-01T00:00:00Z",
+        }),
+      );
+      await staleSave;
+      expect(projectId()).toBe(newID);
+      expect(projectItems()).toEqual([]);
+      expect(revision()).toBe(0);
+      expect(controller.saveState()).toBe("unsaved");
+      expect(localStorage.getItem("videocutlist.active-project.v2")).toBeNull();
+      void setProjectName;
+      void setRevision;
+      void setTimeline;
+      void editorVersion;
+    } finally {
+      resolveDelayedSave(
+        Response.json({
+          ...delayedBody,
+          id: "p_autosave123456",
+          revision: 3,
+          updatedAt: "2026-01-01T00:00:00Z",
+        }),
+      );
+      controller.dispose();
+      registry.dispose();
+      await Promise.all(pendingSaves.map((saving) => saving.catch(() => undefined)));
+      globalThis.fetch = originalFetch;
+      if (originalLocalStorage)
+        Object.defineProperty(globalThis, "localStorage", originalLocalStorage);
+      else Reflect.deleteProperty(globalThis, "localStorage");
+      vi.useRealTimers();
+    }
   });
 });

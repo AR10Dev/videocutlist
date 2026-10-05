@@ -215,6 +215,7 @@ func (s *Scheduler) SubmitProposal(ctx context.Context, proposalID, credentialID
 }
 
 func queuedJob(job Job, now time.Time) Job {
+	job.Revision = 1
 	job.State = JobQueued
 	job.ResultJSON = sql.NullString{}
 	job.ErrorCode = sql.NullString{}

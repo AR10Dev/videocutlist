@@ -5,7 +5,9 @@ import * as AtomHttpApi from "effect/reactivity/AtomHttpApi";
 import * as HttpClient from "effect/http/HttpClient";
 import * as HttpClientResponse from "effect/http/HttpClientResponse";
 import * as HttpApiClient from "effect/http-api/HttpApiClient";
+import * as HttpApi from "effect/http-api/HttpApi";
 import * as Schema from "effect/Schema";
+import { readFileSync } from "node:fs";
 import {
   DetectionInput,
   ExportSubmissionInput,
@@ -52,7 +54,25 @@ describe("generated Effect response codecs", () => {
     const waveform = { startMs: 0, durationMs: 1000, peaks: Array(16).fill(0.5) };
     expect(Schema.decodeUnknownSync(Waveform)(waveform)).toEqual(waveform);
     expect(() => Schema.decodeUnknownSync(Waveform)({ ...waveform, peaks: "malformed" })).toThrow();
-    expect(VideoCutListApi).not.toHaveProperty("getWaveform");
+    const generated = readFileSync(
+      new URL("../src/generated/effect-api.ts", import.meta.url),
+      "utf8",
+    );
+    expect(generated).toContain("export const Waveform =");
+
+    const endpoints: Array<{ identifier: string; path: string }> = [];
+    HttpApi.reflect(VideoCutListApi, {
+      onGroup: () => undefined,
+      onEndpoint: ({ endpoint }) => {
+        endpoints.push({ identifier: endpoint.identifier, path: endpoint.path });
+      },
+    });
+    expect(
+      endpoints.some(
+        ({ identifier, path }) =>
+          identifier.toLowerCase().includes("waveform") || path.toLowerCase().includes("waveform"),
+      ),
+    ).toBe(false);
   });
   it("decodes actual-shaped project and credential fixtures and rejects malformed data", () => {
     expect(Schema.decodeUnknownSync(Project)(project)).toEqual(project);

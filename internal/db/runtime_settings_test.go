@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math"
+	"reflect"
 	"strconv"
 	"testing"
 
@@ -122,12 +123,22 @@ func TestRuntimeSettingsRejectsInvalidAndStaleUpdatesAtomically(t *testing.T) {
 	if _, err := settings.Update(ctx, initial.Revision, invalid); err == nil {
 		t.Fatal("invalid settings accepted")
 	}
-	got, _ := settings.Get(ctx)
-	if got.Revision != initial.Revision {
-		t.Fatalf("invalid update changed revision: %d", got.Revision)
+	got, err := settings.Get(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Revision != initial.Revision || !reflect.DeepEqual(got.Settings, initial.Settings) {
+		t.Fatalf("invalid update changed persisted settings: got=%#v initial=%#v", got, initial)
 	}
 	if _, err := settings.Update(ctx, initial.Revision-1, validRuntimeSettings()); !errors.Is(err, store.ErrRuntimeSettingsRevisionConflict) {
 		t.Fatalf("stale update err=%v", err)
+	}
+	afterStale, err := settings.Get(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterStale.Revision != initial.Revision || !reflect.DeepEqual(afterStale.Settings, initial.Settings) {
+		t.Fatalf("stale update changed persisted settings: got=%#v initial=%#v", afterStale, initial)
 	}
 }
 

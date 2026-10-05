@@ -1,8 +1,7 @@
 import { describe, expect, it } from "vitest";
-import {
-  idempotencyKeyForAttempt,
-  parseBatchExportSubmission,
-} from "../src/features/export/queueResponse";
+import { idempotencyKeyForAttempt } from "../src/features/export/queueResponse";
+import * as Schema from "effect/Schema";
+import { BatchExportSubmission } from "../src/generated/effect-api";
 
 describe("export command submission", () => {
   it("reuses only an uncertain command's key for its identical semantic body", () => {
@@ -19,52 +18,35 @@ describe("export command submission", () => {
   });
 });
 
-describe("export batch response", () => {
+describe("generated export batch response schema", () => {
+  const decode = Schema.decodeUnknownSync(BatchExportSubmission);
+
   it("rejects the old singleton job response", () => {
-    expect(() => parseBatchExportSubmission({ id: "job-1", state: "queued" })).toThrow(
-      "Invalid export batch response",
-    );
+    expect(() => decode({ id: "job-1", state: "queued" })).toThrow();
+  });
+
+  const validChild = {
+    id: "j_0123456789ab",
+    type: "export",
+    state: "queued",
+    revision: 1,
+    createdAt: "2026-01-01T00:00:00Z",
+    updatedAt: "2026-01-01T00:00:00Z",
+  };
+  const responseWith = (job: unknown) => ({ batchId: "b_0123456789ab", jobs: [job] });
+
+  it("accepts a valid child job", () => {
+    expect(decode(responseWith(validChild)).jobs).toHaveLength(1);
   });
 
   it.each([
-    null,
-    {
-      id: "job-1",
-      type: "export",
-      state: "unknown",
-      createdAt: "2026-01-01T00:00:00Z",
-      updatedAt: "2026-01-01T00:00:00Z",
-    },
-    {
-      id: "job-1",
-      type: "export",
-      state: "queued",
-      createdAt: "2026-01-01T00:00:00Z",
-      updatedAt: "2026-01-01T00:00:00Z",
-      progress: 2,
-    },
-    {
-      id: "job-1",
-      type: "export",
-      state: "queued",
-      updatedAt: "2026-01-01T00:00:00Z",
-    },
-    {
-      batchId: "b_0123456789ab",
-      jobs: [
-        {
-          id: "j_0123456789ab",
-          type: "export",
-          state: "queued",
-          createdAt: "2026-01-01T00:00:00Z",
-          updatedAt: "2026-01-01T00:00:00Z",
-          revision: "not-a-revision",
-        },
-      ],
-    },
-  ])("rejects malformed child jobs before polling and queue rendering: %s", (job) => {
-    expect(() => parseBatchExportSubmission({ batchId: "batch-1", jobs: [job] })).toThrow(
-      "Invalid export batch response",
-    );
+    ["null", null],
+    ["revision type", { ...validChild, revision: "not-a-revision" }],
+    ["state", { ...validChild, state: "unknown" }],
+    ["progress", { ...validChild, progress: 2 }],
+    ["missing createdAt", (({ createdAt: _createdAt, ...job }) => job)(validChild)],
+    ["revision", { ...validChild, revision: 0 }],
+  ])("rejects an invalid child %s before polling and queue rendering", (_field, job) => {
+    expect(() => decode(responseWith(job))).toThrow();
   });
 });

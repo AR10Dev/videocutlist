@@ -15,21 +15,6 @@ import (
 	"videocutlist/internal/projects"
 )
 
-type contractProjectService struct {
-	project projects.Project
-	err     error
-}
-
-func (s contractProjectService) Create(context.Context, string, projects.ProjectInput) (projects.Project, error) {
-	return projects.Project{}, nil
-}
-func (s contractProjectService) Get(context.Context, string) (projects.Project, error) {
-	return s.project, s.err
-}
-func (s contractProjectService) Save(context.Context, string, projects.ProjectInput) (projects.Project, error) {
-	return projects.Project{}, nil
-}
-
 type contractBatchService struct {
 	err                  error
 	submits              int

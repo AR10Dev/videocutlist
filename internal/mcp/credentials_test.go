@@ -273,8 +273,8 @@ func TestAuditIsSafeAndBoundedPerCredential(t *testing.T) {
 	}
 	before := entries[0].ID
 	older, err := credentials.ListAuditBefore(ctx, created.ID, before, 1)
-	if err != nil || len(older) != 1 {
-		t.Fatalf("audit cursor entries=%#v err=%v", older, err)
+	if err != nil || len(older) != 1 || older[0].ID >= before {
+		t.Fatalf("audit cursor entries=%#v before=%d err=%v", older, before, err)
 	}
 }
 

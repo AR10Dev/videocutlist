@@ -3,7 +3,6 @@ import { useAtomValue, useAtomSet } from "@effect/atom-solid";
 import { Effect } from "effect";
 import * as AsyncResult from "effect/reactivity/AsyncResult";
 import * as Atom from "effect/reactivity/Atom";
-import * as AtomRegistry from "effect/reactivity/AtomRegistry";
 import {
   createEffect,
   createRoot,
@@ -15,7 +14,7 @@ import {
 } from "solid-js";
 import type { Job } from "../../generated/effect-api";
 import { apiErrorCode, apiErrorStatus, uncertainCommandFailure } from "../../api";
-import { useServerAtom, type ServerState } from "../app/server";
+import { runServerMutation, useServerAtom, type ServerState } from "../app/server";
 
 type Media = EffectApiTypes.Media;
 type PageResult = import("../../generated/effect-api").FolderPage;
@@ -33,18 +32,7 @@ function generatedMutation<Arg, A, E>(
   atom: Atom.AtomResultFn<Arg, A, E>,
   arg: Arg,
 ): Effect.Effect<A, E> {
-  return Effect.acquireUseRelease(
-    Effect.sync(() => server.registry.mount(atom)),
-    () => {
-      server.registry.set(atom, arg);
-      return AtomRegistry.getResult(server.registry, atom, { suspendOnWaiting: true });
-    },
-    (release) =>
-      Effect.sync(() => {
-        server.registry.set(atom, Atom.Reset);
-        release();
-      }),
-  );
+  return runServerMutation(server.registry, atom, arg);
 }
 
 export function createLibraryController(server: ServerState, setStatus: Setter<string>) {

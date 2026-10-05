@@ -114,13 +114,34 @@ func (b *redactionBody) Read(data []byte) (int, error) {
 }
 
 func TestRedactionBodyDetectsSplitSecretsWithoutBufferingDownloads(t *testing.T) {
-	p := &process{forbidden: []string{"/sensitive/cache/original.mp4"}}
-	body := &redactionBody{
-		ReadCloser: io.NopCloser(strings.NewReader(strings.Repeat("public data ", 8192) + "/sensitive/cache/original.mp4")),
-		process:    p,
+	secret := "/sensitive/cache/original.mp4"
+	payload := strings.Repeat("public data ", 8192) + secret
+	p := &process{forbidden: []string{secret}}
+	body := &redactionBody{ReadCloser: io.NopCloser(strings.NewReader(payload)), process: p}
+	secretStart := strings.Index(payload, secret)
+	if secretStart < 0 {
+		t.Fatal("forbidden fixture secret is missing")
 	}
-	if _, err := io.CopyBuffer(io.Discard, body, make([]byte, 3)); err != nil {
-		t.Fatal(err)
+	totalRead := 0
+	crossedSecretBoundary := false
+	buffer := make([]byte, 3)
+	for {
+		n, err := body.Read(buffer)
+		if n > 0 {
+			totalRead += n
+			if totalRead > secretStart && totalRead < secretStart+len(secret) {
+				crossedSecretBoundary = true
+			}
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !crossedSecretBoundary {
+		t.Fatal("fixture did not split the forbidden string across reads")
 	}
 	if !p.redactionViolation {
 		t.Fatal("secret split across response reads was not detected")

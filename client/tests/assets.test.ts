@@ -8,10 +8,11 @@ import {
 
 describe("timeline assets", () => {
   it("normalizes bounded waveform peaks", () => {
-    expect(normalizePeaks([-1, 0.5, 2, "bad", Infinity])).toEqual([0, 0.5, 1]);
+    expect(normalizePeaks([-1, 0.5, 2, "bad", Infinity, Number.NaN])).toEqual([0, 0.5, 1]);
   });
   it("keeps viewport zoom bounded", () => {
     expect(viewportScale(0)).toBe(1);
+    expect(viewportScale(4)).toBe(4);
     expect(viewportScale(40)).toBe(16);
   });
   it("requests the visible interval instead of the media prefix", () => {

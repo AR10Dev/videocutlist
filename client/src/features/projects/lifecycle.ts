@@ -48,8 +48,7 @@ export const confirmDiscard = (dirty: boolean, confirm: () => boolean) => !dirty
 export const projectJson = (project: unknown): string => {
   if (!project || typeof project !== "object") throw new Error("Project is too large or invalid.");
   const text = JSON.stringify(project);
-  if (new TextEncoder().encode(text).byteLength > 1 << 20)
-    throw new Error("Project is too large or invalid.");
+  if (text.length > 1_000_000) throw new Error("Project is too large or invalid.");
   return text;
 };
 
@@ -137,7 +136,7 @@ const projectRecoverySchema = loose({
 export const parseProjectRecovery = (value: unknown): ProjectRecovery | undefined => {
   if (!Schema.is(projectRecoverySchema)(value)) return;
   try {
-    parseProjectJson(JSON.stringify(value));
+    parseProjectJson(JSON.stringify({ schemaVersion: 2, name: value.name, items: value.items }));
     return value as ProjectRecovery;
   } catch {
     return;
@@ -145,8 +144,7 @@ export const parseProjectRecovery = (value: unknown): ProjectRecovery | undefine
 };
 
 export const parseProjectJson = (text: string): Record<string, unknown> => {
-  if (new TextEncoder().encode(text).byteLength > 1 << 20)
-    throw new Error("Project file is too large.");
+  if (text.length > 1_000_000) throw new Error("Project file is too large.");
   let value: unknown;
   try {
     value = JSON.parse(text);

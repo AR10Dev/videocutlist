@@ -63,5 +63,12 @@ describe("workspace panel preferences", () => {
     const defaults = defaultPanelPreferences();
     expect(defaults.mediaWidth).toBe(PANEL_DEFAULT_MEDIA_WIDTH);
     expect(defaults.segmentsWidth).toBe(PANEL_DEFAULT_SEGMENTS_WIDTH);
+    expect(defaults.mediaWidth).toBeGreaterThanOrEqual(PANEL_MIN_WIDTH);
+    expect(defaults.segmentsWidth).toBeGreaterThanOrEqual(PANEL_MIN_WIDTH);
+    const desktop = clampPanelPreferences(defaults, 1050);
+    expect(desktop).toEqual(defaults);
+    expect(defaults.mediaWidth + defaults.segmentsWidth + CENTER_MIN_WIDTH).toBeLessThanOrEqual(
+      1050 - 48,
+    );
   });
 });

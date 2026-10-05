@@ -46,9 +46,17 @@ func TestHTTP2JobAndBatchStreamsSurviveWriteTimeoutAndCloseTerminally(t *testing
 	defer cancel()
 	client := httpServer.Client()
 	jobResponse := openHTTP2SSE(t, ctx, client, httpServer.URL+"/api/v2/jobs/j_aaaaaaaaaaaa/events")
-	defer jobResponse.Body.Close()
+	defer func() {
+		if err := jobResponse.Body.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	batchResponse := openHTTP2SSE(t, ctx, client, httpServer.URL+"/api/v2/batches/b_aaaaaaaaaaaa/events")
-	defer batchResponse.Body.Close()
+	defer func() {
+		if err := batchResponse.Body.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
 	jobScanner, batchScanner := bufio.NewScanner(jobResponse.Body), bufio.NewScanner(batchResponse.Body)
 	if block, err := readSSEBlock(jobScanner); err != nil || !strings.Contains(block, "event: snapshot") || !strings.Contains(block, `"state":"running"`) {
 		t.Fatalf("initial job snapshot = %q, error=%v", block, err)
@@ -112,7 +120,9 @@ func openHTTP2SSE(t *testing.T, ctx context.Context, client *http.Client, url st
 		t.Fatal(err)
 	}
 	if response.ProtoMajor != 2 || response.StatusCode != http.StatusOK {
-		response.Body.Close()
+		if err := response.Body.Close(); err != nil {
+			t.Error(err)
+		}
 		t.Fatalf("HTTP/2 SSE response protocol=%s status=%d", response.Proto, response.StatusCode)
 	}
 	return response

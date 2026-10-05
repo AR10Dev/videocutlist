@@ -69,17 +69,52 @@ describe("project lifecycle helpers", () => {
     expect(parseProjectRecovery({ ...recovery, items: [] })).toBeUndefined();
   });
 
-  it("rejects interchange JSON above the 1 MiB UTF-8 byte limit", () => {
-    expect(() => projectJson({ value: "🎬".repeat(262_145) })).toThrow("too large");
-    const oversized = JSON.stringify({
+  it("preserves the 1,000,000 UTF-16 code-unit JSON limit, not a UTF-8 byte limit", () => {
+    const project = {
       mediaId: "legacy-media-id",
       segments: [],
       uiState: {},
       label: "🎬".repeat(262_145),
-    });
-    expect(oversized.length).toBeLessThan(1_000_000);
-    expect(new TextEncoder().encode(oversized).byteLength).toBeGreaterThan(1 << 20);
-    expect(() => parseProjectJson(oversized)).toThrow("too large");
+    };
+    const text = JSON.stringify(project);
+    expect(text.length).toBeLessThan(1_000_000);
+    expect(new TextEncoder().encode(text).byteLength).toBeGreaterThan(1 << 20);
+    expect(projectJson(project)).toBe(text);
+    expect(parseProjectJson(text)).toEqual(project);
+
+    const boundary = {
+      ...project,
+      label: "x".repeat(1_000_000 - JSON.stringify({ ...project, label: "" }).length),
+    };
+    expect(projectJson(boundary).length).toBe(1_000_000);
+    expect(parseProjectJson(JSON.stringify(boundary))).toEqual(boundary);
+    const oversized = { ...boundary, label: boundary.label + "x" };
+    expect(() => projectJson(oversized)).toThrow("too large");
+    expect(() => parseProjectJson(JSON.stringify(oversized))).toThrow("too large");
+  });
+
+  it("applies recovery size validation only to its embedded document", () => {
+    const recovery = {
+      version: 1,
+      projectId: `p_${"a".repeat(12)}`,
+      revision: 0,
+      schemaVersion: 2,
+      name: "Recovered Unicode",
+      items: [
+        {
+          id: `i_${"b".repeat(12)}`,
+          mediaId: `m_${"c".repeat(43)}`,
+          segments: [],
+          exportOptions: {},
+          historicalItemField: "🎬".repeat(262_145),
+        },
+      ],
+      savedAt: 1,
+      historicalRootField: "x".repeat(1_000_000),
+    };
+    expect(JSON.stringify(recovery).length).toBeGreaterThan(1_000_000);
+    expect(parseProjectRecovery(recovery)).toEqual(recovery);
+    expect(parseProjectRecovery({ ...recovery, name: "x".repeat(1_000_000) })).toBeUndefined();
   });
 
   it("only confirms dirty changes", () => {

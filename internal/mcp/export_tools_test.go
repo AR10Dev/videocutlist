@@ -151,7 +151,7 @@ func (rejectedCancellationJobs) Cancel(context.Context, string) (jobqueue.Job, e
 	return jobqueue.Job{}, jobqueue.ErrJobState
 }
 
-func TestCancelJobRejectsCompletedJob(t *testing.T) {
+func TestCancelJobPreservesCompletedJobAndForwardsSchedulerError(t *testing.T) {
 	service, _, _, _, now := newProposalTestService(t, false)
 	expires := now.Add(time.Hour)
 	owner, err := service.Credentials.Create(t.Context(), CredentialInput{
@@ -183,11 +183,21 @@ func TestCancelJobRejectsCompletedJob(t *testing.T) {
 	ctx := Context{Request: httptest.NewRequest("POST", "/mcp", nil), Credential: owner.Credential}
 	cancel := toolNamed(t, ExportTools(service, rejectedCancellationJobs{service.Scheduler}, exportToolDownload{}), "cancel_job")
 	if _, err := cancel.Call(ctx, []byte(`{"jobId":"`+id+`"}`)); !errors.Is(err, jobqueue.ErrJobState) {
-		t.Fatalf("completed job cancellation = %v, want invalid transition", err)
+		t.Fatalf("scheduler cancellation error = %v, want injected invalid transition", err)
+	}
+	completed, err := store.Get(t.Context(), id)
+	if err != nil || completed.State != jobqueue.JobSucceeded {
+		t.Fatalf("completed job after injected cancellation error = %+v, %v", completed, err)
+	}
+
+	cancel = toolNamed(t, ExportTools(service, service.Scheduler, exportToolDownload{}), "cancel_job")
+	result, err := cancel.Call(ctx, []byte(`{"jobId":"`+id+`"}`))
+	if err != nil || result.StructuredContent["state"] != string(jobqueue.JobSucceeded) {
+		t.Fatalf("completed job cancellation result = %#v, %v", result, err)
 	}
 	job, err := store.Get(t.Context(), id)
-	if err != nil || job.State != jobqueue.JobSucceeded {
-		t.Fatalf("completed job after cancellation = %+v, %v", job, err)
+	if err != nil || job.State != jobqueue.JobSucceeded || job.Revision != completed.Revision {
+		t.Fatalf("completed job after real scheduler cancellation = %+v, %v", job, err)
 	}
 }
 

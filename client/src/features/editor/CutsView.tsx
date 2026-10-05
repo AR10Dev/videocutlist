@@ -33,7 +33,7 @@ export function CutsView() {
   const segmentById = createMemo(
     () =>
       new Map(
-        workspace
+        workspace.editor
           .present()
           .segments.map(
             (segment, index) => [segmentKey(segment.id, index), { segment, index }] as const,
@@ -44,7 +44,10 @@ export function CutsView() {
     const key = segmentKey(segment.id, index);
     return (
       boundaryDrafts()[key]?.[boundary] ??
-      formatTime(boundary === "start" ? segment.startMs : segment.endMs, workspace.duration())
+      formatTime(
+        boundary === "start" ? segment.startMs : segment.endMs,
+        workspace.editor.duration(),
+      )
     );
   };
   const labelValue = (segment: Segment, index: number) =>
@@ -55,7 +58,7 @@ export function CutsView() {
     const error = validateSegmentLabel(value);
     if (error) {
       setLabelErrors((current) => ({ ...current, [key]: error }));
-      workspace.setEditorStatus(error);
+      workspace.editor.setEditorStatus(error);
       return;
     }
     setLabelErrors((current) => {
@@ -63,7 +66,7 @@ export function CutsView() {
       delete next[key];
       return next;
     });
-    workspace.updateSegmentLabel(index, value);
+    workspace.editor.updateSegmentLabel(index, value);
   };
   const commitLabel = (index: number, segment: Segment) => {
     const key = segmentKey(segment.id, index);
@@ -87,7 +90,8 @@ export function CutsView() {
       return;
     }
     const value = parseTimecode(input.value);
-    const valid = value !== undefined && workspace.updateSegmentBoundary(index, boundary, value);
+    const valid =
+      value !== undefined && workspace.editor.updateSegmentBoundary(index, boundary, value);
     if (valid) {
       setBoundaryDrafts((current) => ({
         ...current,
@@ -103,7 +107,7 @@ export function CutsView() {
     const message =
       value === undefined
         ? "Enter a valid timecode within this video."
-        : workspace.editorStatus() ||
+        : workspace.editor.editorStatus() ||
           "That boundary would overlap another cut or leave In before Out.";
     setBoundaryErrors((current) => ({ ...current, [key]: message }));
   };
@@ -112,22 +116,22 @@ export function CutsView() {
       <header class="task-heading flex items-baseline justify-between gap-2">
         <h2>Cuts</h2>
         <div class="cut-summary text-sm" role="status">
-          <span>{workspace.present().segments.length} selected</span>
+          <span>{workspace.editor.present().segments.length} selected</span>
           <span>
-            {workspace.present().segments.filter(segmentIncluded).length} included ·{" "}
+            {workspace.editor.present().segments.filter(segmentIncluded).length} included ·{" "}
             {formatTime(
-              workspace
+              workspace.editor
                 .present()
                 .segments.filter(segmentIncluded)
                 .reduce((total, segment) => total + segment.endMs - segment.startMs, 0),
-              workspace.duration(),
+              workspace.editor.duration(),
             )}{" "}
             requested
           </span>
         </div>
       </header>
       <Show
-        when={workspace.present().segments.length}
+        when={workspace.editor.present().segments.length}
         fallback={
           <div class="text-sm text-base-content/70">
             <p>No segments yet.</p>
@@ -140,7 +144,7 @@ export function CutsView() {
       >
         <ol class="cuts-list" aria-label="Selected cuts">
           <For
-            each={workspace
+            each={workspace.editor
               .present()
               .segments.map((segment, index) => segmentKey(segment.id, index))}
           >
@@ -152,7 +156,7 @@ export function CutsView() {
                 <li
                   class="cut-row"
                   classList={{
-                    "is-active": workspace.activeSegmentIndex() === index(),
+                    "is-active": workspace.editor.activeSegmentIndex() === index(),
                     "is-excluded": !segmentIncluded(segment()),
                   }}
                   aria-label={`${segment().label || `Segment ${String(index() + 1).padStart(3, "0")}`}${segmentIncluded(segment()) ? " included" : " excluded"}`}
@@ -162,18 +166,18 @@ export function CutsView() {
                     class="cut-select"
                     type="button"
                     aria-label={`Select cut ${index() + 1}`}
-                    aria-pressed={workspace.activeSegmentIndex() === index()}
-                    onClick={() => workspace.setActiveSegmentIndex(index())}
+                    aria-pressed={workspace.editor.activeSegmentIndex() === index()}
+                    onClick={() => workspace.editor.setActiveSegmentIndex(index())}
                   >
                     <strong>
                       {segment().label || `Segment ${String(index() + 1).padStart(3, "0")}`}
                     </strong>
                     <span class="text-xs">
-                      {formatTime(segment().startMs, workspace.duration())} –{" "}
-                      {formatTime(segment().endMs, workspace.duration())}
+                      {formatTime(segment().startMs, workspace.editor.duration())} –{" "}
+                      {formatTime(segment().endMs, workspace.editor.duration())}
                     </span>
                     <small>
-                      {formatTime(segment().endMs - segment().startMs, workspace.duration())}
+                      {formatTime(segment().endMs - segment().startMs, workspace.editor.duration())}
                     </small>
                   </button>
                   <label class="cut-inclusion">
@@ -183,7 +187,7 @@ export function CutsView() {
                       checked={segmentIncluded(segment())}
                       aria-label={`Include cut ${index() + 1} in export`}
                       onChange={(event) =>
-                        workspace.updateSegmentIncluded(index(), event.currentTarget.checked)
+                        workspace.editor.updateSegmentIncluded(index(), event.currentTarget.checked)
                       }
                     />
                     Include in export
@@ -298,7 +302,7 @@ export function CutsView() {
                     </label>
                     <span>
                       Duration{" "}
-                      {formatTime(segment().endMs - segment().startMs, workspace.duration())}
+                      {formatTime(segment().endMs - segment().startMs, workspace.editor.duration())}
                     </span>
                     <Show when={boundaryErrors()[id]}>
                       {(message) => (
@@ -317,7 +321,7 @@ export function CutsView() {
                           title="Move up"
                           aria-label={`Move cut ${index() + 1} up`}
                           disabled={index() === 0}
-                          onClick={() => workspace.moveSegment(index(), -1)}
+                          onClick={() => workspace.editor.moveSegment(index(), -1)}
                         >
                           <ArrowUp size={16} />
                         </button>
@@ -325,8 +329,8 @@ export function CutsView() {
                           class="btn btn-ghost btn-sm btn-square"
                           title="Move down"
                           aria-label={`Move cut ${index() + 1} down`}
-                          disabled={index() === workspace.present().segments.length - 1}
-                          onClick={() => workspace.moveSegment(index(), 1)}
+                          disabled={index() === workspace.editor.present().segments.length - 1}
+                          onClick={() => workspace.editor.moveSegment(index(), 1)}
                         >
                           <ArrowDown size={16} />
                         </button>
@@ -335,16 +339,16 @@ export function CutsView() {
                           title="Split at playhead"
                           aria-label={`Split cut ${index() + 1} at playhead`}
                           disabled={
-                            workspace.playheadMs() <= segment().startMs ||
-                            workspace.playheadMs() >= segment().endMs
+                            workspace.editor.playheadMs() <= segment().startMs ||
+                            workspace.editor.playheadMs() >= segment().endMs
                           }
                           onClick={() => {
-                            const playheadMs = workspace.playheadMs();
-                            if (workspace.activeSegmentIndex() !== index()) {
-                              workspace.setActiveSegmentIndex(index());
-                              workspace.updateTimeline({ playheadMs });
+                            const playheadMs = workspace.editor.playheadMs();
+                            if (workspace.editor.activeSegmentIndex() !== index()) {
+                              workspace.editor.setActiveSegmentIndex(index());
+                              workspace.editor.updateTimeline({ playheadMs });
                             }
-                            workspace.splitActiveSegment();
+                            workspace.editor.splitActiveSegment();
                           }}
                         >
                           <Scissors size={16} />
@@ -353,7 +357,7 @@ export function CutsView() {
                           class="btn btn-ghost btn-sm btn-square text-error"
                           title="Remove cut"
                           aria-label={`Remove cut ${index() + 1}`}
-                          onClick={() => workspace.removeSegment(index())}
+                          onClick={() => workspace.editor.removeSegment(index())}
                         >
                           <Trash2 size={16} />
                         </button>
@@ -364,8 +368,8 @@ export function CutsView() {
                           aria-label={`Play cut ${index() + 1}`}
                           aria-keyshortcuts="P"
                           onClick={() => {
-                            workspace.setActiveSegmentIndex(index());
-                            workspace.playActiveSegment(false);
+                            workspace.editor.setActiveSegmentIndex(index());
+                            workspace.preview.playActiveSegment(false);
                           }}
                         >
                           <Play size={14} aria-hidden="true" /> Play
@@ -375,8 +379,8 @@ export function CutsView() {
                           aria-label={`Loop cut ${index() + 1}`}
                           aria-keyshortcuts="L"
                           onClick={() => {
-                            workspace.setActiveSegmentIndex(index());
-                            workspace.toggleLoopSelectedSegment();
+                            workspace.editor.setActiveSegmentIndex(index());
+                            workspace.preview.toggleLoopSelectedSegment();
                           }}
                         >
                           <Repeat2 size={14} aria-hidden="true" /> Loop
@@ -384,8 +388,8 @@ export function CutsView() {
                         <button
                           class="btn btn-ghost btn-xs"
                           onClick={() => {
-                            workspace.setActiveSegmentIndex(index());
-                            workspace.updateTimeline({ playheadMs: segment().startMs });
+                            workspace.editor.setActiveSegmentIndex(index());
+                            workspace.editor.updateTimeline({ playheadMs: segment().startMs });
                           }}
                         >
                           Jump to start
@@ -393,8 +397,8 @@ export function CutsView() {
                         <button
                           class="btn btn-ghost btn-xs"
                           onClick={() => {
-                            workspace.setActiveSegmentIndex(index());
-                            workspace.updateTimeline({ playheadMs: segment().endMs });
+                            workspace.editor.setActiveSegmentIndex(index());
+                            workspace.editor.updateTimeline({ playheadMs: segment().endMs });
                           }}
                         >
                           Jump to end

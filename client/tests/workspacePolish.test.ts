@@ -18,11 +18,14 @@ describe("polished workspace contracts", () => {
   it("accepts the hour timecodes the player formats without accepting overflow", () => {
     for (const value of [0, 1001, 3600000, 3661999])
       expect(parseTimecode(formatTime(value, value))).toBe(value);
+    expect(parseTimecode("1:02.345")).toBe(62345);
+    expect(parseTimecode("1:60.000")).toBeUndefined();
+    expect(parseTimecode("bad")).toBeUndefined();
     expect(parseTimecode("1:60:00.000")).toBeUndefined();
     expect(parseTimecode("99:99.000")).toBeUndefined();
     expect(parseTimecode("999999999999999999:00.000")).toBeUndefined();
   });
-  it("round-trips the multi-item JSON that Download cut list produces", () => {
+  it("round-trips the multi-item project JSON helper contract", () => {
     const first = createProjectItem(media);
     const second = createProjectItem({ ...media, id: `m_${"b".repeat(43)}` });
     const document = {

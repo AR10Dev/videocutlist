@@ -19,7 +19,7 @@ func TestSelectedSegmentsOmitExplicitlyExcludedRanges(t *testing.T) {
 	}
 	gaps := ResolveRanges(segments, "gaps", 1_000)
 	want := []model.Segment{{StartMS: 0, EndMS: 100}, {StartMS: 300, EndMS: 1_000}}
-	if len(gaps) != len(want) || gaps[0].StartMS != want[0].StartMS || gaps[0].EndMS != want[0].EndMS || gaps[1].StartMS != want[1].StartMS {
+	if len(gaps) != len(want) || gaps[0].StartMS != want[0].StartMS || gaps[0].EndMS != want[0].EndMS || gaps[1].StartMS != want[1].StartMS || gaps[1].EndMS != want[1].EndMS {
 		t.Fatalf("gaps = %#v", gaps)
 	}
 }

@@ -6,7 +6,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -177,10 +179,21 @@ func TestCommitOpenAndEvict(t *testing.T) {
 		t.Fatalf("got %q", b)
 	}
 	writePartial(t, store, key2, "two")
-	if _, err := store.Open(context.Background(), key1, accept); err != nil {
+	leasedReader, err := store.Open(context.Background(), key1, accept)
+	if err != nil {
 		t.Fatalf("leased entry was evicted: %v", err)
 	}
-	if _, err := store.Open(context.Background(), key2, accept); !errors.Is(err, ErrMiss) {
+	if err := leasedReader.Close(); err != nil {
+		t.Fatal(err)
+	}
+	newReader, err := store.Open(context.Background(), key2, accept)
+	if newReader != nil {
+		if err := newReader.Close(); err != nil {
+			t.Error(err)
+		}
+		t.Fatal("new entry unexpectedly opened")
+	}
+	if !errors.Is(err, ErrMiss) {
 		t.Fatalf("new entry error = %v, want miss after bounded eviction", err)
 	}
 }
@@ -196,7 +209,27 @@ func TestOpenDoesNotLockDuringValidation(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
 	firstOpened := make(chan error, 1)
+	firstDone := make(chan struct{})
+	secondDone := make(chan struct{})
+	secondLaunched := false
+	var releaseOnce sync.Once
+	defer func() {
+		releaseOnce.Do(func() { close(release) })
+		select {
+		case <-firstDone:
+		case <-time.After(time.Second):
+			t.Error("first cache open did not exit after release")
+		}
+		if secondLaunched {
+			select {
+			case <-secondDone:
+			case <-time.After(time.Second):
+				t.Error("cross-key cache open did not exit")
+			}
+		}
+	}()
 	go func() {
+		defer close(firstDone)
 		reader, err := store.Open(context.Background(), key1, func(context.Context, *os.File) error {
 			close(started)
 			<-release
@@ -207,9 +240,17 @@ func TestOpenDoesNotLockDuringValidation(t *testing.T) {
 		}
 		firstOpened <- err
 	}()
-	<-started
+	select {
+	case <-started:
+	case <-firstDone:
+		t.Fatal("first cache open exited before validation")
+	case <-time.After(time.Second):
+		t.Fatal("first cache open did not enter validation")
+	}
 	opened := make(chan error, 1)
+	secondLaunched = true
 	go func() {
+		defer close(secondDone)
 		reader, err := store.Open(context.Background(), key2, accept)
 		if err == nil {
 			err = reader.Close()
@@ -224,9 +265,14 @@ func TestOpenDoesNotLockDuringValidation(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("cache open blocked on validation")
 	}
-	close(release)
-	if err := <-firstOpened; err != nil {
-		t.Fatal(err)
+	releaseOnce.Do(func() { close(release) })
+	select {
+	case err := <-firstOpened:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("first cache open did not finish after validation release")
 	}
 }
 
@@ -322,6 +368,9 @@ func TestOpenRejectedEntryPreservesReplacement(t *testing.T) {
 			}
 			if content, err := os.ReadFile(path); err != nil || string(content) != "replacement" {
 				t.Fatalf("replacement changed or removed: %q, %v", content, err)
+			}
+			if !test.symlink && len(store.open) != 0 {
+				t.Fatalf("rejected regular entry retained lease: %v", store.open)
 			}
 		})
 	}
@@ -522,41 +571,6 @@ func TestOpenMissesWhenValidatorSwapsRegularEntry(t *testing.T) {
 	}
 }
 
-func TestOpenValidationFailurePreservesReplacement(t *testing.T) {
-	store, err := New(t.TempDir(), 1024)
-	if err != nil {
-		t.Fatal(err)
-	}
-	key := stringsOf('d')
-	writePartial(t, store, key, "original")
-	path, err := store.path(key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	reader, err := store.Open(context.Background(), key, func(context.Context, *os.File) error {
-		if err := os.Remove(path); err != nil {
-			return err
-		}
-		if err := os.WriteFile(path, []byte("replacement"), 0o600); err != nil {
-			return err
-		}
-		return errors.New("validation failed")
-	})
-	if reader != nil {
-		_ = reader.Close()
-		t.Fatal("invalidated entry was leased")
-	}
-	if !errors.Is(err, ErrMiss) {
-		t.Fatalf("validation failure = %v, want miss", err)
-	}
-	if body, err := os.ReadFile(path); err != nil || string(body) != "replacement" {
-		t.Fatalf("unrelated replacement removed: %q, %v", body, err)
-	}
-	if len(store.open) != 0 {
-		t.Fatalf("miss retained lease: %v", store.open)
-	}
-}
-
 func TestOpenCoordinatesReplacementAfterValidation(t *testing.T) {
 	store, err := New(t.TempDir(), 1024)
 	if err != nil {
@@ -566,53 +580,124 @@ func TestOpenCoordinatesReplacementAfterValidation(t *testing.T) {
 	writePartial(t, store, key, "old")
 	started := make(chan struct{})
 	release := make(chan struct{})
-	opened := make(chan []byte, 1)
-	openErr := make(chan error, 1)
+	var releaseOnce sync.Once
+	openDone := make(chan struct{})
+	replacementStarted := make(chan struct{})
+	replacementDone := make(chan struct{})
+	replacementLaunched := false
+	var opened []byte
+	var openErr error
+	var replacementErr error
+	defer func() {
+		releaseOnce.Do(func() { close(release) })
+		select {
+		case <-openDone:
+		case <-time.After(time.Second):
+			t.Error("cache open did not exit after validation release")
+		}
+		if replacementLaunched {
+			select {
+			case <-replacementDone:
+			case <-time.After(time.Second):
+				t.Error("replacement commit did not exit")
+			}
+		}
+	}()
 	go func() {
-		reader, err := store.Open(context.Background(), key, func(context.Context, *os.File) error {
+		defer close(openDone)
+		reader, err := store.Open(t.Context(), key, func(context.Context, *os.File) error {
 			close(started)
 			<-release
 			return nil
 		})
 		if err != nil {
-			openErr <- err
+			openErr = err
 			return
 		}
-		body, readErr := io.ReadAll(reader)
-		_ = reader.Close()
-		if readErr != nil {
-			openErr <- readErr
-			return
+		opened, openErr = io.ReadAll(reader)
+		if err := reader.Close(); openErr == nil {
+			openErr = err
 		}
-		opened <- body
-		openErr <- nil
-	}()
-	<-started
-	replacementDone := make(chan error, 1)
-	go func() {
-		p, err := store.Begin(key)
-		if err == nil {
-			_, err = p.Write([]byte("new"))
-		}
-		if err == nil {
-			err = p.Commit(context.Background(), accept)
-		}
-		replacementDone <- err
 	}()
 	select {
-	case err := <-replacementDone:
-		t.Fatalf("replacement completed during validation: %v", err)
-	case <-time.After(50 * time.Millisecond):
+	case <-started:
+	case <-openDone:
+		t.Fatal("cache open exited before validation")
+	case <-time.After(time.Second):
+		t.Fatal("cache open did not enter validation")
 	}
-	close(release)
-	if err := <-openErr; err != nil {
+	replacementLaunched = true
+	go func() {
+		defer close(replacementDone)
+		close(replacementStarted)
+		partial, err := store.Begin(key)
+		if err == nil {
+			_, err = partial.Write([]byte("new"))
+		}
+		if err == nil {
+			err = partial.Commit(t.Context(), accept)
+		}
+		replacementErr = err
+	}()
+	<-replacementStarted
+	waitForBlockedMutex(t, "(*Partial).Commit", 50*time.Millisecond)
+	select {
+	case <-replacementDone:
+		t.Fatalf("replacement completed while Open held the path lock: %v", replacementErr)
+	default:
+	}
+	releaseOnce.Do(func() { close(release) })
+	select {
+	case <-openDone:
+	case <-time.After(time.Second):
+		t.Fatal("cache open did not finish after validation release")
+	}
+	if openErr != nil {
+		t.Fatal(openErr)
+	}
+	if string(opened) != "old" {
+		t.Fatalf("opened replacement during validation: %q", opened)
+	}
+	select {
+	case <-replacementDone:
+	case <-time.After(time.Second):
+		t.Fatal("replacement did not finish after Open released the path lock")
+	}
+	if replacementErr != nil {
+		t.Fatal(replacementErr)
+	}
+	path, err := store.path(key)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if body := <-opened; string(body) != "old" {
-		t.Fatalf("opened replacement during validation: %q", body)
+	if body, err := os.ReadFile(path); err != nil || string(body) != "old" {
+		t.Fatalf("existing preview changed during replacement attempt: %q, %v", body, err)
 	}
-	if err := <-replacementDone; err != nil {
-		t.Fatal(err)
+}
+
+func waitForBlockedMutex(t *testing.T, function string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	for {
+		stacks := make([]byte, 1<<20)
+		n := runtime.Stack(stacks, true)
+		blocked := false
+		for _, stack := range strings.Split(string(stacks[:n]), "goroutine ") {
+			if strings.Contains(stack, "[sync.Mutex.Lock]") && strings.Contains(stack, function) {
+				blocked = true
+				break
+			}
+		}
+		if blocked {
+			return
+		}
+		select {
+		case <-deadline.C:
+			t.Fatalf("goroutine did not block at %s; stack snapshot:\n%s", function, stacks[:n])
+		default:
+			runtime.Gosched()
+		}
 	}
 }
 

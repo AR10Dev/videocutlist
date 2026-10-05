@@ -201,8 +201,8 @@ test("filename preferences enforce the export server's UTF-8 template limit", as
   await expect(page.getByLabel("Filename template")).toHaveValue("é".repeat(80));
 });
 
-test("editing remains usable at 200% browser zoom", async ({ page }) => {
-  // A 640 CSS-pixel viewport at 2x page zoom represents a 1280px display at 200% zoom.
+test("editing remains usable with 2x CSS zoom", async ({ page }) => {
+  // This intentionally exercises CSS zoom at a narrow viewport, not browser page zoom.
   await page.setViewportSize({ width: 640, height: 900 });
   await chooseMedia(page);
   await page.evaluate(() => {
@@ -253,7 +253,7 @@ test("missing preview assets and audio remain non-blocking for editing", async (
   await expect(page.getByRole("button", { name: "Create clips" })).toBeEnabled();
 });
 
-test("onboarding expands Media and Export expands the task sidebar", async ({ page }) => {
+test("onboarding focuses Media and Export remains reachable with tasks open", async ({ page }) => {
   await page.goto("/");
   const mediaToggle = page.getByRole("button", { name: /media library/ }).first();
   const segmentsToggle = page.getByRole("button", { name: /editing tools/ }).first();
@@ -261,8 +261,8 @@ test("onboarding expands Media and Export expands the task sidebar", async ({ pa
   if ((await segmentsToggle.getAttribute("aria-expanded")) === "true") await segmentsToggle.click();
   await page.getByRole("button", { name: "Choose a video" }).click();
   await expect(page.getByRole("button", { name: "Select camera.mp4" })).toBeFocused();
-  if ((await segmentsToggle.getAttribute("aria-expanded")) === "false")
-    await segmentsToggle.click();
+  await segmentsToggle.click();
+  await expect(segmentsToggle).toHaveAttribute("aria-expanded", "true");
   await page.getByRole("tab", { name: "Export", exact: true }).click();
   await expect(page.getByRole("tab", { name: "Export", exact: true })).toBeVisible();
 });

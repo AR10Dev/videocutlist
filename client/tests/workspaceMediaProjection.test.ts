@@ -8,6 +8,7 @@ import {
   type WorkspaceController,
 } from "../src/features/app/controller";
 import { serializeProjectItem } from "../src/features/projects/model";
+import { memoryStorage } from "./memoryStorage";
 
 type Media = EffectApiTypes.Media;
 type Project = EffectApiTypes.Project;
@@ -79,20 +80,6 @@ const mcpSettings: EffectApiTypes.MCPSettingsResponse = {
   credentials: [],
   proposals: [],
 };
-
-function memoryStorage(): Storage {
-  const values = new Map<string, string>();
-  return {
-    get length() {
-      return values.size;
-    },
-    clear: () => values.clear(),
-    getItem: (key) => values.get(key) ?? null,
-    key: (index) => [...values.keys()][index] ?? null,
-    removeItem: (key) => void values.delete(key),
-    setItem: (key, value) => values.set(key, value),
-  };
-}
 
 function until(
   check: () => boolean,
@@ -328,7 +315,7 @@ describe("workspace project media projection", () => {
     });
     const { controller } = harness;
     try {
-      await until(() => controller.media().length === 2);
+      await until(() => controller.library.media().length === 2);
       await controller.projects.loadProject(saved.id);
       await until(() => controller.visibleMedia().length === 4);
       expect(controller.visibleMedia().map((item) => item.id)).toEqual([
@@ -346,7 +333,7 @@ describe("workspace project media projection", () => {
           media: item.media,
           persisted: serializeProjectItem(item),
         })),
-        timeline: controller.timeline(),
+        timeline: controller.editor.timeline(),
         revision: controller.revision(),
       };
       let autosaveSchedules = 0;
@@ -381,16 +368,15 @@ describe("workspace project media projection", () => {
           persisted: serializeProjectItem(item),
         })),
       ).toEqual(cleanState.items);
-      expect(controller.timeline()).toEqual(cleanState.timeline);
-      await new Promise((resolve) => setTimeout(resolve, 800));
+      expect(controller.editor.timeline()).toEqual(cleanState.timeline);
       expect(autosaveSchedules).toBe(0);
       expect(harness.saveRequests()).toBe(0);
 
       controller.projects.scheduleAutosave = () => undefined;
-      controller.updateTimeline({
+      controller.editor.updateTimeline({
         segments: [{ id: "s_projection-one", startMs: 100, endMs: 200 }],
       });
-      controller.updateTimeline({
+      controller.editor.updateTimeline({
         segments: [
           { id: "s_projection-one", startMs: 100, endMs: 200 },
           { id: "s_projection-two", startMs: 300, endMs: 400 },
@@ -407,10 +393,10 @@ describe("workspace project media projection", () => {
           mediaID: source.id,
           etag: source.etag,
         })),
-        timeline: controller.timeline(),
+        timeline: controller.editor.timeline(),
         revision: controller.revision(),
       };
-      expect(controller.timeline().past).toHaveLength(2);
+      expect(controller.editor.timeline().past).toHaveLength(2);
 
       controller.server.refreshMedia();
       await until(
@@ -433,7 +419,7 @@ describe("workspace project media projection", () => {
           persisted: serializeProjectItem(item),
         })),
       ).toEqual(dirtyState.items);
-      expect(controller.timeline()).toEqual(dirtyState.timeline);
+      expect(controller.editor.timeline()).toEqual(dirtyState.timeline);
       expect(
         controller.projectItems().map(({ id, media: source }) => ({
           id,

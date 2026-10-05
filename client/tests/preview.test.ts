@@ -49,6 +49,7 @@ describe("hybrid Smart Cut eligibility", () => {
   });
 
   it("does not disable when metadata is incomplete", () => {
+    expect(hybridSmartCutKnownIneligible(undefined)).toBe(false);
     expect(hybridSmartCutKnownIneligible(media({ codec: "h264", avgFrameRate: "25/1" }))).toBe(
       false,
     );

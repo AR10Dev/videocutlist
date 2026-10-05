@@ -88,6 +88,80 @@ describe("job snapshot stream", () => {
     );
   });
 
+  it("dispatches a valid terminal snapshot when the response ends without a final newline", async () => {
+    const encoder = new TextEncoder();
+    const event = `event: snapshot\nid: eof-cursor\ndata: ${JSON.stringify({
+      id: "j_demo",
+      type: "export",
+      state: "succeeded",
+      revision: 1,
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-01T00:00:01Z",
+    })}`;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(event));
+        controller.close();
+      },
+    });
+    const fetch = vi.fn<typeof globalThis.fetch>(() =>
+      Promise.resolve(new Response(body, { headers: { "Content-Type": "text/event-stream" } })),
+    );
+    const api = createApiClient(
+      { serverBaseUrl: "https://video.example.test", authentication: { type: "none" } },
+      fetch,
+    );
+
+    const snapshots = await Effect.runPromise(
+      Stream.runCollect(observeSnapshots<JobSnapshot, JobSnapshot>(api, "jobs/j_demo/events", Job)),
+    );
+
+    expect([...snapshots]).toHaveLength(1);
+    expect([...snapshots][0]).toMatchObject({ revision: 1, state: "succeeded" });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(body.locked).toBe(false);
+  });
+
+  it("dispatches a valid snapshot larger than Effect's default event limit across chunks", async () => {
+    const encoder = new TextEncoder();
+    const mediaLabel = "x".repeat(10 * 1024 * 1024 + 1024);
+    const payload = JSON.stringify({
+      id: "j_demo",
+      type: "export",
+      state: "succeeded",
+      revision: 1,
+      createdAt: "2026-01-01T00:00:00Z",
+      updatedAt: "2026-01-01T00:00:01Z",
+      mediaLabel,
+    });
+    const splitAt = 10 * 1024 * 1024 + 1;
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode(`event: snapshot\nid: large-cursor\ndata: ${payload.slice(0, splitAt)}`),
+        );
+        controller.enqueue(encoder.encode(`${payload.slice(splitAt)}\n\n`));
+        controller.close();
+      },
+    });
+    const fetch = vi.fn<typeof globalThis.fetch>(() =>
+      Promise.resolve(new Response(body, { headers: { "Content-Type": "text/event-stream" } })),
+    );
+    const api = createApiClient(
+      { serverBaseUrl: "https://video.example.test", authentication: { type: "none" } },
+      fetch,
+    );
+
+    const snapshots = await Effect.runPromise(
+      Stream.runCollect(observeSnapshots<JobSnapshot, JobSnapshot>(api, "jobs/j_demo/events", Job)),
+    );
+
+    expect([...snapshots]).toHaveLength(1);
+    expect([...snapshots][0]).toMatchObject({ state: "succeeded", mediaLabel });
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(body.locked).toBe(false);
+  });
+
   it("backs off after transient fetch failure, reconnects with auth and cursor, then emits the next snapshot", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const encoder = new TextEncoder();
@@ -302,7 +376,7 @@ describe("job snapshot stream", () => {
     try {
       await firstSeen;
       await thirdPull;
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      await Effect.runPromise(Effect.yieldNow);
       expect(pulls).toBe(3);
       expect(revisions).toEqual([1]);
 
@@ -377,7 +451,7 @@ describe("job snapshot stream", () => {
     try {
       await firstSeen;
       await thirdPull;
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      await Effect.runPromise(Effect.yieldNow);
       expect(pulls).toBe(3);
       expect(body.locked).toBe(true);
       await Effect.runPromise(Fiber.interrupt(fiber));

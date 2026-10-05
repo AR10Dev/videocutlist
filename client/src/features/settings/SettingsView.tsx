@@ -24,6 +24,7 @@ export function SettingsView(props: { onClose?: () => void } = {}) {
     else setSettingsOpen(false);
     returnFocus?.focus();
   };
+  const workspace = useWorkspace();
   const {
     settings,
     setSettingsOpen,
@@ -37,13 +38,11 @@ export function SettingsView(props: { onClose?: () => void } = {}) {
     serverSettingsLoading,
     loadServerSettings,
     rescanPending,
-    diagnostics,
-    waveformVisible,
-    setWaveformVisibility,
     saveSettings,
     saveRuntimeSettings,
     rescanLibrary,
-  } = useWorkspace();
+  } = workspace.settings;
+  const { diagnostics, waveformVisible, setWaveformVisibility } = workspace.preview;
   return (
     <section class="settings-view flex flex-col gap-4 p-4" aria-labelledby="settings-heading">
       <div class="panel-heading settings-heading">

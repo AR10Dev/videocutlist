@@ -293,7 +293,9 @@ func (s Service) Run(ctx context.Context, source *os.File, document model.Docume
 	}
 	appliedStrategies := segmentStrategies(request.CutStrategy, segments, keyframes)
 	if request.Mode == "separate" {
-		result := Result{Container: request.Container, OutputNames: make([]string, 0, len(segmentFiles)), OutputFailures: segmentFailures, RetainUntil: now(s).Add(destinationRetention(destination, s)), DestinationID: destination.ID, DestinationKind: destination.Kind, AppliedStrategy: uniformStrategy(appliedStrategies), AppliedStrategies: appliedStrategies}
+		result := newResult(request.Container, destination, s, appliedStrategies)
+		result.OutputNames = make([]string, 0, len(segmentFiles))
+		result.OutputFailures = segmentFailures
 		publishedOwners := make([]manifestOutput, 0, len(segmentFiles))
 		committed := false
 		separateNames := make([]string, len(segmentFiles))
@@ -418,14 +420,7 @@ func (s Service) Run(ctx context.Context, source *os.File, document model.Docume
 			result.AppliedStrategies[i].OutputName = name
 			result.SizeBytes += info.Size()
 		}
-		if request.CutStrategy == "precise_reencode" {
-			result.Warnings = []Warning{{Code: "experimental_precise_reencode", Message: "Experimental full re-encode mode; output boundaries and codec behavior require inspection."}}
-		} else if request.CutStrategy == "hybrid_smart_cut" {
-			result.Warnings = hybridWarnings(segments, keyframes, hybridInterior)
-		} else if hasPotentiallyInexactCut(segments, keyframes) {
-			result.Warnings = []Warning{{Code: "stream_copy_cut_may_not_be_frame_exact", Message: "Stream-copy cuts can start on an earlier keyframe; requested non-keyframe boundaries are not frame-exact."}}
-		}
-		result.Verified = request.CutStrategy != "precise_reencode"
+		applyResultMetadata(&result, request.CutStrategy, segments, keyframes, hybridInterior)
 		if len(result.OutputNames) == 0 {
 			return Result{}, errors.New("all separate outputs failed")
 		}
@@ -516,19 +511,12 @@ func (s Service) Run(ctx context.Context, source *os.File, document model.Docume
 	if !info.Mode().IsRegular() || !os.SameFile(temporaryInfo, info) {
 		return Result{}, errors.New("published output changed")
 	}
-	result := Result{Container: request.Container, OutputName: outputName, SizeBytes: info.Size(), RetainUntil: now(s).Add(destinationRetention(destination, s)), DestinationID: destination.ID, DestinationKind: destination.Kind, AppliedStrategy: uniformStrategy(appliedStrategies), AppliedStrategies: appliedStrategies, Verified: request.CutStrategy != "precise_reencode"}
+	result := newResult(request.Container, destination, s, appliedStrategies)
+	result.OutputName = outputName
+	result.SizeBytes = info.Size()
+	applyResultMetadata(&result, request.CutStrategy, segments, keyframes, hybridInterior)
 	if s.Artifacts != nil {
 		s.Artifacts.Put(request.JobID, []Artifact{{Path: finalPath, Name: outputName, Kind: destination.Kind, Expires: result.RetainUntil}})
-	}
-	if request.CutStrategy == "precise_reencode" {
-		result.Warnings = []Warning{{Code: "experimental_precise_reencode", Message: "Experimental full re-encode mode; output boundaries and codec behavior require inspection."}}
-	} else if request.CutStrategy == "hybrid_smart_cut" {
-		result.Warnings = hybridWarnings(segments, keyframes, hybridInterior)
-	} else if hasPotentiallyInexactCut(segments, keyframes) {
-		result.Warnings = []Warning{{
-			Code:    "stream_copy_cut_may_not_be_frame_exact",
-			Message: "Stream-copy cuts can start on an earlier keyframe; requested non-keyframe boundaries are not frame-exact.",
-		}}
 	}
 	manifestPublished = true
 	mergeCommitted = true
@@ -807,27 +795,6 @@ func sourceArgument() string {
 	return fdinput.Path(3)
 }
 
-func validateStreamIndexes(indexes []int, streams []probe.Stream) error {
-	if len(indexes) == 0 {
-		return nil
-	}
-	known := map[int]bool{}
-	for _, stream := range streams {
-		known[stream.Index] = true
-	}
-	seen := map[int]bool{}
-	for _, index := range indexes {
-		if index < 0 || !known[index] {
-			return fmt.Errorf("unknown stream index %d", index)
-		}
-		if seen[index] {
-			return fmt.Errorf("duplicate stream index %d", index)
-		}
-		seen[index] = true
-	}
-	return nil
-}
-
 // ResolveRanges freezes the exact included ranges for an export selection.
 func ResolveRanges(segments []model.Segment, selection string, duration int64) []model.Segment {
 	included := make([]model.Segment, 0, len(segments))
@@ -867,6 +834,29 @@ func segmentStrategies(requested string, segments []model.Segment, keyframes []i
 		strategies[i] = AppliedStrategy{Segment: i + 1, Strategy: strategy}
 	}
 	return strategies
+}
+
+func newResult(container string, destination Destination, service Service, strategies []AppliedStrategy) Result {
+	return Result{
+		Container:         container,
+		RetainUntil:       now(service).Add(destinationRetention(destination, service)),
+		DestinationID:     destination.ID,
+		DestinationKind:   destination.Kind,
+		AppliedStrategy:   uniformStrategy(strategies),
+		AppliedStrategies: strategies,
+	}
+}
+
+func applyResultMetadata(result *Result, requested string, segments []model.Segment, keyframes []int64, hybridInterior bool) {
+	result.Verified = requested != "precise_reencode"
+	switch {
+	case requested == "precise_reencode":
+		result.Warnings = []Warning{{Code: "experimental_precise_reencode", Message: "Experimental full re-encode mode; output boundaries and codec behavior require inspection."}}
+	case requested == "hybrid_smart_cut":
+		result.Warnings = hybridWarnings(segments, keyframes, hybridInterior)
+	case hasPotentiallyInexactCut(segments, keyframes):
+		result.Warnings = []Warning{{Code: "stream_copy_cut_may_not_be_frame_exact", Message: "Stream-copy cuts can start on an earlier keyframe; requested non-keyframe boundaries are not frame-exact."}}
+	}
 }
 
 func uniformStrategy(strategies []AppliedStrategy) string {

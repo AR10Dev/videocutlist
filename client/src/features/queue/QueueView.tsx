@@ -125,7 +125,7 @@ function BatchCard(props: {
 export function QueueView() {
   const workspace = useWorkspace();
   const { batches, destinations, cancelBatch, cancelChildJob, retryChildJob, childJobPending } =
-    workspace;
+    workspace.export;
   const activeOrRecent = () => {
     const current = batches();
     const visible = current.filter(isBatchActive);
@@ -151,29 +151,33 @@ export function QueueView() {
             type="button"
             title="Refresh export queue"
             aria-label="Refresh export queue"
-            disabled={workspace.batchesRefreshing()}
-            onClick={workspace.refreshBatches}
+            disabled={workspace.export.batchesRefreshing()}
+            onClick={workspace.export.refreshBatches}
           >
             <RefreshCw
-              classList={{ spin: workspace.batchesRefreshing() }}
+              classList={{ spin: workspace.export.batchesRefreshing() }}
               size={15}
               aria-hidden="true"
             />
           </button>
         </div>
       </header>
-      <Show when={workspace.batchesError()}>
+      <Show when={workspace.export.batchesError()}>
         {(message) => (
           <div class="alert alert-error alert-soft" role="alert">
             <CircleAlert size={16} aria-hidden="true" />
             <span>{message()}</span>
-            <button class="btn btn-ghost btn-xs" type="button" onClick={workspace.refreshBatches}>
+            <button
+              class="btn btn-ghost btn-xs"
+              type="button"
+              onClick={workspace.export.refreshBatches}
+            >
               Retry
             </button>
           </div>
         )}
       </Show>
-      <Show when={workspace.batchesLoading() && !batches().length}>
+      <Show when={workspace.export.batchesLoading() && !batches().length}>
         <div class="export-loading" role="status" aria-busy="true">
           <LoaderCircle class="spin" size={16} aria-hidden="true" /> Loading export queue…
         </div>
@@ -181,7 +185,7 @@ export function QueueView() {
       <Show
         when={batches().length > 0}
         fallback={
-          <Show when={!workspace.batchesLoading()}>
+          <Show when={!workspace.export.batchesLoading()}>
             <p role="status">No export jobs yet. Submitted clips will appear here.</p>
           </Show>
         }

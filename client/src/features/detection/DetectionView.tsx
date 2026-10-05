@@ -53,7 +53,7 @@ export function DetectionView() {
   const candidateRows = new Map<string, HTMLLIElement>();
 
   createEffect(() => {
-    const candidates = workspace.detectionCandidates();
+    const candidates = workspace.detection.detectionCandidates();
     if (!candidates.length) {
       setReviewIndex(0);
     } else if (reviewIndex() >= candidates.length) {
@@ -63,40 +63,46 @@ export function DetectionView() {
 
   const focusCandidate = (candidate: Candidate | undefined) => {
     if (!candidate) return;
-    const index = workspace.detectionCandidates().findIndex((item) => item.id === candidate.id);
+    const index = workspace.detection
+      .detectionCandidates()
+      .findIndex((item) => item.id === candidate.id);
     if (index < 0) return;
     setReviewIndex(index);
     queueMicrotask(() => candidateRows.get(candidate.id)?.focus());
   };
   const focusNextCandidate = (index: number) => {
-    const candidates = workspace.detectionCandidates();
+    const candidates = workspace.detection.detectionCandidates();
     focusCandidate(candidates[Math.min(index, candidates.length - 1)]);
   };
   const accept = (candidate: Candidate) => {
-    const index = workspace.detectionCandidates().findIndex((item) => item.id === candidate.id);
-    const result = workspace.acceptDetection(candidate);
+    const index = workspace.detection
+      .detectionCandidates()
+      .findIndex((item) => item.id === candidate.id);
+    const result = workspace.detection.acceptDetection(candidate);
     if (result.accepted.length) focusNextCandidate(index);
   };
   const reject = (candidate: Candidate) => {
-    const index = workspace.detectionCandidates().findIndex((item) => item.id === candidate.id);
-    workspace.rejectDetection(candidate);
+    const index = workspace.detection
+      .detectionCandidates()
+      .findIndex((item) => item.id === candidate.id);
+    workspace.detection.rejectDetection(candidate);
     focusNextCandidate(index);
   };
   const preview = (candidate: Candidate, index: number) => {
     setReviewIndex(index);
     const pointMs = candidatePointMs(candidate);
     if (pointMs !== undefined) {
-      workspace.setDetectionStatus(`Previewing scene change ${index + 1}.`);
-      workspace.playDetectionPoint(pointMs);
+      workspace.detection.setDetectionStatus(`Previewing scene change ${index + 1}.`);
+      workspace.preview.playDetectionPoint(pointMs);
       return;
     }
     const range = candidateRange(candidate);
     if (!range) {
-      workspace.setDetectionStatus("That candidate has invalid playback bounds.");
+      workspace.detection.setDetectionStatus("That candidate has invalid playback bounds.");
       return;
     }
-    workspace.setDetectionStatus(`Previewing candidate ${index + 1}.`);
-    workspace.playDetectionCandidate({
+    workspace.detection.setDetectionStatus(`Previewing candidate ${index + 1}.`);
+    workspace.preview.playSegment({
       ...range,
       label: candidate.source,
       included: true,
@@ -105,8 +111,8 @@ export function DetectionView() {
   const seek = (candidate: Candidate) => {
     const pointMs = candidatePointMs(candidate);
     if (pointMs === undefined) return;
-    workspace.seekDetectionPoint(pointMs);
-    workspace.setDetectionStatus("Scene change selected; dismiss it or keep reviewing.");
+    workspace.preview.seekDetectionPoint(pointMs);
+    workspace.detection.setDetectionStatus("Scene change selected; dismiss it or keep reviewing.");
   };
   const updateOption = (key: "noiseDb" | "minDurationMs" | "sceneThreshold", value: string) => {
     setOptions((current) => ({
@@ -124,19 +130,19 @@ export function DetectionView() {
     }
     setStarting(true);
     try {
-      await workspace.startDetection(kind, options());
+      await workspace.detection.startDetection(kind, options());
     } finally {
       setStarting(false);
     }
   };
   const active = () =>
     starting() ||
-    workspace.detectionLoading() ||
-    workspace.detectionJob()?.state === "queued" ||
-    workspace.detectionJob()?.state === "running";
+    workspace.detection.detectionLoading() ||
+    workspace.detection.detectionJob()?.state === "queued" ||
+    workspace.detection.detectionJob()?.state === "running";
   const canStart = () => Boolean(workspace.selected() && workspace.activeItemId()) && !active();
   const acceptAll = () => {
-    const candidates = workspace.detectionCandidates();
+    const candidates = workspace.detection.detectionCandidates();
     if (!candidates.length) return;
     if (
       !window.confirm(
@@ -144,8 +150,8 @@ export function DetectionView() {
       )
     )
       return;
-    const result = workspace.bulkAcceptDetection();
-    if (result.accepted.length) focusCandidate(workspace.detectionCandidates()[0]);
+    const result = workspace.detection.bulkAcceptDetection();
+    if (result.accepted.length) focusCandidate(workspace.detection.detectionCandidates()[0]);
   };
   const handleReviewKeyDown = (event: KeyboardEvent) => {
     const target = event.target as HTMLElement;
@@ -156,7 +162,7 @@ export function DetectionView() {
       )
     )
       return;
-    const candidate = workspace.detectionCandidates()[reviewIndex()];
+    const candidate = workspace.detection.detectionCandidates()[reviewIndex()];
     if (!candidate) return;
     const key = event.key.toLowerCase();
     const enterOnRow = key === "enter" && !target.closest("button, a");
@@ -175,7 +181,7 @@ export function DetectionView() {
     }
   };
 
-  const job = () => workspace.detectionJob();
+  const job = () => workspace.detection.detectionJob();
   const jobState = () => job()?.state;
   const jobKind = () => job()?.kind;
   const jobIsTerminal = () => {
@@ -197,9 +203,9 @@ export function DetectionView() {
             deliberately.
           </p>
         </div>
-        <Show when={workspace.detectionCandidates().length > 0}>
+        <Show when={workspace.detection.detectionCandidates().length > 0}>
           <span class="badge badge-sm badge-neutral">
-            {workspace.detectionCandidates().length} pending
+            {workspace.detection.detectionCandidates().length} pending
           </span>
         </Show>
       </header>
@@ -223,13 +229,13 @@ export function DetectionView() {
           <div class="detection-source-copy">
             <strong>{workspace.selected()!.name}</strong>
             <span>
-              {formatTime(workspace.duration(), workspace.duration())} · project revision{" "}
-              {workspace.revision() || "not saved"}
+              {formatTime(workspace.editor.duration(), workspace.editor.duration())} · project
+              revision {workspace.revision() || "not saved"}
             </span>
           </div>
         </div>
 
-        <Show when={workspace.detectionQueryError()}>
+        <Show when={workspace.detection.detectionQueryError()}>
           {(message) => (
             <div class="alert alert-error alert-soft" role="alert">
               <CircleAlert size={16} aria-hidden="true" />
@@ -282,7 +288,7 @@ export function DetectionView() {
 
         <Show
           when={
-            workspace.detectionLoading() ||
+            workspace.detection.detectionLoading() ||
             jobState() === "queued" ||
             jobState() === "running" ||
             starting()
@@ -303,7 +309,8 @@ export function DetectionView() {
                 </strong>
                 <span>
                   {jobKind() ? `${kindLabel[jobKind()!]} · ` : ""}
-                  {workspace.detectionStatus() || "The server is scanning this media item."}
+                  {workspace.detection.detectionStatus() ||
+                    "The server is scanning this media item."}
                 </span>
               </div>
             </div>
@@ -311,7 +318,7 @@ export function DetectionView() {
               <button
                 class="btn btn-ghost btn-sm"
                 type="button"
-                onClick={() => void workspace.cancelDetection()}
+                onClick={() => void workspace.detection.cancelDetection()}
               >
                 <X size={15} aria-hidden="true" /> Cancel detection
               </button>
@@ -340,12 +347,12 @@ export function DetectionView() {
                 </strong>
                 <span>
                   {jobKind() ? `${kindLabel[jobKind()!]} · ` : ""}
-                  {workspace.detectionStatus()}
+                  {workspace.detection.detectionStatus()}
                   <Show when={job()?.errorCode}> · code: {job()!.errorCode}</Show>
                 </span>
               </div>
             </div>
-            <Show when={workspace.detectionLoading()}>
+            <Show when={workspace.detection.detectionLoading()}>
               <LoaderCircle class="spin" size={15} aria-label="Updating detection status" />
             </Show>
           </div>
@@ -423,7 +430,11 @@ export function DetectionView() {
           </fieldset>
         </details>
 
-        <Show when={jobState() === "succeeded" && workspace.detectionCandidates().length === 0}>
+        <Show
+          when={
+            jobState() === "succeeded" && workspace.detection.detectionCandidates().length === 0
+          }
+        >
           <div class="detection-empty-state detection-empty-state-result" role="status">
             <CheckCircle2 size={18} aria-hidden="true" />
             <div>
@@ -439,7 +450,7 @@ export function DetectionView() {
           </div>
         </Show>
 
-        <Show when={workspace.detectionCandidates().length > 0}>
+        <Show when={workspace.detection.detectionCandidates().length > 0}>
           <div class="detection-review" aria-label="Detection review">
             <div class="detection-review-heading">
               <div>
@@ -459,24 +470,24 @@ export function DetectionView() {
               </button>
             </div>
             <p class="shortcut-help">
-              Candidate {reviewIndex() + 1} of {workspace.detectionCandidates().length}. Use A or
-              Enter to accept, R/X/N to dismiss.
+              Candidate {reviewIndex() + 1} of {workspace.detection.detectionCandidates().length}.
+              Use A or Enter to accept, R/X/N to dismiss.
             </p>
             <ol aria-label="Detection candidates">
-              <For each={workspace.detectionCandidates()}>
+              <For each={workspace.detection.detectionCandidates()}>
                 {(candidate, index) => (
                   <li
                     ref={(element) => candidateRows.set(candidate.id, element)}
                     tabIndex={index() === reviewIndex() ? 0 : -1}
                     aria-current={index() === reviewIndex() ? "true" : undefined}
-                    aria-label={`Detection candidate ${index() + 1}: ${candidateLabel(candidate, workspace.duration())}`}
+                    aria-label={`Detection candidate ${index() + 1}: ${candidateLabel(candidate, workspace.editor.duration())}`}
                     data-detection-candidate={candidate.id}
                     onFocus={() => setReviewIndex(index())}
                   >
                     <div class="detection-candidate-copy">
                       <div class="detection-candidate-title">
                         <span class="badge badge-sm">{kindLabel[candidate.source]}</span>
-                        <strong>{candidateLabel(candidate, workspace.duration())}</strong>
+                        <strong>{candidateLabel(candidate, workspace.editor.duration())}</strong>
                       </div>
                       <dl>
                         <dt>{candidate.source === "scene" ? "Point" : "Duration"}</dt>
@@ -547,7 +558,7 @@ export function DetectionView() {
       </Show>
 
       <p class="detection-status" role="status" aria-live="polite">
-        {workspace.detectionStatus()}
+        {workspace.detection.detectionStatus()}
       </p>
     </section>
   );

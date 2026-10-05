@@ -77,10 +77,9 @@ type ExportViewProps = {
 
 export function ExportView(props: ExportViewProps = {}) {
   const workspace = useWorkspace();
+  const { selected, projectItems, editableItems } = workspace;
+  const { tracks } = workspace.editor;
   const {
-    selected,
-    projectItems,
-    editableItems,
     selectedExportItems,
     chooseExportItems,
     exportScope,
@@ -111,11 +110,10 @@ export function ExportView(props: ExportViewProps = {}) {
     batchError,
     exportJobLoading,
     exportJobError,
-    export: exportFeature,
-    tracks,
     exportProject,
     cancelExport,
-  } = workspace;
+  } = workspace.export;
+  const exportFeature = workspace.export;
 
   const summary = () =>
     summarizeExports(editableItems().filter((item) => exportItemIDs().includes(item.id)));
@@ -737,9 +735,9 @@ export function ExportView(props: ExportViewProps = {}) {
                       (item) =>
                         item.state === "succeeded" && item.result?.destinationKind === "download",
                     )}
-                    onCancel={workspace.cancelChildJob}
-                    childJobPending={workspace.childJobPending}
-                    onRetry={workspace.retryChildJob}
+                    onCancel={workspace.export.cancelChildJob}
+                    childJobPending={workspace.export.childJobPending}
+                    onRetry={workspace.export.retryChildJob}
                   />
                 )}
               </For>

@@ -1,12 +1,14 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
-	"net"
 	"net/http"
+	"os"
 	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -44,14 +46,7 @@ func TestRunRecoversUnifiedJobsOnStartup(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	port := strconv.Itoa(listener.Addr().(*net.TCPAddr).Port)
-	if err := listener.Close(); err != nil {
-		t.Fatal(err)
-	}
+	port := "0"
 	t.Setenv("VIDEOCUTLIST_DATABASE_PATH", databasePath)
 	t.Setenv("VIDEOCUTLIST_CACHE_DIR", directory+"/cache")
 	t.Setenv("VIDEOCUTLIST_EXPORT_DIR", directory+"/exports")
@@ -80,6 +75,70 @@ func TestRunRecoversUnifiedJobsOnStartup(t *testing.T) {
 	t.Fatal("startup did not recover a running unified job")
 }
 
+var runStdoutCapture sync.Mutex
+
+func startRunCapturingAddress(t *testing.T, ctx context.Context, cancel context.CancelFunc) (string, <-chan error, func()) {
+	t.Helper()
+	runStdoutCapture.Lock()
+	originalStdout := os.Stdout
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		runStdoutCapture.Unlock()
+		t.Fatal(err)
+	}
+	os.Stdout = writer
+	runDone := make(chan error, 1)
+	finished := make(chan struct{})
+	go func() {
+		runDone <- run(ctx)
+		close(finished)
+	}()
+	address := make(chan string, 1)
+	readDone := make(chan struct{})
+	go func() {
+		defer close(readDone)
+		scanner := bufio.NewScanner(reader)
+		reported := false
+		for scanner.Scan() {
+			if reported {
+				continue
+			}
+			var event struct {
+				Event      string `json:"event"`
+				ListenAddr string `json:"listen_addr"`
+			}
+			if json.Unmarshal(scanner.Bytes(), &event) == nil && event.Event == "server_started" {
+				address <- event.ListenAddr
+				reported = true
+			}
+		}
+	}()
+	var stopOnce sync.Once
+	stop := func() {
+		stopOnce.Do(func() {
+			cancel()
+			<-finished
+			_ = writer.Close()
+			os.Stdout = originalStdout
+			_ = reader.Close()
+			<-readDone
+			runStdoutCapture.Unlock()
+		})
+	}
+	t.Cleanup(stop)
+	select {
+	case listenAddr := <-address:
+		return listenAddr, runDone, stop
+	case err := <-runDone:
+		stop()
+		t.Fatalf("server stopped before reporting its listening address: %v", err)
+	case <-time.After(5 * time.Second):
+		stop()
+		t.Fatal("server did not report its listening address")
+	}
+	return "", runDone, stop
+}
+
 func TestRunWithNoMediaRootsHidesRemovedRootAndServesAPI(t *testing.T) {
 	directory := t.TempDir()
 	databasePath := directory + "/videocutlist.db"
@@ -98,14 +157,7 @@ func TestRunWithNoMediaRootsHidesRemovedRootAndServesAPI(t *testing.T) {
 	if err := database.Close(); err != nil {
 		t.Fatal(err)
 	}
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	port := strconv.Itoa(listener.Addr().(*net.TCPAddr).Port)
-	if err := listener.Close(); err != nil {
-		t.Fatal(err)
-	}
+	port := "0"
 	t.Setenv("VIDEOCUTLIST_DATABASE_PATH", databasePath)
 	t.Setenv("VIDEOCUTLIST_CACHE_DIR", directory+"/cache")
 	t.Setenv("VIDEOCUTLIST_EXPORT_DIR", directory+"/exports")
@@ -113,10 +165,9 @@ func TestRunWithNoMediaRootsHidesRemovedRootAndServesAPI(t *testing.T) {
 	t.Setenv("VIDEOCUTLIST_LISTEN_ADDRESS", "127.0.0.1")
 	t.Setenv("VIDEOCUTLIST_PORT", port)
 	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	done := make(chan error, 1)
-	go func() { done <- run(ctx) }()
-	base := "http://127.0.0.1:" + port
+	listenAddress, done, stop := startRunCapturingAddress(t, ctx, cancel)
+	defer stop()
+	base := "http://" + listenAddress
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		select {
@@ -177,6 +228,7 @@ func TestRunWithNoMediaRootsHidesRemovedRootAndServesAPI(t *testing.T) {
 		}
 	}
 	cancel()
+	stop()
 	if err := <-done; err != nil {
 		t.Fatalf("shutdown unconfigured server: %v", err)
 	}

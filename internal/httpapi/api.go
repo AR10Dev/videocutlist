@@ -1,4 +1,4 @@
-// Package httpapi implements the frozen v1 HTTP contract without exposing media paths.
+// Package httpapi implements the v2 JSON control and native media contract without exposing media paths.
 package httpapi
 
 import (

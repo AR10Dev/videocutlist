@@ -36,6 +36,7 @@ func TestProductionSettingsAndAutomationWorkflows(t *testing.T) {
 	p = startProcess(t, root)
 	var persisted struct {
 		Settings map[string]any `json:"settings"`
+		Revision int64          `json:"revision"`
 	}
 	getJSON(t, p, "/api/v2/settings", &persisted)
 	projects := p.request(t, http.MethodGet, "/api/v2/projects")
@@ -49,10 +50,20 @@ func TestProductionSettingsAndAutomationWorkflows(t *testing.T) {
 		t.Fatalf("stale settings status=%d", stale.StatusCode)
 	}
 	stale.Body.Close()
-	deployment := p.requestBody(t, http.MethodPut, "/api/v2/settings", map[string]any{"revision": settings.Revision + 1, "settings": map[string]any{"mediaRoots": map[string]string{"escape": "/tmp"}}})
-	if deployment.StatusCode != http.StatusBadRequest {
+	deploymentSettings := make(map[string]any, len(persisted.Settings)+1)
+	for key, value := range persisted.Settings {
+		deploymentSettings[key] = value
+	}
+	deploymentSettings["mediaRoots"] = map[string]string{"escape": "/tmp"}
+	deployment := p.requestBody(t, http.MethodPut, "/api/v2/settings", map[string]any{"revision": persisted.Revision, "settings": deploymentSettings})
+	var deploymentError struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if deployment.StatusCode != http.StatusBadRequest || json.NewDecoder(deployment.Body).Decode(&deploymentError) != nil || deploymentError.Error.Code != "deployment_settings_read_only" {
 		deployment.Body.Close()
-		t.Fatalf("deployment settings status=%d", deployment.StatusCode)
+		t.Fatalf("deployment settings status=%d code=%q", deployment.StatusCode, deploymentError.Error.Code)
 	}
 	deployment.Body.Close()
 
@@ -358,6 +369,14 @@ func TestProductionBatchCancellationLifecycle(t *testing.T) {
 		return json.NewDecoder(response.Body).Decode(&job) == nil && job.State == "running"
 	})
 	ffmpegPID := ffmpegDescendant(t, p)
+	resumedFFmpeg := false
+	resumeFFmpeg := func() {
+		if !resumedFFmpeg {
+			_ = syscall.Kill(ffmpegPID, syscall.SIGCONT)
+			resumedFFmpeg = true
+		}
+	}
+	t.Cleanup(resumeFFmpeg)
 	second, secondJob := submit()
 	waitFor(t, 10*time.Second, func() bool {
 		response := p.request(t, http.MethodGet, "/api/v2/jobs/"+secondJob)
@@ -367,34 +386,12 @@ func TestProductionBatchCancellationLifecycle(t *testing.T) {
 		}
 		return json.NewDecoder(response.Body).Decode(&job) == nil && job.State == "queued"
 	})
-	runningCancel := p.request(t, http.MethodDelete, "/api/v2/batches/"+firstBatch)
-	if runningCancel.StatusCode != http.StatusNoContent {
-		runningCancel.Body.Close()
-		t.Fatalf("running batch cancellation status=%d", runningCancel.StatusCode)
+	queuedCancel := p.request(t, http.MethodDelete, "/api/v2/batches/"+second)
+	if queuedCancel.StatusCode != http.StatusNoContent {
+		queuedCancel.Body.Close()
+		t.Fatalf("queued batch cancellation status=%d", queuedCancel.StatusCode)
 	}
-	runningCancel.Body.Close()
-	waitFor(t, 10*time.Second, func() bool {
-		response := p.request(t, http.MethodGet, "/api/v2/batches/"+firstBatch)
-		defer response.Body.Close()
-		var value struct {
-			State string `json:"state"`
-		}
-		return json.NewDecoder(response.Body).Decode(&value) == nil && value.State == "cancelled"
-	})
-	runningOutput := p.request(t, http.MethodGet, "/media/v2/jobs/"+firstJob+"/outputs/0")
-	if runningOutput.StatusCode != http.StatusNotFound {
-		runningOutput.Body.Close()
-		t.Fatalf("running cancelled output status=%d", runningOutput.StatusCode)
-	}
-	runningOutput.Body.Close()
-	_ = syscall.Kill(ffmpegPID, syscall.SIGCONT)
-	waitPIDExit(t, ffmpegPID)
-	cancel := p.request(t, http.MethodDelete, "/api/v2/batches/"+second)
-	if cancel.StatusCode != http.StatusNoContent {
-		cancel.Body.Close()
-		t.Fatalf("batch cancellation status=%d", cancel.StatusCode)
-	}
-	cancel.Body.Close()
+	queuedCancel.Body.Close()
 	waitFor(t, 10*time.Second, func() bool {
 		response := p.request(t, http.MethodGet, "/api/v2/batches/"+second)
 		defer response.Body.Close()
@@ -418,6 +415,28 @@ func TestProductionBatchCancellationLifecycle(t *testing.T) {
 		t.Fatalf("cancelled output status=%d", output.StatusCode)
 	}
 	output.Body.Close()
+	runningCancel := p.request(t, http.MethodDelete, "/api/v2/batches/"+firstBatch)
+	if runningCancel.StatusCode != http.StatusNoContent {
+		runningCancel.Body.Close()
+		t.Fatalf("running batch cancellation status=%d", runningCancel.StatusCode)
+	}
+	runningCancel.Body.Close()
+	waitFor(t, 10*time.Second, func() bool {
+		response := p.request(t, http.MethodGet, "/api/v2/batches/"+firstBatch)
+		defer response.Body.Close()
+		var value struct {
+			State string `json:"state"`
+		}
+		return json.NewDecoder(response.Body).Decode(&value) == nil && value.State == "cancelled"
+	})
+	runningOutput := p.request(t, http.MethodGet, "/media/v2/jobs/"+firstJob+"/outputs/0")
+	if runningOutput.StatusCode != http.StatusNotFound {
+		runningOutput.Body.Close()
+		t.Fatalf("running cancelled output status=%d", runningOutput.StatusCode)
+	}
+	runningOutput.Body.Close()
+	resumeFFmpeg()
+	waitPIDExit(t, ffmpegPID)
 	assertNoTemporaryArtifacts(t, root)
 	suiteSummary.Add("cancellation batch_id=%s job_id=%s state=cancelled", second, secondJob)
 }
@@ -505,6 +524,19 @@ func TestProductionRestartReconcilesExport(t *testing.T) {
 
 func TestProductionAuthNoneLoopback(t *testing.T) {
 	p := startProcessWithEnv(t, t.TempDir(), map[string]string{"VIDEOCUTLIST_AUTH_MODE": "none"})
+	media := p.requestNoAuth(t, http.MethodGet, "/api/v2/media")
+	if media.StatusCode != http.StatusOK {
+		media.Body.Close()
+		t.Fatalf("auth-none application resource=%d", media.StatusCode)
+	}
+	var page struct {
+		Items []json.RawMessage `json:"items"`
+	}
+	if err := json.NewDecoder(media.Body).Decode(&page); err != nil || len(page.Items) == 0 {
+		media.Body.Close()
+		t.Fatalf("unauthenticated media response items=%d err=%v", len(page.Items), err)
+	}
+	media.Body.Close()
 	resp := p.request(t, http.MethodGet, "/ready")
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()

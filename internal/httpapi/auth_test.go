@@ -50,14 +50,22 @@ func TestTrustedProxyAuthenticatorUsesOnlyContext(t *testing.T) {
 		t.Fatal("raw forwarded user was accepted")
 	}
 	var authErr error
-	handler, err := TrustedProxy([]string{"127.0.0.0/8"}, http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) { authErr = authenticator.Authenticate(request) }))
+	called := false
+	handler, err := TrustedProxy([]string{"127.0.0.0/8"}, http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
+		called = true
+		authErr = authenticator.Authenticate(request)
+	}))
 	if err != nil {
 		t.Fatal(err)
 	}
 	r := httptest.NewRequest(http.MethodGet, "http://api.test", nil)
 	r.RemoteAddr = "127.0.0.1:1234"
 	r.Header.Set("X-Forwarded-User", "proxy-editor")
-	handler.ServeHTTP(httptest.NewRecorder(), r)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, r)
+	if !called || response.Code != http.StatusOK {
+		t.Fatalf("trusted request was not accepted: called=%v status=%d", called, response.Code)
+	}
 	if authErr != nil {
 		t.Fatal(authErr)
 	}

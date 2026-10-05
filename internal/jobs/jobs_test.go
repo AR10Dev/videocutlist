@@ -300,7 +300,7 @@ func TestUnifiedJobsCreateValidatesOpaqueIDs(t *testing.T) {
 	}
 	for _, invalid := range []store.Job{
 		{ID: "invalid", BatchID: valid.BatchID, Kind: valid.Kind, RequestJSON: valid.RequestJSON},
-		{ID: valid.ID, BatchID: "invalid", Kind: valid.Kind, RequestJSON: valid.RequestJSON},
+		{ID: "j_bbbbbbbbbbbb", BatchID: "invalid", Kind: valid.Kind, RequestJSON: valid.RequestJSON},
 	} {
 		if _, err := jobs.Create(context.Background(), invalid); err == nil {
 			t.Fatalf("invalid IDs accepted: %#v", invalid)
@@ -328,6 +328,7 @@ func TestUnifiedJobsCancellationFailureAndRestartRecovery(t *testing.T) {
 		{ID: "j_000000000005", BatchID: "b_000000000005", Kind: store.JobScan, RequestJSON: `{}`},
 		{ID: "j_000000000006", BatchID: "b_000000000006", Kind: store.JobExport, ProjectID: "p", ProjectItemID: "i", RequestJSON: `{}`},
 		{ID: "j_000000000007", BatchID: "b_000000000007", Kind: store.JobDetect, ProjectID: "p", ProjectItemID: "i", RequestJSON: `{}`},
+		{ID: "j_000000000008", BatchID: "b_000000000008", Kind: store.JobScan, RequestJSON: `{}`},
 	} {
 		if _, err := jobs.Create(ctx, job); err != nil {
 			t.Fatal(err)
@@ -350,6 +351,10 @@ func TestUnifiedJobsCancellationFailureAndRestartRecovery(t *testing.T) {
 	if recovered, err := jobs.Recover(ctx); err != nil || recovered != 2 {
 		t.Fatalf("recovery = %d, %v", recovered, err)
 	}
+	queued, err := jobs.Get(ctx, "j_000000000008")
+	if err != nil || queued.State != store.JobQueued {
+		t.Fatalf("recovery changed queued job: %#v, %v", queued, err)
+	}
 	for _, id := range []string{"j_000000000006", "j_000000000007"} {
 		if job, err := jobs.Get(ctx, id); err != nil || job.State != store.JobFailed || !job.ErrorCode.Valid || job.ErrorCode.String != "interrupted_by_restart" || job.Revision != 3 {
 			t.Fatalf("recovered job = %#v, %v", job, err)
@@ -357,6 +362,10 @@ func TestUnifiedJobsCancellationFailureAndRestartRecovery(t *testing.T) {
 	}
 	if recovered, err := jobs.Recover(ctx); err != nil || recovered != 0 {
 		t.Fatalf("second recovery = %d, %v", recovered, err)
+	}
+	queuedAfterSecond, err := jobs.Get(ctx, "j_000000000008")
+	if err != nil || queuedAfterSecond.State != store.JobQueued {
+		t.Fatalf("second recovery changed queued job: %#v, %v", queuedAfterSecond, err)
 	}
 }
 

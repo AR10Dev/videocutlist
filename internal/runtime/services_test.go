@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -83,7 +84,7 @@ func TestMediaAPIShapeHidesStorageAndProviderMetadata(t *testing.T) {
 			Codec: "h264", Width: 1280, Height: 720, AvgFrameRate: "30/1",
 		}},
 	}
-	response, err := json.Marshal(media(item, ""))
+	response, err := json.Marshal(media(item, "private-root-alias"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,6 +93,9 @@ func TestMediaAPIShapeHidesStorageAndProviderMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 	for field := range top {
+		if strings.Contains(string(response), "private-root-alias") {
+			t.Fatalf("media response exposed private root: %s", response)
+		}
 		switch field {
 		case "id", "name", "durationMs", "sizeBytes", "container", "streams", "etag":
 		default:
@@ -448,6 +452,18 @@ func TestExportExecutorDownloadBatchPublishesValidatedArchive(t *testing.T) {
 	}
 }
 
+// acquireBatchArchiveLock calls Done only after a nonblocking flock attempt reports contention.
+type lockWaitObserver struct {
+	context.Context
+	waiting chan struct{}
+	once    sync.Once
+}
+
+func (c *lockWaitObserver) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.waiting) })
+	return c.Context.Done()
+}
+
 func TestExportExecutorConcurrentBatchDownloadsShareOneOwnedArchive(t *testing.T) {
 	ctx := t.Context()
 	root := t.TempDir()
@@ -496,27 +512,45 @@ func TestExportExecutorConcurrentBatchDownloadsShareOneOwnedArchive(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	releaseLock := func() {
-		if unlock != nil {
-			unlock()
-			unlock = nil
-		}
-	}
-	t.Cleanup(releaseLock)
-	cancelCtx, cancel := context.WithCancel(ctx)
-	cancelled := make(chan error, 1)
+	var releaseLockOnce sync.Once
+	releaseLock := func() { releaseLockOnce.Do(unlock) }
 	first := ExportExecutor{Jobs: jobs, Service: export.Service{OutputDir: root, Artifacts: export.NewArtifactStore()}}
 	second := ExportExecutor{Jobs: jobs, Service: export.Service{OutputDir: root, Artifacts: export.NewArtifactStore()}}
+	cancelCtx, cancel := context.WithCancel(ctx)
+	observer := &lockWaitObserver{Context: cancelCtx, waiting: make(chan struct{})}
+	waiterResult := make(chan error, 1)
+	waiterFinished := make(chan struct{})
+	outputs := []batchArchiveOutput{{jobID: "j_concurrent_one", name: "first.mkv"}, {jobID: "j_concurrent_two", name: "second.mkv"}}
 	go func() {
-		file, _, err := first.DownloadBatch(cancelCtx, batchID)
+		defer close(waiterFinished)
+		file, _, err := first.downloadBatchWithLock(observer, batchID, root, outputs, time.Now().Add(time.Hour))
 		if file != nil {
 			_ = file.Close()
 		}
-		cancelled <- err
+		waiterResult <- err
 	}()
+	defer func() {
+		cancel()
+		releaseLock()
+		select {
+		case <-waiterFinished:
+		case <-time.After(time.Second):
+			t.Error("lock waiter did not finish after cancellation and release")
+		}
+	}()
+	select {
+	case <-observer.waiting:
+	case <-time.After(time.Second):
+		t.Fatal("lock waiter did not reach the contended retry loop")
+	}
 	cancel()
-	if err := <-cancelled; !errors.Is(err, context.Canceled) {
-		t.Fatalf("cancelled lock waiter = %v", err)
+	select {
+	case err := <-waiterResult:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("cancelled lock waiter = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cancelled lock waiter did not return")
 	}
 	releaseLock()
 

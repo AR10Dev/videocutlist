@@ -34,9 +34,19 @@ func TestValidateProjectItemTemplateUsesUTF8Bytes(t *testing.T) {
 }
 
 func TestValidateProjectItemRejectsOverlappingAndOutOfRangeSegments(t *testing.T) {
-	item := ProjectItem{Segments: []Segment{{StartMS: 0, EndMS: 500}, {StartMS: 400, EndMS: 1_200}}}
-	if err := ValidateProjectItem(item, 1_000); err == nil {
-		t.Fatal("overlapping and out-of-range segments were accepted")
+	for _, test := range []struct {
+		name     string
+		segments []Segment
+		duration int64
+	}{
+		{"overlap only", []Segment{{StartMS: 0, EndMS: 500}, {StartMS: 400, EndMS: 800}}, 1_000},
+		{"out of range only", []Segment{{StartMS: 0, EndMS: 500}, {StartMS: 600, EndMS: 1_200}}, 1_000},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := ValidateProjectItem(ProjectItem{Segments: test.segments}, test.duration); err == nil {
+				t.Fatal("invalid segments accepted")
+			}
+		})
 	}
 }
 

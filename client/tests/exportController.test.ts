@@ -8,6 +8,7 @@ import { createExportController } from "../src/features/export/controller";
 import { createTimelineHistory } from "../src/features/editor/timeline";
 import type { EditableProjectItem } from "../src/features/projects/model";
 import { defaultSettings } from "../src/features/settings/model";
+import { memoryStorage } from "./memoryStorage";
 
 const batchId = "b_exportstatus0001";
 const timestamp = "2026-01-01T00:00:00Z";
@@ -55,20 +56,6 @@ const exportItem = (media: EffectApiTypes.Media): EditableProjectItem => ({
   },
 });
 
-function memoryStorage(): Storage {
-  const values = new Map<string, string>();
-  return {
-    get length() {
-      return values.size;
-    },
-    clear: () => values.clear(),
-    getItem: (key) => values.get(key) ?? null,
-    key: (index) => [...values.keys()][index] ?? null,
-    removeItem: (key) => void values.delete(key),
-    setItem: (key, value) => values.set(key, value),
-  };
-}
-
 async function withExportController(
   terminalBatch: Batch,
   exercise: (controller: ExportController) => Promise<void>,
@@ -76,6 +63,7 @@ async function withExportController(
     initialBatch?: Batch;
     selected?: EffectApiTypes.Media;
     projectId?: () => string;
+    editorVersion?: () => number;
     projectItems?: EditableProjectItem[];
     dirty?: boolean;
     revision?: number;
@@ -209,7 +197,7 @@ async function withExportController(
             revision: () => options.revision ?? 1,
             dirty,
             setDirty,
-            editorVersion: () => 0,
+            editorVersion: options.editorVersion ?? (() => 0),
             status: () => "",
             projectItems: () => options.projectItems ?? projectItems(),
             setProjectItems,
@@ -470,6 +458,65 @@ describe("export controller aggregate status", () => {
             schemaVersion: 2,
             items: [],
           };
+        },
+      },
+    );
+  });
+  it("stops after a save when the editor version changed during the save", async () => {
+    const media: EffectApiTypes.Media = {
+      id: `m_${"m".repeat(43)}`,
+      name: "clip.mp4",
+      durationMs: 2_000,
+      sizeBytes: 1,
+      container: "mp4",
+      streams: {},
+      etag: "v1",
+    };
+    let editorVersion = 0;
+    let signalSaveStarted!: () => void;
+    const saveStarted = new Promise<void>((resolve) => {
+      signalSaveStarted = resolve;
+    });
+    let finishSave!: (project: EffectApiTypes.Project) => void;
+    const saveResponse = new Promise<EffectApiTypes.Project>((resolve) => {
+      finishSave = resolve;
+    });
+    const calls: string[] = [];
+    let saves = 0;
+    await withExportController(
+      batch("succeeded", 1, [job("j_exportstatus0001", "succeeded", 1)]),
+      async (controller) => {
+        const exporting = controller.exportProject();
+        await saveStarted;
+        editorVersion++;
+        finishSave({
+          id: "p_exportstatus0001",
+          name: "Saved",
+          revision: 2,
+          updatedAt: timestamp,
+          schemaVersion: 2,
+          items: [],
+        });
+        await exporting;
+        expect(saves).toBe(1);
+        expect(calls).toEqual([]);
+        expect(controller.exportStatus()).toBe(
+          "Create clips stopped because the project changed. Save again and retry.",
+        );
+      },
+      {
+        selected: media,
+        projectItems: [exportItem(media)],
+        dirty: true,
+        revision: 2,
+        editorVersion: () => editorVersion,
+        saveProject: () => {
+          saves++;
+          signalSaveStarted();
+          return saveResponse;
+        },
+        onRequest: (method, path) => {
+          if (method === "POST") calls.push(path.endsWith("/preflight") ? "preflight" : "submit");
         },
       },
     );

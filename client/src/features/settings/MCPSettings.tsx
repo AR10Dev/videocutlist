@@ -31,7 +31,7 @@ export function MCPSettings() {
     createMCPCredential,
     approveExportProposal,
     revokeMCPCredential,
-  } = useWorkspace();
+  } = useWorkspace().settings;
   const [name, setName] = createSignal("");
   const [permissions, setPermissions] = createSignal<string[]>([]);
   const [expiry, setExpiry] = createSignal("7d");

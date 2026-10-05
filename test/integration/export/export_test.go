@@ -409,6 +409,10 @@ func TestHybridSmartCutRejectsWebMAndInvalidRate(t *testing.T) {
 	}
 }
 
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
+}
+
 func TestCancellationRemovesIncompleteOutput(t *testing.T) {
 	directory := t.TempDir()
 	sourcePath := filepath.Join(directory, "source")
@@ -424,25 +428,82 @@ func TestCancellationRemovesIncompleteOutput(t *testing.T) {
 			t.Error(err)
 		}
 	})
+	marker := filepath.Join(directory, "ffmpeg-started")
 	ffmpeg := filepath.Join(directory, "wait-for-cancel.sh")
-	if err := os.WriteFile(ffmpeg, []byte("#!/bin/sh\nexec sleep 10\n"), 0o700); err != nil {
+	ffmpegScript := "#!/bin/sh\nif [ \"$2\" = \"-muxers\" ]; then printf ' E matroska\\n'; exit 0; fi\noutput=\"\"\nfor argument do output=\"$argument\"; done\nprintf 'partial output' > \"$output\"\nprintf '%s' \"$output\" > " + shellQuote(marker) + "\nexec sleep 10\n"
+	if err := os.WriteFile(ffmpeg, []byte(ffmpegScript), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	ffprobe := filepath.Join(directory, "wait-for-probe-cancel.sh")
-	if err := os.WriteFile(ffprobe, []byte("#!/bin/sh\nexec sleep 10\n"), 0o700); err != nil {
+	ffprobe := filepath.Join(directory, "valid-source-ffprobe.sh")
+	ffprobeScript := "#!/bin/sh\ncase \"$*\" in\n  *-show_frames*) printf '0.000000\\n0.500000\\n' ;;\n  *) printf '%s\\n' '{\"format\":{\"duration\":\"1.000\",\"format_name\":\"matroska\"},\"streams\":[{\"index\":0,\"codec_type\":\"video\",\"codec_name\":\"h264\",\"width\":160,\"height\":90,\"avg_frame_rate\":\"30/1\",\"r_frame_rate\":\"30/1\"}]}' ;;\nesac\n"
+	if err := os.WriteFile(ffprobe, []byte(ffprobeScript), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(directory, "exports"), 0o750); err != nil {
+	exportDir := filepath.Join(directory, "exports")
+	if err := os.MkdirAll(exportDir, 0o750); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer cancel()
-	service := export.Service{FFmpegPath: ffmpeg, FFprobePath: ffprobe, OutputDir: filepath.Join(directory, "exports")}
-	_, err = service.Run(ctx, source, projectDocument(model.Segment{StartMS: 0, EndMS: 1}), export.Request{Mode: "merge", CutStrategy: "stream_copy_preferred", Container: "mkv"})
-	if !errors.Is(err, export.ErrCancelled) {
-		t.Fatalf("cancellation error = %v", err)
+	ctx, cancel := context.WithCancel(t.Context())
+	service := export.Service{FFmpegPath: ffmpeg, FFprobePath: ffprobe, OutputDir: exportDir}
+	runDone := make(chan struct{})
+	var runErr error
+	go func() {
+		_, runErr = service.Run(ctx, source, projectDocument(model.Segment{StartMS: 0, EndMS: 500}), export.Request{Mode: "merge", CutStrategy: "stream_copy_preferred", Container: "mkv"})
+		close(runDone)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-runDone:
+		case <-time.After(5 * time.Second):
+			t.Error("export did not finish after cancellation")
+		}
+	})
+	deadline := time.NewTimer(5 * time.Second)
+	ticker := time.NewTicker(5 * time.Millisecond)
+	defer deadline.Stop()
+	defer ticker.Stop()
+	for {
+		if _, err := os.Stat(marker); err == nil {
+			break
+		}
+		select {
+		case <-runDone:
+			t.Fatalf("export ended before generation checkpoint: %v", runErr)
+		case <-deadline.C:
+			t.Fatal("FFmpeg did not reach generation checkpoint")
+		case <-ticker.C:
+		}
 	}
-	entries, err := os.ReadDir(filepath.Join(directory, "exports"))
+	var generatedOutput string
+	if err := filepath.WalkDir(exportDir, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.Name() == "segment-000.mkv" {
+			generatedOutput = path
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if generatedOutput == "" {
+		t.Fatal("generation checkpoint did not correspond to a temporary segment artifact")
+	}
+	generated, err := os.ReadFile(generatedOutput)
+	if err != nil || string(generated) != "partial output" {
+		t.Fatalf("generation artifact=%q err=%v", generated, err)
+	}
+	cancel()
+	select {
+	case <-runDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("export did not finish after cancellation")
+	}
+	if !errors.Is(runErr, export.ErrCancelled) {
+		t.Fatalf("cancellation error = %v", runErr)
+	}
+	entries, err := os.ReadDir(exportDir)
 	if err != nil {
 		t.Fatal(err)
 	}

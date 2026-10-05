@@ -1,6 +1,15 @@
 import { expect, test } from "@playwright/test";
 
 const origin = "http://127.0.0.1:8787";
+let successScanEvents = 0;
+let scanTreeRequests = 0;
+let scanStatusRequests = 0;
+let scanTreePending = 0;
+let scanStatusPending = 0;
+let scanTreeRequestsAtEvent = 0;
+let scanStatusRequestsAtEvent = 0;
+let releaseSuccessScan!: () => void;
+let successScanPending = Promise.resolve();
 const media = {
   id: `m_${"a".repeat(43)}`,
   name: "camera.mp4",
@@ -24,6 +33,15 @@ function projectResponse(body: Record<string, unknown> = {}) {
 }
 
 test.beforeEach(async ({ page }) => {
+  successScanEvents = 0;
+  scanTreeRequests = 0;
+  scanStatusRequests = 0;
+  scanTreePending = 0;
+  scanStatusPending = 0;
+  scanTreeRequestsAtEvent = 0;
+  scanStatusRequestsAtEvent = 0;
+  successScanPending = new Promise<void>((resolve) => (releaseSuccessScan = resolve));
+  let terminalPublished = false;
   await page.addInitScript(() => {
     window.VIDEOCUTLIST_CONFIG = {
       serverBaseUrl: "http://127.0.0.1:8787",
@@ -33,18 +51,32 @@ test.beforeEach(async ({ page }) => {
   await page.route(`${origin}/api/v2/**`, async (route) => {
     const request = route.request();
     const url = new URL(request.url());
-    if (url.pathname === "/api/v2/media/status")
-      return route.fulfill({
-        json: { state: "ready_with_media", message: "Library ready." },
-      });
-    if (url.pathname === "/api/v2/media/tree")
-      return route.fulfill({
-        json: {
-          folders: [{ id: "f_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", label: "Interviews" }],
-          items: [media],
-          nextCursor: null,
-        },
-      });
+    if (url.pathname === "/api/v2/media/status") {
+      scanStatusRequests++;
+      scanStatusPending++;
+      try {
+        return await route.fulfill({
+          json: { state: "ready_with_media", message: "Library ready." },
+        });
+      } finally {
+        scanStatusPending--;
+      }
+    }
+    if (url.pathname === "/api/v2/media/tree") {
+      scanTreeRequests++;
+      scanTreePending++;
+      try {
+        return await route.fulfill({
+          json: {
+            folders: [{ id: "f_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", label: "Interviews" }],
+            items: [terminalPublished ? { ...media, name: "rescanned-camera.mp4" } : media],
+            nextCursor: null,
+          },
+        });
+      } finally {
+        scanTreePending--;
+      }
+    }
     if (url.pathname === `/api/v2/media/${media.id}`) return route.fulfill({ json: media });
     if (url.pathname === "/api/v2/destinations")
       return route.fulfill({
@@ -60,6 +92,24 @@ test.beforeEach(async ({ page }) => {
       });
     if (url.pathname.startsWith("/api/v2/projects/"))
       return route.fulfill({ json: projectResponse() });
+    if (url.pathname === "/api/v2/jobs/j_scan_succeeded/events") {
+      successScanEvents++;
+      await successScanPending;
+      terminalPublished = true;
+      return route.fulfill({
+        contentType: "text/event-stream",
+        body: `event: snapshot\nid: scan-cursor\ndata: ${JSON.stringify({
+          id: "j_scan_succeeded",
+          type: "library_scan",
+          state: "succeeded",
+          revision: 2,
+          progress: 1,
+          indexed: 1,
+          createdAt: "2026-01-01T00:00:00Z",
+          updatedAt: "2026-01-01T00:00:01Z",
+        })}\n\n`,
+      });
+    }
     if (url.pathname === "/api/v2/media/refresh") {
       expect(request.headers()["idempotency-key"]).toMatch(/^[A-Za-z0-9_-]{1,128}$/);
       return route.fulfill({
@@ -97,12 +147,26 @@ test("workspace uses project controls on the left and keeps tasks focused", asyn
 });
 
 test("successful scans stay quiet while media remains browsable", async ({ page }) => {
-  await page.goto("/");
-  await page.getByRole("button", { name: "Refresh media" }).click();
-  await expect(page.getByText(/Scan succeeded/)).toHaveCount(0);
-  await expect(page.getByText("Indexing media…")).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Select camera.mp4" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Interviews" })).toBeVisible();
+  try {
+    await page.goto("/");
+    await expect.poll(() => scanTreeRequests).toBeGreaterThan(0);
+    await expect.poll(() => scanStatusRequests).toBeGreaterThan(0);
+    await page.getByRole("button", { name: "Refresh media" }).click();
+    await expect.poll(() => successScanEvents).toBe(1);
+    await expect.poll(() => scanTreePending + scanStatusPending).toBe(0);
+    scanTreeRequestsAtEvent = scanTreeRequests;
+    scanStatusRequestsAtEvent = scanStatusRequests;
+    releaseSuccessScan();
+    await expect.poll(() => scanTreeRequests).toBeGreaterThan(scanTreeRequestsAtEvent);
+    await expect.poll(() => scanStatusRequests).toBeGreaterThan(scanStatusRequestsAtEvent);
+    await expect(page.getByRole("button", { name: "Refresh media" })).toBeEnabled();
+    await expect(page.getByRole("button", { name: "Select rescanned-camera.mp4" })).toBeVisible();
+    await expect(page.getByText(/Scan succeeded/)).toHaveCount(0);
+    await expect(page.getByText("Indexing media…")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Interviews" })).toBeVisible();
+  } finally {
+    releaseSuccessScan();
+  }
 });
 
 test("settings keeps the media trigger reachable after a persisted panel preference reload", async ({

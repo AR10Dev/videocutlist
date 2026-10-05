@@ -1,4 +1,5 @@
 import { Effect, Queue, Stream } from "effect";
+import * as Sse from "effect/encoding/Sse";
 import * as Schema from "effect/Schema";
 import type { ApiClient } from "../../api";
 import { ApiFailure, readApiError } from "../../api";
@@ -18,45 +19,30 @@ async function* readFrames(
   const cancelReader = () => void reader.cancel().catch(() => undefined);
   signal.addEventListener("abort", cancelReader, { once: true });
   const decoder = new TextDecoder();
-  let buffer = "";
-  let event = "message";
-  let id: string | undefined;
-  let data: string[] = [];
-
-  const line = (value: string): SnapshotFrame | undefined => {
-    if (value === "") {
-      const frame = data.length ? { event, id, data: data.join("\n") } : undefined;
-      event = "message";
-      data = [];
-      return frame;
-    }
-    if (value.startsWith(":")) return;
-    const separator = value.indexOf(":");
-    const field = separator < 0 ? value : value.slice(0, separator);
-    const content = separator < 0 ? "" : value.slice(separator + 1).replace(/^ /, "");
-    if (field === "event") event = content;
-    else if (field === "id" && !content.includes("\0")) id = content;
-    else if (field === "data") data.push(content);
-    return;
+  const pending: SnapshotFrame[] = [];
+  const parser = Sse.makeParser(
+    (parsed) => {
+      if (parsed._tag === "Event") {
+        pending.push({ event: parsed.event, id: parsed.id, data: parsed.data });
+      }
+    },
+    { maxEventSize: Infinity },
+  );
+  const feed = function* (text: string): Generator<SnapshotFrame> {
+    const error = parser.feed(text);
+    if (error) throw error;
+    yield* pending.splice(0);
   };
 
   try {
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      let newline: number;
-      while ((newline = buffer.indexOf("\n")) >= 0) {
-        const current = buffer.slice(0, newline).replace(/\r$/, "");
-        buffer = buffer.slice(newline + 1);
-        const frame = line(current);
-        if (frame) yield frame;
-      }
+      yield* feed(decoder.decode(value, { stream: true }));
     }
-    buffer += decoder.decode();
-    if (buffer) line(buffer.replace(/\r$/, ""));
-    const frame = line("");
-    if (frame) yield frame;
+    yield* feed(decoder.decode());
+    // Preserve the former reader's dispatch of a final unterminated event.
+    yield* feed("\n\n");
   } finally {
     signal.removeEventListener("abort", cancelReader);
     await reader.cancel().catch(() => undefined);

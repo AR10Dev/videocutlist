@@ -47,7 +47,13 @@ async function createClips(page: Page, jobCount: number) {
   return batch;
 }
 
-async function downloadAndProbe(page: Page, button: Locator, testInfo: TestInfo, filename: string) {
+async function downloadAndProbe(
+  page: Page,
+  button: Locator,
+  testInfo: TestInfo,
+  filename: string,
+  expected: { format: RegExp; durationAtMostSeconds: number; audio: boolean },
+) {
   const downloadPromise = page.waitForEvent("download");
   await button.click();
   const download = await downloadPromise;
@@ -57,14 +63,46 @@ async function downloadAndProbe(page: Page, button: Locator, testInfo: TestInfo,
     "-v",
     "error",
     "-show_entries",
-    "format=duration,format_name",
+    "format=duration,format_name:stream=codec_type",
     "-of",
     "json",
     path,
   ]);
-  const probe = JSON.parse(stdout) as { format?: { duration?: string; format_name?: string } };
-  expect(Number(probe.format?.duration)).toBeGreaterThan(0);
-  expect(probe.format?.format_name).toBeTruthy();
+  const probe = JSON.parse(stdout) as {
+    format?: { duration?: string; format_name?: string };
+    streams?: { codec_type: string }[];
+  };
+  const duration = Number(probe.format?.duration);
+  expect(duration).toBeGreaterThan(0);
+  expect(duration).toBeLessThanOrEqual(expected.durationAtMostSeconds);
+  expect(probe.format?.format_name).toMatch(expected.format);
+  expect(probe.streams?.some((stream) => stream.codec_type === "video")).toBe(true);
+  expect(probe.streams?.some((stream) => stream.codec_type === "audio")).toBe(expected.audio);
+}
+
+function zipEntryNames(archive: Buffer): string[] {
+  const endOffset = archive.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
+  expect(endOffset).toBeGreaterThanOrEqual(0);
+  const entriesOnDisk = archive.readUInt16LE(endOffset + 8);
+  const entryCount = archive.readUInt16LE(endOffset + 10);
+  expect(entriesOnDisk).toBe(entryCount);
+  const centralSize = archive.readUInt32LE(endOffset + 12);
+  const centralOffset = archive.readUInt32LE(endOffset + 16);
+  const centralEnd = centralOffset + centralSize;
+  expect(centralEnd).toBeLessThanOrEqual(endOffset);
+
+  const names: string[] = [];
+  let offset = centralOffset;
+  for (let index = 0; index < entryCount; index++) {
+    expect(archive.readUInt32LE(offset)).toBe(0x02014b50);
+    const nameLength = archive.readUInt16LE(offset + 28);
+    const extraLength = archive.readUInt16LE(offset + 30);
+    const commentLength = archive.readUInt16LE(offset + 32);
+    names.push(archive.toString("utf8", offset + 46, offset + 46 + nameLength));
+    offset += 46 + nameLength + extraLength + commentLength;
+  }
+  expect(offset).toBe(centralEnd);
+  return names;
 }
 
 async function downloadBatch(page: Page, batch: Locator, testInfo: TestInfo) {
@@ -77,9 +115,14 @@ async function downloadBatch(page: Page, batch: Locator, testInfo: TestInfo) {
   const archive = await readFile(path);
   expect(archive.length).toBeGreaterThan(1_000);
   expect(archive.subarray(0, 2).toString()).toBe("PK");
+  const entries = zipEntryNames(archive);
+  const expectedNames = await batch.locator(".export-output-list code").allTextContents();
+  expect(entries).toHaveLength(4);
+  expect(expectedNames).toHaveLength(4);
+  expect([...entries].sort()).toEqual([...expectedNames].sort());
 }
 
-test("creates, downloads, and verifies every export option with real media", async ({
+test("creates, downloads, and verifies selected real-media export scenarios", async ({
   page,
   request,
 }, testInfo) => {
@@ -101,7 +144,7 @@ test("creates, downloads, and verifies every export option with real media", asy
   page.on("request", (request) => {
     if (
       request.method() === "PUT" &&
-      /\/api\/v1\/projects\/[^/]+$/.test(new URL(request.url()).pathname)
+      /\/api\/v2\/projects\/[^/]+$/.test(new URL(request.url()).pathname)
     )
       saveRequests += 1;
   });
@@ -117,7 +160,7 @@ test("creates, downloads, and verifies every export option with real media", asy
   const savedResponse = page.waitForResponse(
     (response) =>
       response.request().method() === "PUT" &&
-      /\/api\/v1\/projects\/[^/]+$/.test(new URL(response.url()).pathname),
+      /\/api\/v2\/projects\/[^/]+$/.test(new URL(response.url()).pathname),
   );
   await page.getByRole("button", { name: "Save project", exact: true }).click();
   const response = await savedResponse;
@@ -157,6 +200,7 @@ test("creates, downloads, and verifies every export option with real media", asy
     separateBatch.getByRole("button", { name: "Download output 1" }).first(),
     testInfo,
     "separate-fast-copy.mp4",
+    { format: /mp4/, durationAtMostSeconds: 3.5, audio: true },
   );
   await downloadBatch(page, separateBatch, testInfo);
 
@@ -181,6 +225,7 @@ test("creates, downloads, and verifies every export option with real media", asy
     preciseBatch.getByRole("button", { name: "Download output 1" }),
     testInfo,
     "merged-gaps-precise.mov",
+    { format: /mov/, durationAtMostSeconds: 60, audio: true },
   );
   await page.getByRole("button", { name: "Reset to automatic tracks" }).click();
 
@@ -197,6 +242,7 @@ test("creates, downloads, and verifies every export option with real media", asy
     hybridBatch.getByRole("button", { name: "Download output 1" }),
     testInfo,
     "hybrid-smart-cut.mkv",
+    { format: /matroska/, durationAtMostSeconds: 3.5, audio: true },
   );
 
   const persistedResponse = await request.get(`/api/v2/projects/${saved.id}`, {

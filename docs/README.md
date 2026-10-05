@@ -11,6 +11,7 @@ Guides for installing, using, and maintaining VideoCutlist.
 ## Developing
 
 - [Contributor setup and checks](../CONTRIBUTING.md)
+- [Protocol v2 and test-retention completion](runbooks/implementation-completion.md)
 
 ## Editing and exporting
 

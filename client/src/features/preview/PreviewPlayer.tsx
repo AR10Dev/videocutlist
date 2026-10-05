@@ -52,39 +52,43 @@ export function PreviewPlayer(props: { timeline: JSX.Element }) {
   let videoElement: HTMLVideoElement | undefined;
   let settlingSeek = false;
   onCleanup(() => {
-    workspace.pausePlayback();
-    workspace.setVideo(undefined);
+    workspace.preview.pausePlayback();
+    workspace.preview.setVideo(undefined);
   });
 
   const step = (direction: -1 | 1) => {
     const amount = frameDuration(workspace.selected()) || 1000;
-    workspace.updateTimeline({
+    workspace.editor.updateTimeline({
       playheadMs: Math.max(
         0,
-        Math.min(workspace.duration(), workspace.playheadMs() + direction * amount),
+        Math.min(workspace.editor.duration(), workspace.editor.playheadMs() + direction * amount),
       ),
     });
   };
-  const togglePlayback = () => workspace.togglePlayback();
+  const togglePlayback = () => workspace.preview.togglePlayback();
   const fullscreen = () => {
     const request = !document.fullscreenElement
       ? videoElement?.requestFullscreen?.()
       : document.exitFullscreen?.();
     void request?.catch(() =>
-      workspace.setEditorStatus("Fullscreen is unavailable. Check your browser permissions."),
+      workspace.editor.setEditorStatus(
+        "Fullscreen is unavailable. Check your browser permissions.",
+      ),
     );
   };
   const jumpToCut = (direction: -1 | 1) => {
-    const cuts = workspace
+    const cuts = workspace.editor
       .present()
       .segments.filter(segmentIncluded)
       .sort((a, b) => a.startMs - b.startMs);
-    const position = workspace.playheadMs();
+    const position = workspace.editor.playheadMs();
     const target =
       direction < 0
         ? [...cuts].reverse().find((cut) => cut.startMs < position)?.startMs
         : cuts.find((cut) => cut.startMs > position)?.startMs;
-    workspace.updateTimeline({ playheadMs: target ?? (direction < 0 ? 0 : workspace.duration()) });
+    workspace.editor.updateTimeline({
+      playheadMs: target ?? (direction < 0 ? 0 : workspace.editor.duration()),
+    });
   };
   const setVolumeValue = (value: number) => {
     setVolume(value);
@@ -98,25 +102,26 @@ export function PreviewPlayer(props: { timeline: JSX.Element }) {
           <video
             ref={(element) => {
               videoElement = element;
-              workspace.setPreviewCenterMs(workspace.playheadMs());
-              workspace.setVideo(element);
+              workspace.preview.setPreviewCenterMs(workspace.editor.playheadMs());
+              workspace.preview.setVideo(element);
             }}
             muted={workspace.muted()}
             aria-label="Preview player"
-            data-preview-offset={workspace.diagnostics()?.offsetMs ?? 0}
-            data-playback-mode={workspace.playbackMode()}
-            data-playback-intent={workspace.playbackIntent() ? "playing" : "paused"}
+            data-preview-offset={workspace.preview.diagnostics()?.offsetMs ?? 0}
+            data-playback-mode={workspace.preview.playbackMode()}
+            data-playback-intent={workspace.preview.playbackIntent() ? "playing" : "paused"}
             onLoadedMetadata={(event) => {
               const { videoWidth, videoHeight } = event.currentTarget;
               if (videoWidth && videoHeight) setAspectRatio(`${videoWidth} / ${videoHeight}`);
             }}
-            onClick={workspace.togglePlayback}
+            onClick={workspace.preview.togglePlayback}
             onDblClick={fullscreen}
             onEnded={(event) => {
-              workspace.handlePreviewEnded(event.currentTarget.currentTime);
+              workspace.preview.handlePreviewEnded(event.currentTarget.currentTime);
             }}
             onTimeUpdate={(event) => {
-              if (!settlingSeek) workspace.syncPreviewPosition(event.currentTarget.currentTime);
+              if (!settlingSeek)
+                workspace.preview.syncPreviewPosition(event.currentTarget.currentTime);
             }}
             onSeeking={() => (settlingSeek = true)}
             onSeeked={() => (settlingSeek = false)}
@@ -128,9 +133,9 @@ export function PreviewPlayer(props: { timeline: JSX.Element }) {
             markers manually.
           </p>
         )}
-        {workspace.previewStatus() && (
+        {workspace.preview.previewStatus() && (
           <p class="preview-overlay" role="status">
-            {workspace.previewStatus()}
+            {workspace.preview.previewStatus()}
           </p>
         )}
       </div>
@@ -138,12 +143,12 @@ export function PreviewPlayer(props: { timeline: JSX.Element }) {
         <div class="control-rail" role="toolbar" aria-label="Editor controls">
           <div class="preview-controls" aria-label="Playback and audio controls">
             <span class="sr-only" role="status" aria-live="polite">
-              {workspace.playbackIntent()
-                ? workspace.playbackMode() === "whole-media"
+              {workspace.preview.playbackIntent()
+                ? workspace.preview.playbackMode() === "whole-media"
                   ? "Playing whole media"
-                  : workspace.playbackMode() === "ordered-segments"
+                  : workspace.preview.playbackMode() === "ordered-segments"
                     ? "Playing selected segments in order"
-                    : workspace.playbackMode() === "active-segment-loop"
+                    : workspace.preview.playbackMode() === "active-segment-loop"
                       ? "Looping selected segment"
                       : "Playing selected segment"
                 : "Preview paused"}
@@ -155,12 +160,12 @@ export function PreviewPlayer(props: { timeline: JSX.Element }) {
               <SkipBack size={18} aria-hidden="true" />
             </IconButton>
             <IconButton
-              label={workspace.playbackIntent() ? "Pause preview" : "Play preview"}
+              label={workspace.preview.playbackIntent() ? "Pause preview" : "Play preview"}
               keyshortcuts="Space"
               disabled={!canStreamPreview()}
               onClick={togglePlayback}
             >
-              {workspace.playbackIntent() ? (
+              {workspace.preview.playbackIntent() ? (
                 <Pause size={22} aria-hidden="true" />
               ) : (
                 <Play size={22} aria-hidden="true" />
@@ -175,16 +180,16 @@ export function PreviewPlayer(props: { timeline: JSX.Element }) {
             <IconButton
               label="Play selected segment"
               keyshortcuts="P"
-              disabled={!workspace.activeSegment() || !canStreamPreview()}
-              onClick={() => workspace.playActiveSegment(false)}
+              disabled={!workspace.editor.activeSegment() || !canStreamPreview()}
+              onClick={() => workspace.preview.playActiveSegment(false)}
             >
               <Play size={18} aria-hidden="true" />
             </IconButton>
             <IconButton
               label="Preview selected segments"
               keyshortcuts="R"
-              disabled={!workspace.present().segments.length || !canStreamPreview()}
-              onClick={workspace.playOrderedSegments}
+              disabled={!workspace.editor.present().segments.length || !canStreamPreview()}
+              onClick={workspace.preview.playOrderedSegments}
             >
               <List size={18} aria-hidden="true" />
             </IconButton>
@@ -192,7 +197,7 @@ export function PreviewPlayer(props: { timeline: JSX.Element }) {
               class="btn btn-sm"
               type="button"
               aria-keyshortcuts="I"
-              onClick={() => workspace.startSegmentAt(workspace.watchedPosition())}
+              onClick={() => workspace.editor.startSegmentAt(workspace.preview.watchedPosition())}
             >
               Set in
             </button>
@@ -200,7 +205,9 @@ export function PreviewPlayer(props: { timeline: JSX.Element }) {
               class="btn btn-sm"
               type="button"
               aria-keyshortcuts="O"
-              onClick={() => workspace.setMarker("outMs", workspace.watchedPosition())}
+              onClick={() =>
+                workspace.editor.setMarker("outMs", workspace.preview.watchedPosition())
+              }
             >
               Set out
             </button>
@@ -212,7 +219,7 @@ export function PreviewPlayer(props: { timeline: JSX.Element }) {
                 onClick={() => {
                   const muted = !workspace.muted();
                   workspace.setMuted(muted);
-                  workspace.saveSettings({ muted });
+                  workspace.settings.saveSettings({ muted });
                 }}
               >
                 {workspace.muted() ? (
@@ -235,7 +242,7 @@ export function PreviewPlayer(props: { timeline: JSX.Element }) {
                   setVolumeValue(Number(event.currentTarget.value));
                   if (workspace.muted()) {
                     workspace.setMuted(false);
-                    workspace.saveSettings({ muted: false });
+                    workspace.settings.saveSettings({ muted: false });
                   }
                 }}
               />

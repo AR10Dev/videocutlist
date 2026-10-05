@@ -7,11 +7,13 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"videocutlist/internal/exportpolicy"
 	api "videocutlist/internal/httpapi"
 	jobqueue "videocutlist/internal/jobs"
 	"videocutlist/internal/projects"
@@ -271,7 +273,8 @@ func TestTrustedProxyAccessGateReachesPreview(t *testing.T) {
 
 func TestInvalidIDsAndOversizeBodiesDoNotReachServices(t *testing.T) {
 	media, exports := &mediaStub{}, &exportStub{}
-	service := server(t, noneAuth(t), media, &previewStub{start: func(context.Context) (api.PreviewResult, error) { return api.PreviewResult{}, nil }}, exports)
+	projects := &projectStub{get: api.Project{ID: validProject}}
+	service := serverWith(t, noneAuth(t), media, &previewStub{start: func(context.Context) (api.PreviewResult, error) { return api.PreviewResult{}, nil }}, projects, exports, &jobsStub{}, nil)
 	for _, target := range []string{"/api/v2/media/../../etc/passwd", "/api/v2/media/m_not-an-id", "/api/v2/media/" + strings.Repeat("a", 1000)} {
 		recorder := httptest.NewRecorder()
 		service.ServeHTTP(recorder, localRequest(http.MethodGet, target, nil))
@@ -283,15 +286,15 @@ func TestInvalidIDsAndOversizeBodiesDoNotReachServices(t *testing.T) {
 	request.Header.Set("Content-Type", "application/json")
 	recorder := httptest.NewRecorder()
 	service.ServeHTTP(recorder, request)
-	if recorder.Code != 400 || media.calls != 0 {
-		t.Fatalf("oversize status=%d media calls=%d", recorder.Code, media.calls)
+	if recorder.Code != 400 || media.calls != 0 || projects.saveCalls != 0 {
+		t.Fatalf("oversize status=%d media calls=%d project saves=%d", recorder.Code, media.calls, projects.saveCalls)
 	}
 	request = localRequest(http.MethodPut, "/api/v2/projects/"+validProject, strings.NewReader(`{"mediaId":"`+validMedia+`","revision":0,"uiState":{"playheadMs":0,"zoom":1,"muted":false}}`))
 	request.Header.Set("Content-Type", "application/json")
 	recorder = httptest.NewRecorder()
 	service.ServeHTTP(recorder, request)
-	if recorder.Code != 400 || media.calls != 0 {
-		t.Fatalf("missing field status=%d media calls=%d", recorder.Code, media.calls)
+	if recorder.Code != 400 || media.calls != 0 || projects.saveCalls != 0 {
+		t.Fatalf("missing field status=%d media calls=%d project saves=%d", recorder.Code, media.calls, projects.saveCalls)
 	}
 }
 
@@ -335,7 +338,7 @@ func TestDownloadOutputLifecycle(t *testing.T) {
 	}{
 		{"unknown output", "9", http.StatusNotFound},
 		{"negative output", "-1", http.StatusNotFound},
-		{"out of range output", "100", http.StatusNotFound},
+		{"out of range output", strconv.Itoa(exportpolicy.MaxOutputs), http.StatusNotFound},
 		{"non-numeric output", "nope", http.StatusNotFound},
 		{"traversal-shaped output", "%2e%2e", http.StatusNotFound},
 		{"expired export", "1", http.StatusNotFound},
@@ -344,10 +347,14 @@ func TestDownloadOutputLifecycle(t *testing.T) {
 		{"unsafe returned name", "4", http.StatusNotFound},
 	} {
 		t.Run(test.name, func(t *testing.T) {
+			callsBefore := stub.calls
 			response := httptest.NewRecorder()
 			service.ServeHTTP(response, request(test.position))
 			if response.Code != test.status || strings.Contains(response.Body.String(), internalPath) || response.Header().Get("Content-Disposition") != "" {
 				t.Fatalf("status=%d headers=%v body=%q", response.Code, response.Header(), response.Body.String())
+			}
+			if test.name == "out of range output" && stub.calls != callsBefore {
+				t.Fatalf("out-of-range output reached download service: calls before=%d after=%d", callsBefore, stub.calls)
 			}
 		})
 	}
@@ -355,14 +362,31 @@ func TestDownloadOutputLifecycle(t *testing.T) {
 
 func TestBatchDownloadUsesAuthenticatedSafeArchiveResponse(t *testing.T) {
 	const batch = "b_aaaaaaaaaaaa"
+	token := strings.Repeat("x", 32)
 	stub := &batchDownloadStub{download: func(_ context.Context, batchID string) (io.ReadCloser, string, error) {
 		if batchID != batch {
 			return nil, "", errors.New("missing")
 		}
 		return io.NopCloser(strings.NewReader("zip bytes")), "videocutlist-clips.zip", nil
 	}}
-	service := serverWithBatchDownload(t, headerAuthenticator{}, stub)
+	authenticator, err := api.NewAuthenticator(api.AuthConfig{Mode: "bearer", BearerToken: token})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := serverWithBatchDownload(t, authenticator, stub)
+	for _, authorization := range []string{"", "Bearer " + strings.Repeat("y", 32)} {
+		request := localRequest(http.MethodGet, "/media/v2/batches/"+batch+"/download", nil)
+		if authorization != "" {
+			request.Header.Set("Authorization", authorization)
+		}
+		response := httptest.NewRecorder()
+		service.ServeHTTP(response, request)
+		if response.Code != http.StatusUnauthorized || stub.calls != 0 {
+			t.Fatalf("unauthorized batch request status=%d calls=%d authorization=%q", response.Code, stub.calls, authorization)
+		}
+	}
 	request := localRequest(http.MethodGet, "/media/v2/batches/"+batch+"/download", nil)
+	request.Header.Set("Authorization", "Bearer "+token)
 	response := httptest.NewRecorder()
 	service.ServeHTTP(response, request)
 	if response.Code != http.StatusOK || response.Body.String() != "zip bytes" || response.Header().Get("Content-Type") != "application/zip" || response.Header().Get("Content-Disposition") != `attachment; filename="videocutlist-clips.zip"` || stub.calls != 1 {
@@ -393,9 +417,16 @@ func TestLibraryStatusContractIsSafe(t *testing.T) {
 		if response.Code != http.StatusOK || strings.Contains(response.Body.String(), "/private/media") {
 			t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 		}
-		var fields map[string]json.RawMessage
-		if err := json.Unmarshal(response.Body.Bytes(), &fields); err != nil || len(fields) != 2 || fields["state"] == nil || fields["message"] == nil {
-			t.Fatalf("response fields=%v err=%v body=%s", fields, err, response.Body.String())
+		var fields struct {
+			State   api.LibraryState `json:"state"`
+			Message string           `json:"message"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &fields); err != nil || fields.State != want.State || fields.Message != want.Message {
+			t.Fatalf("response=%#v want=%#v err=%v body=%s", fields, want, err, response.Body.String())
+		}
+		var exactFields map[string]json.RawMessage
+		if err := json.Unmarshal(response.Body.Bytes(), &exactFields); err != nil || len(exactFields) != 2 {
+			t.Fatalf("response fields=%v err=%v body=%s", exactFields, err, response.Body.String())
 		}
 	}
 }

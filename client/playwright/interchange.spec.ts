@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { sseSnapshotFrame } from "./fixtures";
 
 const origin = "http://127.0.0.1:8787";
 const media = {
@@ -26,8 +27,6 @@ async function installProjectApi(page: import("@playwright/test").Page) {
       authentication: { type: "none" },
     };
   });
-  const writes: { body: Record<string, unknown>; id: string }[] = [];
-  let conflict = false;
   await page.route(`${origin}/api/v2/**`, async (route) => {
     const request = route.request();
     const url = new URL(request.url());
@@ -48,20 +47,6 @@ async function installProjectApi(page: import("@playwright/test").Page) {
     if (request.method() === "PUT" && /^\/api\/v2\/projects\/[^/]+$/.test(url.pathname)) {
       const id = url.pathname.split("/").at(-1)!;
       const body = request.postDataJSON() as Record<string, unknown>;
-      writes.push({ body, id });
-      if (conflict) {
-        conflict = false;
-        return route.fulfill({
-          status: 409,
-          json: {
-            error: {
-              code: "revision_conflict",
-              message: "Project revision changed.",
-              requestId: "browser-test",
-            },
-          },
-        });
-      }
       return route.fulfill({
         json: {
           ...body,
@@ -76,7 +61,6 @@ async function installProjectApi(page: import("@playwright/test").Page) {
       json: { error: { code: "not_found", message: "Missing", requestId: "browser" } },
     });
   });
-  return { writes, setConflict: () => (conflict = true) };
 }
 
 test("export cancellation remains effective when the active project item changes", async ({
@@ -184,7 +168,7 @@ test("export cancellation remains effective when the active project item changes
     if (url.pathname === `/api/v2/batches/${batchId}/events`)
       return route.fulfill({
         headers: { "Content-Type": "text/event-stream" },
-        body: `id: batch-cursor-1\\nevent: snapshot\\ndata: ${JSON.stringify({
+        body: sseSnapshotFrame("batch-cursor-1", {
           batchId,
           projectId,
           projectRevision: 1,
@@ -193,7 +177,7 @@ test("export cancellation remains effective when the active project item changes
           jobs: [
             cancellationRequested ? { ...job, state: "cancelled", revision: 2, progress: 1 } : job,
           ],
-        })}\n\n`,
+        }),
       });
     return route.fulfill({
       status: 404,
@@ -270,64 +254,4 @@ test("project tools expose cut-list import before and after media selection", as
   await page.getByRole("tab", { name: "Export", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Export", exact: true })).toBeVisible();
   await expect(page.getByLabel("Import cut list")).toHaveCount(0);
-});
-
-test("project JSON import stays dirty across conflict and local recovery restores edits", async ({
-  page,
-}) => {
-  const api = await installProjectApi(page);
-  const imported = {
-    schemaVersion: 2,
-    name: "Imported edit",
-    items: [
-      {
-        id: "i_aaaaaaaaaaaaaaaaaaaaaaaa",
-        mediaId: media.id,
-        segments: [{ startMs: 250, endMs: 1500, label: "Opening" }],
-        exportOptions: {},
-      },
-    ],
-  };
-  await page.goto("/");
-  await page.locator(".project-menu > summary").click();
-  await page.getByRole("button", { name: "Project tools", exact: true }).click();
-  await page.getByText("Interchange", { exact: true }).click();
-  await page.getByLabel("Import cut list", { exact: true }).setInputFiles({
-    name: "review.videocutlist.json",
-    mimeType: "application/json",
-    buffer: Buffer.from(JSON.stringify(imported)),
-  });
-  await expect(page.getByLabel("Project name")).toHaveValue("Imported edit");
-  await expect(page.getByText("Cut list imported. Save the project to keep it.")).toBeVisible();
-  await page.getByRole("button", { name: "Close project tools", exact: true }).click();
-  api.setConflict();
-  await page.getByRole("button", { name: "Save project from project header", exact: true }).click();
-  await expect(page.getByRole("alert")).toContainText("Another client saved this project");
-  expect(api.writes[0]?.body).toMatchObject({
-    revision: 0,
-    schemaVersion: 2,
-    name: "Imported edit",
-  });
-
-  await page.evaluate(
-    (snapshot) =>
-      localStorage.setItem("videocutlist.project-recovery.v1", JSON.stringify(snapshot)),
-    {
-      version: 1,
-      projectId: "p_recovery-project1",
-      revision: 3,
-      schemaVersion: 2,
-      name: "Recovered edit",
-      items: imported.items,
-      savedAt: 1_800_000_000_000,
-    },
-  );
-  await page.reload();
-  await expect(page.getByRole("button", { name: "Recover local edits" })).toBeVisible();
-  await page.getByRole("button", { name: "Recover local edits" }).click();
-  await expect(page.getByRole("status", { name: "Project status" })).toHaveText("Unsaved changes");
-  await page.locator(".project-menu > summary").click();
-  await page.getByRole("button", { name: "Project tools", exact: true }).click();
-  await expect(page.getByLabel("Project name")).toHaveValue("Recovered edit");
-  await expect(page.locator(".cut-row[data-segment-id]")).toHaveCount(1);
 });

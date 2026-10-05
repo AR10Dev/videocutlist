@@ -13,9 +13,8 @@ import { Cause, Effect, Exit } from "effect";
 import * as Schema from "effect/Schema";
 import * as AsyncResult from "effect/reactivity/AsyncResult";
 import * as Atom from "effect/reactivity/Atom";
-import * as AtomRegistry from "effect/reactivity/AtomRegistry";
 import { ApiFailure, runEffect, uncertainCommandFailure } from "../../api";
-import { readServerAtom, useServerAtom, type ServerState } from "../app/server";
+import { readServerAtom, runServerMutation, useServerAtom, type ServerState } from "../app/server";
 import { Batch as BatchSchema } from "../../generated/effect-api";
 import type { Batch as ObservedBatch } from "../../generated/effect-api";
 import type { EditableProjectItem, ExportContainer } from "../projects/model";
@@ -26,7 +25,6 @@ import {
   isBatchActive,
   isJobActive,
   idempotencyKeyForAttempt,
-  parseBatchExportSubmission,
   selectBatchJob,
 } from "./queueResponse";
 import { destinationIsConfigured, lastDestinationId, rememberDestination } from "./destination";
@@ -242,10 +240,23 @@ export function createExportController(deps: {
   const [preflight, setPreflight] = createSignal<ExportPreflight>();
   const [preflightPending, setPreflightPending] = createSignal(false);
   const [exportPending, setExportPending] = createSignal(false);
-  let workflowActive = false;
   let preflightVersion = 0;
-  let workflowGeneration = 0;
-  let workflowCommand: Atom.AtomResultFn<void, void, Error> | undefined;
+  type ExportAttempt = {
+    context: {
+      projectId: string;
+      mediaId?: string;
+      editorVersion: number;
+      revision: number;
+      scope: ExportScope;
+      itemIDs: string[];
+      input: EffectApiTypes.ExportInput;
+    };
+    expectedRevision: number;
+    savedRevision: number;
+    phase: "saving" | "preflight" | "submitting";
+    command?: Atom.AtomResultFn<void, void, Error>;
+  };
+  let exportAttempt: ExportAttempt | undefined;
   let cancellationGeneration = 0;
   const invalidatedTerminalJobs = new Set<string>();
   const [exportCancellation, setExportCancellation] = createSignal<ExportCancellation>();
@@ -269,19 +280,7 @@ export function createExportController(deps: {
   const generatedMutation = <Arg, A, E>(
     atom: Atom.AtomResultFn<Arg, A, E>,
     argument: Arg,
-  ): Effect.Effect<A, E> =>
-    Effect.acquireUseRelease(
-      Effect.sync(() => registry.mount(atom)),
-      () => {
-        registry.set(atom, argument);
-        return AtomRegistry.getResult(registry, atom, { suspendOnWaiting: true });
-      },
-      (release) =>
-        Effect.sync(() => {
-          registry.set(atom, Atom.Reset);
-          release();
-        }),
-    );
+  ): Effect.Effect<A, E> => runServerMutation(registry, atom, argument);
   const generatedApi = deps.server.generatedApi;
   const preflightMutation = generatedApi.mutation("default", "preflightExport");
   const preflightRequest = (request: { projectId: string; input: EffectApiTypes.ExportInput }) =>
@@ -498,11 +497,11 @@ export function createExportController(deps: {
       return;
     }
     deps.tracks();
-    if (workflowActive || deps.dirty()) {
+    if (exportAttempt || deps.dirty()) {
       cancelPreflight();
       setPreflight();
       setPreflightError("");
-      if (!workflowActive) setPreflightPending(false);
+      if (!exportAttempt) setPreflightPending(false);
       return;
     }
     const input = {
@@ -538,11 +537,9 @@ export function createExportController(deps: {
   });
 
   const clearExportContext = () => {
-    workflowGeneration++;
     cancellationGeneration++;
-    if (workflowCommand) registry.set(workflowCommand, Atom.Interrupt);
-    workflowCommand = undefined;
-    workflowActive = false;
+    if (exportAttempt?.command) registry.set(exportAttempt.command, Atom.Interrupt);
+    exportAttempt = undefined;
     setExportPending(false);
     cancelPreflight();
     const cancelling = exportCancellation()?.batchId;
@@ -599,8 +596,6 @@ export function createExportController(deps: {
           : "Add or include a segment in each selected project item before creating clips.",
       );
 
-    workflowActive = true;
-    const generation = ++workflowGeneration;
     const context = {
       projectId: deps.projectId(),
       mediaId: deps.selected()?.id,
@@ -623,27 +618,46 @@ export function createExportController(deps: {
             : itemIDs,
       },
     };
-    let expectedRevision = context.revision;
-    const editorContextCurrent = () =>
-      context.projectId === deps.projectId() &&
-      expectedRevision === deps.revision() &&
-      context.mediaId === deps.selected()?.id &&
-      context.editorVersion === deps.editorVersion() &&
-      context.scope === exportScope() &&
-      context.itemIDs.length === exportItemIDs().length &&
-      context.itemIDs.every((id, index) => exportItemIDs()[index] === id);
-    const workflowCurrent = () => generation === workflowGeneration && editorContextCurrent();
-    const stopForStaleContext = () => {
-      if (generation === workflowGeneration)
-        setExportStatus("Create clips stopped because the project changed. Save again and retry.");
+    const attempt: ExportAttempt = {
+      context,
+      expectedRevision: context.revision,
+      savedRevision: context.revision,
+      phase: deps.dirty() ? "saving" : "preflight",
     };
-    let savedRevision = context.revision;
+    const editorContextCurrent = () =>
+      attempt.context.projectId === deps.projectId() &&
+      attempt.expectedRevision === deps.revision() &&
+      attempt.context.mediaId === deps.selected()?.id &&
+      attempt.context.editorVersion === deps.editorVersion() &&
+      attempt.context.scope === exportScope() &&
+      attempt.context.itemIDs.length === exportItemIDs().length &&
+      attempt.context.itemIDs.every((id, index) => exportItemIDs()[index] === id);
+    const workflowCurrent = () => exportAttempt === attempt && editorContextCurrent();
+    const continueIfCurrent = () => {
+      if (workflowCurrent()) return true;
+      if (exportAttempt === attempt)
+        setExportStatus("Create clips stopped because the project changed. Save again and retry.");
+      return false;
+    };
+    const setAttemptPhase = (phase: ExportAttempt["phase"]) => {
+      if (exportAttempt !== attempt) return;
+      attempt.phase = phase;
+      setExportStatus(
+        phase === "saving"
+          ? "Saving project…"
+          : phase === "preflight"
+            ? "Checking export requirements…"
+            : "Creating clips…",
+      );
+    };
     cancelPreflight();
     setPreflight();
     setPreflightError("");
     setPreflightPending(true);
     setExportPending(true);
-    setExportStatus(deps.dirty() ? "Saving project…" : "Checking export requirements…");
+    setExportStatus(
+      attempt.phase === "saving" ? "Saving project…" : "Checking export requirements…",
+    );
     const command = runtime.fn(() =>
       Effect.gen(function* () {
         if (deps.dirty()) {
@@ -653,33 +667,23 @@ export function createExportController(deps: {
               error instanceof Error ? error : new Error("Project could not be saved."),
           });
           if (!saved) {
-            if (workflowCurrent())
+            if (continueIfCurrent())
               setExportStatus(deps.status() || "Project could not be saved. Try again.");
-            else stopForStaleContext();
             return;
           }
-          expectedRevision = saved.revision;
-          if (!workflowCurrent()) {
-            stopForStaleContext();
-            return;
-          }
-          savedRevision = saved.revision;
+          attempt.expectedRevision = saved.revision;
+          if (!continueIfCurrent()) return;
+          attempt.savedRevision = saved.revision;
         }
-        if (!workflowCurrent()) {
-          stopForStaleContext();
-          return;
-        }
-        setExportStatus("Checking export requirements…");
+        if (!continueIfCurrent()) return;
+        setAttemptPhase("preflight");
         const checked = yield* Effect.exit(
           preflightRequest({
-            projectId: context.projectId,
-            input: { ...context.input, itemIds: [...itemIDs] },
+            projectId: attempt.context.projectId,
+            input: { ...attempt.context.input, itemIds: [...attempt.context.itemIDs] },
           }),
         );
-        if (!workflowCurrent()) {
-          stopForStaleContext();
-          return;
-        }
+        if (!continueIfCurrent()) return;
         if (Exit.isFailure(checked)) {
           const failure = Cause.squash(checked.cause);
           setPreflight();
@@ -694,30 +698,27 @@ export function createExportController(deps: {
           setExportStatus("");
           return;
         }
-        if (!workflowCurrent()) {
-          stopForStaleContext();
-          return;
-        }
-        setExportStatus("Creating clips…");
+        if (!continueIfCurrent()) return;
+        setAttemptPhase("submitting");
         const submissionBody: EffectApiTypes.ExportSubmissionInput = {
-          projectRevision: savedRevision,
-          ...(context.input.itemIds ? { itemIds: context.input.itemIds } : {}),
+          projectRevision: attempt.savedRevision,
+          ...(attempt.context.input.itemIds ? { itemIds: attempt.context.input.itemIds } : {}),
         };
         const retry =
-          uncertainExport?.projectId === context.projectId ? uncertainExport : undefined;
+          uncertainExport?.projectId === attempt.context.projectId ? uncertainExport : undefined;
         const key = idempotencyKeyForAttempt(retry, submissionBody, () =>
           globalThis.crypto.randomUUID(),
         );
         const create = deps.server.generatedApi.mutation("default", "createExport");
         const response = yield* Effect.exit(
           generatedMutation(create, {
-            params: { projectId: context.projectId },
+            params: { projectId: attempt.context.projectId },
             headers: { "Idempotency-Key": key },
             payload: submissionBody,
           }).pipe(
             Effect.mapError((error) => {
               uncertainExport = isUncertainExportFailure(error)
-                ? { key, projectId: context.projectId, body: submissionBody }
+                ? { key, projectId: attempt.context.projectId, body: submissionBody }
                 : undefined;
               if (error instanceof Error) return error;
               const envelope = publicApiError(error);
@@ -746,16 +747,14 @@ export function createExportController(deps: {
           );
           return;
         }
-        const submission = parseBatchExportSubmission(response.value);
+        // The generated createExport endpoint has already decoded this response.
+        const submission = response.value;
         uncertainExport = undefined;
-        if (!workflowCurrent()) {
-          stopForStaleContext();
-          return;
-        }
+        if (!continueIfCurrent()) return;
         const initialBatch = Schema.decodeUnknownSync(BatchSchema)({
           batchId: submission.batchId,
-          projectId: context.projectId,
-          projectRevision: savedRevision,
+          projectId: attempt.context.projectId,
+          projectRevision: attempt.savedRevision,
           state: "queued",
           progress: 0,
           jobs: submission.jobs,
@@ -777,7 +776,9 @@ export function createExportController(deps: {
         );
       }),
     );
-    workflowCommand = command;
+    attempt.command = command;
+    exportAttempt = attempt;
+    setAttemptPhase(attempt.phase);
     registry.set(command, undefined);
     try {
       await runEffect(readServerAtom(deps.server, command));
@@ -787,9 +788,8 @@ export function createExportController(deps: {
           error instanceof Error ? error.message : "Export could not be started. Try again.",
         );
     } finally {
-      if (workflowCommand === command) {
-        workflowActive = false;
-        workflowCommand = undefined;
+      if (exportAttempt === attempt) {
+        exportAttempt = undefined;
         setExportPending(false);
         setPreflightPending(false);
       }

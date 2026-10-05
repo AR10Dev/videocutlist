@@ -24,16 +24,9 @@ import { applyAppearance } from "./features/settings/model";
 
 export function App() {
   const controller = createWorkspaceController();
-  const {
-    selected,
-    projectName,
-    revision,
-    saveState: projectSaveState,
-    settingsOpen,
-    setSettingsOpen,
-    openSettings,
-    appearance,
-  } = controller;
+  const { selected, projectName, revision } = controller;
+  const projectSaveState = controller.projects.saveState;
+  const { settingsOpen, setSettingsOpen, openSettings, appearance } = controller.settings;
   createEffect(() => {
     const preference = appearance();
     const media = window.matchMedia("(prefers-color-scheme: dark)");
@@ -46,7 +39,7 @@ export function App() {
     selected,
     activeItem: controller.activeItemId,
     dirty: controller.dirty,
-    segmentCount: () => controller.present().segments.length,
+    segmentCount: () => controller.editor.present().segments.length,
     setSettingsOpen,
   });
   const {
@@ -93,7 +86,7 @@ export function App() {
   const openHelp = () => {
     shortcutReturnFocus = shortcutFocusTarget();
     closeProjectMenu();
-    controller.setShortcutHelpOpen(true);
+    controller.editor.setShortcutHelpOpen(true);
   };
   const loadProjectFromMenu = () => {
     closeProjectMenu();
@@ -111,14 +104,14 @@ export function App() {
     void openSettings();
   };
   createEffect(() => {
-    const open = controller.shortcutHelpOpen();
+    const open = controller.editor.shortcutHelpOpen();
     if (open) {
       if (!shortcutWasOpen) {
         shortcutWasOpen = true;
         shortcutReturnFocus ??= shortcutFocusTarget();
       }
       queueMicrotask(() => {
-        if (!controller.shortcutHelpOpen() || !shortcutDialog) return;
+        if (!controller.editor.shortcutHelpOpen() || !shortcutDialog) return;
         if (!shortcutDialog.open) shortcutDialog.showModal();
         shortcutClose?.focus();
       });
@@ -174,7 +167,7 @@ export function App() {
         <Show when={projectDialogOpen()}>
           <ProjectDialog onClose={closeProjectDialog} />
         </Show>
-        <Show when={controller.shortcutHelpOpen()}>
+        <Show when={controller.editor.shortcutHelpOpen()}>
           <dialog
             ref={(element) => (shortcutDialog = element)}
             class="modal"
@@ -183,7 +176,7 @@ export function App() {
             aria-labelledby="shortcut-help-heading"
             onCancel={(event) => {
               event.preventDefault();
-              controller.setShortcutHelpOpen(false);
+              controller.editor.setShortcutHelpOpen(false);
             }}
           >
             <div class="modal-box">
@@ -271,7 +264,7 @@ export function App() {
                   ref={(element) => (shortcutClose = element)}
                   class="btn btn-primary"
                   type="button"
-                  onClick={() => controller.setShortcutHelpOpen(false)}
+                  onClick={() => controller.editor.setShortcutHelpOpen(false)}
                 >
                   Close
                 </button>
@@ -281,7 +274,7 @@ export function App() {
               <button
                 type="button"
                 aria-label="Close shortcut help"
-                onClick={() => controller.setShortcutHelpOpen(false)}
+                onClick={() => controller.editor.setShortcutHelpOpen(false)}
               />
             </form>
           </dialog>

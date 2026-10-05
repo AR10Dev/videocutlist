@@ -76,6 +76,7 @@ async function withDetection(
       setRevision: (value: number) => void;
       editorVersion: () => number;
       setProjectId: (value: string) => void;
+      timeline: () => ReturnType<typeof createTimelineHistory>;
     },
   ) => Promise<void>,
   overrides: {
@@ -89,9 +90,9 @@ async function withDetection(
       const [revision, setRevision] = createSignal(1);
       const [projectId, setProjectId] = createSignal(queuedDetectionJob.projectId);
       const [editorVersion, setEditorVersion] = createSignal(0);
-      const [segments, setSegments] = createSignal<
-        EffectApiTypes.Project["items"][number]["segments"][number][]
-      >([]);
+      const [timeline, setTimeline] = createSignal(
+        createTimelineHistory({ playheadMs: 0, segments: [], zoom: 1 }),
+      );
       let controller!: DetectionController;
       const configuration = {
         serverBaseUrl: "https://example.test",
@@ -115,7 +116,7 @@ async function withDetection(
                 dirty: () => false,
                 editorVersion,
                 saveConflict: () => false,
-                segments,
+                segments: () => timeline().present.segments,
                 saveProject:
                   overrides.saveProject ??
                   (() =>
@@ -124,7 +125,7 @@ async function withDetection(
                       revision: revision(),
                     } as EffectApiTypes.Project)),
                 updateSegments: (value) => {
-                  setSegments(value);
+                  setTimeline((current) => editTimeline(current, { segments: value }));
                   setEditorVersion((version) => version + 1);
                 },
               },
@@ -134,7 +135,7 @@ async function withDetection(
         },
       });
       queueMicrotask(() => {
-        void exercise(controller, { setRevision, editorVersion, setProjectId }).then(
+        void exercise(controller, { setRevision, editorVersion, setProjectId, timeline }).then(
           () => {
             dispose();
             vi.unstubAllGlobals();
@@ -956,28 +957,45 @@ describe("candidate acceptance", () => {
     expect(candidateSkipReason({ ...point, pointMs: 101 }, project, 100)).toBe("invalid");
   });
 
-  it("publishes a bulk result as one undoable timeline edit", () => {
-    const result = acceptCandidates(
-      [candidate, { ...candidate, id: "c_2", startMs: 30, endMs: 40 }],
-      project,
-      100,
+  it("publishes a bulk result as one undoable timeline edit", async () => {
+    const firstCandidate = {
+      ...candidate,
+      mediaId: detectionMedia.id,
+      projectId: queuedDetectionJob.projectId,
+      projectRevision: 1,
+    };
+    const candidates = [firstCandidate, { ...firstCandidate, id: "c_2", startMs: 30, endMs: 40 }];
+    await withDetection(
+      {
+        url: (path) => path,
+        request: () => Promise.resolve(Response.json({})),
+        assetRequest: () => Promise.resolve(Response.json({})),
+      },
+      async (controller, { timeline }) => {
+        controller.setDetectionCandidates(candidates);
+        const result = controller.bulkAcceptDetection();
+        expect(result.accepted.map((item) => item.id)).toEqual(["c_1", "c_2"]);
+        expect(timeline().present.segments).toHaveLength(2);
+        expect(timeline().past).toHaveLength(1);
+        expect(undoTimeline(timeline()).present.segments).toEqual([]);
+      },
     );
-    const history = editTimeline(
-      createTimelineHistory({ playheadMs: 0, segments: project.segments, zoom: 1 }),
-      { segments: result.segments },
-    );
-    expect(history.past).toHaveLength(1);
-    expect(undoTimeline(history).present.segments).toEqual([]);
   });
 
   it("rejects stale and overlapping candidates without mutation", () => {
-    expect(acceptCandidate({ ...candidate, projectRevision: 1 }, project, 100)).toBeNull();
-    expect(
-      acceptCandidate(
-        { ...candidate, startMs: 15 },
-        { ...project, segments: [{ startMs: 12, endMs: 18, included: true }] },
-        100,
-      ),
-    ).toBeNull();
+    const staleCandidate = Object.freeze({ ...candidate, projectRevision: 1 });
+    const staleProject = Object.freeze({ ...project, segments: [] });
+    const staleProjectBefore = structuredClone(staleProject);
+    expect(acceptCandidate(staleCandidate, staleProject, 100)).toBeNull();
+    expect(staleCandidate).toEqual({ ...candidate, projectRevision: 1 });
+    expect(staleProject).toEqual(staleProjectBefore);
+
+    const overlappingCandidate = Object.freeze({ ...candidate, startMs: 15 });
+    const existingSegment = Object.freeze({ startMs: 12, endMs: 18, included: true });
+    const overlapProject = Object.freeze({ ...project, segments: [existingSegment] });
+    const overlapProjectBefore = structuredClone(overlapProject);
+    expect(acceptCandidate(overlappingCandidate, overlapProject, 100)).toBeNull();
+    expect(overlappingCandidate).toEqual({ ...candidate, startMs: 15 });
+    expect(overlapProject).toEqual(overlapProjectBefore);
   });
 });

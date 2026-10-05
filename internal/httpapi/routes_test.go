@@ -59,54 +59,6 @@ func TestV2RouteBoundaries(t *testing.T) {
 	}
 }
 
-func TestParseRoute(t *testing.T) {
-	media := "m_" + strings.Repeat("a", 43)
-	project := "p_" + strings.Repeat("b", 12)
-	job := "j_" + strings.Repeat("c", 12)
-	batch := "b_" + strings.Repeat("d", 12)
-	credential := "c_" + strings.Repeat("e", 12)
-	tests := []struct {
-		name, method, path string
-		kind               routeKind
-		id                 string
-	}{
-		{"list", http.MethodGet, "/api/v2/media", routeListMedia, ""},
-		{"browse root", http.MethodGet, "/api/v2/media/tree", routeBrowseMedia, ""},
-		{"status", http.MethodGet, "/api/v2/media/status", routeMediaStatus, ""},
-		{"refresh", http.MethodPost, "/api/v2/media/refresh", routeRefreshMedia, ""},
-		{"settings get", http.MethodGet, "/api/v2/settings", routeGetSettings, ""},
-		{"settings put", http.MethodPut, "/api/v2/settings", routePutSettings, ""},
-		{"settings refresh", http.MethodPost, "/api/v2/settings/media/refresh", routeRefreshSettings, ""},
-		{"mcp settings", http.MethodGet, "/api/v2/settings/mcp", routeGetMCPSettings, ""},
-		{"mcp credential create", http.MethodPost, "/api/v2/settings/mcp/credentials", routeCreateMCPCredential, ""},
-		{"mcp credential revoke", http.MethodDelete, "/api/v2/settings/mcp/credentials/" + credential, routeRevokeMCPCredential, credential},
-		{"media", http.MethodGet, "/api/v2/media/" + media, routeGetMedia, media},
-		{"preview head", http.MethodHead, "/media/v2/media/" + media + "/preview", routePreview, media},
-		{"thumbnails", http.MethodGet, "/media/v2/media/" + media + "/thumbnails", routeThumbnails, media},
-		{"waveform", http.MethodGet, "/media/v2/media/" + media + "/waveform", routeWaveform, media},
-		{"project put", http.MethodPut, "/api/v2/projects/" + project, routePutProject, project},
-		{"export", http.MethodPost, "/api/v2/projects/" + project + "/exports", routeCreateExport, project},
-		{"export preflight", http.MethodPost, "/api/v2/projects/" + project + "/exports/preflight", routePreflightExport, project},
-		{"csv import", http.MethodPost, "/api/v2/projects/" + project + "/interchange/csv", routeImportInterchange, project + ":csv"},
-		{"chapter export", http.MethodGet, "/media/v2/projects/" + project + "/interchange/chapters", routeExportInterchange, project + ":chapters"},
-		{"detection", http.MethodPost, "/api/v2/projects/" + project + "/detections", routeCreateDetection, project},
-		{"job delete", http.MethodDelete, "/api/v2/jobs/" + job, routeCancelJob, job},
-		{"job retry", http.MethodPost, "/api/v2/jobs/" + job + "/retry", routeRetryJob, job},
-		{"batch list", http.MethodGet, "/api/v2/batches", routeListBatches, ""},
-		{"batch download", http.MethodGet, "/media/v2/batches/" + batch + "/download", routeDownloadBatch, batch},
-		{"batch get", http.MethodGet, "/api/v2/batches/" + batch, routeGetBatch, batch},
-		{"batch delete", http.MethodDelete, "/api/v2/batches/" + batch, routeCancelBatch, batch},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			got := parseRoute(test.method, test.path)
-			if got.kind != test.kind || got.id != test.id {
-				t.Fatalf("route=%#v, want kind=%d id=%q", got, test.kind, test.id)
-			}
-		})
-	}
-}
-
 func TestRouteForUsesBoundedMetricLabels(t *testing.T) {
 	for _, test := range []struct {
 		path, want string
@@ -175,6 +127,47 @@ func TestRouteCoverageInventory(t *testing.T) {
 		{http.MethodGet, "/api/v2/settings/mcp", routeGetMCPSettings},
 		{http.MethodPost, "/api/v2/settings/mcp/credentials", routeCreateMCPCredential},
 		{http.MethodDelete, "/api/v2/settings/mcp/credentials/" + credential, routeRevokeMCPCredential},
+	}
+	// Retain the positive parser cases and their exact extracted IDs alongside the route inventory.
+	parserCases := []struct {
+		name, method, path string
+		kind               routeKind
+		id                 string
+	}{
+		{"list", http.MethodGet, "/api/v2/media", routeListMedia, ""},
+		{"browse root", http.MethodGet, "/api/v2/media/tree", routeBrowseMedia, ""},
+		{"status", http.MethodGet, "/api/v2/media/status", routeMediaStatus, ""},
+		{"refresh", http.MethodPost, "/api/v2/media/refresh", routeRefreshMedia, ""},
+		{"settings get", http.MethodGet, "/api/v2/settings", routeGetSettings, ""},
+		{"settings put", http.MethodPut, "/api/v2/settings", routePutSettings, ""},
+		{"settings refresh", http.MethodPost, "/api/v2/settings/media/refresh", routeRefreshSettings, ""},
+		{"mcp settings", http.MethodGet, "/api/v2/settings/mcp", routeGetMCPSettings, ""},
+		{"mcp credential create", http.MethodPost, "/api/v2/settings/mcp/credentials", routeCreateMCPCredential, ""},
+		{"mcp credential revoke", http.MethodDelete, "/api/v2/settings/mcp/credentials/" + credential, routeRevokeMCPCredential, credential},
+		{"media", http.MethodGet, "/api/v2/media/" + media, routeGetMedia, media},
+		{"preview head", http.MethodHead, "/media/v2/media/" + media + "/preview", routePreview, media},
+		{"thumbnails", http.MethodGet, "/media/v2/media/" + media + "/thumbnails", routeThumbnails, media},
+		{"waveform", http.MethodGet, "/media/v2/media/" + media + "/waveform", routeWaveform, media},
+		{"project put", http.MethodPut, "/api/v2/projects/" + project, routePutProject, project},
+		{"export", http.MethodPost, "/api/v2/projects/" + project + "/exports", routeCreateExport, project},
+		{"export preflight", http.MethodPost, "/api/v2/projects/" + project + "/exports/preflight", routePreflightExport, project},
+		{"csv import", http.MethodPost, "/api/v2/projects/" + project + "/interchange/csv", routeImportInterchange, project + ":csv"},
+		{"chapter export", http.MethodGet, "/media/v2/projects/" + project + "/interchange/chapters", routeExportInterchange, project + ":chapters"},
+		{"detection", http.MethodPost, "/api/v2/projects/" + project + "/detections", routeCreateDetection, project},
+		{"job delete", http.MethodDelete, "/api/v2/jobs/" + job, routeCancelJob, job},
+		{"job retry", http.MethodPost, "/api/v2/jobs/" + job + "/retry", routeRetryJob, job},
+		{"batch list", http.MethodGet, "/api/v2/batches", routeListBatches, ""},
+		{"batch download", http.MethodGet, "/media/v2/batches/" + batch + "/download", routeDownloadBatch, batch},
+		{"batch get", http.MethodGet, "/api/v2/batches/" + batch, routeGetBatch, batch},
+		{"batch delete", http.MethodDelete, "/api/v2/batches/" + batch, routeCancelBatch, batch},
+	}
+	for _, test := range parserCases {
+		t.Run("parser/"+test.name, func(t *testing.T) {
+			got := parseRoute(test.method, test.path)
+			if got.kind != test.kind || got.id != test.id {
+				t.Fatalf("route=%#v, want kind=%d id=%q", got, test.kind, test.id)
+			}
+		})
 	}
 	contract := openAPIOperations(t)
 	normalize := strings.NewReplacer(media, "{mediaId}", project, "{projectId}", job, "{jobId}", batch, "{batchId}", credential, "{credentialId}", proposal, "{proposalId}", "/outputs/0", "/outputs/{position}", "/interchange/csv", "/interchange/{format}", "/interchange/chapters", "/interchange/{format}")

@@ -1,4 +1,6 @@
 import type * as EffectApiTypes from "../src/generated/effect-api";
+import { Effect } from "effect";
+import * as AtomRegistry from "effect/reactivity/AtomRegistry";
 import { RegistryContext, RegistryProvider } from "@effect/atom-solid";
 import {
   createComponent,
@@ -10,7 +12,7 @@ import {
 } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import type { ApiClient, NativeMediaApiClient } from "../src/api";
-import { createServerState } from "../src/features/app/server";
+import { createServerState, type ServerState } from "../src/features/app/server";
 import { createLibraryController } from "../src/features/media/controller";
 
 type LibrarySurface = {
@@ -57,7 +59,10 @@ function deferredResponse() {
 
 async function withLibrary(
   request: ApiClient["request"],
-  exercise: (library: LibrarySurface) => Promise<void>,
+  exercise: (
+    library: LibrarySurface,
+    context: { server: ServerState; registry: AtomRegistry.AtomRegistry },
+  ) => Promise<void>,
   configuration?: Parameters<typeof createServerState>[2],
 ) {
   const api: ApiClient & Pick<NativeMediaApiClient, "mediaRequest"> = {
@@ -90,12 +95,10 @@ async function withLibrary(
             untrack(() => {
               const registry = useContext(RegistryContext);
               const [status, setStatus] = createSignal("");
-              const library = createLibraryController(
-                createServerState(api, registry, workspaceConfiguration),
-                setStatus,
-              );
+              const server = createServerState(api, registry, workspaceConfiguration);
+              const library = createLibraryController(server, setStatus);
               queueMicrotask(() => {
-                void exercise({ ...library, status }).then(
+                void exercise({ ...library, status }, { server, registry }).then(
                   () => {
                     dispose();
                     resolve();
@@ -407,91 +410,125 @@ describe("library controller", () => {
           return Promise.resolve(Response.json({ state: "ready", message: "Ready" }));
         return Promise.resolve(page(["root-video"]));
       },
-      async (library) => {
+      async (library, { server, registry }) => {
         await vi.waitFor(() =>
           expect(library.media().map((media) => media.name)).toEqual(["root-video"]),
         );
-        library.loadFolder("folder-a");
-        await started;
-        library.loadFolder("folder-b");
-        await vi.waitFor(() =>
-          expect(library.media().map((media) => media.name)).toEqual(["folder-b-video"]),
+        const staleFolder = server.mediaTree(
+          "folder-a",
+          undefined,
+          registry.get(server.mediaRevision),
         );
-        olderFolder.resolve(page(["wrong-folder-video"]));
-        await Promise.resolve();
-        await Promise.resolve();
-        await Promise.resolve();
-        expect(library.activeFolder()).toBe("folder-b");
-        expect(library.media().map((media) => media.name)).toEqual(["folder-b-video"]);
+        const releaseStaleFolder = registry.mount(staleFolder);
+        try {
+          library.loadFolder("folder-a");
+          await started;
+          expect(
+            server.mediaTree("folder-b", undefined, registry.get(server.mediaRevision)),
+          ).not.toBe(staleFolder);
+          library.loadFolder("folder-b");
+          await vi.waitFor(() =>
+            expect(library.media().map((media) => media.name)).toEqual(["folder-b-video"]),
+          );
+          olderFolder.resolve(page(["wrong-folder-video"]));
+          await Effect.runPromise(
+            AtomRegistry.getResult(registry, staleFolder, { suspendOnWaiting: true }),
+          );
+          expect(library.activeFolder()).toBe("folder-b");
+          expect(library.media().map((media) => media.name)).toEqual(["folder-b-video"]);
+        } finally {
+          olderFolder.resolve(page(["wrong-folder-video"]));
+          releaseStaleFolder();
+        }
       },
     );
   });
 
   it("does not append an old cursor page after a library refresh", async () => {
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = async (input) => {
-      const url = input instanceof Request ? input.url : String(input);
-      if (url.includes("/media/refresh")) {
-        refreshed = true;
-        return Response.json(
-          { id: "j_abcdefghijkl", state: "queued", progress: 0, indexed: 0 },
-          { status: 202 },
-        );
-      }
-      if (url.includes("/jobs/j_abcdefghijkl/events"))
-        return new Response(
-          `event: snapshot\nid: cursor-1\ndata: ${JSON.stringify({
-            id: "j_abcdefghijkl",
-            type: "library_scan",
-            state: "succeeded",
-            revision: 1,
-            createdAt: "2026-01-01T00:00:00Z",
-            updatedAt: "2026-01-01T00:00:01Z",
-          })}\n\n`,
-          { headers: { "Content-Type": "text/event-stream" } },
-        );
-      throw new Error(`Unexpected generated request: ${String(input)}`);
-    };
-    const oldCursor = deferredResponse();
-    let refreshed = false;
-    let cursorRequested!: () => void;
-    const started = new Promise<void>((resolve) => {
-      cursorRequested = resolve;
-    });
-    await withLibrary(
-      (path) => {
-        if (path === "media/tree?cursor=old-page") {
-          cursorRequested();
-          return oldCursor.promise;
-        }
-        if (path === "media/refresh") {
+    try {
+      globalThis.fetch = async (input) => {
+        const url = input instanceof Request ? input.url : String(input);
+        if (url.includes("/media/refresh")) {
           refreshed = true;
-          return Promise.resolve(Response.json({}));
+          return Response.json(
+            { id: "j_abcdefghijkl", state: "queued", progress: 0, indexed: 0 },
+            { status: 202 },
+          );
         }
-        if (path === "media/status")
-          return Promise.resolve(Response.json({ state: "ready", message: "Ready" }));
-        return Promise.resolve(
-          refreshed ? page(["refreshed-video"]) : page(["old-video"], "old-page"),
-        );
-      },
-      async (library) => {
-        await vi.waitFor(() => expect(library.nextCursor()).toBe("old-page"));
-        library.loadFolder(undefined, "old-page");
-        await vi.waitFor(() => expect(library.loadingMore()).toBe(true));
-        await started;
-        await library.refreshMedia();
-        await vi.waitFor(() =>
-          expect(library.media().map((media) => media.name)).toEqual(["refreshed-video"]),
-        );
-        oldCursor.resolve(page(["old-cursor-video"]));
-        await Promise.resolve();
-        await Promise.resolve();
-        await Promise.resolve();
-        expect(library.media().map((media) => media.name)).toEqual(["refreshed-video"]);
-        expect(library.nextCursor()).toBeUndefined();
-      },
-      { serverBaseUrl: "http://localhost", authentication: { type: "none" } },
-    );
-    globalThis.fetch = originalFetch;
+        if (url.includes("/jobs/j_abcdefghijkl/events"))
+          return new Response(
+            `event: snapshot\nid: cursor-1\ndata: ${JSON.stringify({
+              id: "j_abcdefghijkl",
+              type: "library_scan",
+              state: "succeeded",
+              revision: 1,
+              createdAt: "2026-01-01T00:00:00Z",
+              updatedAt: "2026-01-01T00:00:01Z",
+            })}\n\n`,
+            { headers: { "Content-Type": "text/event-stream" } },
+          );
+        throw new Error(`Unexpected generated request: ${String(input)}`);
+      };
+      const oldCursor = deferredResponse();
+      let refreshed = false;
+      let cursorRequested!: () => void;
+      const started = new Promise<void>((resolve) => {
+        cursorRequested = resolve;
+      });
+      await withLibrary(
+        (path) => {
+          if (path === "media/tree?cursor=old-page") {
+            cursorRequested();
+            return oldCursor.promise;
+          }
+          if (path === "media/refresh") {
+            refreshed = true;
+            return Promise.resolve(Response.json({}));
+          }
+          if (path === "media/status")
+            return Promise.resolve(Response.json({ state: "ready", message: "Ready" }));
+          return Promise.resolve(
+            refreshed ? page(["refreshed-video"]) : page(["old-video"], "old-page"),
+          );
+        },
+        async (library, { server, registry }) => {
+          await vi.waitFor(() => expect(library.nextCursor()).toBe("old-page"));
+          const stalePage = server.mediaTree(
+            undefined,
+            "old-page",
+            registry.get(server.mediaRevision),
+          );
+          const releaseStalePage = registry.mount(stalePage);
+          try {
+            library.loadFolder(undefined, "old-page");
+            await vi.waitFor(() => expect(library.loadingMore()).toBe(true));
+            await started;
+            await library.refreshMedia();
+            const refreshedCursor = server.mediaTree(
+              undefined,
+              "old-page",
+              registry.get(server.mediaRevision),
+            );
+            expect(refreshedCursor).not.toBe(stalePage);
+            await vi.waitFor(() =>
+              expect(library.media().map((media) => media.name)).toEqual(["refreshed-video"]),
+            );
+            oldCursor.resolve(page(["old-cursor-video"]));
+            await Effect.runPromise(
+              AtomRegistry.getResult(registry, stalePage, { suspendOnWaiting: true }),
+            );
+            expect(library.media().map((media) => media.name)).toEqual(["refreshed-video"]);
+            expect(library.nextCursor()).toBeUndefined();
+          } finally {
+            oldCursor.resolve(page(["old-cursor-video"]));
+            releaseStalePage();
+          }
+        },
+        { serverBaseUrl: "http://localhost", authentication: { type: "none" } },
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
   });
 });

@@ -155,7 +155,7 @@ export function ProjectDialog(props: { onClose: () => void }) {
         const error = validateSegments(segments, selected.durationMs);
         if (error) throw new Error(error);
         if (!isCurrent(operation)) return;
-        workspace.updateTimeline({ segments });
+        workspace.editor.updateTimeline({ segments });
         workspace.addMediaToProject();
         workspace.setStatus("Cut list imported. Save the project to keep it.");
       })
@@ -259,10 +259,10 @@ export function ProjectDialog(props: { onClose: () => void }) {
             <button
               class="btn btn-primary btn-sm"
               type="button"
-              disabled={workspace.saveState() === "saving"}
+              disabled={workspace.projects.saveState() === "saving"}
               onClick={() => void workspace.projects.saveProject()}
             >
-              {workspace.saveState() === "saving" ? "Saving…" : "Save project"}
+              {workspace.projects.saveState() === "saving" ? "Saving…" : "Save project"}
             </button>
           </div>
         </section>

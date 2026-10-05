@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -48,24 +49,48 @@ func (r waitClosesStdoutRunner) Start(context.Context, model.PreviewSpec) (*Runn
 }
 
 type blockingRunner struct {
-	mu      sync.Mutex
-	starts  int
-	cancels int
+	finished chan struct{}
+}
+
+type recordingPartial struct {
+	PreviewPartial
+	discarded chan struct{}
+	once      sync.Once
+}
+
+func (p *recordingPartial) Discard() error {
+	err := p.PreviewPartial.Discard()
+	p.once.Do(func() { close(p.discarded) })
+	return err
+}
+
+type recordingPreviewCache struct {
+	store   *cache.Store
+	partial *recordingPartial
+}
+
+func (c *recordingPreviewCache) Open(ctx context.Context, key string, validator Validator) (io.ReadCloser, error) {
+	return c.store.Open(ctx, key, validator)
+}
+func (c *recordingPreviewCache) Begin(key string) (PreviewPartial, error) {
+	partial, err := c.store.Begin(key)
+	if err != nil {
+		return nil, err
+	}
+	c.partial = &recordingPartial{PreviewPartial: partial, discarded: make(chan struct{})}
+	return c.partial, nil
 }
 
 func (r *blockingRunner) Start(ctx context.Context, _ model.PreviewSpec) (*RunningPreview, error) {
-	r.mu.Lock()
-	r.starts++
-	r.mu.Unlock()
 	reader, writer := io.Pipe()
 	done := make(chan error, 1)
 	go func() {
 		<-ctx.Done()
-		r.mu.Lock()
-		r.cancels++
-		r.mu.Unlock()
 		_ = writer.CloseWithError(ctx.Err())
 		done <- ctx.Err()
+		if r.finished != nil {
+			close(r.finished)
+		}
 	}()
 	return &RunningPreview{Stdout: reader, Wait: func() error { return <-done }}, nil
 }
@@ -110,31 +135,68 @@ func TestPreviewWaitOwnsStdoutCloseAndPublishesCache(t *testing.T) {
 }
 
 func TestPreviewCancellationStopsProcessAndDiscardsPartial(t *testing.T) {
-	runner := &blockingRunner{}
-	manager, store := newManager(t, runner, 1)
-	ctx, cancel := context.WithCancel(context.Background())
+	runner := &blockingRunner{finished: make(chan struct{})}
+	root := t.TempDir()
+	store, err := cache.New(root, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cacheRecorder := &recordingPreviewCache{store: store}
+	limiter, err := NewPreviewLimits(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, err := NewPreviewManager(cacheRecorder, runner, func(context.Context, *os.File) error { return nil }, limiter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
 	reader, result, err := manager.Preview(ctx, testSpec("m_cancel"))
 	if err != nil || result.Status != CacheMiss {
 		t.Fatalf("preview = %v, %+v", err, result)
 	}
-	cancel()
-	_, _ = io.ReadAll(reader)
-	_ = reader.Close()
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		runner.mu.Lock()
-		cancels := runner.cancels
-		runner.mu.Unlock()
-		if cancels == 1 {
-			break
+	defer func() {
+		cancel()
+		_ = reader.Close()
+		select {
+		case <-cacheRecorder.partial.discarded:
+		case <-time.After(time.Second):
+			t.Error("preview partial cleanup did not finish")
 		}
-		time.Sleep(time.Millisecond)
+	}()
+	cancel()
+	_, readErr := io.ReadAll(reader)
+	if !errors.Is(readErr, context.Canceled) {
+		t.Fatalf("cancelled preview read = %v, want context.Canceled", readErr)
 	}
-	runner.mu.Lock()
-	if runner.cancels != 1 {
-		t.Fatalf("cancels = %d", runner.cancels)
+	if err := reader.Close(); err != nil {
+		t.Fatal(err)
 	}
-	runner.mu.Unlock()
+	select {
+	case <-cacheRecorder.partial.discarded:
+	case <-time.After(time.Second):
+		t.Fatal("preview partial was not discarded")
+	}
+	select {
+	case <-runner.finished:
+	case <-time.After(time.Second):
+		t.Fatal("preview process cleanup did not finish")
+	}
+	var files []string
+	if err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !entry.IsDir() {
+			files = append(files, path)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 0 {
+		t.Fatalf("cancelled preview left cache files: %v", files)
+	}
 	key := model.PreviewKey(testSpec("m_cancel"))
 	if hit, err := store.Open(context.Background(), key, func(context.Context, *os.File) error { return nil }); !errors.Is(err, cache.ErrMiss) {
 		if hit != nil {
@@ -142,6 +204,13 @@ func TestPreviewCancellationStopsProcessAndDiscardsPartial(t *testing.T) {
 		}
 		t.Fatalf("cancelled cache = %v", err)
 	}
+	slotCtx, slotCancel := context.WithTimeout(t.Context(), time.Second)
+	defer slotCancel()
+	release, err := manager.limits.AcquireProcessContext(slotCtx)
+	if err != nil {
+		t.Fatalf("preview process slot was not released: %v", err)
+	}
+	release()
 }
 
 type failingPartial struct{}
