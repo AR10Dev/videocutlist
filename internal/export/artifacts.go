@@ -15,7 +15,8 @@ import (
 	"time"
 
 	"videocutlist/internal/exportpolicy"
-	jobqueue "videocutlist/internal/jobs"
+	jobs "videocutlist/internal/jobs"
+	jobqueue "videocutlist/internal/jobs/model"
 	"videocutlist/internal/library/media/probe"
 )
 
@@ -404,7 +405,7 @@ func removeManifestOutputs(manifestPath string, outputs []manifestOutput) (err e
 
 // Reconcile validates job-owned published outputs before ordinary job restart
 // recovery. Unfinished manifests and their exact listed outputs are removed.
-func (s *ArtifactStore) Reconcile(ctx context.Context, jobs *jobqueue.JobsStore, ffprobePath string, destinations []Destination) error {
+func (s *ArtifactStore) Reconcile(ctx context.Context, jobs *jobs.JobsStore, ffprobePath string, destinations []Destination) error {
 	if jobs == nil {
 		return errors.New("job store is required")
 	}

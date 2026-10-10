@@ -14,34 +14,24 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"videocutlist/internal/detection"
+	"videocutlist/internal/jobs/view"
 
-	"videocutlist/internal/db"
+	exporter "videocutlist/internal/export"
 	"videocutlist/internal/exportpolicy"
-	jobqueue "videocutlist/internal/jobs"
+	librarymedia "videocutlist/internal/library/media"
 	"videocutlist/internal/mcp"
+	"videocutlist/internal/preview"
 	"videocutlist/internal/projects"
 	"videocutlist/internal/projects/interchange"
 	"videocutlist/internal/projects/model"
 	settings "videocutlist/internal/settings"
+	settingsmodel "videocutlist/internal/settings/model"
 )
 
 const (
 	maxQueryBytes          = 4 << 10
 	maxAutomationBodyBytes = interchange.MaxInputBytes
-)
-
-type Media = projects.Media
-type MediaPage = projects.MediaPage
-type FolderPage = projects.FolderPage
-type LibraryStatus = projects.LibraryStatus
-type LibraryState = projects.LibraryState
-
-const (
-	LibraryUnconfigured   = projects.LibraryUnconfigured
-	LibraryScanning       = projects.LibraryScanning
-	LibraryReadyEmpty     = projects.LibraryReadyEmpty
-	LibraryReadyWithMedia = projects.LibraryReadyWithMedia
-	LibraryFailed         = projects.LibraryFailed
 )
 
 type Segment = model.Segment
@@ -88,24 +78,18 @@ type ExportSubmissionInput struct {
 	ItemIDs         []string `json:"itemIds,omitempty"`
 }
 
-type Job = projects.Job
-type PreviewSpec = projects.PreviewSpec
-type PreviewResult = projects.PreviewResult
-type AssetSpec = projects.AssetSpec
-type AssetResult = projects.AssetResult
+type PreviewSpec = preview.PreviewSpec
+type PreviewResult = preview.PreviewResult
+type AssetSpec = preview.AssetSpec
+type AssetResult = preview.AssetResult
 
 // The interfaces are intentionally API-shaped adapters. Concrete domain wiring
 // remains outside this package, and no original path crosses this boundary.
-type MediaService = projects.MediaService
-type PreviewService = projects.PreviewService
-type AssetService = projects.AssetService
+type PreviewService = preview.PreviewService
+type AssetService = preview.AssetService
 type ProjectService = projects.ProjectService
-type ExportPreflightService = projects.ExportPreflightService
-type JobService = projects.JobService
-type DetectionRequest = projects.DetectionRequest
-type DetectionJob = projects.DetectionJob
 type DetectionService interface {
-	Submit(context.Context, string, string, DetectionRequest) (DetectionJob, error)
+	Submit(context.Context, string, string, detection.Request) (detection.Job, error)
 }
 type DestinationMetadata struct {
 	ID          string `json:"id"`
@@ -119,7 +103,7 @@ type DestinationCapabilities struct {
 	SaveBesideSource bool `json:"saveBesideSource"`
 }
 type BatchExportService interface {
-	Submit(context.Context, projects.BatchExportRequest) (string, []projects.Job, error)
+	Submit(context.Context, projects.BatchExportRequest) (string, []view.Job, error)
 	Get(context.Context, string) (projects.Batch, error)
 	List(context.Context, string, int) (projects.BatchPage, error)
 	Retry(context.Context, string, string) (projects.Batch, error)
@@ -131,18 +115,19 @@ type BatchDownloadService interface {
 
 type Config struct {
 	Authenticator     Authenticator
-	Media             MediaService
-	MediaImport       projects.MediaImportService
+	Media             librarymedia.MediaService
+	MediaImport       librarymedia.MediaImportService
 	Preview           PreviewService
 	Assets            AssetService
 	Projects          ProjectService
 	BatchExports      BatchExportService
-	Preflight         ExportPreflightService
-	Jobs              JobService
+	Preflight         projects.ExportPreflightService
+	Jobs              view.JobService
 	Detection         DetectionService
-	Download          projects.ExportDownloadService
+	Download          exporter.ExportDownloadService
+	BatchDownload     BatchDownloadService
 	Settings          *settings.RuntimeService
-	RuntimeSettings   *store.RuntimeSettingsState
+	RuntimeSettings   *settingsmodel.RuntimeSettingsState
 	MCPCredentials    *mcp.CredentialStore
 	ExportProposals   *mcp.ProposalService
 	SettingsAllowlist []string
@@ -169,6 +154,8 @@ type Server struct {
 	shutdown         context.Context
 	shutdownCancel   context.CancelFunc
 	observationSlots chan struct{}
+	routes           *http.ServeMux
+	handler          http.Handler
 }
 
 func New(config Config) (*Server, error) {
@@ -194,7 +181,12 @@ func New(config Config) (*Server, error) {
 		config.Metrics = NewMetrics()
 	}
 	shutdown, shutdownCancel := context.WithCancel(context.Background())
-	return &Server{config: config, metrics: config.Metrics, shutdown: shutdown, shutdownCancel: shutdownCancel, observationSlots: make(chan struct{}, maxConcurrentObservations)}, nil
+	server := &Server{config: config, metrics: config.Metrics, shutdown: shutdown, shutdownCancel: shutdownCancel, observationSlots: make(chan struct{}, maxConcurrentObservations)}
+	server.routes = newRouteMux(server)
+	server.handler = CORS(config.AllowedOrigins, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server.dispatch(w, r, RequestIDFromContext(r.Context()))
+	}))
+	return server, nil
 }
 
 // Shutdown stops long-lived observation handlers when the owning HTTP server shuts down.
@@ -205,11 +197,9 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	id := RequestID()
 	writer.Header().Set("X-Request-ID", id)
 	request = request.WithContext(context.WithValue(request.Context(), requestIDKey{}, id))
-	status := &statusWriter{ResponseWriter: writer, status: http.StatusOK}
-	route := routeFor(request.URL.Path)
-	CORS(s.config.AllowedOrigins, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		route, _ = s.dispatch(w, r, id)
-	})).ServeHTTP(status, request)
+	status := &statusWriter{ResponseWriter: writer, status: http.StatusOK, route: routeFor(request.URL.Path)}
+	s.handler.ServeHTTP(status, request)
+	route := status.route
 	elapsed := time.Since(started)
 	s.metrics.HTTP(route, request.Method, strconv.Itoa(status.status/100)+"xx", elapsed.Seconds())
 	if s.config.Logger != nil {
@@ -218,28 +208,32 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	}
 }
 
-func (s *Server) dispatch(writer http.ResponseWriter, request *http.Request, id string) (string, string) {
+func (s *Server) dispatch(writer http.ResponseWriter, request *http.Request, id string) {
 	if request.URL.Path == "/health" && request.Method == http.MethodGet {
+		if observed, ok := writer.(*statusWriter); ok {
+			observed.route = "/health"
+		}
 		writer.WriteHeader(http.StatusOK)
-		return "/health", ""
+		return
 	}
 	if request.URL.Path == "/ready" && request.Method == http.MethodGet {
+		if observed, ok := writer.(*statusWriter); ok {
+			observed.route = "/ready"
+		}
 		if s.config.Ready != nil && s.config.Ready(request.Context()) != nil {
 			Error(writer, http.StatusServiceUnavailable, "not_ready", "Service is not ready.", id)
 		} else {
 			writer.WriteHeader(http.StatusOK)
 		}
-		return "/ready", ""
+		return
 	}
 	if err := s.config.Authenticator.Authenticate(request); err != nil {
 		Error(writer, http.StatusUnauthorized, "unauthenticated", "Authentication is required.", id)
-		return routeFor(request.URL.Path), ""
+		return
 	}
 	if request.URL.Path == "/metrics" && request.Method == http.MethodGet {
 		writer.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 		if err := s.metrics.WritePrometheus(writer); err != nil {
-			// The metrics response is committed by its first write, so record the
-			// cleanup failure instead of attempting to rewrite it as an HTTP error.
 			if observed, ok := writer.(*statusWriter); ok {
 				observed.errorCode = "metrics_write"
 			}
@@ -247,168 +241,18 @@ func (s *Server) dispatch(writer http.ResponseWriter, request *http.Request, id 
 				s.config.Logger.Print(`{"error_category":"metrics_write"}`)
 			}
 		}
-		return "/metrics", ""
+		return
 	}
-	r := parseRoute(request.Method, request.URL.EscapedPath())
-	switch r.kind {
-	case routeListDestinations:
-		capabilities := DestinationCapabilities{}
-		for _, destination := range s.config.Destinations {
-			if destination.Kind == "source_adjacent" {
-				capabilities.SaveBesideSource = true
-				break
-			}
-		}
-		httpx.WriteJSON(writer, http.StatusOK, map[string]any{"destinations": s.config.Destinations, "capabilities": capabilities})
-		return "/api/v2/destinations", ""
-	case routeGetSettings:
-		s.getSettings(writer, request, id)
-		return "/api/v2/settings", ""
-	case routePutSettings:
-		s.putSettings(writer, request, id)
-		return "/api/v2/settings", ""
-	case routeRefreshSettings:
-		s.refreshSettings(writer, request, id)
-		return "/api/v2/settings/media/refresh", ""
-	case routeGetMCPSettings:
-		s.getMCPSettings(writer, request, id)
-		return "/api/v2/settings/mcp", ""
-	case routeCreateMCPCredential:
-		s.createMCPCredential(writer, request, id)
-		return "/api/v2/settings/mcp/credentials", ""
-	case routeRevokeMCPCredential:
-		s.revokeMCPCredential(writer, request, r.id, id)
-		return "/api/v2/settings/mcp/credentials/{credentialId}", ""
-	case routeGetExportProposal:
-		s.getExportProposal(writer, request, r.id, id)
-		return "/api/v2/export-proposals/{proposalId}", ""
-	case routeApproveExportProposal:
-		s.approveExportProposal(writer, request, r.id, id)
-		return "/api/v2/export-proposals/{proposalId}/approval", ""
-	case routeListMedia:
-		s.listMedia(writer, request, id)
-		return "/api/v2/media", ""
-	case routeBrowseMedia:
-		s.browseMedia(writer, request, id)
-		return "/api/v2/media/tree", ""
-	case routeMediaStatus:
-		httpx.WriteJSON(writer, http.StatusOK, s.config.Media.Status())
-		return "/api/v2/media/status", ""
-	case routeRefreshMedia:
-		s.refreshMedia(writer, request, id)
-		return "/api/v2/media/refresh", ""
-	case routeStartMediaImport:
-		key := request.Header.Get("Idempotency-Key")
-		if !jobqueue.ValidCommandKey(key) {
-			httpx.Error(writer, http.StatusBadRequest, "invalid_idempotency_key", "A valid Idempotency-Key is required.", id)
-			return "/api/v2/media/import", ""
-		}
-		if s.config.MediaImport == nil {
-			httpx.Error(writer, http.StatusConflict, "import_unavailable", "Import could not be started.", id)
-			return "/api/v2/media/import", ""
-		}
-		job, err := s.startMediaScan(request.Context(), key)
-		if err != nil {
-			writeMediaScanError(writer, err, id)
-			return "/api/v2/media/import", ""
-		}
-		httpx.WriteJSON(writer, http.StatusAccepted, job)
-		return "/api/v2/media/import", ""
-	case routeGetMediaImport:
-		if s.config.MediaImport == nil {
-			notFound(writer, id)
-			return "/api/v2/media/import/{jobId}", ""
-		}
-		job, err := s.config.MediaImport.ImportStatus(request.Context(), r.id)
-		if err != nil {
-			resourceError(writer, id, err)
-			return "/api/v2/media/import/{jobId}", ""
-		}
-		httpx.WriteJSON(writer, http.StatusOK, job)
-		return "/api/v2/media/import/{jobId}", ""
-	case routeCancelMediaImport:
-		if s.config.MediaImport == nil {
-			notFound(writer, id)
-			return "/api/v2/media/import/{jobId}", ""
-		}
-		if err := s.config.MediaImport.CancelImport(request.Context(), r.id); err != nil {
-			resourceError(writer, id, err)
-			return "/api/v2/media/import/{jobId}", ""
-		}
-		writer.WriteHeader(http.StatusNoContent)
-		return "/api/v2/media/import/{jobId}", ""
-	case routeGetMedia:
-		s.getMedia(writer, request, r.id, id)
-		return "/api/v2/media/{mediaId}", ""
-	case routePreview:
-		s.preview(writer, request, r.id, id)
-		return "/media/v2/media/{mediaId}/preview", ""
-	case routeThumbnails:
-		s.thumbnails(writer, request, r.id, id)
-		return "/media/v2/media/{mediaId}/thumbnails", ""
-	case routeWaveform:
-		s.waveform(writer, request, r.id, id)
-		return "/media/v2/media/{mediaId}/waveform", ""
-	case routeListProjects:
-		s.listProjects(writer, request, id)
-		return "/api/v2/projects", ""
-	case routeGetProject:
-		s.getProject(writer, request, r.id, id)
-		return "/api/v2/projects/{projectId}", ""
-	case routePutProject:
-		s.putProject(writer, request, r.id, id)
-		return "/api/v2/projects/{projectId}", ""
-	case routeCreateExport:
-		s.createExport(writer, request, r.id, id)
-		return "/api/v2/projects/{projectId}/exports", ""
-	case routeListBatches:
-		s.listBatches(writer, request, id)
-		return "/api/v2/batches", ""
-	case routeGetBatch:
-		s.getBatch(writer, request, r.id, id)
-		return "/api/v2/batches/{batchId}", ""
-	case routeCancelBatch:
-		s.cancelBatch(writer, request, r.id, id)
-		return "/api/v2/batches/{batchId}", ""
-	case routePreflightExport:
-		s.preflightExport(writer, request, r.id, id)
-		return "/api/v2/projects/{projectId}/exports/preflight", ""
-	case routeImportInterchange:
-		s.importInterchange(writer, request, r.id, id)
-		return "/api/v2/projects/{projectId}/interchange/{format}", ""
-	case routeExportInterchange:
-		s.exportInterchange(writer, request, r.id, id)
-		return "/api/v2/projects/{projectId}/interchange/{format}", ""
-	case routeCreateDetection:
-		s.createDetection(writer, request, r.id, id)
-		return "/api/v2/projects/{projectId}/detections", ""
-	case routeGetJob:
-		s.getJob(writer, request, r.id, id)
-		return "/api/v2/jobs/{jobId}", ""
-	case routeStreamJob:
-		s.streamJob(writer, request, r.id, id)
-		return "/api/v2/jobs/{jobId}/events", ""
-	case routeStreamBatch:
-		s.streamBatch(writer, request, r.id, id)
-		return "/api/v2/batches/{batchId}/events", ""
-	case routeDownloadOutput:
-		s.downloadOutput(writer, request, r.id, id)
-		return "/media/v2/jobs/{jobId}/outputs/{position}", ""
-	case routeDownloadBatch:
-		s.downloadBatch(writer, request, r.id, id)
-		return "/media/v2/batches/{batchId}/download", ""
-	case routeCancelJob:
-		s.cancelJob(writer, request, r.id, id)
-		return "/api/v2/jobs/{jobId}", ""
-	case routeRetryJob:
-		s.retryJob(writer, request, r.id, id)
-		return "/api/v2/jobs/{jobId}/retry", ""
-	case routeAutomation:
-		s.automation(writer, request, id)
-		return "/api/v2/automation", ""
+	if !validRoutePath(request.URL.EscapedPath()) {
+		notFound(writer, id)
+		return
 	}
-	httpx.Error(writer, http.StatusNotFound, "not_found", "Resource not found.", id)
-	return routeFor(request.URL.Path), ""
+	_, pattern := s.routes.Handler(request)
+	if pattern == "" {
+		notFound(writer, id)
+		return
+	}
+	s.routes.ServeHTTP(writer, request)
 }
 
 func queryKeys(request *http.Request, allowed ...string) bool {
@@ -452,7 +296,7 @@ func parseLimit(value string) (int, error) {
 	}
 	return limit, nil
 }
-func assetNotModified(w http.ResponseWriter, r *http.Request, item Media, kind string) bool {
+func assetNotModified(w http.ResponseWriter, r *http.Request, item librarymedia.Media, kind string) bool {
 	sum := sha256.Sum256([]byte(kind + "\x00" + item.ETag + "\x00" + r.URL.RawQuery))
 	etag := `"` + hex.EncodeToString(sum[:]) + `"`
 	w.Header().Set("Cache-Control", "private, no-cache")
@@ -513,6 +357,7 @@ type statusWriter struct {
 	status    int
 	wrote     bool
 	errorCode string
+	route     string
 }
 
 func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }

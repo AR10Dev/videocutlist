@@ -14,8 +14,31 @@ import (
 	"testing"
 	"time"
 
+	"videocutlist/internal/jobs/model"
+	settingsmodel "videocutlist/internal/settings/model"
+
 	_ "modernc.org/sqlite"
 )
+
+func TestSchedulerClaimReportsEmptyQueueWithoutStorageErrors(t *testing.T) {
+	database := openSchedulerTestDatabase(t)
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	jobs, err := newTestJobsStore(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scheduler, err := NewScheduler(jobs, SchedulerConfig{QueueCapacity: 1, WorkerLimit: 1}, func(context.Context, model.Job) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := scheduler.claim(t.Context()); !errors.Is(err, model.ErrNoQueuedJob) {
+		t.Fatalf("empty queue claim = %v, want model.ErrNoQueuedJob", err)
+	}
+}
 
 func TestSchedulerClaimAdvancesJobRevision(t *testing.T) {
 	database := openSchedulerTestDatabase(t)
@@ -24,14 +47,14 @@ func TestSchedulerClaimAdvancesJobRevision(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	jobs, err := NewJobsStore(database)
+	jobs, err := newTestJobsStore(database)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := jobs.Create(t.Context(), Job{ID: "j_claimrevision1", BatchID: "b_claimrevision1", Kind: JobScan, RequestJSON: `{}`}); err != nil {
+	if _, err := jobs.Create(t.Context(), model.Job{ID: "j_claimrevision1", BatchID: "b_claimrevision1", Kind: model.JobScan, RequestJSON: `{}`}); err != nil {
 		t.Fatal(err)
 	}
-	scheduler, err := NewScheduler(jobs, SchedulerConfig{QueueCapacity: 1, WorkerLimit: 1}, func(context.Context, Job) error { return nil })
+	scheduler, err := NewScheduler(jobs, SchedulerConfig{QueueCapacity: 1, WorkerLimit: 1}, func(context.Context, model.Job) error { return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +64,7 @@ func TestSchedulerClaimAdvancesJobRevision(t *testing.T) {
 	}
 }
 
-func waitForJobState(t *testing.T, jobs *JobsStore, id string, want JobState) {
+func waitForJobState(t *testing.T, jobs *JobsStore, id string, want model.JobState) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
@@ -104,14 +127,14 @@ func TestSchedulerCancelBetweenClaimAndRegistrationSkipsRunner(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	jobs, err := NewJobsStore(db)
+	jobs, err := newTestJobsStore(db)
 	if err != nil {
 		t.Fatal(err)
 	}
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	var executions atomic.Int32
-	scheduler, err := NewScheduler(jobs, SchedulerConfig{QueueCapacity: 1, WorkerLimit: 1}, func(context.Context, Job) error {
+	scheduler, err := NewScheduler(jobs, SchedulerConfig{QueueCapacity: 1, WorkerLimit: 1}, func(context.Context, model.Job) error {
 		executions.Add(1)
 		return nil
 	})
@@ -123,8 +146,8 @@ func TestSchedulerCancelBetweenClaimAndRegistrationSkipsRunner(t *testing.T) {
 		<-release
 	}
 	scheduler.Start()
-	job := Job{ID: "j_000000000071", BatchID: "b_000000000071", Kind: JobScan, RequestJSON: `{}`}
-	if _, err := scheduler.Submit(context.Background(), []Job{job}); err != nil {
+	job := model.Job{ID: "j_000000000071", BatchID: "b_000000000071", Kind: model.JobScan, RequestJSON: `{}`}
+	if _, err := scheduler.Submit(context.Background(), []model.Job{job}); err != nil {
 		t.Fatal(err)
 	}
 	<-entered
@@ -149,7 +172,7 @@ func TestSchedulerCancelBetweenClaimAndRegistrationSkipsRunner(t *testing.T) {
 		t.Fatalf("runner executed cancelled job %d times", executions.Load())
 	}
 	stored, err := jobs.Get(context.Background(), job.ID)
-	if err != nil || stored.State != JobCancelled {
+	if err != nil || stored.State != model.JobCancelled {
 		t.Fatalf("job = %#v, err = %v", stored, err)
 	}
 }
@@ -161,7 +184,7 @@ func TestSchedulerConcurrentSubmitClaimAndCancel(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	jobs, err := NewJobsStore(db)
+	jobs, err := newTestJobsStore(db)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +192,7 @@ func TestSchedulerConcurrentSubmitClaimAndCancel(t *testing.T) {
 	release := make(chan struct{})
 	var once sync.Once
 	var executions atomic.Int32
-	scheduler, err := NewScheduler(jobs, SchedulerConfig{QueueCapacity: 2, WorkerLimit: 1}, func(context.Context, Job) error {
+	scheduler, err := NewScheduler(jobs, SchedulerConfig{QueueCapacity: 2, WorkerLimit: 1}, func(context.Context, model.Job) error {
 		executions.Add(1)
 		return nil
 	})
@@ -183,9 +206,9 @@ func TestSchedulerConcurrentSubmitClaimAndCancel(t *testing.T) {
 		})
 	}
 	scheduler.Start()
-	first := Job{ID: "j_000000000072", BatchID: "b_000000000072", Kind: JobScan, RequestJSON: `{}`}
-	second := Job{ID: "j_000000000073", BatchID: "b_000000000073", Kind: JobScan, RequestJSON: `{}`}
-	if _, err := scheduler.Submit(t.Context(), []Job{first}); err != nil {
+	first := model.Job{ID: "j_000000000072", BatchID: "b_000000000072", Kind: model.JobScan, RequestJSON: `{}`}
+	second := model.Job{ID: "j_000000000073", BatchID: "b_000000000073", Kind: model.JobScan, RequestJSON: `{}`}
+	if _, err := scheduler.Submit(t.Context(), []model.Job{first}); err != nil {
 		t.Fatal(err)
 	}
 	<-entered
@@ -196,7 +219,7 @@ func TestSchedulerConcurrentSubmitClaimAndCancel(t *testing.T) {
 		errs <- err
 	})
 	group.Go(func() {
-		_, err := scheduler.Submit(t.Context(), []Job{second})
+		_, err := scheduler.Submit(t.Context(), []model.Job{second})
 		errs <- err
 	})
 	group.Wait()
@@ -210,7 +233,7 @@ func TestSchedulerConcurrentSubmitClaimAndCancel(t *testing.T) {
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
 		stored, err := jobs.Get(t.Context(), second.ID)
-		if err == nil && stored.State == JobSucceeded {
+		if err == nil && stored.State == model.JobSucceeded {
 			break
 		}
 		time.Sleep(time.Millisecond)
@@ -219,11 +242,11 @@ func TestSchedulerConcurrentSubmitClaimAndCancel(t *testing.T) {
 		t.Fatal(err)
 	}
 	firstStored, err := jobs.Get(t.Context(), first.ID)
-	if err != nil || firstStored.State != JobCancelled {
+	if err != nil || firstStored.State != model.JobCancelled {
 		t.Fatalf("first = %#v, err = %v", firstStored, err)
 	}
 	secondStored, err := jobs.Get(t.Context(), second.ID)
-	if err != nil || secondStored.State != JobSucceeded {
+	if err != nil || secondStored.State != model.JobSucceeded {
 		t.Fatalf("second = %#v, err = %v", secondStored, err)
 	}
 	if executions.Load() != 1 {
@@ -238,13 +261,13 @@ func TestSchedulerShutdownBetweenClaimAndRegistrationSkipsRunner(t *testing.T) {
 			t.Error(err)
 		}
 	}()
-	jobs, err := NewJobsStore(db)
+	jobs, err := newTestJobsStore(db)
 	if err != nil {
 		t.Fatal(err)
 	}
 	entered, release := make(chan struct{}), make(chan struct{})
 	var executions atomic.Int32
-	scheduler, err := NewScheduler(jobs, SchedulerConfig{QueueCapacity: 1, WorkerLimit: 1}, func(ctx context.Context, _ Job) error {
+	scheduler, err := NewScheduler(jobs, SchedulerConfig{QueueCapacity: 1, WorkerLimit: 1}, func(ctx context.Context, _ model.Job) error {
 		executions.Add(1)
 		select {
 		case <-ctx.Done():
@@ -257,8 +280,8 @@ func TestSchedulerShutdownBetweenClaimAndRegistrationSkipsRunner(t *testing.T) {
 	}
 	scheduler.afterClaim = func() { close(entered); <-release }
 	scheduler.Start()
-	job := Job{ID: "j_000000000074", BatchID: "b_000000000074", Kind: JobScan, RequestJSON: `{}`}
-	if _, err := scheduler.Submit(t.Context(), []Job{job}); err != nil {
+	job := model.Job{ID: "j_000000000074", BatchID: "b_000000000074", Kind: model.JobScan, RequestJSON: `{}`}
+	if _, err := scheduler.Submit(t.Context(), []model.Job{job}); err != nil {
 		t.Fatal(err)
 	}
 	<-entered
@@ -275,7 +298,7 @@ func TestSchedulerShutdownBetweenClaimAndRegistrationSkipsRunner(t *testing.T) {
 		t.Fatal("runner executed a job registered after shutdown")
 	}
 	stored, err := jobs.Get(t.Context(), job.ID)
-	if err != nil || stored.State != JobFailed || stored.ErrorCode.String != "interrupted_by_restart" {
+	if err != nil || stored.State != model.JobFailed || stored.ErrorCode.String != "interrupted_by_restart" {
 		t.Fatalf("job = %#v, err = %v", stored, err)
 	}
 }
@@ -283,12 +306,12 @@ func TestSchedulerShutdownBetweenClaimAndRegistrationSkipsRunner(t *testing.T) {
 func TestSchedulerShutdownPreservesQueuedAndFailsInterruptedWork(t *testing.T) {
 	db := openSchedulerTestDatabase(t)
 	t.Cleanup(func() { _ = db.Close() })
-	jobs, err := NewJobsStore(db)
+	jobs, err := newTestJobsStore(db)
 	if err != nil {
 		t.Fatal(err)
 	}
 	started := make(chan struct{})
-	scheduler, err := NewScheduler(jobs, SchedulerConfig{QueueCapacity: 2, WorkerLimit: 1}, func(ctx context.Context, _ Job) error {
+	scheduler, err := NewScheduler(jobs, SchedulerConfig{QueueCapacity: 2, WorkerLimit: 1}, func(ctx context.Context, _ model.Job) error {
 		close(started)
 		<-ctx.Done()
 		return ctx.Err()
@@ -296,9 +319,9 @@ func TestSchedulerShutdownPreservesQueuedAndFailsInterruptedWork(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	first := Job{ID: "j_shutdown_active", BatchID: "b_shutdown_batch", Kind: JobScan, RequestJSON: `{}`}
-	second := Job{ID: "j_shutdown_queued", BatchID: "b_shutdown_batch", Kind: JobScan, RequestJSON: `{}`}
-	if _, err := scheduler.Submit(t.Context(), []Job{first, second}); err != nil {
+	first := model.Job{ID: "j_shutdown_active", BatchID: "b_shutdown_batch", Kind: model.JobScan, RequestJSON: `{}`}
+	second := model.Job{ID: "j_shutdown_queued", BatchID: "b_shutdown_batch", Kind: model.JobScan, RequestJSON: `{}`}
+	if _, err := scheduler.Submit(t.Context(), []model.Job{first, second}); err != nil {
 		t.Fatal(err)
 	}
 	scheduler.Start()
@@ -309,11 +332,11 @@ func TestSchedulerShutdownPreservesQueuedAndFailsInterruptedWork(t *testing.T) {
 		t.Fatal(err)
 	}
 	active, err := jobs.Get(t.Context(), first.ID)
-	if err != nil || active.State != JobFailed || active.ErrorCode.String != "interrupted_by_restart" {
+	if err != nil || active.State != model.JobFailed || active.ErrorCode.String != "interrupted_by_restart" {
 		t.Fatalf("interrupted work = %#v, %v", active, err)
 	}
 	queued, err := jobs.Get(t.Context(), second.ID)
-	if err != nil || queued.State != JobQueued {
+	if err != nil || queued.State != model.JobQueued {
 		t.Fatalf("queued work = %#v, %v", queued, err)
 	}
 	if recovered, err := jobs.Recover(t.Context()); err != nil || recovered != 0 {
@@ -328,19 +351,19 @@ func TestSchedulerWorkerLimitSafetyBoundary(t *testing.T) {
 			t.Error(err)
 		}
 	}()
-	jobs, _ := NewJobsStore(db)
+	jobs, _ := newTestJobsStore(db)
 	for _, limit := range []int{0, 1, 64, 65, math.MaxInt} {
 		t.Run(strconv.Itoa(limit), func(t *testing.T) {
-			valid := limit >= 1 && limit <= MaxWorkerLimit
+			valid := limit >= 1 && limit <= settingsmodel.MaxExportWorkers
 			config := SchedulerConfig{QueueCapacity: 4, WorkerLimit: limit}
-			s, err := NewScheduler(jobs, config, func(context.Context, Job) error { return nil })
+			s, err := NewScheduler(jobs, config, func(context.Context, model.Job) error { return nil })
 			if (err == nil) != valid {
 				t.Fatalf("create(%d) = %v", limit, err)
 			}
 			if s != nil {
 				_ = s.Shutdown(t.Context())
 			}
-			s, err = NewScheduler(jobs, SchedulerConfig{QueueCapacity: 4, WorkerLimit: 1}, func(context.Context, Job) error { return nil })
+			s, err = NewScheduler(jobs, SchedulerConfig{QueueCapacity: 4, WorkerLimit: 1}, func(context.Context, model.Job) error { return nil })
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -366,8 +389,8 @@ func TestSchedulerShutdownUnblocksDatabaseClaim(t *testing.T) {
 			t.Error(err)
 		}
 	}()
-	jobs, _ := NewJobsStore(db)
-	s, err := NewScheduler(jobs, SchedulerConfig{QueueCapacity: 1, WorkerLimit: 1}, func(context.Context, Job) error { return nil })
+	jobs, _ := newTestJobsStore(db)
+	s, err := NewScheduler(jobs, SchedulerConfig{QueueCapacity: 1, WorkerLimit: 1}, func(context.Context, model.Job) error { return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -409,8 +432,8 @@ func TestSchedulerProposalRemainsIdempotentAfterCapacityDecrease(t *testing.T) {
 			t.Error(err)
 		}
 	}()
-	jobs, _ := NewJobsStore(db)
-	s, err := NewScheduler(jobs, SchedulerConfig{QueueCapacity: 2, WorkerLimit: 1}, func(context.Context, Job) error { return nil })
+	jobs, _ := newTestJobsStore(db)
+	s, err := NewScheduler(jobs, SchedulerConfig{QueueCapacity: 2, WorkerLimit: 1}, func(context.Context, model.Job) error { return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -419,9 +442,9 @@ func TestSchedulerProposalRemainsIdempotentAfterCapacityDecrease(t *testing.T) {
 			t.Error(err)
 		}
 	}()
-	batch := []Job{
-		{ID: "j_000000000081", BatchID: "b_000000000081", Kind: JobExport, ProjectID: "p_project", ProjectItemID: "i_item", ProposalID: "ep_proposal", CredentialID: "c_credential", RequestJSON: `{}`},
-		{ID: "j_000000000082", BatchID: "b_000000000081", Kind: JobExport, ProjectID: "p_project", ProjectItemID: "i_item", ProposalID: "ep_proposal", CredentialID: "c_credential", RequestJSON: `{}`},
+	batch := []model.Job{
+		{ID: "j_000000000081", BatchID: "b_000000000081", Kind: model.JobExport, ProjectID: "p_project", ProjectItemID: "i_item", ProposalID: "ep_proposal", CredentialID: "c_credential", RequestJSON: `{}`},
+		{ID: "j_000000000082", BatchID: "b_000000000081", Kind: model.JobExport, ProjectID: "p_project", ProjectItemID: "i_item", ProposalID: "ep_proposal", CredentialID: "c_credential", RequestJSON: `{}`},
 	}
 	if _, err := s.SubmitProposal(t.Context(), "ep_proposal", "c_credential", batch); err != nil {
 		t.Fatal(err)
@@ -433,7 +456,7 @@ func TestSchedulerProposalRemainsIdempotentAfterCapacityDecrease(t *testing.T) {
 		t.Fatalf("repeated proposal = %v, %v", got, err)
 	}
 	batch[0].ProposalID = "ep_other"
-	if _, err := s.SubmitProposal(t.Context(), "ep_other", "c_credential", batch[:1]); !errors.Is(err, ErrQueueFull) {
+	if _, err := s.SubmitProposal(t.Context(), "ep_other", "c_credential", batch[:1]); !errors.Is(err, model.ErrQueueFull) {
 		t.Fatalf("new admission = %v", err)
 	}
 }
@@ -445,13 +468,13 @@ func TestSchedulerCancellationAfterRunnerReturnPersistsBeforeSuccess(t *testing.
 			t.Error(err)
 		}
 	})
-	jobs, err := NewJobsStore(db)
+	jobs, err := newTestJobsStore(db)
 	if err != nil {
 		t.Fatal(err)
 	}
 	deregistered := make(chan struct{})
 	release := make(chan struct{})
-	scheduler, err := NewScheduler(jobs, SchedulerConfig{QueueCapacity: 1, WorkerLimit: 1}, func(context.Context, Job) error {
+	scheduler, err := NewScheduler(jobs, SchedulerConfig{QueueCapacity: 1, WorkerLimit: 1}, func(context.Context, model.Job) error {
 		return nil
 	})
 	if err != nil {
@@ -462,8 +485,8 @@ func TestSchedulerCancellationAfterRunnerReturnPersistsBeforeSuccess(t *testing.
 		<-release
 	}
 	scheduler.Start()
-	job := Job{ID: "j_000000000093", BatchID: "b_000000000093", Kind: JobScan, RequestJSON: `{}`}
-	if _, err := scheduler.Submit(t.Context(), []Job{job}); err != nil {
+	job := model.Job{ID: "j_000000000093", BatchID: "b_000000000093", Kind: model.JobScan, RequestJSON: `{}`}
+	if _, err := scheduler.Submit(t.Context(), []model.Job{job}); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -472,26 +495,26 @@ func TestSchedulerCancellationAfterRunnerReturnPersistsBeforeSuccess(t *testing.
 		t.Fatal("runner did not reach the deregistration barrier")
 	}
 	cancelled := make(chan struct {
-		job Job
+		job model.Job
 		err error
 	}, 1)
 	go func() {
 		value, err := scheduler.Cancel(t.Context(), job.ID)
 		cancelled <- struct {
-			job Job
+			job model.Job
 			err error
 		}{job: value, err: err}
 	}()
 	select {
 	case result := <-cancelled:
-		if result.err != nil || result.job.State != JobCancelled {
+		if result.err != nil || result.job.State != model.JobCancelled {
 			t.Fatalf("cancellation = %#v, %v; want durable cancellation", result.job, result.err)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("cancellation did not acknowledge while worker was at the barrier")
 	}
 	stored, err := jobs.Get(t.Context(), job.ID)
-	if err != nil || stored.State != JobCancelled {
+	if err != nil || stored.State != model.JobCancelled {
 		t.Fatalf("stored job before worker release = %#v, %v", stored, err)
 	}
 	close(release)
@@ -499,7 +522,7 @@ func TestSchedulerCancellationAfterRunnerReturnPersistsBeforeSuccess(t *testing.
 		t.Fatal(err)
 	}
 	stored, err = jobs.Get(t.Context(), job.ID)
-	if err != nil || stored.State != JobCancelled {
+	if err != nil || stored.State != model.JobCancelled {
 		t.Fatalf("stored job after worker release = %#v, %v", stored, err)
 	}
 }
@@ -519,7 +542,7 @@ func TestSchedulerCancellationArbitratesRunnerSuccessBothOrders(t *testing.T) {
 					t.Error(err)
 				}
 			})
-			jobs, err := NewJobsStore(database)
+			jobs, err := newTestJobsStore(database)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -528,7 +551,7 @@ func TestSchedulerCancellationArbitratesRunnerSuccessBothOrders(t *testing.T) {
 			release := make(chan struct{})
 			var releaseOnce sync.Once
 			releaseRunner := func() { releaseOnce.Do(func() { close(release) }) }
-			scheduler, err := NewScheduler(jobs, SchedulerConfig{QueueCapacity: 1, WorkerLimit: 1}, func(ctx context.Context, job Job) error {
+			scheduler, err := NewScheduler(jobs, SchedulerConfig{QueueCapacity: 1, WorkerLimit: 1}, func(ctx context.Context, job model.Job) error {
 				close(started)
 				if test.cancelFirst {
 					<-ctx.Done()
@@ -549,25 +572,25 @@ func TestSchedulerCancellationArbitratesRunnerSuccessBothOrders(t *testing.T) {
 					t.Error(err)
 				}
 			})
-			job := Job{ID: "j_000000000094", BatchID: "b_000000000094", Kind: JobScan, RequestJSON: `{}`}
-			if _, err := scheduler.Submit(t.Context(), []Job{job}); err != nil {
+			job := model.Job{ID: "j_000000000094", BatchID: "b_000000000094", Kind: model.JobScan, RequestJSON: `{}`}
+			if _, err := scheduler.Submit(t.Context(), []model.Job{job}); err != nil {
 				t.Fatal(err)
 			}
 			scheduler.Start()
 			<-started
 			if test.cancelFirst {
 				cancelled, err := scheduler.Cancel(t.Context(), job.ID)
-				if err != nil || cancelled.State != JobCancelled {
+				if err != nil || cancelled.State != model.JobCancelled {
 					t.Fatalf("cancellation = %#v, %v", cancelled, err)
 				}
-				if err := <-succeedAttempted; !errors.Is(err, ErrJobState) {
+				if err := <-succeedAttempted; !errors.Is(err, model.ErrJobState) {
 					t.Fatalf("runner success after cancellation = %v", err)
 				}
 			} else {
 				if err := <-succeedAttempted; err != nil {
 					t.Fatalf("runner success = %v", err)
 				}
-				if cancelled, err := scheduler.Cancel(t.Context(), job.ID); err != nil || cancelled.State != JobSucceeded {
+				if cancelled, err := scheduler.Cancel(t.Context(), job.ID); err != nil || cancelled.State != model.JobSucceeded {
 					t.Fatalf("cancellation after success = %#v, %v", cancelled, err)
 				}
 				releaseRunner()
@@ -580,10 +603,10 @@ func TestSchedulerCancellationArbitratesRunnerSuccessBothOrders(t *testing.T) {
 				t.Fatal(err)
 			}
 			if test.cancelFirst {
-				if stored.State != JobCancelled {
+				if stored.State != model.JobCancelled {
 					t.Fatalf("stored cancelled job = %#v", stored)
 				}
-			} else if stored.State != JobSucceeded || !stored.ResultJSON.Valid || stored.ResultJSON.String != `{"output":"published"}` {
+			} else if stored.State != model.JobSucceeded || !stored.ResultJSON.Valid || stored.ResultJSON.String != `{"output":"published"}` {
 				t.Fatalf("stored successful job = %#v", stored)
 			}
 		})
@@ -593,20 +616,20 @@ func TestSchedulerCancellationArbitratesRunnerSuccessBothOrders(t *testing.T) {
 func TestSchedulerAdmissionReturnsCommittedJobsAfterContextCancellation(t *testing.T) {
 	tests := []struct {
 		name   string
-		jobs   []Job
-		submit func(*Scheduler, context.Context, []Job) ([]Job, error)
+		jobs   []model.Job
+		submit func(*Scheduler, context.Context, []model.Job) ([]model.Job, error)
 	}{
 		{
 			name: "batch",
-			jobs: []Job{{ID: "j_000000000091", BatchID: "b_000000000091", Kind: JobScan, RequestJSON: `{}`}},
-			submit: func(s *Scheduler, ctx context.Context, jobs []Job) ([]Job, error) {
+			jobs: []model.Job{{ID: "j_000000000091", BatchID: "b_000000000091", Kind: model.JobScan, RequestJSON: `{}`}},
+			submit: func(s *Scheduler, ctx context.Context, jobs []model.Job) ([]model.Job, error) {
 				return s.Submit(ctx, jobs)
 			},
 		},
 		{
 			name: "proposal",
-			jobs: []Job{{ID: "j_000000000092", BatchID: "b_000000000092", Kind: JobExport, ProjectID: "p_project", ProjectItemID: "i_item", ProposalID: "ep_proposal", CredentialID: "c_credential", RequestJSON: `{}`}},
-			submit: func(s *Scheduler, ctx context.Context, jobs []Job) ([]Job, error) {
+			jobs: []model.Job{{ID: "j_000000000092", BatchID: "b_000000000092", Kind: model.JobExport, ProjectID: "p_project", ProjectItemID: "i_item", ProposalID: "ep_proposal", CredentialID: "c_credential", RequestJSON: `{}`}},
+			submit: func(s *Scheduler, ctx context.Context, jobs []model.Job) ([]model.Job, error) {
 				return s.SubmitProposal(ctx, "ep_proposal", "c_credential", jobs)
 			},
 		},
@@ -619,11 +642,11 @@ func TestSchedulerAdmissionReturnsCommittedJobsAfterContextCancellation(t *testi
 					t.Error(err)
 				}
 			})
-			jobs, err := NewJobsStore(database)
+			jobs, err := newTestJobsStore(database)
 			if err != nil {
 				t.Fatal(err)
 			}
-			scheduler, err := NewScheduler(jobs, SchedulerConfig{QueueCapacity: 1, WorkerLimit: 1}, func(context.Context, Job) error { return nil })
+			scheduler, err := NewScheduler(jobs, SchedulerConfig{QueueCapacity: 1, WorkerLimit: 1}, func(context.Context, model.Job) error { return nil })
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -643,14 +666,14 @@ func TestSchedulerAdmissionReturnsCommittedJobsAfterContextCancellation(t *testi
 				t.Fatalf("returned %d jobs, want %d", len(got), len(test.jobs))
 			}
 			for i, returned := range got {
-				if returned.ID != test.jobs[i].ID || returned.State != JobQueued || returned.CreatedAt.IsZero() || returned.UpdatedAt.IsZero() {
+				if returned.ID != test.jobs[i].ID || returned.State != model.JobQueued || returned.CreatedAt.IsZero() || returned.UpdatedAt.IsZero() {
 					t.Fatalf("returned job %d = %#v", i, returned)
 				}
 				stored, err := jobs.Get(t.Context(), returned.ID)
 				if err != nil {
 					t.Fatal(err)
 				}
-				if stored.State != JobQueued || !stored.CreatedAt.Equal(returned.CreatedAt) || !stored.UpdatedAt.Equal(returned.UpdatedAt) {
+				if stored.State != model.JobQueued || !stored.CreatedAt.Equal(returned.CreatedAt) || !stored.UpdatedAt.Equal(returned.UpdatedAt) {
 					t.Fatalf("stored job %d = %#v, returned = %#v", i, stored, returned)
 				}
 			}
@@ -665,7 +688,7 @@ func TestSchedulerRetriesTerminalTransitionPreservingRunnerResult(t *testing.T) 
 			t.Error(err)
 		}
 	})
-	jobs, err := NewJobsStore(database)
+	jobs, err := newTestJobsStore(database)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -676,7 +699,7 @@ func TestSchedulerRetriesTerminalTransitionPreservingRunnerResult(t *testing.T) 
 		QueueCapacity: 1,
 		WorkerLimit:   1,
 		Logger:        log.New(&logs, "", 0),
-	}, func(context.Context, Job) error {
+	}, func(context.Context, model.Job) error {
 		executions.Add(1)
 		return &ResultPersistenceError{
 			Result: `{"output":"published"}`,
@@ -686,21 +709,21 @@ func TestSchedulerRetriesTerminalTransitionPreservingRunnerResult(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	scheduler.terminalTransition = func(ctx context.Context, id string, target JobState, result, _ string) (Job, error) {
-		if target != JobSucceeded || result != `{"output":"published"}` {
-			return Job{}, errors.New("scheduler supplied an unexpected terminal transition")
+	scheduler.terminalTransition = func(ctx context.Context, id string, target model.JobState, result, _ string) (model.Job, error) {
+		if target != model.JobSucceeded || result != `{"output":"published"}` {
+			return model.Job{}, errors.New("scheduler supplied an unexpected terminal transition")
 		}
 		if got := attempts.Add(1); got < terminalTransitionAttempts {
-			return Job{}, errors.New("transient terminal write")
+			return model.Job{}, errors.New("transient terminal write")
 		}
 		return jobs.Succeed(ctx, id, result)
 	}
 	scheduler.Start()
-	job := Job{ID: "j_000000000101", BatchID: "b_000000000101", Kind: JobScan, RequestJSON: `{}`}
-	if _, err := scheduler.Submit(t.Context(), []Job{job}); err != nil {
+	job := model.Job{ID: "j_000000000101", BatchID: "b_000000000101", Kind: model.JobScan, RequestJSON: `{}`}
+	if _, err := scheduler.Submit(t.Context(), []model.Job{job}); err != nil {
 		t.Fatal(err)
 	}
-	waitForJobState(t, jobs, job.ID, JobSucceeded)
+	waitForJobState(t, jobs, job.ID, model.JobSucceeded)
 	if err := scheduler.Shutdown(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -729,7 +752,7 @@ func TestSchedulerSurfacesExhaustedTerminalTransitionWithoutEmptySuccess(t *test
 			t.Error(err)
 		}
 	})
-	jobs, err := NewJobsStore(database)
+	jobs, err := newTestJobsStore(database)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -739,7 +762,7 @@ func TestSchedulerSurfacesExhaustedTerminalTransitionWithoutEmptySuccess(t *test
 		QueueCapacity: 1,
 		WorkerLimit:   1,
 		Logger:        log.New(&logs, "", 0),
-	}, func(context.Context, Job) error {
+	}, func(context.Context, model.Job) error {
 		return &ResultPersistenceError{
 			Result: `{"output":"published"}`,
 			Err:    errors.New("permanent terminal write"),
@@ -748,13 +771,13 @@ func TestSchedulerSurfacesExhaustedTerminalTransitionWithoutEmptySuccess(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	scheduler.terminalTransition = func(context.Context, string, JobState, string, string) (Job, error) {
+	scheduler.terminalTransition = func(context.Context, string, model.JobState, string, string) (model.Job, error) {
 		attempts.Add(1)
-		return Job{}, errors.New("permanent terminal write")
+		return model.Job{}, errors.New("permanent terminal write")
 	}
 	scheduler.Start()
-	job := Job{ID: "j_000000000102", BatchID: "b_000000000102", Kind: JobScan, RequestJSON: `{}`}
-	if _, err := scheduler.Submit(t.Context(), []Job{job}); err != nil {
+	job := model.Job{ID: "j_000000000102", BatchID: "b_000000000102", Kind: model.JobScan, RequestJSON: `{}`}
+	if _, err := scheduler.Submit(t.Context(), []model.Job{job}); err != nil {
 		t.Fatal(err)
 	}
 	deadline := time.Now().Add(time.Second)
@@ -771,7 +794,7 @@ func TestSchedulerSurfacesExhaustedTerminalTransitionWithoutEmptySuccess(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stored.State != JobRunning {
+	if stored.State != model.JobRunning {
 		t.Fatalf("stored state = %s, want running after exhausted write", stored.State)
 	}
 	if stored.ResultJSON.Valid {
@@ -783,14 +806,14 @@ func TestSchedulerSurfacesExhaustedTerminalTransitionWithoutEmptySuccess(t *test
 		t.Fatalf("shutdown after exhausted write = %v", err)
 	}
 	var event struct {
-		JobID         string   `json:"job_id"`
-		TargetState   JobState `json:"target_state"`
-		ErrorCategory string   `json:"error_category"`
+		JobID         string         `json:"job_id"`
+		TargetState   model.JobState `json:"target_state"`
+		ErrorCategory string         `json:"error_category"`
 	}
 	if err := json.Unmarshal(logs.Bytes(), &event); err != nil {
 		t.Fatalf("terminal failure log is not structured JSON: %v", err)
 	}
-	if event.JobID != job.ID || event.TargetState != JobSucceeded || event.ErrorCategory != "terminal_transition" {
+	if event.JobID != job.ID || event.TargetState != model.JobSucceeded || event.ErrorCategory != "terminal_transition" {
 		t.Fatalf("unexpected terminal failure event: %#v", event)
 	}
 	if logged := logs.String(); bytes.Contains([]byte(logged), []byte("permanent terminal write")) || bytes.Contains([]byte(logged), []byte(`{"output":"published"}`)) {

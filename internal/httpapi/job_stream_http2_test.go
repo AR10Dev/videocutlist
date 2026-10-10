@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"videocutlist/internal/jobs/view"
 
 	"videocutlist/internal/projects"
 )
@@ -146,11 +147,11 @@ func readSSEBlock(scanner *bufio.Scanner) (string, error) {
 
 type http2StreamJobs struct{ terminal atomic.Bool }
 
-func (j *http2StreamJobs) Get(_ context.Context, id string) (Job, error) {
+func (j *http2StreamJobs) Get(_ context.Context, id string) (view.Job, error) {
 	if j.terminal.Load() {
-		return Job{ID: id, Type: "export", State: "succeeded", Revision: 2}, nil
+		return view.Job{ID: id, Type: "export", State: "succeeded", Revision: 2}, nil
 	}
-	return Job{ID: id, Type: "export", State: "running", Revision: 1}, nil
+	return view.Job{ID: id, Type: "export", State: "running", Revision: 1}, nil
 }
 
 func (*http2StreamJobs) Cancel(context.Context, string) error { return nil }
@@ -162,7 +163,7 @@ type http2StreamBatches struct {
 
 func (b *http2StreamBatches) Snapshot(_ context.Context, id string) (projects.Batch, string, error) {
 	if b.terminal.Load() {
-		return projects.Batch{BatchID: id, State: "succeeded", Jobs: []projects.Job{}}, "b2_done", nil
+		return projects.Batch{BatchID: id, State: "succeeded", Jobs: []view.Job{}}, "b2_done", nil
 	}
-	return projects.Batch{BatchID: id, State: "running", Jobs: []projects.Job{}}, "b2_running", nil
+	return projects.Batch{BatchID: id, State: "running", Jobs: []view.Job{}}, "b2_running", nil
 }

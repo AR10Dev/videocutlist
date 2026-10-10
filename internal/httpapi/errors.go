@@ -5,7 +5,7 @@ import (
 	"net/http"
 
 	store "videocutlist/internal/db"
-	"videocutlist/internal/jobs"
+	jobs "videocutlist/internal/jobs/model"
 	"videocutlist/internal/projects"
 )
 

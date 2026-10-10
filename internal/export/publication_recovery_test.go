@@ -5,9 +5,10 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+	testsupport "videocutlist/internal/testsupport"
 
 	store "videocutlist/internal/db"
-	jobqueue "videocutlist/internal/jobs"
+	jobqueue "videocutlist/internal/jobs/model"
 	"videocutlist/internal/library/media/probe"
 )
 
@@ -28,7 +29,7 @@ func TestCollisionPublicationRecoveryPreservesExternalFile(t *testing.T) {
 					t.Error(err)
 				}
 			})
-			jobs, err := jobqueue.NewJobsStore(database)
+			jobs, err := testsupport.NewJobsStore(database)
 			if err != nil {
 				t.Fatal(err)
 			}

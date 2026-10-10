@@ -6,8 +6,8 @@
     ".devenv/**",
     ".pnpm-store/**",
     "node_modules/**",
-    "client/node_modules/**",
-    "client/dist/**",
+    "web/node_modules/**",
+    "web/dist/**",
     "internal/web/webassets/dist/**",
     "test/fixtures/real-media/**",
     "test-results/**",
@@ -17,7 +17,7 @@
   "lsp": {
     "warmFiles": [
       "cmd/videocutlist/main.go",
-      "client/src/App.tsx",
+      "web/src/App.tsx",
       "deployments/containers/compose.yaml"
     ],
     "servers": {

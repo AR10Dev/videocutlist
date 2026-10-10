@@ -13,8 +13,7 @@ import (
 	"unicode"
 
 	exporter "videocutlist/internal/export"
-	"videocutlist/internal/jobs"
-	"videocutlist/internal/preview"
+	settingsmodel "videocutlist/internal/settings/model"
 )
 
 const (
@@ -116,7 +115,7 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 	}
 	seenDestinations := map[string]bool{}
 	for _, destination := range c.Destinations {
-		if !validDestinationID(destination.ID) || seenDestinations[destination.ID] || destination.Kind != exporter.KindDownload && destination.Kind != exporter.KindArchive && destination.Kind != exporter.KindSourceAdjacent {
+		if !settingsmodel.ValidDestinationID(destination.ID) || seenDestinations[destination.ID] || destination.Kind != exporter.KindDownload && destination.Kind != exporter.KindArchive && destination.Kind != exporter.KindSourceAdjacent {
 			return Config{}, fmt.Errorf("invalid destination configuration")
 		}
 		if destination.Kind == exporter.KindSourceAdjacent {
@@ -166,14 +165,14 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 	if c.PreviewGlobalLimit, err = positiveInt(lookup, "VIDEOCUTLIST_PREVIEW_GLOBAL_LIMIT", defaultPreviewGlobal); err != nil {
 		return Config{}, err
 	}
-	if c.PreviewGlobalLimit > preview.MaxGlobalProcesses {
-		return Config{}, fmt.Errorf("VIDEOCUTLIST_PREVIEW_GLOBAL_LIMIT must be 1..%d", preview.MaxGlobalProcesses)
+	if c.PreviewGlobalLimit > settingsmodel.MaxMediaProcesses {
+		return Config{}, fmt.Errorf("VIDEOCUTLIST_PREVIEW_GLOBAL_LIMIT must be 1..%d", settingsmodel.MaxMediaProcesses)
 	}
 	if c.ExportLimit, err = positiveInt(lookup, "VIDEOCUTLIST_EXPORT_LIMIT", defaultExportLimit); err != nil {
 		return Config{}, err
 	}
-	if c.ExportLimit > jobs.MaxWorkerLimit {
-		return Config{}, fmt.Errorf("VIDEOCUTLIST_EXPORT_LIMIT must be 1..%d", jobs.MaxWorkerLimit)
+	if c.ExportLimit > settingsmodel.MaxExportWorkers {
+		return Config{}, fmt.Errorf("VIDEOCUTLIST_EXPORT_LIMIT must be 1..%d", settingsmodel.MaxExportWorkers)
 	}
 	if c.MediaMaxFiles, err = positiveInt(lookup, "VIDEOCUTLIST_MEDIA_MAX_FILES", defaultMediaMaxFiles); err != nil {
 		return Config{}, err
@@ -203,18 +202,6 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 		return Config{}, fmt.Errorf("VIDEOCUTLIST_PREVIEW_MAX_MS must cover the default preview window")
 	}
 	return c, nil
-}
-
-func validDestinationID(value string) bool {
-	if strings.TrimSpace(value) == "" || len(value) > 64 || strings.ContainsAny(value, "/\\") {
-		return false
-	}
-	for _, character := range value {
-		if character < 32 || character == 127 {
-			return false
-		}
-	}
-	return true
 }
 
 func loadListener(c *Config, lookup func(string) (string, bool)) error {

@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"videocutlist/internal/preview"
 	ffmpegrunner "videocutlist/internal/preview/ffmpeg"
-	"videocutlist/internal/projects/model"
 )
 
 func TestSoftwarePreviewStreamsAndValidates(t *testing.T) {
@@ -37,7 +37,7 @@ func TestSoftwarePreviewStreamsAndValidates(t *testing.T) {
 		}
 	})
 	var timings []ffmpegrunner.Timing
-	running, err := (ffmpegrunner.Runner{Path: ffmpeg, OnTiming: func(timing ffmpegrunner.Timing) { timings = append(timings, timing) }}).Start(context.Background(), source, model.PreviewSpec{StartMS: 0, DurationMS: 800, Width: 160, Height: 90, FPS: 30, Audio: true})
+	running, err := (ffmpegrunner.Runner{Path: ffmpeg, OnTiming: func(timing ffmpegrunner.Timing) { timings = append(timings, timing) }}).Start(context.Background(), source, preview.TranscodeSpec{StartMS: 0, DurationMS: 800, Width: 160, Height: 90, FPS: 30, Audio: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +94,7 @@ func TestPreviewCancellationAfterFirstByte(t *testing.T) {
 		}
 	})
 	ctx, cancel := context.WithCancel(context.Background())
-	running, err := (ffmpegrunner.Runner{Path: filepath.Join(root, "test", "harness", "fake-ffmpeg.sh"), GracePeriod: 100 * time.Millisecond}).Start(ctx, source, model.PreviewSpec{DurationMS: 1, Width: 16, Height: 16, FPS: 1})
+	running, err := (ffmpegrunner.Runner{Path: filepath.Join(root, "test", "harness", "fake-ffmpeg.sh"), GracePeriod: 100 * time.Millisecond}).Start(ctx, source, preview.TranscodeSpec{DurationMS: 1, Width: 16, Height: 16, FPS: 1})
 	if err != nil {
 		cancel()
 		t.Fatal(err)

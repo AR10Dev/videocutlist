@@ -7,14 +7,14 @@ import (
 	"time"
 
 	store "videocutlist/internal/db"
+	librarymedia "videocutlist/internal/library/media"
 	"videocutlist/internal/mcp"
-	"videocutlist/internal/projects"
 )
 
-type toolMedia struct{ items []projects.Media }
+type toolMedia struct{ items []librarymedia.Media }
 
-func (m toolMedia) List(_ context.Context, cursor string, limit int) (projects.MediaPage, error) {
-	page := projects.MediaPage{}
+func (m toolMedia) List(_ context.Context, cursor string, limit int) (librarymedia.MediaPage, error) {
+	page := librarymedia.MediaPage{}
 	for _, item := range m.items {
 		if item.ID > cursor {
 			page.Items = append(page.Items, item)
@@ -27,17 +27,17 @@ func (m toolMedia) List(_ context.Context, cursor string, limit int) (projects.M
 	}
 	return page, nil
 }
-func (m toolMedia) Get(_ context.Context, id string) (projects.Media, error) {
+func (m toolMedia) Get(_ context.Context, id string) (librarymedia.Media, error) {
 	for _, item := range m.items {
 		if item.ID == id {
 			return item, nil
 		}
 	}
-	return projects.Media{}, store.ErrMediaNotFound
+	return librarymedia.Media{}, store.ErrMediaNotFound
 }
 
 func TestMediaToolsScopeAndSafeMetadata(t *testing.T) {
-	media := toolMedia{items: []projects.Media{
+	media := toolMedia{items: []librarymedia.Media{
 		{ID: "m_alpha", RootID: "camera", Name: "alpha.mp4", DurationMS: 1000, SizeBytes: 4, Container: "mp4", Streams: map[string]any{"video": "h264"}},
 		{ID: "m_secret", RootID: "private", Name: "secret.mp4", DurationMS: 2000, SizeBytes: 8, Container: "mp4", Streams: map[string]any{"video": "hevc"}},
 	}}
@@ -62,7 +62,7 @@ func TestMediaToolsScopeAndSafeMetadata(t *testing.T) {
 }
 
 func TestMediaToolsFinalFilteredPageDoesNotReturnCursor(t *testing.T) {
-	media := toolMedia{items: []projects.Media{
+	media := toolMedia{items: []librarymedia.Media{
 		{ID: "m_a_skip", RootID: "camera", Name: "skip.mp4", DurationMS: 1000},
 		{ID: "m_b_match", RootID: "camera", Name: "match.mp4", DurationMS: 1000},
 	}}
@@ -80,7 +80,7 @@ func TestMediaToolsFinalFilteredPageDoesNotReturnCursor(t *testing.T) {
 }
 
 func TestMediaToolsRetainsUnconsumedFinalPageRows(t *testing.T) {
-	media := toolMedia{items: []projects.Media{
+	media := toolMedia{items: []librarymedia.Media{
 		{ID: "m_a_match", RootID: "camera", Name: "match-a.mp4"},
 		{ID: "m_b_match", RootID: "camera", Name: "match-b.mp4"},
 	}}
@@ -131,7 +131,7 @@ func scopedTransportCredentials(t *testing.T) (*mcp.CredentialStore, string) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = database.Close() })
-	credentials, err := mcp.NewCredentialStore(database)
+	credentials, err := mcp.NewCredentialStore(newMCPRepository(t, database))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -10,8 +10,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"videocutlist/internal/jobs/view"
 
-	jobqueue "videocutlist/internal/jobs"
+	jobqueue "videocutlist/internal/jobs/model"
 	"videocutlist/internal/projects"
 )
 
@@ -264,7 +265,7 @@ func parseJobCursor(cursor, jobID string) (string, bool) {
 	return cursor, true
 }
 
-func writeJobEvent(writer http.ResponseWriter, flush func() error, event string, job Job) bool {
+func writeJobEvent(writer http.ResponseWriter, flush func() error, event string, job view.Job) bool {
 	data, err := json.Marshal(job)
 	if err != nil {
 		return false

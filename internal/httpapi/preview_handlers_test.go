@@ -8,8 +8,10 @@ import (
 	"strings"
 	"testing"
 
+	librarymedia "videocutlist/internal/library/media"
+	"videocutlist/internal/preview"
+
 	"videocutlist/internal/library/media/index"
-	"videocutlist/internal/projects"
 )
 
 type previewErrorService struct {
@@ -27,23 +29,23 @@ func (s previewErrorService) Cached(context.Context, PreviewSpec) (bool, error) 
 }
 
 type previewHandlerMedia struct {
-	item Media
+	item librarymedia.Media
 }
 
-func (m previewHandlerMedia) List(context.Context, string, int) (MediaPage, error) {
-	return MediaPage{}, nil
+func (m previewHandlerMedia) List(context.Context, string, int) (librarymedia.MediaPage, error) {
+	return librarymedia.MediaPage{}, nil
 }
 
-func (m previewHandlerMedia) Browse(context.Context, string, string, int) (FolderPage, error) {
-	return FolderPage{}, nil
+func (m previewHandlerMedia) Browse(context.Context, string, string, int) (librarymedia.FolderPage, error) {
+	return librarymedia.FolderPage{}, nil
 }
 
-func (m previewHandlerMedia) Get(context.Context, string) (Media, error) {
+func (m previewHandlerMedia) Get(context.Context, string) (librarymedia.Media, error) {
 	return m.item, nil
 }
 
 func (m previewHandlerMedia) RefreshMedia(context.Context) error { return nil }
-func (m previewHandlerMedia) Status() LibraryStatus              { return LibraryStatus{} }
+func (m previewHandlerMedia) Status() librarymedia.LibraryStatus { return librarymedia.LibraryStatus{} }
 
 func newPreviewErrorServer(t *testing.T, preview PreviewService) *Server {
 	t.Helper()
@@ -54,7 +56,7 @@ func newPreviewErrorServer(t *testing.T, preview PreviewService) *Server {
 	mediaID := "m_" + strings.Repeat("a", 43)
 	server, err := New(Config{
 		Authenticator: authenticator,
-		Media:         previewHandlerMedia{item: Media{ID: mediaID, DurationMS: 1_000}},
+		Media:         previewHandlerMedia{item: librarymedia.Media{ID: mediaID, DurationMS: 1_000}},
 		Preview:       preview,
 		Projects:      routeTestProjects{},
 		BatchExports:  &routeTestBatchExports{},
@@ -81,7 +83,7 @@ func TestPreviewHTTPMapsDomainErrorsForGetAndHead(t *testing.T) {
 	}{
 		{name: "source changed", err: index.ErrSourceChanged, status: http.StatusConflict, code: "source_changed"},
 		{name: "missing", err: index.ErrNotFound, status: http.StatusNotFound, code: "not_found"},
-		{name: "limit", err: projects.ErrGlobalLimit, status: http.StatusTooManyRequests, code: "preview_busy", retryAfter: "1"},
+		{name: "limit", err: preview.ErrGlobalLimit, status: http.StatusTooManyRequests, code: "preview_busy", retryAfter: "1"},
 		{name: "internal", err: errors.New("ffmpeg failed"), status: http.StatusInternalServerError, code: "internal_error"},
 		{name: "deadline", err: context.DeadlineExceeded, status: http.StatusGatewayTimeout, code: "preview_timeout"},
 	}
@@ -162,7 +164,7 @@ func TestConditionalAssetsValidateSourceBefore304(t *testing.T) {
 	mediaID := "m_" + strings.Repeat("a", 43)
 	server, err := New(Config{
 		Authenticator: authenticator,
-		Media:         previewHandlerMedia{item: Media{ID: mediaID, DurationMS: 1_000, ETag: "source-v1", Streams: map[string]any{"audio": map[string]any{}}}},
+		Media:         previewHandlerMedia{item: librarymedia.Media{ID: mediaID, DurationMS: 1_000, ETag: "source-v1", Streams: map[string]any{"audio": map[string]any{}}}},
 		Assets:        sourceValidatingAssets{err: index.ErrSourceChanged},
 		Preview:       routeTestPreview{},
 		Projects:      routeTestProjects{},
@@ -182,7 +184,7 @@ func TestConditionalAssetsValidateSourceBefore304(t *testing.T) {
 			kind = "waveform-v2"
 		}
 		etagResponse := httptest.NewRecorder()
-		assetNotModified(etagResponse, request, Media{ID: mediaID, ETag: "source-v1"}, kind)
+		assetNotModified(etagResponse, request, librarymedia.Media{ID: mediaID, ETag: "source-v1"}, kind)
 		request.Header.Set("If-None-Match", etagResponse.Header().Get("ETag"))
 		response := httptest.NewRecorder()
 		server.ServeHTTP(response, request)

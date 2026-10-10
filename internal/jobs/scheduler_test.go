@@ -9,7 +9,8 @@ import (
 	"time"
 
 	db "videocutlist/internal/db"
-	store "videocutlist/internal/jobs"
+	jobqueue "videocutlist/internal/jobs"
+	store "videocutlist/internal/jobs/model"
 )
 
 func schedulerJob(n string) store.Job {
@@ -27,12 +28,12 @@ func TestSchedulerPreservesRunnerResult(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	jobs, err := store.NewJobsStore(db)
+	jobs, err := newTestJobsStore(db)
 	if err != nil {
 		t.Fatal(err)
 	}
 	result := `{"camera":{"state":"ready_with_media"}}`
-	s, err := store.NewScheduler(jobs, store.SchedulerConfig{QueueCapacity: 1, WorkerLimit: 1}, func(ctx context.Context, job store.Job) error {
+	s, err := jobqueue.NewScheduler(jobs, jobqueue.SchedulerConfig{QueueCapacity: 1, WorkerLimit: 1}, func(ctx context.Context, job store.Job) error {
 		_, err := jobs.Succeed(ctx, job.ID, result)
 		return err
 	})
@@ -68,11 +69,11 @@ func TestCancelTerminalJobsIsIdempotentAndPreservesOutcome(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = database.Close() })
-	jobs, err := store.NewJobsStore(database)
+	jobs, err := newTestJobsStore(database)
 	if err != nil {
 		t.Fatal(err)
 	}
-	scheduler, err := store.NewScheduler(jobs, store.SchedulerConfig{QueueCapacity: 1, WorkerLimit: 1}, func(context.Context, store.Job) error { return nil })
+	scheduler, err := jobqueue.NewScheduler(jobs, jobqueue.SchedulerConfig{QueueCapacity: 1, WorkerLimit: 1}, func(context.Context, store.Job) error { return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,11 +128,11 @@ func TestCancelBatchDistinguishesUnknownFromCompleted(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = database.Close() })
-	jobs, err := store.NewJobsStore(database)
+	jobs, err := newTestJobsStore(database)
 	if err != nil {
 		t.Fatal(err)
 	}
-	scheduler, err := store.NewScheduler(jobs, store.SchedulerConfig{QueueCapacity: 1, WorkerLimit: 1}, func(context.Context, store.Job) error { return nil })
+	scheduler, err := jobqueue.NewScheduler(jobs, jobqueue.SchedulerConfig{QueueCapacity: 1, WorkerLimit: 1}, func(context.Context, store.Job) error { return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,8 +161,8 @@ func TestSchedulerAdmissionIsAtomicAndBounded(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	jobs, _ := store.NewJobsStore(db)
-	s, err := store.NewScheduler(jobs, store.SchedulerConfig{QueueCapacity: 2, WorkerLimit: 1}, func(context.Context, store.Job) error { return nil })
+	jobs, _ := newTestJobsStore(db)
+	s, err := jobqueue.NewScheduler(jobs, jobqueue.SchedulerConfig{QueueCapacity: 2, WorkerLimit: 1}, func(context.Context, store.Job) error { return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -186,12 +187,12 @@ func TestSchedulerBoundedExecutionCancellationAndShutdown(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	jobs, _ := store.NewJobsStore(db)
+	jobs, _ := newTestJobsStore(db)
 	started := make(chan string, 2)
 	release := make(chan struct{})
 	var mu sync.Mutex
 	running, maxRunning := 0, 0
-	s, err := store.NewScheduler(jobs, store.SchedulerConfig{QueueCapacity: 3, WorkerLimit: 1}, func(ctx context.Context, job store.Job) error {
+	s, err := jobqueue.NewScheduler(jobs, jobqueue.SchedulerConfig{QueueCapacity: 3, WorkerLimit: 1}, func(ctx context.Context, job store.Job) error {
 		mu.Lock()
 		running++
 		if running > maxRunning {
@@ -253,12 +254,12 @@ func TestSchedulerQueuedCancellationNeverInvokesRunner(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	jobs, err := store.NewJobsStore(db)
+	jobs, err := newTestJobsStore(db)
 	if err != nil {
 		t.Fatal(err)
 	}
 	runnerIDs := make(chan string, 2)
-	s, err := store.NewScheduler(jobs, store.SchedulerConfig{QueueCapacity: 2, WorkerLimit: 1}, func(_ context.Context, job store.Job) error { runnerIDs <- job.ID; return nil })
+	s, err := jobqueue.NewScheduler(jobs, jobqueue.SchedulerConfig{QueueCapacity: 2, WorkerLimit: 1}, func(_ context.Context, job store.Job) error { runnerIDs <- job.ID; return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -317,10 +318,10 @@ func TestSchedulerRunningCancellationPersistsBeforeRunnerExit(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	jobs, _ := store.NewJobsStore(db)
+	jobs, _ := newTestJobsStore(db)
 	started := make(chan string, 2)
 	returned := make(chan struct{})
-	s, err := store.NewScheduler(jobs, store.SchedulerConfig{QueueCapacity: 2, WorkerLimit: 1}, func(ctx context.Context, job store.Job) error {
+	s, err := jobqueue.NewScheduler(jobs, jobqueue.SchedulerConfig{QueueCapacity: 2, WorkerLimit: 1}, func(ctx context.Context, job store.Job) error {
 		started <- job.ID
 		if job.ID == "j_000000000032" {
 			<-ctx.Done()
@@ -373,8 +374,8 @@ func TestSchedulerConcurrentSubmitClaimAndCancel(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	jobs, _ := store.NewJobsStore(db)
-	s, err := store.NewScheduler(jobs, store.SchedulerConfig{QueueCapacity: 32, WorkerLimit: 2}, func(ctx context.Context, _ store.Job) error {
+	jobs, _ := newTestJobsStore(db)
+	s, err := jobqueue.NewScheduler(jobs, jobqueue.SchedulerConfig{QueueCapacity: 32, WorkerLimit: 2}, func(ctx context.Context, _ store.Job) error {
 		<-ctx.Done()
 		return ctx.Err()
 	})
@@ -417,7 +418,7 @@ func TestSchedulerConcurrentSubmitClaimAndCancel(t *testing.T) {
 	}
 }
 
-func waitForJobState(t *testing.T, jobs *store.JobsStore, id string, want store.JobState) {
+func waitForJobState(t *testing.T, jobs *jobqueue.JobsStore, id string, want store.JobState) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
@@ -441,10 +442,10 @@ func TestSchedulerStartAndShutdownAreIdempotent(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	jobs, _ := store.NewJobsStore(db)
+	jobs, _ := newTestJobsStore(db)
 	started := make(chan struct{}, 3)
 	release := make(chan struct{})
-	s, err := store.NewScheduler(jobs, store.SchedulerConfig{QueueCapacity: 3, WorkerLimit: 2}, func(ctx context.Context, _ store.Job) error {
+	s, err := jobqueue.NewScheduler(jobs, jobqueue.SchedulerConfig{QueueCapacity: 3, WorkerLimit: 2}, func(ctx context.Context, _ store.Job) error {
 		started <- struct{}{}
 		select {
 		case <-release:
@@ -493,10 +494,10 @@ func TestSchedulerSetLimitsDrainsActiveAndQueuedJobs(t *testing.T) {
 			t.Error(err)
 		}
 	}()
-	jobs, _ := store.NewJobsStore(db)
+	jobs, _ := newTestJobsStore(db)
 	started := make(chan string, 4)
 	release := make(chan struct{})
-	s, err := store.NewScheduler(jobs, store.SchedulerConfig{QueueCapacity: 2, WorkerLimit: 1}, func(ctx context.Context, job store.Job) error {
+	s, err := jobqueue.NewScheduler(jobs, jobqueue.SchedulerConfig{QueueCapacity: 2, WorkerLimit: 1}, func(ctx context.Context, job store.Job) error {
 		started <- job.ID
 		select {
 		case <-release:
@@ -536,12 +537,12 @@ func TestSchedulerSetLimitsDrainsActiveAndQueuedJobs(t *testing.T) {
 	}
 	submit("80", "81")
 	first := next()
-	if err := s.SetLimits(store.SchedulerConfig{QueueCapacity: 4, WorkerLimit: 2}); err != nil {
+	if err := s.SetLimits(jobqueue.SchedulerConfig{QueueCapacity: 4, WorkerLimit: 2}); err != nil {
 		t.Fatal(err)
 	}
 	second := next()
 	submit("82", "83")
-	if err := s.SetLimits(store.SchedulerConfig{QueueCapacity: 1, WorkerLimit: 1}); err != nil {
+	if err := s.SetLimits(jobqueue.SchedulerConfig{QueueCapacity: 1, WorkerLimit: 1}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.Submit(t.Context(), []store.Job{schedulerJob("84")}); !errors.Is(err, store.ErrQueueFull) {
@@ -579,8 +580,8 @@ func TestSchedulerSetLimitsConcurrentWithShutdown(t *testing.T) {
 			t.Error(err)
 		}
 	}()
-	jobs, _ := store.NewJobsStore(db)
-	s, err := store.NewScheduler(jobs, store.SchedulerConfig{QueueCapacity: 4, WorkerLimit: 1}, func(ctx context.Context, _ store.Job) error {
+	jobs, _ := newTestJobsStore(db)
+	s, err := jobqueue.NewScheduler(jobs, jobqueue.SchedulerConfig{QueueCapacity: 4, WorkerLimit: 1}, func(ctx context.Context, _ store.Job) error {
 		<-ctx.Done()
 		return ctx.Err()
 	})
@@ -594,8 +595,8 @@ func TestSchedulerSetLimitsConcurrentWithShutdown(t *testing.T) {
 	var wg sync.WaitGroup
 	for i := range 20 {
 		wg.Go(func() {
-			err := s.SetLimits(store.SchedulerConfig{QueueCapacity: 4, WorkerLimit: i%3 + 1})
-			if err != nil && !errors.Is(err, store.ErrSchedulerStopped) {
+			err := s.SetLimits(jobqueue.SchedulerConfig{QueueCapacity: 4, WorkerLimit: i%3 + 1})
+			if err != nil && !errors.Is(err, jobqueue.ErrSchedulerStopped) {
 				t.Errorf("resize = %v", err)
 			}
 		})
@@ -606,7 +607,7 @@ func TestSchedulerSetLimitsConcurrentWithShutdown(t *testing.T) {
 		t.Fatal(err)
 	}
 	wg.Wait()
-	if err := s.SetLimits(store.SchedulerConfig{QueueCapacity: 4, WorkerLimit: 2}); !errors.Is(err, store.ErrSchedulerStopped) {
+	if err := s.SetLimits(jobqueue.SchedulerConfig{QueueCapacity: 4, WorkerLimit: 2}); !errors.Is(err, jobqueue.ErrSchedulerStopped) {
 		t.Fatalf("resize after shutdown = %v", err)
 	}
 }

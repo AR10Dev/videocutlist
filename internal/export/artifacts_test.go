@@ -10,9 +10,10 @@ import (
 	"sync"
 	"testing"
 	"time"
+	testsupport "videocutlist/internal/testsupport"
 
 	"videocutlist/internal/db"
-	jobqueue "videocutlist/internal/jobs"
+	jobqueue "videocutlist/internal/jobs/model"
 	"videocutlist/internal/library/media/probe"
 )
 
@@ -36,7 +37,7 @@ func TestArtifactReconcilePublishesOnlyValidatedOwnedOutput(t *testing.T) {
 			t.Errorf("close database: %v", err)
 		}
 	})
-	jobs, err := jobqueue.NewJobsStore(db)
+	jobs, err := testsupport.NewJobsStore(db)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +88,7 @@ func TestArtifactReconcileRejectsMalformedExpiryAndKeepsZeroExpiryArchive(t *tes
 			t.Errorf("close database: %v", err)
 		}
 	})
-	jobs, err := jobqueue.NewJobsStore(database)
+	jobs, err := testsupport.NewJobsStore(database)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +176,7 @@ func TestArtifactReconcileCleansCancelledPublishedManifestAndPreservesSucceededS
 			t.Errorf("close database: %v", err)
 		}
 	})
-	jobs, err := jobqueue.NewJobsStore(database)
+	jobs, err := testsupport.NewJobsStore(database)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,7 +252,7 @@ func TestArtifactReconcileAdoptsSuccessfulManifestForCleanup(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = database.Close() })
-	jobs, err := jobqueue.NewJobsStore(database)
+	jobs, err := testsupport.NewJobsStore(database)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -308,7 +309,7 @@ func TestArtifactReconcileAdoptsBatchArchiveManifestForCleanup(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = database.Close() })
-	jobs, err := jobqueue.NewJobsStore(database)
+	jobs, err := testsupport.NewJobsStore(database)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -391,7 +392,7 @@ func TestArtifactReconcileCleansInvalidOwnedOutputOnly(t *testing.T) {
 			t.Errorf("close database: %v", err)
 		}
 	})
-	jobs, err := jobqueue.NewJobsStore(db)
+	jobs, err := testsupport.NewJobsStore(db)
 	if err != nil {
 		t.Fatal(err)
 	}

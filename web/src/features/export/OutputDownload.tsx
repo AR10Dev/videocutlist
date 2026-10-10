@@ -1,0 +1,33 @@
+import { Show } from "solid-js";
+import { createApiClient, resolveBrowserConfiguration } from "../../api";
+import { useWorkspace } from "../app/WorkspaceContext";
+import { createExportDownload, downloadExport } from "./download";
+
+/** Stream a protected output without making its API URL a navigable link. */
+export function OutputDownload(props: { jobId: string; position: number; name: string }) {
+  const configuration = resolveBrowserConfiguration();
+  const api = createApiClient(configuration);
+  const { pending, error, download, cancel } = createExportDownload(useWorkspace().server, () =>
+    downloadExport(
+      api,
+      `jobs/${encodeURIComponent(props.jobId)}/outputs/${props.position}`,
+      props.name,
+      configuration.authentication,
+    ),
+  );
+  return (
+    <div>
+      <button class="btn btn-link" type="button" disabled={pending()} onClick={download}>
+        {pending() ? "Downloading…" : `Download output ${props.position + 1}`}
+      </button>
+      <Show when={pending()}>
+        <button class="btn btn-ghost btn-sm" type="button" onClick={cancel}>
+          Cancel download
+        </button>
+      </Show>
+      <Show when={error()}>
+        <p role="alert">{error()}</p>
+      </Show>
+    </div>
+  );
+}

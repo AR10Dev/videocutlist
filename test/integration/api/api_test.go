@@ -13,9 +13,12 @@ import (
 	"testing"
 	"time"
 
+	exporter "videocutlist/internal/export"
 	"videocutlist/internal/exportpolicy"
 	api "videocutlist/internal/httpapi"
-	jobqueue "videocutlist/internal/jobs"
+	"videocutlist/internal/jobs/model"
+	"videocutlist/internal/jobs/view"
+	librarymedia "videocutlist/internal/library/media"
 	"videocutlist/internal/projects"
 )
 
@@ -25,33 +28,33 @@ const validProject = "p_aaaaaaaaaaaa"
 type mediaStub struct {
 	calls, refreshCalls, importStarts int
 	refreshErr, importErr             error
-	status                            api.LibraryStatus
+	status                            librarymedia.LibraryStatus
 }
 
-func (m *mediaStub) List(context.Context, string, int) (api.MediaPage, error) {
-	return api.MediaPage{}, nil
+func (m *mediaStub) List(context.Context, string, int) (librarymedia.MediaPage, error) {
+	return librarymedia.MediaPage{}, nil
 }
-func (m *mediaStub) Browse(context.Context, string, string, int) (api.FolderPage, error) {
-	return api.FolderPage{}, nil
+func (m *mediaStub) Browse(context.Context, string, string, int) (librarymedia.FolderPage, error) {
+	return librarymedia.FolderPage{}, nil
 }
-func (m *mediaStub) Get(context.Context, string) (api.Media, error) {
+func (m *mediaStub) Get(context.Context, string) (librarymedia.Media, error) {
 	m.calls++
-	return api.Media{ID: validMedia, Name: "clip.mp4", DurationMS: 10_000, SizeBytes: 1, Container: "mp4", Streams: map[string]any{}, ETag: "e"}, nil
+	return librarymedia.Media{ID: validMedia, Name: "clip.mp4", DurationMS: 10_000, SizeBytes: 1, Container: "mp4", Streams: map[string]any{}, ETag: "e"}, nil
 }
 func (m *mediaStub) RefreshMedia(_ context.Context) error {
 	m.refreshCalls++
 	return m.refreshErr
 }
-func (m *mediaStub) Status() api.LibraryStatus { return m.status }
-func (m *mediaStub) StartImport(context.Context, string) (projects.ImportJob, error) {
+func (m *mediaStub) Status() librarymedia.LibraryStatus { return m.status }
+func (m *mediaStub) StartImport(context.Context, string) (librarymedia.ImportJob, error) {
 	m.importStarts++
 	if m.importErr != nil {
-		return projects.ImportJob{}, m.importErr
+		return librarymedia.ImportJob{}, m.importErr
 	}
-	return projects.ImportJob{ID: "j_scanresult1234", State: "queued"}, nil
+	return librarymedia.ImportJob{ID: "j_scanresult1234", State: "queued"}, nil
 }
-func (m *mediaStub) ImportStatus(context.Context, string) (projects.ImportJob, error) {
-	return projects.ImportJob{}, nil
+func (m *mediaStub) ImportStatus(context.Context, string) (librarymedia.ImportJob, error) {
+	return librarymedia.ImportJob{}, nil
 }
 func (m *mediaStub) CancelImport(context.Context, string) error { return nil }
 
@@ -86,12 +89,12 @@ func (p *projectStub) Save(_ context.Context, id string, input projects.ProjectI
 
 type exportStub struct{ calls int }
 
-func (e *exportStub) Submit(context.Context, projects.BatchExportRequest) (string, []projects.Job, error) {
+func (e *exportStub) Submit(context.Context, projects.BatchExportRequest) (string, []view.Job, error) {
 	e.calls++
-	return "b_aaaaaaaaaaaa", []projects.Job{{ID: "j_aaaaaaaaaaaa", Type: "export", State: "queued"}}, nil
+	return "b_aaaaaaaaaaaa", []view.Job{{ID: "j_aaaaaaaaaaaa", Type: "export", State: "queued"}}, nil
 }
-func (*exportStub) Progress(context.Context, string) (jobqueue.JobState, float64, error) {
-	return jobqueue.JobQueued, 0, nil
+func (*exportStub) Progress(context.Context, string) (model.JobState, float64, error) {
+	return model.JobQueued, 0, nil
 }
 func (*exportStub) Get(context.Context, string) (projects.Batch, error) { return projects.Batch{}, nil }
 func (*exportStub) List(context.Context, string, int) (projects.BatchPage, error) {
@@ -104,7 +107,7 @@ func (*exportStub) Cancel(context.Context, string) error { return nil }
 
 type jobsStub struct {
 	getCalls, cancelCalls int
-	get                   func(context.Context, string) (api.Job, error)
+	get                   func(context.Context, string) (view.Job, error)
 }
 
 type downloadStub struct {
@@ -135,12 +138,12 @@ type headerAuthenticator struct{}
 
 func (headerAuthenticator) Authenticate(*http.Request) error { return nil }
 
-func (j *jobsStub) Get(ctx context.Context, id string) (api.Job, error) {
+func (j *jobsStub) Get(ctx context.Context, id string) (view.Job, error) {
 	j.getCalls++
 	if j.get != nil {
 		return j.get(ctx, id)
 	}
-	return api.Job{}, errors.New("missing")
+	return view.Job{}, errors.New("missing")
 }
 func (j *jobsStub) Cancel(context.Context, string) error {
 	j.cancelCalls++
@@ -151,7 +154,7 @@ func server(t *testing.T, authenticator api.Authenticator, media *mediaStub, pre
 	return serverWith(t, authenticator, media, preview, &projectStub{get: api.Project{ID: validProject}}, exports, &jobsStub{}, nil)
 }
 
-func serverWith(t *testing.T, authenticator api.Authenticator, media *mediaStub, preview api.PreviewService, projects api.ProjectService, exports *exportStub, jobs api.JobService, download projects.ExportDownloadService) *api.Server {
+func serverWith(t *testing.T, authenticator api.Authenticator, media *mediaStub, preview api.PreviewService, projects api.ProjectService, exports *exportStub, jobs view.JobService, download exporter.ExportDownloadService) *api.Server {
 	t.Helper()
 	result, err := api.New(api.Config{Authenticator: authenticator, Media: media, MediaImport: media, Preview: preview, Projects: projects, BatchExports: exports, Jobs: jobs, Download: download})
 	if err != nil {
@@ -173,6 +176,7 @@ func serverWithBatchDownload(t *testing.T, authenticator api.Authenticator, batc
 		BatchExports:  &exportStub{},
 		Jobs:          &jobsStub{},
 		Download:      batchDownload,
+		BatchDownload: batchDownload,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -404,12 +408,12 @@ func TestBatchDownloadUsesAuthenticatedSafeArchiveResponse(t *testing.T) {
 }
 
 func TestLibraryStatusContractIsSafe(t *testing.T) {
-	for _, want := range []api.LibraryStatus{
-		{State: api.LibraryUnconfigured, Message: "No media library is configured."},
-		{State: api.LibraryScanning, Message: "Scanning media library."},
-		{State: api.LibraryReadyEmpty, Message: "No supported media was found."},
-		{State: api.LibraryReadyWithMedia, Message: "Media library is ready."},
-		{State: api.LibraryFailed, Message: "Media library scan failed. Try refreshing it."},
+	for _, want := range []librarymedia.LibraryStatus{
+		{State: librarymedia.LibraryUnconfigured, Message: "No media library is configured."},
+		{State: librarymedia.LibraryScanning, Message: "Scanning media library."},
+		{State: librarymedia.LibraryReadyEmpty, Message: "No supported media was found."},
+		{State: librarymedia.LibraryReadyWithMedia, Message: "Media library is ready."},
+		{State: librarymedia.LibraryFailed, Message: "Media library scan failed. Try refreshing it."},
 	} {
 		service := server(t, noneAuth(t), &mediaStub{status: want}, &previewStub{start: func(context.Context) (api.PreviewResult, error) { return api.PreviewResult{}, nil }}, &exportStub{})
 		response := httptest.NewRecorder()
@@ -418,8 +422,8 @@ func TestLibraryStatusContractIsSafe(t *testing.T) {
 			t.Fatalf("status=%d body=%s", response.Code, response.Body.String())
 		}
 		var fields struct {
-			State   api.LibraryState `json:"state"`
-			Message string           `json:"message"`
+			State   librarymedia.LibraryState `json:"state"`
+			Message string                    `json:"message"`
 		}
 		if err := json.Unmarshal(response.Body.Bytes(), &fields); err != nil || fields.State != want.State || fields.Message != want.Message {
 			t.Fatalf("response=%#v want=%#v err=%v body=%s", fields, want, err, response.Body.String())
@@ -438,7 +442,7 @@ func TestRefreshReturnsAcceptedUnifiedJobAndPropagatesSubmissionFailure(t *testi
 	request := localRequest(http.MethodPost, "/api/v2/media/refresh", nil)
 	request.Header.Set("Idempotency-Key", "integration-scan")
 	service.ServeHTTP(response, request)
-	var job projects.ImportJob
+	var job librarymedia.ImportJob
 	if err := json.Unmarshal(response.Body.Bytes(), &job); err != nil {
 		t.Fatal(err)
 	}
@@ -458,8 +462,8 @@ func TestRefreshReturnsAcceptedUnifiedJobAndPropagatesSubmissionFailure(t *testi
 func TestJobResponsesExposeOnlySafeTerminalMetadata(t *testing.T) {
 	retainUntil := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
 	code := "media_unavailable"
-	jobs := &jobsStub{get: func(_ context.Context, _ string) (api.Job, error) {
-		return api.Job{ID: "j_aaaaaaaaaaaa", Type: "export", State: "succeeded", Progress: 1, Result: &projects.JobResult{OutputName: "export.mkv", SizeBytes: 42, RetainUntil: retainUntil}, Warnings: []string{"Cut may start at an earlier keyframe."}}, nil
+	jobs := &jobsStub{get: func(_ context.Context, _ string) (view.Job, error) {
+		return view.Job{ID: "j_aaaaaaaaaaaa", Type: "export", State: "succeeded", Progress: 1, Result: &view.JobResult{OutputName: "export.mkv", SizeBytes: 42, RetainUntil: retainUntil}, Warnings: []string{"Cut may start at an earlier keyframe."}}, nil
 	}}
 	service := serverWith(t, headerAuthenticator{}, &mediaStub{}, &previewStub{start: func(context.Context) (api.PreviewResult, error) { return api.PreviewResult{}, nil }}, &projectStub{get: api.Project{ID: validProject}}, &exportStub{}, jobs, nil)
 	response := httptest.NewRecorder()
@@ -477,8 +481,8 @@ func TestJobResponsesExposeOnlySafeTerminalMetadata(t *testing.T) {
 		t.Fatalf("missing safe result: %s", response.Body.String())
 	}
 
-	jobs.get = func(context.Context, string) (api.Job, error) {
-		return api.Job{ID: "j_aaaaaaaaaaaa", Type: "export", State: "failed", Progress: 1, ErrorCode: &code}, nil
+	jobs.get = func(context.Context, string) (view.Job, error) {
+		return view.Job{ID: "j_aaaaaaaaaaaa", Type: "export", State: "failed", Progress: 1, ErrorCode: &code}, nil
 	}
 	response = httptest.NewRecorder()
 	request = localRequest(http.MethodGet, "/api/v2/jobs/j_aaaaaaaaaaaa", nil)
@@ -487,8 +491,8 @@ func TestJobResponsesExposeOnlySafeTerminalMetadata(t *testing.T) {
 		t.Fatalf("failed response=%d %s", response.Code, response.Body.String())
 	}
 
-	jobs.get = func(_ context.Context, _ string) (api.Job, error) {
-		return api.Job{ID: "j_aaaaaaaaaaaa", Type: "export", State: "queued"}, nil
+	jobs.get = func(_ context.Context, _ string) (view.Job, error) {
+		return view.Job{ID: "j_aaaaaaaaaaaa", Type: "export", State: "queued"}, nil
 	}
 	request = localRequest(http.MethodGet, "/api/v2/jobs/j_aaaaaaaaaaaa", nil)
 	request.Header.Set("X-Test-User", "other")

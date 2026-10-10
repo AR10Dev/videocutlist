@@ -11,6 +11,7 @@ import (
 
 	"videocutlist/internal/db"
 	settingsdomain "videocutlist/internal/settings"
+	settingsmodel "videocutlist/internal/settings/model"
 )
 
 func TestPutSettingsRuntimeFailureDoesNotPersist(t *testing.T) {
@@ -42,7 +43,7 @@ func TestPutSettingsRuntimeFailureDoesNotPersist(t *testing.T) {
 	server, err := New(Config{
 		Authenticator: authenticator, Media: &routeTestMedia{}, Preview: routeTestPreview{},
 		Projects: routeTestProjects{}, BatchExports: &routeTestBatchExports{}, Jobs: &routeTestJobs{},
-		Settings: settingsdomain.NewRuntimeService(settings, store.NewRuntimeSettingsState(previous.Settings), func(context.Context, store.RuntimeSettings) error { return applyErr }),
+		Settings: settingsdomain.NewRuntimeService(settings, settingsmodel.NewRuntimeSettingsState(previous.Settings), func(context.Context, settingsmodel.RuntimeSettings) error { return applyErr }),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -81,7 +82,7 @@ func TestPutSettingsRejectsInvalidDocumentsWithoutToggling(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	state := store.NewRuntimeSettingsState(previous.Settings)
+	state := settingsmodel.NewRuntimeSettingsState(previous.Settings)
 	authenticator, err := NewAuthenticator(AuthConfig{Mode: "none"})
 	if err != nil {
 		t.Fatal(err)
@@ -227,7 +228,7 @@ func TestPutSettingsRejectsDeploymentMutation(t *testing.T) {
 	}
 	server, err := New(Config{
 		Authenticator: authenticator, Media: &routeTestMedia{}, Preview: routeTestPreview{},
-		Projects: routeTestProjects{}, BatchExports: &routeTestBatchExports{}, Jobs: &routeTestJobs{}, Settings: settingsdomain.NewRuntimeService(settings, nil, func(context.Context, store.RuntimeSettings) error { applied = true; return nil }),
+		Projects: routeTestProjects{}, BatchExports: &routeTestBatchExports{}, Jobs: &routeTestJobs{}, Settings: settingsdomain.NewRuntimeService(settings, nil, func(context.Context, settingsmodel.RuntimeSettings) error { applied = true; return nil }),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -272,7 +273,7 @@ func TestPutSettingsPersistenceFailureRestoresRuntime(t *testing.T) {
 	}
 	candidate := testRuntimeSettings()
 	candidate.ExportLimit = 9
-	var applied []store.RuntimeSettings
+	var applied []settingsmodel.RuntimeSettings
 	authenticator, err := NewAuthenticator(AuthConfig{Mode: "none"})
 	if err != nil {
 		t.Fatal(err)
@@ -280,7 +281,7 @@ func TestPutSettingsPersistenceFailureRestoresRuntime(t *testing.T) {
 	server, err := New(Config{
 		Authenticator: authenticator, Media: &routeTestMedia{}, Preview: routeTestPreview{},
 		Projects: routeTestProjects{}, BatchExports: &routeTestBatchExports{}, Jobs: &routeTestJobs{},
-		Settings: settingsdomain.NewRuntimeService(settings, store.NewRuntimeSettingsState(previous.Settings), func(_ context.Context, value store.RuntimeSettings) error {
+		Settings: settingsdomain.NewRuntimeService(settings, settingsmodel.NewRuntimeSettingsState(previous.Settings), func(_ context.Context, value settingsmodel.RuntimeSettings) error {
 			applied = append(applied, value)
 			return nil
 		}),
@@ -304,7 +305,7 @@ func TestPutSettingsPersistenceFailureRestoresRuntime(t *testing.T) {
 	}
 }
 
-func putSettingsRequest(t *testing.T, server http.Handler, revision int64, settings store.RuntimeSettings) *httptest.ResponseRecorder {
+func putSettingsRequest(t *testing.T, server http.Handler, revision int64, settings settingsmodel.RuntimeSettings) *httptest.ResponseRecorder {
 	t.Helper()
 	body, err := json.Marshal(settingsUpdateRequest{Revision: revision, Settings: settings})
 	if err != nil {
@@ -321,10 +322,10 @@ func putSettingsBodyRequest(t *testing.T, server http.Handler, body []byte) *htt
 	return response
 }
 
-func testRuntimeSettings() store.RuntimeSettings {
-	return store.RuntimeSettings{
+func testRuntimeSettings() settingsmodel.RuntimeSettings {
+	return settingsmodel.RuntimeSettings{
 		MediaRoots:   map[string]string{"camera": "/media/camera"},
-		Destinations: []store.RuntimeDestination{{ID: "download", Label: "Downloads", Kind: "download", Root: "/exports", Retention: "24h"}},
+		Destinations: []settingsmodel.RuntimeDestination{{ID: "download", Label: "Downloads", Kind: "download", Root: "/exports", Retention: "24h"}},
 		ExportLimit:  1, CacheMaxBytes: 1024, PreviewGlobalLimit: 2,
 		PreviewBeforeMS: 2000, PreviewAfterMS: 6000, PreviewMaxMS: 15000, PreviewGridMS: 500,
 		MediaMaxFiles: 100, MediaMaxDepth: 5, MCPEnabled: false,

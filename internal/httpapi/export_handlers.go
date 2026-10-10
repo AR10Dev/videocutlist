@@ -2,13 +2,13 @@
 package httpapi
 
 import (
-	"context"
 	"io"
 	"net/http"
 	"path/filepath"
 	"strconv"
 	"strings"
 
+	"videocutlist/internal/contextio"
 	"videocutlist/internal/exportpolicy"
 )
 
@@ -44,12 +44,11 @@ func (s *Server) downloadOutput(w http.ResponseWriter, r *http.Request, encoded,
 
 // downloadBatch streams the authenticated, validated batch archive.
 func (s *Server) downloadBatch(w http.ResponseWriter, r *http.Request, batchID, id string) {
-	service, ok := s.config.Download.(BatchDownloadService)
-	if !ok {
+	if s.config.BatchDownload == nil {
 		notFound(w, id)
 		return
 	}
-	file, name, err := service.DownloadBatch(r.Context(), batchID)
+	file, name, err := s.config.BatchDownload.DownloadBatch(r.Context(), batchID)
 	if err != nil {
 		notFound(w, id)
 		return
@@ -62,21 +61,7 @@ func (s *Server) downloadBatch(w http.ResponseWriter, r *http.Request, batchID, 
 	w.Header().Set("Content-Type", "application/zip")
 	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
 	w.WriteHeader(http.StatusOK)
-	_, _ = io.Copy(w, cancellableReader{ctx: r.Context(), reader: file})
-}
-
-type cancellableReader struct {
-	ctx    context.Context
-	reader io.Reader
-}
-
-func (r cancellableReader) Read(p []byte) (int, error) {
-	select {
-	case <-r.ctx.Done():
-		return 0, r.ctx.Err()
-	default:
-		return r.reader.Read(p)
-	}
+	_, _ = io.Copy(w, contextio.NewReader(r.Context(), file))
 }
 
 func safeOutputName(name string) bool {

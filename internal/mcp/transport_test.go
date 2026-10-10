@@ -2,6 +2,7 @@ package mcp_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net"
 	"net/http"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	store "videocutlist/internal/db"
+	"videocutlist/internal/httpapi"
 	"videocutlist/internal/mcp"
 )
 
@@ -64,7 +66,7 @@ func TestTransportInitializationNegotiationDiscoveryAndCall(t *testing.T) {
 				return mcp.Resource{}, nil
 			}},
 			{Name: "huge_result", Permission: mcp.PermissionMediaRead, InputSchema: map[string]any{"type": "object"}, Resource: func(mcp.Context, json.RawMessage) (mcp.Resource, error) { return mcp.Resource{}, nil }, Call: func(mcp.Context, json.RawMessage) (mcp.ToolResult, error) {
-				return mcp.ToolResult{StructuredContent: map[string]any{"value": strings.Repeat("x", 2<<20)}}, nil
+				return mcp.ToolResult{StructuredContent: map[string]any{"value": "sensitive-result-canary-" + strings.Repeat("x", 2<<20)}}, nil
 			}},
 		},
 	})
@@ -100,7 +102,7 @@ func TestTransportInitializationNegotiationDiscoveryAndCall(t *testing.T) {
 
 	huge := sessionRequest(`{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"huge_result","arguments":{}}}`, secret, session)
 	response = serve(handler, huge)
-	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "result exceeded") || response.Body.Len() > 1024 {
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "result exceeded") || response.Body.Len() > 1024 || strings.Contains(response.Body.String(), "sensitive-result-canary") {
 		t.Fatalf("huge result status=%d body bytes=%d body=%s", response.Code, response.Body.Len(), response.Body.String())
 	}
 
@@ -130,6 +132,109 @@ func TestTransportPreservesLargeNumericRequestIDs(t *testing.T) {
 	response = serve(handler, sessionRequest(`{"jsonrpc":"2.0","id":`+id+`,"method":"ping"}`, secret, session))
 	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil || string(envelope.ID) != id {
 		t.Fatalf("ping ID=%s err=%v", envelope.ID, err)
+	}
+}
+
+func TestTransportNumericIDAndRequestFraming(t *testing.T) {
+	credentials, secret, _ := transportCredentials(t, time.Hour)
+	calls := 0
+	handler := newTransport(t, mcp.TransportConfig{Enabled: true, Credentials: credentials, Tools: []mcp.Tool{{
+		Name: "count", Permission: mcp.PermissionMediaRead, InputSchema: map[string]any{"type": "object"},
+		Call: func(mcp.Context, json.RawMessage) (mcp.ToolResult, error) {
+			calls++
+			return mcp.ToolResult{}, nil
+		},
+	}}})
+
+	initializeBody := `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}`
+	response := serve(handler, request(initializeBody, secret))
+	if response.Code != http.StatusOK {
+		t.Fatalf("initialize status=%d body=%s", response.Code, response.Body.String())
+	}
+	session := response.Header().Get("Mcp-Session-Id")
+	notification := serve(handler, sessionRequest(`{"jsonrpc":"2.0","method":"notifications/initialized"}`, secret, session))
+	if notification.Code != http.StatusAccepted || notification.Body.Len() != 0 {
+		t.Fatalf("lifecycle notification status=%d body=%s", notification.Code, notification.Body.String())
+	}
+	valid := []string{`1`, `-1`, `1.25`, `1e3`, `"id"`}
+	for _, id := range valid {
+		t.Run("id "+id, func(t *testing.T) {
+			body := `{"jsonrpc":"2.0","id":` + id + `,"method":"ping"}`
+			got := serve(handler, sessionRequest(body, secret, session))
+			if got.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", got.Code, got.Body.String())
+			}
+			if !bytes.Contains(got.Body.Bytes(), []byte(`"id":`+id)) {
+				t.Fatalf("response does not preserve ID %s: %s", id, got.Body.String())
+			}
+		})
+	}
+	for _, body := range []string{
+		`{"jsonrpc":"2.0","id":true,"method":"tools/call","params":{"name":"count","arguments":{}}}`,
+		`{"jsonrpc":"2.0","id":{},"method":"tools/call","params":{"name":"count","arguments":{}}}`,
+		`{"jsonrpc":"2.0","id":[],"method":"tools/call","params":{"name":"count","arguments":{}}}`,
+		`{"jsonrpc":"2.0","id":"` + strings.Repeat("x", 129) + `","method":"tools/call","params":{"name":"count","arguments":{}}}`,
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"count","arguments":{}}} {}`,
+		`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"count","arguments":{}}`,
+	} {
+		got := serve(handler, sessionRequest(body, secret, session))
+		if got.Code < 400 {
+			t.Errorf("accepted invalid framing %q: status=%d body=%s", body, got.Code, got.Body.String())
+		}
+	}
+	oversized := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"count","arguments":{}}}` + strings.Repeat(" ", 1<<20)
+	got := serve(handler, sessionRequest(oversized, secret, session))
+	if got.Code != http.StatusRequestEntityTooLarge || calls != 0 {
+		t.Fatalf("oversized status=%d calls=%d body=%s", got.Code, calls, got.Body.String())
+	}
+	for _, body := range []string{
+		`{"jsonrpc":"2.0","id":null,"method":"tools/call","params":{"name":"count","arguments":{}}}`,
+		`{"jsonrpc":"2.0","method":"ping"}`,
+	} {
+		got := serve(handler, sessionRequest(body, secret, session))
+		if got.Code < 400 || calls != 0 {
+			t.Errorf("accepted unsupported ID/notification framing %q: status=%d calls=%d body=%s", body, got.Code, calls, got.Body.String())
+		}
+	}
+}
+
+func TestTransportHidesDeniedToolsAndBindsSessionsToCredentials(t *testing.T) {
+	credentials, secret, clock := transportCredentials(t, time.Hour)
+	otherExpiry := clock.Add(time.Hour)
+	other, err := credentials.Create(t.Context(), mcp.CredentialInput{
+		Name: "other", Permissions: []mcp.Permission{mcp.PermissionMediaRead},
+		MediaScope: mcp.MediaScope{Kind: mcp.MediaScopeAll}, ProjectScope: mcp.ProjectScope{Kind: mcp.ProjectScopeAll}, ExpiresAt: &otherExpiry,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved := false
+	handler := newTransport(t, mcp.TransportConfig{Enabled: true, Credentials: credentials, Tools: []mcp.Tool{{
+		Name: "private_tool", Permission: mcp.PermissionExportsRun, InputSchema: map[string]any{"type": "object"},
+		Resource: func(mcp.Context, json.RawMessage) (mcp.Resource, error) {
+			resolved = true
+			return mcp.Resource{MediaID: "secret_media", RootID: "secret_root"}, nil
+		},
+		Call: func(mcp.Context, json.RawMessage) (mcp.ToolResult, error) { return mcp.ToolResult{}, nil },
+	}}})
+	session := initialize(t, handler, secret)
+
+	call := func(token, name string) *httptest.ResponseRecorder {
+		body := `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"` + name + `","arguments":{}}}`
+		return serve(handler, sessionRequest(body, token, session))
+	}
+	denied := call(secret, "private_tool")
+	unknown := call(secret, "unknown_private_tool")
+	if denied.Code != http.StatusOK || unknown.Code != http.StatusOK || denied.Body.String() != unknown.Body.String() {
+		t.Fatalf("denied/unknown responses differ: denied=%d %s unknown=%d %s", denied.Code, denied.Body.String(), unknown.Code, unknown.Body.String())
+	}
+	if resolved || strings.Contains(denied.Body.String(), "private_tool") || strings.Contains(denied.Body.String(), "secret_") {
+		t.Fatalf("denied response leaked tool/resource: resolved=%v body=%s", resolved, denied.Body.String())
+	}
+
+	crossCredential := call(other.Secret, "private_tool")
+	if crossCredential.Code != http.StatusNotFound {
+		t.Fatalf("cross-credential session status=%d body=%s", crossCredential.Code, crossCredential.Body.String())
 	}
 }
 
@@ -218,6 +323,80 @@ func TestTransportRejectsOversizedTrailingJSON(t *testing.T) {
 	}
 }
 
+func TestTransportConfiguredPublicAuthorityThroughTrustedProxy(t *testing.T) {
+	credentials, secret, _ := transportCredentials(t, time.Hour)
+	makeHandler := func(publicURL string) http.Handler {
+		transport := newTransport(t, mcp.TransportConfig{
+			Enabled: true, Credentials: credentials, PublicBaseURL: publicURL,
+			RequestInfo: func(r *http.Request) mcp.RequestInfo {
+				info := httpapi.GetForwardedInfo(r.Context())
+				return mcp.RequestInfo{ClientIP: info.ClientIP, Host: info.Host, Proto: info.Proto}
+			},
+		})
+		hostGuard := httpapi.HostGuard(8080, publicURL, transport)
+		proxy, err := httpapi.TrustedProxy([]string{"127.0.0.0/8"}, hostGuard)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return proxy
+	}
+
+	requestFor := func(host, forwardedHost, proto, origin string) *http.Request {
+		r := request(`{}`, secret)
+		r.Host = host
+		r.RemoteAddr = "127.0.0.1:43210"
+		r = r.WithContext(context.WithValue(r.Context(), http.LocalAddrContextKey, &net.TCPAddr{IP: net.ParseIP("127.0.0.1"), Port: 8080}))
+		r.Header.Set("X-Forwarded-For", "203.0.113.7")
+		r.Header.Set("X-Forwarded-Host", forwardedHost)
+		r.Header.Set("X-Forwarded-Proto", proto)
+		if origin != "" {
+			r.Header.Set("Origin", origin)
+		}
+		return r
+	}
+
+	handler := makeHandler("https://mcp.example.test:8443")
+	response := serve(handler, requestFor("localhost:8080", "mcp.example.test:8443", "https", "https://mcp.example.test:8443"))
+	if response.Code == http.StatusForbidden {
+		t.Fatalf("configured public authority rejected: %d %s", response.Code, response.Body.String())
+	}
+	for _, tc := range []struct {
+		name, host, forwardedHost, proto, origin string
+	}{
+		{name: "wrong forwarded host", host: "localhost:8080", forwardedHost: "attacker.test:8443", proto: "https"},
+		{name: "wrong public port", host: "localhost:8080", forwardedHost: "mcp.example.test:9443", proto: "https"},
+		{name: "forbidden origin", host: "localhost:8080", forwardedHost: "mcp.example.test:8443", proto: "https", origin: "https://attacker.test"},
+		{name: "spoofed headers from untrusted peer", host: "localhost:8080", forwardedHost: "mcp.example.test:8443", proto: "https", origin: "https://mcp.example.test:8443"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r := requestFor(tc.host, tc.forwardedHost, tc.proto, tc.origin)
+			if tc.name == "spoofed headers from untrusted peer" {
+				r.RemoteAddr = "203.0.113.8:43210"
+			}
+			got := serve(handler, r)
+			if got.Code != http.StatusForbidden {
+				t.Fatalf("status=%d want forbidden; body=%s", got.Code, got.Body.String())
+			}
+		})
+	}
+
+	withoutPublicURL := makeHandler("")
+	for _, host := range []string{"localhost:8080", "127.0.0.1:8080", "[::1]:8080"} {
+		r := requestFor(host, host, "http", "")
+		r.Header.Set("X-Forwarded-For", "127.0.0.1")
+		got := serve(withoutPublicURL, r)
+		if got.Code == http.StatusForbidden {
+			t.Errorf("default loopback authority %q was rejected: %s", host, got.Body.String())
+		}
+	}
+	for _, host := range []string{"attacker.test:8080", "127.0.0.2:8080"} {
+		got := serve(withoutPublicURL, requestFor(host, host, "http", ""))
+		if got.Code != http.StatusForbidden {
+			t.Errorf("unconfigured authority %q status=%d, want forbidden", host, got.Code)
+		}
+	}
+}
+
 func TestTransportRejectsUntrustedOriginAndInsecureRemoteAccess(t *testing.T) {
 	credentials, secret, _ := transportCredentials(t, time.Hour)
 	info := mcp.RequestInfo{ClientIP: net.ParseIP("203.0.113.7"), Host: "video.test", Proto: "http"}
@@ -258,7 +437,7 @@ func transportCredentials(t *testing.T, lifetime time.Duration) (*mcp.Credential
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = database.Close() })
-	credentials, err := mcp.NewCredentialStoreWithClock(database, func() time.Time { return clock })
+	credentials, err := mcp.NewCredentialStoreWithClock(newMCPRepository(t, database), func() time.Time { return clock })
 	if err != nil {
 		t.Fatal(err)
 	}

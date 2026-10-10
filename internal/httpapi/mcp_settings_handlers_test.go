@@ -12,6 +12,7 @@ import (
 	"videocutlist/internal/db"
 	"videocutlist/internal/mcp"
 	settingsdomain "videocutlist/internal/settings"
+	settingsmodel "videocutlist/internal/settings/model"
 )
 
 func TestMCPAdministrationRequiresDeploymentAuthAndRevealsSecretOnce(t *testing.T) {
@@ -32,7 +33,7 @@ func TestMCPAdministrationRequiresDeploymentAuthAndRevealsSecretOnce(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	credentials, err := mcp.NewCredentialStore(database)
+	credentials, err := mcp.NewCredentialStore(newMCPTestStorage(t, database))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,7 +44,7 @@ func TestMCPAdministrationRequiresDeploymentAuthAndRevealsSecretOnce(t *testing.
 	server, err := New(Config{
 		Authenticator: authenticator, Media: &routeTestMedia{}, Preview: routeTestPreview{},
 		Projects: routeTestProjects{}, BatchExports: &routeTestBatchExports{}, Jobs: &routeTestJobs{},
-		Settings: settingsdomain.NewRuntimeService(runtimeSettings, nil, nil), RuntimeSettings: store.NewRuntimeSettingsState(record.Settings), MCPCredentials: credentials,
+		Settings: settingsdomain.NewRuntimeService(runtimeSettings, nil, nil), RuntimeSettings: settingsmodel.NewRuntimeSettingsState(record.Settings), MCPCredentials: credentials,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -139,12 +140,12 @@ func TestMCPEnablementUsesPersistedRuntimeSettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	credentials, _ := mcp.NewCredentialStore(database)
+	credentials, _ := mcp.NewCredentialStore(newMCPTestStorage(t, database))
 	authenticator, _ := NewAuthenticator(AuthConfig{Mode: "none"})
 	server, err := New(Config{
 		Authenticator: authenticator, Media: &routeTestMedia{}, Preview: routeTestPreview{},
 		Projects: routeTestProjects{}, BatchExports: &routeTestBatchExports{}, Jobs: &routeTestJobs{},
-		Settings: settingsdomain.NewRuntimeService(runtimeSettings, nil, nil), RuntimeSettings: store.NewRuntimeSettingsState(record.Settings), MCPCredentials: credentials,
+		Settings: settingsdomain.NewRuntimeService(runtimeSettings, nil, nil), RuntimeSettings: settingsmodel.NewRuntimeSettingsState(record.Settings), MCPCredentials: credentials,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -182,7 +183,7 @@ func TestMCPSettingsQueryAndStorageErrorsUseSafeEnvelopes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	credentials, err := mcp.NewCredentialStore(credentialsDatabase)
+	credentials, err := mcp.NewCredentialStore(newMCPTestStorage(t, credentialsDatabase))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -193,7 +194,7 @@ func TestMCPSettingsQueryAndStorageErrorsUseSafeEnvelopes(t *testing.T) {
 	server, err := New(Config{
 		Authenticator: authenticator, Media: &routeTestMedia{}, Preview: routeTestPreview{},
 		Projects: routeTestProjects{}, BatchExports: &routeTestBatchExports{}, Jobs: &routeTestJobs{},
-		Settings: settingsdomain.NewRuntimeService(runtimeSettings, nil, nil), RuntimeSettings: store.NewRuntimeSettingsState(record.Settings), MCPCredentials: credentials,
+		Settings: settingsdomain.NewRuntimeService(runtimeSettings, nil, nil), RuntimeSettings: settingsmodel.NewRuntimeSettingsState(record.Settings), MCPCredentials: credentials,
 	})
 	if err != nil {
 		t.Fatal(err)

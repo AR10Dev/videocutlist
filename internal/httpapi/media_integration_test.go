@@ -11,10 +11,10 @@ import (
 	"testing"
 
 	"videocutlist/internal/db"
+	librarymedia "videocutlist/internal/library/media"
+	"videocutlist/internal/library/media/catalog"
 	"videocutlist/internal/library/media/index"
 	"videocutlist/internal/library/media/probe"
-	"videocutlist/internal/projects"
-	"videocutlist/internal/runtime"
 )
 
 type integrationProbe struct{}
@@ -48,7 +48,7 @@ func TestMediaTreeUsesProductionMediaUseCaseWiring(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	media := &projects.MediaUseCase{Catalog: runtime.MediaCatalog{Scanner: scanner, Store: mediaStore}, Configured: true}
+	media := &librarymedia.MediaUseCase{Catalog: catalog.MediaCatalog{Scanner: scanner, Store: mediaStore}, Configured: true}
 	if err := media.RefreshMedia(context.Background()); err != nil {
 		t.Fatal(err)
 	}

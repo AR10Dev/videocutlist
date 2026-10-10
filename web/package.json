@@ -1,0 +1,51 @@
+{
+  "name": "videocutlist-solid",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "clean": "make -C .. clean",
+    "clean:deps": "make -C .. clean-deps",
+    "clean:all": "make -C .. clean-all",
+    "build": "tsc --noEmit && vite build && node scripts/compress.mjs",
+    "api:generate": "pnpm run effect:api:generate",
+    "effect:api:generate": "node scripts/generate-effect-api.mjs",
+    "dev": "vite",
+    "lint": "oxlint . && node scripts/check-boundary.mjs",
+    "format": "oxfmt --write .",
+    "format:check": "oxfmt --check .",
+    "test": "vitest run --passWithNoTests",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "@effect/atom-solid": "4.0.0",
+    "@effect/platform-browser": "4.0.0",
+    "@kobalte/core": "0.13.14",
+    "effect": "4.0.0",
+    "lucide-solid": "1.48.0",
+    "motion": "13.4.4",
+    "solid-js": "1.9.15"
+  },
+  "devDependencies": {
+    "@effect/openapi-generator": "4.0.0",
+    "@effect/platform-node": "4.0.0",
+    "@effect/vitest": "4.0.0",
+    "@playwright/test": "1.63.0",
+    "@tailwindcss/vite": "4.3.3",
+    "@types/node": "26.6.3",
+    "daisyui": "5.7.46",
+    "oxfmt": "0.70.0",
+    "oxlint": "1.85.0",
+    "tailwindcss": "4.3.3",
+    "typescript": "6.0.3",
+    "vite": "8.3.1",
+    "vite-plugin-solid": "2.11.14",
+    "vitest": "5.0.2",
+    "yaml": "2.8.1"
+  },
+  "pnpm": {
+    "overrides": {
+      "@redocly/openapi-core>js-yaml": "4.3.2"
+    }
+  }
+}

@@ -2,6 +2,11 @@
   "name": "videocutlist-tooling",
   "private": true,
   "packageManager": "pnpm@10.34.5",
+  "scripts": {
+    "clean": "make clean",
+    "clean:deps": "make clean-deps",
+    "clean:all": "make clean-all"
+  },
   "devDependencies": {
     "@tailwindcss/language-server": "0.16.0",
     "bash-language-server": "5.8.1",

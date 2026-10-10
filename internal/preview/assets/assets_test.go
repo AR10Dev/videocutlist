@@ -14,14 +14,14 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	store "videocutlist/internal/db"
 	"videocutlist/internal/library/media/index"
 	"videocutlist/internal/library/media/probe"
-	"videocutlist/internal/projects"
+	"videocutlist/internal/preview"
 )
 
 type rejectingProcessLimiter struct{}
@@ -53,8 +53,21 @@ func TestPublishDoesNotPublishAfterCancellationWhileLocked(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := &Service{CacheDir: dir, MaxBytes: 1024}
-	ctx, cancel := context.WithCancel(t.Context())
+	parent, cancel := context.WithCancel(t.Context())
 	defer cancel()
+	checked := make(chan struct{})
+	resume := make(chan struct{})
+	release := sync.OnceFunc(func() { close(resume) })
+	defer release()
+	var firstCheck sync.Once
+	ctx := publicationContext{Context: parent, err: func() error {
+		err := parent.Err()
+		firstCheck.Do(func() {
+			close(checked)
+			<-resume
+		})
+		return err
+	}}
 	s.mu.Lock()
 	locked := true
 	unlock := func() {
@@ -67,6 +80,7 @@ func TestPublishDoesNotPublishAfterCancellationWhileLocked(t *testing.T) {
 	joined := false
 	defer func() {
 		cancel()
+		release()
 		unlock()
 		if !joined {
 			select {
@@ -77,8 +91,14 @@ func TestPublishDoesNotPublishAfterCancellationWhileLocked(t *testing.T) {
 		}
 	}()
 	go func() { done <- s.publish(ctx, "key", ".png", []byte("png")) }()
-	waitForBlockedMutex(t, "(*Service).publish")
+	select {
+	case <-checked:
+	case <-time.After(time.Second):
+		t.Fatal("publish did not check cancellation before locking")
+	}
+	// Let the initial check return nil, then require the locked check to observe cancellation.
 	cancel()
+	release()
 	unlock()
 	err := <-done
 	joined = true
@@ -93,31 +113,12 @@ func TestPublishDoesNotPublishAfterCancellationWhileLocked(t *testing.T) {
 	}
 }
 
-func waitForBlockedMutex(t *testing.T, function string) {
-	t.Helper()
-	deadline := time.NewTimer(time.Second)
-	defer deadline.Stop()
-	for {
-		stacks := make([]byte, 1<<20)
-		n := runtime.Stack(stacks, true)
-		blocked := false
-		for _, stack := range strings.Split(string(stacks[:n]), "goroutine ") {
-			if strings.Contains(stack, "[sync.Mutex.Lock]") && strings.Contains(stack, function) {
-				blocked = true
-				break
-			}
-		}
-		if blocked {
-			return
-		}
-		select {
-		case <-deadline.C:
-			t.Fatalf("goroutine did not block at %s; stack snapshot:\n%s", function, stacks[:n])
-		default:
-			runtime.Gosched()
-		}
-	}
+type publicationContext struct {
+	context.Context
+	err func() error
 }
+
+func (c publicationContext) Err() error { return c.err() }
 
 func TestPublishRemovesAssetWhenCancelledDuringRename(t *testing.T) {
 	dir := t.TempDir()
@@ -140,7 +141,7 @@ func TestPublishRemovesAssetWhenCancelledDuringRename(t *testing.T) {
 }
 
 func TestValidateRejectsExcessiveWaveformSamples(t *testing.T) {
-	if err := validate(projects.AssetSpec{DurationMS: 1, Samples: maxWaveformSamples + 1}, true); err == nil {
+	if err := validate(preview.AssetSpec{DurationMS: 1, Samples: maxWaveformSamples + 1}, true); err == nil {
 		t.Fatal("validate accepted excessive waveform samples")
 	}
 	for _, samples := range []int{-1, 0, 15, maxWaveformSamples + 1} {
@@ -208,7 +209,7 @@ func (assetProbe) ProbeFile(context.Context, *os.File) (probe.Metadata, error) {
 	return probe.Metadata{DurationMS: 1000, Container: "mp4", Video: &probe.Video{Codec: "h264", Width: 80, Height: 80}, Audio: &probe.Audio{Codec: "aac"}}, nil
 }
 
-func assetFixture(t *testing.T, output []byte) (*Service, projects.AssetSpec) {
+func assetFixture(t *testing.T, output []byte) (*Service, preview.AssetSpec) {
 	t.Helper()
 	db, err := store.OpenDatabase(t.Context(), filepath.Join(t.TempDir(), "assets.db"))
 	if err != nil {
@@ -234,7 +235,7 @@ func assetFixture(t *testing.T, output []byte) (*Service, projects.AssetSpec) {
 	if err := os.WriteFile(command+".output", output, 0600); err != nil {
 		t.Fatal(err)
 	}
-	return &Service{Scanner: scanner, Media: media, FFmpegPath: command, CacheDir: t.TempDir(), MaxBytes: 1 << 20}, projects.AssetSpec{MediaID: index.MediaID("library", "clip.mp4"), DurationMS: 1000, Count: 1, Width: 80, Samples: 16}
+	return &Service{Scanner: scanner, Media: media, FFmpegPath: command, CacheDir: t.TempDir(), MaxBytes: 1 << 20}, preview.AssetSpec{MediaID: index.MediaID("library", "clip.mp4"), DurationMS: 1000, Count: 1, Width: 80, Samples: 16}
 }
 
 func TestWaveformPartitionsFloat32Samples(t *testing.T) {

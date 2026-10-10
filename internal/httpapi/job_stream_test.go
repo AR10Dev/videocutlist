@@ -9,8 +9,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"videocutlist/internal/jobs/view"
 
-	jobqueue "videocutlist/internal/jobs"
+	jobqueue "videocutlist/internal/jobs/model"
 	"videocutlist/internal/projects"
 )
 
@@ -64,7 +65,7 @@ func (*streamTestBatches) Snapshot(_ context.Context, id string) (projects.Batch
 	if id != "b_aaaaaaaaaaaa" {
 		return projects.Batch{}, "", jobqueue.ErrJobNotFound
 	}
-	return projects.Batch{BatchID: id, State: "succeeded", Jobs: []projects.Job{}}, "b2_current", nil
+	return projects.Batch{BatchID: id, State: "succeeded", Jobs: []view.Job{}}, "b2_current", nil
 }
 
 type changingStreamBatches struct {
@@ -73,7 +74,7 @@ type changingStreamBatches struct {
 }
 
 func (b *changingStreamBatches) Snapshot(_ context.Context, id string) (projects.Batch, string, error) {
-	return projects.Batch{BatchID: id, State: b.state, Jobs: []projects.Job{}}, "b2_" + b.state, nil
+	return projects.Batch{BatchID: id, State: b.state, Jobs: []view.Job{}}, "b2_" + b.state, nil
 }
 
 func TestBatchEventStreamPublishesChangedTerminalSnapshot(t *testing.T) {
@@ -121,7 +122,7 @@ func TestJobEventStreamSendsTerminalSnapshotAndResynchronizesInvalidCursor(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	job := Job{ID: "j_aaaaaaaaaaaa", Type: "export", State: "succeeded", Revision: 2}
+	job := view.Job{ID: "j_aaaaaaaaaaaa", Type: "export", State: "succeeded", Revision: 2}
 	jobs := &routeTestJobs{job: job}
 	server, err := New(Config{
 		Authenticator: authenticator,
@@ -304,11 +305,11 @@ func (w *capacityFlushWriter) Flush() {
 
 type capacityTestJobs struct{ overflowReads atomic.Int64 }
 
-func (j *capacityTestJobs) Get(_ context.Context, id string) (Job, error) {
+func (j *capacityTestJobs) Get(_ context.Context, id string) (view.Job, error) {
 	if id == "j_zzzzzzzzzzzz" {
 		j.overflowReads.Add(1)
 	}
-	return Job{ID: id, Type: "export", State: "running"}, nil
+	return view.Job{ID: id, Type: "export", State: "running"}, nil
 }
 func (*capacityTestJobs) Cancel(context.Context, string) error { return nil }
 
@@ -321,7 +322,7 @@ func (b *capacityTestBatches) Snapshot(_ context.Context, id string) (projects.B
 	if id == "b_zzzzzzzzzzzz" {
 		b.overflowReads.Add(1)
 	}
-	return projects.Batch{BatchID: id, State: "running", Jobs: []projects.Job{}}, "b2_current", nil
+	return projects.Batch{BatchID: id, State: "running", Jobs: []view.Job{}}, "b2_current", nil
 }
 
 func TestUnsupportedDeadlineWriterFailsClosedAndReleasesObservation(t *testing.T) {
@@ -329,7 +330,7 @@ func TestUnsupportedDeadlineWriterFailsClosedAndReleasesObservation(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	jobs := &streamTestJobs{job: Job{ID: "j_aaaaaaaaaaaa", Type: "export", State: "running"}}
+	jobs := &streamTestJobs{job: view.Job{ID: "j_aaaaaaaaaaaa", Type: "export", State: "running"}}
 	server, err := New(Config{
 		Authenticator: authenticator,
 		Media:         &routeTestMedia{}, Preview: routeTestPreview{}, Projects: routeTestProjects{},
@@ -356,7 +357,7 @@ func TestJobEventStreamReleasesObservationOnDisconnectAndShutdown(t *testing.T) 
 			if err != nil {
 				t.Fatal(err)
 			}
-			jobs := &streamTestJobs{job: Job{ID: "j_aaaaaaaaaaaa", Type: "export", State: "running"}}
+			jobs := &streamTestJobs{job: view.Job{ID: "j_aaaaaaaaaaaa", Type: "export", State: "running"}}
 			server, err := New(Config{
 				Authenticator: authenticator,
 				Media:         &routeTestMedia{}, Preview: routeTestPreview{}, Projects: routeTestProjects{},
@@ -389,11 +390,11 @@ func TestJobEventStreamReleasesObservationOnDisconnectAndShutdown(t *testing.T) 
 }
 
 type streamTestJobs struct {
-	job  Job
+	job  view.Job
 	gets int
 }
 
-func (s *streamTestJobs) Get(context.Context, string) (Job, error) {
+func (s *streamTestJobs) Get(context.Context, string) (view.Job, error) {
 	s.gets++
 	return s.job, nil
 }
@@ -404,7 +405,7 @@ func TestJobEventStreamSendsHeartbeatAfterWriteTimeoutInterval(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	jobs := &streamTestJobs{job: Job{ID: "j_aaaaaaaaaaaa", Type: "export", State: "running"}}
+	jobs := &streamTestJobs{job: view.Job{ID: "j_aaaaaaaaaaaa", Type: "export", State: "running"}}
 	server, err := New(Config{
 		Authenticator: authenticator,
 		Media:         &routeTestMedia{}, Preview: routeTestPreview{}, Projects: routeTestProjects{},

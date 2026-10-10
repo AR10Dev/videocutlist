@@ -2,7 +2,6 @@
 package export
 
 import (
-	"bytes"
 	"cmp"
 	"context"
 	"errors"
@@ -20,7 +19,8 @@ import (
 	"videocutlist/internal/exportpolicy"
 	"videocutlist/internal/fdinput"
 	"videocutlist/internal/library/media/probe"
-	"videocutlist/internal/projects"
+	"videocutlist/internal/preview"
+	"videocutlist/internal/processio"
 	"videocutlist/internal/projects/model"
 )
 
@@ -97,10 +97,6 @@ type Result struct {
 	Verified          bool              `json:"verified"`
 }
 
-type ProcessLimiter interface {
-	AcquireProcess() (func(), error)
-}
-
 type Service struct {
 	FFmpegPath   string
 	FFprobePath  string
@@ -109,7 +105,7 @@ type Service struct {
 	Artifacts    *ArtifactStore
 	Retention    time.Duration
 	Now          func() time.Time
-	Capacity     ProcessLimiter
+	Capacity     preview.ProcessLimiter
 }
 
 func (s Service) Run(ctx context.Context, source *os.File, document model.Document, request Request) (Result, error) {
@@ -130,7 +126,7 @@ func (s Service) Run(ctx context.Context, source *os.File, document model.Docume
 		sourceName = source.Name()
 	}
 	if s.Capacity != nil {
-		release, err := projects.AcquireProcess(ctx, s.Capacity)
+		release, err := preview.AcquireProcess(ctx, s.Capacity)
 		if err != nil {
 			return Result{}, err
 		}
@@ -747,20 +743,19 @@ func (s Service) runWithOutput(ctx context.Context, source, output, directory *o
 		cmd.Dir = fdinput.Directory(directory)
 	}
 	cmd.ExtraFiles = extraFiles
-	var stderr limitedBuffer
-	stderr.limit = maxStderrBytes
-	cmd.Stderr = &stderr
+	stderr := processio.NewLimitedBuffer(maxStderrBytes, errors.New("stderr exceeds limit"))
+	cmd.Stderr = stderr
 	if err := runCommand(ctx, cmd); err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 			return fmt.Errorf("%w: %v", ErrCancelled, err)
 		}
-		if stderr.err != nil {
-			return fmt.Errorf("ffmpeg output exceeded limit: %w", stderr.err)
+		if stderr.Err() != nil {
+			return fmt.Errorf("ffmpeg output exceeded limit: %w", stderr.Err())
 		}
 		return fmt.Errorf("ffmpeg export failed: %w", err)
 	}
-	if stderr.err != nil {
-		return fmt.Errorf("ffmpeg output exceeded limit: %w", stderr.err)
+	if stderr.Err() != nil {
+		return fmt.Errorf("ffmpeg output exceeded limit: %w", stderr.Err())
 	}
 	return nil
 }
@@ -981,22 +976,3 @@ func copyOpenFileToOpen(source, destination *os.File) error {
 	_, err := io.Copy(destination, source)
 	return err
 }
-
-type limitedBuffer struct {
-	bytes.Buffer
-	limit int
-	err   error
-}
-
-func (b *limitedBuffer) Write(data []byte) (int, error) {
-	if b.err != nil {
-		return 0, b.err
-	}
-	if b.Len()+len(data) > b.limit {
-		b.err = errors.New("stderr exceeds limit")
-		return 0, b.err
-	}
-	return b.Buffer.Write(data)
-}
-
-var _ io.Writer = (*limitedBuffer)(nil)

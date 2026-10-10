@@ -10,8 +10,10 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+	testsupport "videocutlist/internal/testsupport"
 
-	jobqueue "videocutlist/internal/jobs"
+	jobservice "videocutlist/internal/jobs"
+	jobqueue "videocutlist/internal/jobs/model"
 	"videocutlist/internal/projects"
 )
 
@@ -22,7 +24,7 @@ func (d exportToolDownload) Download(context.Context, string, int) (io.ReadClose
 }
 
 func TestExportToolsKeepJobsOwnedAndDownloadsRevocable(t *testing.T) {
-	service, _, _, _, now := newProposalTestService(t, false)
+	service, _, _, _, now, _ := newProposalTestService(t, false)
 	expires := now.Add(time.Hour)
 	owner, err := service.Credentials.Create(t.Context(), CredentialInput{
 		Name: "export tool owner", Permissions: []Permission{PermissionExportsPrepare, PermissionExportsRun, PermissionJobsRead, PermissionJobsCancel, PermissionExportsDownload},
@@ -92,7 +94,7 @@ func TestExportToolsKeepJobsOwnedAndDownloadsRevocable(t *testing.T) {
 }
 
 func TestExportToolsRejectMalformedArgumentsBeforeAccessingJobs(t *testing.T) {
-	service, _, _, _, _ := newProposalTestService(t, false)
+	service, _, _, _, _, _ := newProposalTestService(t, false)
 	tools := ExportTools(service, service.Scheduler, exportToolDownload{})
 	ctx := Context{Request: httptest.NewRequest("POST", "/mcp", nil)}
 	for _, test := range []struct {
@@ -130,7 +132,7 @@ func (f failingExportJobs) Cancel(context.Context, string) (jobqueue.Job, error)
 }
 
 func TestExportJobLookupDoesNotClassifyStorageFailuresAsInvalidInput(t *testing.T) {
-	service, _, _, _, _ := newProposalTestService(t, false)
+	service, _, _, _, _, _ := newProposalTestService(t, false)
 	failure := errors.New("storage unavailable")
 	tool := toolNamed(t, ExportTools(service, failingExportJobs{err: failure}, exportToolDownload{}), "get_job")
 	ctx := Context{Request: httptest.NewRequest("POST", "/mcp", nil)}
@@ -145,14 +147,14 @@ func TestExportJobLookupDoesNotClassifyStorageFailuresAsInvalidInput(t *testing.
 	}
 }
 
-type rejectedCancellationJobs struct{ *jobqueue.Scheduler }
+type rejectedCancellationJobs struct{ *jobservice.Scheduler }
 
 func (rejectedCancellationJobs) Cancel(context.Context, string) (jobqueue.Job, error) {
 	return jobqueue.Job{}, jobqueue.ErrJobState
 }
 
 func TestCancelJobPreservesCompletedJobAndForwardsSchedulerError(t *testing.T) {
-	service, _, _, _, now := newProposalTestService(t, false)
+	service, _, _, _, now, database := newProposalTestService(t, false)
 	expires := now.Add(time.Hour)
 	owner, err := service.Credentials.Create(t.Context(), CredentialInput{
 		Name: "cancel owner", Permissions: []Permission{PermissionExportsPrepare, PermissionExportsRun, PermissionJobsCancel},
@@ -169,7 +171,7 @@ func TestCancelJobPreservesCompletedJobAndForwardsSchedulerError(t *testing.T) {
 	if err != nil || len(created) != 1 {
 		t.Fatalf("execute = %#v, %v", created, err)
 	}
-	store, err := jobqueue.NewJobsStore(service.db)
+	store, err := testsupport.NewJobsStore(database)
 	if err != nil {
 		t.Fatal(err)
 	}

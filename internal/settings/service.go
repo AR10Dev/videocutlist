@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
+	"slices"
 	"sync"
 	"time"
 
-	store "videocutlist/internal/db"
+	settingsmodel "videocutlist/internal/settings/model"
 )
 
 var (
@@ -24,43 +26,66 @@ type DeploymentDocument struct {
 	Destinations json.RawMessage `json:"destinations"`
 }
 
+// RuntimeSettingsPersistence is the settings service's storage boundary.
+type RuntimeSettingsPersistence interface {
+	Seed(context.Context, settingsmodel.RuntimeSettings) (settingsmodel.RuntimeSettingsRecord, error)
+	Get(context.Context) (settingsmodel.RuntimeSettingsRecord, error)
+	Update(context.Context, int64, settingsmodel.RuntimeSettings) (settingsmodel.RuntimeSettingsRecord, error)
+}
+
 type RuntimeService struct {
-	store *store.RuntimeSettingsStore
-	state *store.RuntimeSettingsState
-	apply func(context.Context, store.RuntimeSettings) error
+	store RuntimeSettingsPersistence
+	state *settingsmodel.RuntimeSettingsState
+	apply func(context.Context, settingsmodel.RuntimeSettings) error
 	mu    sync.Mutex
 }
 
-func NewRuntimeService(repository *store.RuntimeSettingsStore, state *store.RuntimeSettingsState, apply func(context.Context, store.RuntimeSettings) error) *RuntimeService {
+func NewRuntimeService(repository RuntimeSettingsPersistence, state *settingsmodel.RuntimeSettingsState, apply func(context.Context, settingsmodel.RuntimeSettings) error) *RuntimeService {
 	return &RuntimeService{store: repository, state: state, apply: apply}
 }
 
-func (s *RuntimeService) Get(ctx context.Context) (store.RuntimeSettingsRecord, error) {
+// BootstrapRuntimeSettings inserts defaults and refreshes deployment-owned roots
+// and destinations without moving those policy decisions into storage.
+func BootstrapRuntimeSettings(ctx context.Context, repository RuntimeSettingsPersistence, defaults settingsmodel.RuntimeSettings) (settingsmodel.RuntimeSettingsRecord, error) {
+	record, err := repository.Seed(ctx, defaults)
+	if err != nil {
+		return settingsmodel.RuntimeSettingsRecord{}, err
+	}
+	updated := record.Settings
+	updated.MediaRoots = maps.Clone(defaults.MediaRoots)
+	updated.Destinations = slices.Clone(defaults.Destinations)
+	if maps.Equal(record.Settings.MediaRoots, updated.MediaRoots) && slices.Equal(record.Settings.Destinations, updated.Destinations) {
+		return record, nil
+	}
+	return repository.Update(ctx, record.Revision, updated)
+}
+
+func (s *RuntimeService) Get(ctx context.Context) (settingsmodel.RuntimeSettingsRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.store.Get(ctx)
 }
 
-func (s *RuntimeService) Update(ctx context.Context, revision int64, settings store.RuntimeSettings, deployment DeploymentDocument) (store.RuntimeSettingsRecord, error) {
+func (s *RuntimeService) Update(ctx context.Context, revision int64, settings settingsmodel.RuntimeSettings, deployment DeploymentDocument) (settingsmodel.RuntimeSettingsRecord, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	previous, err := s.store.Get(ctx)
 	if err != nil {
-		return store.RuntimeSettingsRecord{}, err
+		return settingsmodel.RuntimeSettingsRecord{}, err
 	}
 	if previous.Revision != revision {
-		return store.RuntimeSettingsRecord{}, store.ErrRuntimeSettingsRevisionConflict
+		return settingsmodel.RuntimeSettingsRecord{}, settingsmodel.ErrRuntimeSettingsRevisionConflict
 	}
 	if len(deployment.MediaRoots) > 0 && !jsonEqual(deployment.MediaRoots, previous.Settings.MediaRoots) || len(deployment.Destinations) > 0 && !destinationsMatch(deployment.Destinations, previous.Settings.Destinations) {
-		return store.RuntimeSettingsRecord{}, ErrDeploymentSettingsReadOnly
+		return settingsmodel.RuntimeSettingsRecord{}, ErrDeploymentSettingsReadOnly
 	}
 	settings.MediaRoots, settings.Destinations = previous.Settings.MediaRoots, previous.Settings.Destinations
-	if err := store.ValidateRuntimeSettings(settings); err != nil {
-		return store.RuntimeSettingsRecord{}, fmt.Errorf("%w: %w", ErrInvalidSettings, err)
+	if err := settingsmodel.ValidateRuntimeSettings(settings); err != nil {
+		return settingsmodel.RuntimeSettingsRecord{}, fmt.Errorf("%w: %w", ErrInvalidSettings, err)
 	}
 	if s.apply != nil {
 		if err := s.apply(ctx, settings); err != nil {
-			return store.RuntimeSettingsRecord{}, fmt.Errorf("apply runtime settings: %w", err)
+			return settingsmodel.RuntimeSettingsRecord{}, fmt.Errorf("apply runtime settings: %w", err)
 		}
 	}
 	record, err := s.store.Update(ctx, revision, settings)
@@ -70,10 +95,10 @@ func (s *RuntimeService) Update(ctx context.Context, revision int64, settings st
 			rollback, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			if rollbackErr := s.apply(rollback, previous.Settings); rollbackErr != nil {
-				return store.RuntimeSettingsRecord{}, fmt.Errorf("restore runtime settings: %w", errors.Join(err, rollbackErr))
+				return settingsmodel.RuntimeSettingsRecord{}, fmt.Errorf("restore runtime settings: %w", errors.Join(err, rollbackErr))
 			}
 		}
-		return store.RuntimeSettingsRecord{}, err
+		return settingsmodel.RuntimeSettingsRecord{}, err
 	}
 	if s.state != nil {
 		s.state.Replace(record.Settings)
@@ -90,14 +115,14 @@ func jsonEqual(raw json.RawMessage, value any) bool {
 	return reflect.DeepEqual(got, want)
 }
 
-func destinationsMatch(raw json.RawMessage, previous []store.RuntimeDestination) bool {
+func destinationsMatch(raw json.RawMessage, previous []settingsmodel.RuntimeDestination) bool {
 	var got []map[string]json.RawMessage
 	if json.Unmarshal(raw, &got) != nil || len(got) != len(previous) {
 		return false
 	}
 	for i, destination := range previous {
 		encoded, err := json.Marshal(got[i])
-		var supplied store.RuntimeDestination
+		var supplied settingsmodel.RuntimeDestination
 		if err != nil || json.Unmarshal(encoded, &supplied) != nil {
 			return false
 		}

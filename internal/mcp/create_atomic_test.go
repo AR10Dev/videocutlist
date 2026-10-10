@@ -7,28 +7,30 @@ import (
 	"testing"
 	"time"
 	store "videocutlist/internal/db"
+	librarymedia "videocutlist/internal/library/media"
 	"videocutlist/internal/mcp"
 	"videocutlist/internal/projects"
-	appRuntime "videocutlist/internal/runtime"
 )
 
 type atomicProjectMedia struct {
-	projects.MediaCatalog
-	media projects.Media
+	librarymedia.MediaCatalog
+	media librarymedia.Media
 }
 
-func (m atomicProjectMedia) Get(context.Context, string) (projects.Media, error) { return m.media, nil }
+func (m atomicProjectMedia) Get(context.Context, string) (librarymedia.Media, error) {
+	return m.media, nil
+}
 
 type databaseProjectMedia struct {
-	projects.MediaCatalog
+	librarymedia.MediaCatalog
 	db    *sql.DB
-	media projects.Media
+	media librarymedia.Media
 }
 
-func (m databaseProjectMedia) Get(ctx context.Context, _ string) (projects.Media, error) {
+func (m databaseProjectMedia) Get(ctx context.Context, _ string) (librarymedia.Media, error) {
 	var value int
 	if err := m.db.QueryRowContext(ctx, "SELECT 1").Scan(&value); err != nil {
-		return projects.Media{}, err
+		return librarymedia.Media{}, err
 	}
 	return m.media, nil
 }
@@ -48,9 +50,9 @@ func TestCreateProjectAndGrantRollBackTogetherAtCapacity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	media := projects.Media{ID: "m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", RootID: "camera", DurationMS: 1000}
-	service := projects.ProjectUseCase{Repository: appRuntime.ProjectRepository{Store: projectStore}, Media: atomicProjectMedia{media: media}}
-	handler := newTransport(t, mcp.TransportConfig{Enabled: true, Credentials: credentials, Tools: mcp.ProjectTools(service, toolMedia{items: []projects.Media{media}}, credentials)})
+	media := librarymedia.Media{ID: "m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", RootID: "camera", DurationMS: 1000}
+	service := projects.ProjectUseCase{Repository: projects.StoreRepository{Store: projectStore}, Media: atomicProjectMedia{media: media}}
+	handler := newTransport(t, mcp.TransportConfig{Enabled: true, Credentials: credentials, Tools: mcp.ProjectTools(service, toolMedia{items: []librarymedia.Media{media}}, credentials)})
 	session := initialize(t, handler, created.Secret)
 	response := serve(handler, sessionRequest(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"create_project","arguments":{"name":"Atomic","mediaIds":["m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]}}}`, created.Secret, session))
 	if !contains(response.Body.String(), "Tool failed.") {
@@ -79,9 +81,9 @@ func TestCreateProjectGrantUsesSingleDatabaseConnection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	media := projects.Media{ID: "m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", RootID: "camera", DurationMS: 1000}
-	service := projects.ProjectUseCase{Repository: appRuntime.ProjectRepository{Store: projectStore}, Media: databaseProjectMedia{db: database, media: media}}
-	handler := newTransport(t, mcp.TransportConfig{Enabled: true, Credentials: credentials, Tools: mcp.ProjectTools(service, toolMedia{items: []projects.Media{media}}, credentials)})
+	media := librarymedia.Media{ID: "m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", RootID: "camera", DurationMS: 1000}
+	service := projects.ProjectUseCase{Repository: projects.StoreRepository{Store: projectStore}, Media: databaseProjectMedia{db: database, media: media}}
+	handler := newTransport(t, mcp.TransportConfig{Enabled: true, Credentials: credentials, Tools: mcp.ProjectTools(service, toolMedia{items: []librarymedia.Media{media}}, credentials)})
 	session := initialize(t, handler, created.Secret)
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()

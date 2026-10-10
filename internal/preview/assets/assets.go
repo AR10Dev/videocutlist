@@ -22,8 +22,9 @@ import (
 	"videocutlist/internal/db"
 	"videocutlist/internal/fdinput"
 	"videocutlist/internal/library/media/index"
+	"videocutlist/internal/preview"
 	"videocutlist/internal/preview/cache"
-	"videocutlist/internal/projects"
+	"videocutlist/internal/processio"
 )
 
 const (
@@ -31,17 +32,13 @@ const (
 	maxPNGBytes        = 8 << 20
 )
 
-type ProcessLimiter interface {
-	AcquireProcess() (func(), error)
-}
-
 type Service struct {
 	Scanner    *index.Scanner
 	Media      *store.MediaStore
 	FFmpegPath string
 	CacheDir   string
 	MaxBytes   int64
-	Capacity   ProcessLimiter
+	Capacity   preview.ProcessLimiter
 	mu         sync.Mutex
 }
 
@@ -63,13 +60,13 @@ func (s *Service) ValidateSource(ctx context.Context, mediaID string) error {
 
 var renameAsset = os.Rename
 
-func (s *Service) Thumbnails(ctx context.Context, spec projects.AssetSpec) (output projects.AssetResult, err error) {
+func (s *Service) Thumbnails(ctx context.Context, spec preview.AssetSpec) (output preview.AssetResult, err error) {
 	if err := validate(spec, false); err != nil {
-		return projects.AssetResult{}, err
+		return preview.AssetResult{}, err
 	}
 	source, item, err := s.Scanner.Open(ctx, s.Media, spec.MediaID)
 	if err != nil {
-		return projects.AssetResult{}, err
+		return preview.AssetResult{}, err
 	}
 	defer func() {
 		if closeErr := source.Close(); closeErr != nil {
@@ -79,36 +76,36 @@ func (s *Service) Thumbnails(ctx context.Context, spec projects.AssetSpec) (outp
 	key := assetKey(item, spec, "thumb")
 	data, hit, err := s.cached(key, ".png", validatePNG)
 	if err != nil {
-		return projects.AssetResult{}, err
+		return preview.AssetResult{}, err
 	}
 	if hit {
 		return result(data, "image/png", true, spec), nil
 	}
 	file, ok := source.(*os.File)
 	if !ok {
-		return projects.AssetResult{}, errors.New("media source is not a file")
+		return preview.AssetResult{}, errors.New("media source is not a file")
 	}
 	fps := float64(spec.Count) / (float64(spec.DurationMS) / 1000)
 	args := []string{"-nostdin", "-hide_banner", "-loglevel", "error", "-ss", ms(spec.StartMS), "-i", fdinput.Path(3), "-t", ms(spec.DurationMS), "-vf", fmt.Sprintf("fps=%g,scale=%d:-2,tile=%dx1", fps, spec.Width, spec.Count), "-frames:v", "1", "-f", "image2pipe", "-vcodec", "png", "pipe:1"}
 	data, err = s.run(ctx, file, args, maxPNGBytes)
 	if err != nil {
-		return projects.AssetResult{}, err
+		return preview.AssetResult{}, err
 	}
 	if err := validatePNG(data); err != nil {
-		return projects.AssetResult{}, err
+		return preview.AssetResult{}, err
 	}
 	if err := s.publish(ctx, key, ".png", data); err != nil {
-		return projects.AssetResult{}, err
+		return preview.AssetResult{}, err
 	}
 	return result(data, "image/png", false, spec), nil
 }
-func (s *Service) Waveform(ctx context.Context, spec projects.AssetSpec) (output projects.AssetResult, err error) {
+func (s *Service) Waveform(ctx context.Context, spec preview.AssetSpec) (output preview.AssetResult, err error) {
 	if err := validate(spec, true); err != nil {
-		return projects.AssetResult{}, err
+		return preview.AssetResult{}, err
 	}
 	source, item, err := s.Scanner.Open(ctx, s.Media, spec.MediaID)
 	if err != nil {
-		return projects.AssetResult{}, err
+		return preview.AssetResult{}, err
 	}
 	defer func() {
 		if closeErr := source.Close(); closeErr != nil {
@@ -121,30 +118,30 @@ func (s *Service) Waveform(ctx context.Context, spec projects.AssetSpec) (output
 		return err
 	})
 	if err != nil {
-		return projects.AssetResult{}, err
+		return preview.AssetResult{}, err
 	}
 	if hit {
 		return waveformResult(data, true, spec)
 	}
 	if item.Metadata.Audio == nil {
-		return projects.AssetResult{}, projects.ErrNoAudio
+		return preview.AssetResult{}, preview.ErrNoAudio
 	}
 	file, ok := source.(*os.File)
 	if !ok {
-		return projects.AssetResult{}, errors.New("media source is not a file")
+		return preview.AssetResult{}, errors.New("media source is not a file")
 	}
 	args := []string{"-nostdin", "-hide_banner", "-loglevel", "error", "-ss", ms(spec.StartMS), "-i", fdinput.Path(3), "-t", ms(spec.DurationMS), "-map", "0:a:0", "-ac", "1", "-ar", fmt.Sprint(min(spec.Samples*2, 48000)), "-f", "f32le", "pipe:1"}
 	raw, err := s.run(ctx, file, args, 16<<20)
 	if err != nil {
-		return projects.AssetResult{}, err
+		return preview.AssetResult{}, err
 	}
 	peaks, err := waveformPeaks(raw, spec.Samples)
 	if err != nil {
-		return projects.AssetResult{}, err
+		return preview.AssetResult{}, err
 	}
 	data, _ = json.Marshal(map[string]any{"startMs": spec.StartMS, "durationMs": spec.DurationMS, "peaks": peaks})
 	if err := s.publish(ctx, key, ".json", data); err != nil {
-		return projects.AssetResult{}, err
+		return preview.AssetResult{}, err
 	}
 	return waveformResult(data, false, spec)
 }
@@ -189,7 +186,7 @@ func validatePNG(data []byte) error {
 	return nil
 }
 
-func validate(s projects.AssetSpec, wave bool) error {
+func validate(s preview.AssetSpec, wave bool) error {
 	if s.StartMS < 0 || s.DurationMS < 1 || s.DurationMS > 120000 {
 		return errors.New("invalid asset range")
 	}
@@ -202,7 +199,7 @@ func validate(s projects.AssetSpec, wave bool) error {
 	}
 	return nil
 }
-func assetKey(item index.Media, spec projects.AssetSpec, kind string) string {
+func assetKey(item index.Media, spec preview.AssetSpec, kind string) string {
 	sum := sha256.Sum256([]byte(fmt.Sprintf("%s:%s:%d:%d:%d:%d:%d:%d", kind, item.ID, item.SizeBytes, item.MtimeNS, spec.StartMS, spec.DurationMS, spec.Count, spec.Width+spec.Samples)))
 	return hex.EncodeToString(sum[:])
 }
@@ -365,24 +362,9 @@ func (s *Service) SetMaxBytes(maxBytes int64) error {
 	return nil
 }
 
-type boundedBuffer struct {
-	bytes.Buffer
-	max int
-}
-
-func (b *boundedBuffer) Write(p []byte) (int, error) {
-	if b.Len() < b.max {
-		n := b.max - b.Len()
-		if len(p) < n {
-			n = len(p)
-		}
-		_, _ = b.Buffer.Write(p[:n])
-	}
-	return len(p), nil
-}
 func (s *Service) run(ctx context.Context, file *os.File, args []string, max int) ([]byte, error) {
 	if s.Capacity != nil {
-		release, err := projects.AcquireProcess(ctx, s.Capacity)
+		release, err := preview.AcquireProcess(ctx, s.Capacity)
 		if err != nil {
 			return nil, err
 		}
@@ -397,9 +379,8 @@ func run(ctx context.Context, path string, file *os.File, args []string, max int
 	}
 	cmd := exec.CommandContext(ctx, path, args...)
 	cmd.ExtraFiles = []*os.File{file}
-	var stderr boundedBuffer
-	stderr.max = 64 << 10
-	cmd.Stderr = &stderr
+	stderr := processio.NewTruncatedBuffer(64 << 10)
+	cmd.Stderr = stderr
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, fmt.Errorf("ffmpeg stdout: %w", err)
@@ -425,33 +406,33 @@ func run(ctx context.Context, path string, file *os.File, args []string, max int
 	}
 	return out, nil
 }
-func result(b []byte, ct string, hit bool, s projects.AssetSpec) projects.AssetResult {
-	return projects.AssetResult{Reader: io.NopCloser(bytes.NewReader(b)), ContentType: ct, CacheStatus: status(hit), StartMS: s.StartMS, DurationMS: s.DurationMS}
+func result(b []byte, ct string, hit bool, s preview.AssetSpec) preview.AssetResult {
+	return preview.AssetResult{Reader: io.NopCloser(bytes.NewReader(b)), ContentType: ct, CacheStatus: status(hit), StartMS: s.StartMS, DurationMS: s.DurationMS}
 }
-func waveformResult(b []byte, hit bool, s projects.AssetSpec) (projects.AssetResult, error) {
+func waveformResult(b []byte, hit bool, s preview.AssetSpec) (preview.AssetResult, error) {
 	var v struct {
 		StartMS    *int64    `json:"startMs"`
 		DurationMS *int64    `json:"durationMs"`
 		Peaks      []float64 `json:"peaks"`
 	}
 	if err := json.Unmarshal(b, &v); err != nil {
-		return projects.AssetResult{}, err
+		return preview.AssetResult{}, err
 	}
 	if v.StartMS == nil || v.DurationMS == nil || v.Peaks == nil {
-		return projects.AssetResult{}, errors.New("waveform response is missing required fields")
+		return preview.AssetResult{}, errors.New("waveform response is missing required fields")
 	}
 	if *v.StartMS != s.StartMS || *v.DurationMS != s.DurationMS {
-		return projects.AssetResult{}, errors.New("waveform response does not match requested range")
+		return preview.AssetResult{}, errors.New("waveform response does not match requested range")
 	}
 	if len(v.Peaks) != s.Samples {
-		return projects.AssetResult{}, errors.New("waveform response has an invalid peak count")
+		return preview.AssetResult{}, errors.New("waveform response has an invalid peak count")
 	}
 	for _, peak := range v.Peaks {
 		if math.IsNaN(peak) || math.IsInf(peak, 0) || peak < 0 || peak > 1 {
-			return projects.AssetResult{}, errors.New("waveform response has an invalid peak")
+			return preview.AssetResult{}, errors.New("waveform response has an invalid peak")
 		}
 	}
-	return projects.AssetResult{Peaks: v.Peaks, StartMS: *v.StartMS, DurationMS: *v.DurationMS, CacheStatus: status(hit), ContentType: "application/json"}, nil
+	return preview.AssetResult{Peaks: v.Peaks, StartMS: *v.StartMS, DurationMS: *v.DurationMS, CacheStatus: status(hit), ContentType: "application/json"}, nil
 }
 func status(hit bool) string {
 	if hit {

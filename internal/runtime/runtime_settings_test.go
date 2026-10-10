@@ -12,37 +12,48 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	testsupport "videocutlist/internal/testsupport"
+
 	"time"
+	previewpkg "videocutlist/internal/preview"
 
 	"videocutlist/internal/db"
-	"videocutlist/internal/jobs"
+	jobservice "videocutlist/internal/jobs"
+	jobs "videocutlist/internal/jobs/model"
 	"videocutlist/internal/library/media/index"
+	"videocutlist/internal/library/media/probe"
 	"videocutlist/internal/preview/assets"
 	"videocutlist/internal/preview/cache"
-	"videocutlist/internal/projects"
 	settingsdomain "videocutlist/internal/settings"
+	settingsmodel "videocutlist/internal/settings/model"
 )
 
+type adapterProbe struct{}
+
+func (adapterProbe) ProbeFile(context.Context, *os.File) (probe.Metadata, error) {
+	return probe.Metadata{}, nil
+}
+
 func TestApplyRuntimeSettingsTransactionalRestoresAfterScannerFailure(t *testing.T) {
-	previous := store.RuntimeSettings{MediaRoots: map[string]string{"old": "/old"}, CacheMaxBytes: 10}
-	next := store.RuntimeSettings{MediaRoots: map[string]string{"new": "/new"}, CacheMaxBytes: 20}
+	previous := settingsmodel.RuntimeSettings{MediaRoots: map[string]string{"old": "/old"}, CacheMaxBytes: 10}
+	next := settingsmodel.RuntimeSettings{MediaRoots: map[string]string{"new": "/new"}, CacheMaxBytes: 20}
 	var calls []string
 	fail := errors.New("scanner failed")
 	err := applyRuntimeSettingsTransactional(next, previous,
-		func(value store.RuntimeSettings) error {
+		func(value settingsmodel.RuntimeSettings) error {
 			calls = append(calls, "config:"+value.MediaRoots["old"]+value.MediaRoots["new"])
 			return nil
 		},
-		func(value store.RuntimeSettings) error {
+		func(value settingsmodel.RuntimeSettings) error {
 			calls = append(calls, "roots:"+value.MediaRoots["old"]+value.MediaRoots["new"])
 			if value.MediaRoots["new"] != "" {
 				return fail
 			}
 			return nil
 		},
-		func(value store.RuntimeSettings) error { calls = append(calls, "scan"); return nil },
-		func(value store.RuntimeSettings) error { calls = append(calls, "preview"); return nil },
-		func(value store.RuntimeSettings) error { calls = append(calls, "cache"); return nil },
+		func(value settingsmodel.RuntimeSettings) error { calls = append(calls, "scan"); return nil },
+		func(value settingsmodel.RuntimeSettings) error { calls = append(calls, "preview"); return nil },
+		func(value settingsmodel.RuntimeSettings) error { calls = append(calls, "cache"); return nil },
 	)
 	if !errors.Is(err, fail) {
 		t.Fatalf("error = %v", err)
@@ -54,12 +65,12 @@ func TestApplyRuntimeSettingsTransactionalRestoresAfterScannerFailure(t *testing
 }
 
 func TestApplyRuntimeSettingsTransactionalRestoresAfterLaterFailure(t *testing.T) {
-	previous := store.RuntimeSettings{MediaRoots: map[string]string{"old": "/old"}, CacheMaxBytes: 10}
-	next := store.RuntimeSettings{MediaRoots: map[string]string{"new": "/new"}, CacheMaxBytes: 20}
+	previous := settingsmodel.RuntimeSettings{MediaRoots: map[string]string{"old": "/old"}, CacheMaxBytes: 10}
+	next := settingsmodel.RuntimeSettings{MediaRoots: map[string]string{"new": "/new"}, CacheMaxBytes: 20}
 	var calls []string
 	fail := errors.New("preview failed")
-	step := func(name string, failure bool) func(store.RuntimeSettings) error {
-		return func(value store.RuntimeSettings) error {
+	step := func(name string, failure bool) func(settingsmodel.RuntimeSettings) error {
+		return func(value settingsmodel.RuntimeSettings) error {
 			calls = append(calls, name+value.MediaRoots["old"]+value.MediaRoots["new"])
 			if failure && value.MediaRoots["new"] != "" {
 				return fail
@@ -121,10 +132,10 @@ func TestRuntimeSettingsApplierUpdatesSchedulerAndBothCaches(t *testing.T) {
 		t.Fatal(err)
 	}
 	assetService := &assets.Service{Scanner: scanner, Media: media, FFmpegPath: command, CacheDir: t.TempDir(), MaxBytes: 1024}
-	limits, _ := projects.NewPreviewLimits(2)
-	jobStore, _ := jobs.NewJobsStore(db)
+	limits, _ := previewpkg.NewPreviewLimits(2)
+	jobStore, _ := testsupport.NewJobsStore(db)
 	started := make(chan string, 2)
-	scheduler, err := jobs.NewScheduler(jobStore, jobs.SchedulerConfig{QueueCapacity: 4, WorkerLimit: 1}, func(ctx context.Context, job jobs.Job) error {
+	scheduler, err := jobservice.NewScheduler(jobStore, jobservice.SchedulerConfig{QueueCapacity: 4, WorkerLimit: 1}, func(ctx context.Context, job jobs.Job) error {
 		started <- job.ID
 		<-ctx.Done()
 		return ctx.Err()
@@ -138,8 +149,8 @@ func TestRuntimeSettingsApplierUpdatesSchedulerAndBothCaches(t *testing.T) {
 			t.Error(err)
 		}
 	}()
-	defaults := store.RuntimeSettings{MediaRoots: map[string]string{"library": root}, Destinations: []store.RuntimeDestination{{ID: "download", Label: "Downloads", Kind: "download", Root: t.TempDir()}}, ExportLimit: 1, CacheMaxBytes: 1024, PreviewGlobalLimit: 2, PreviewBeforeMS: 1, PreviewAfterMS: 1, PreviewMaxMS: 2, PreviewGridMS: 1, MediaMaxFiles: 10, MediaMaxDepth: 2}
-	state := store.NewRuntimeSettingsState(defaults)
+	defaults := settingsmodel.RuntimeSettings{MediaRoots: map[string]string{"library": root}, Destinations: []settingsmodel.RuntimeDestination{{ID: "download", Label: "Downloads", Kind: "download", Root: t.TempDir()}}, ExportLimit: 1, CacheMaxBytes: 1024, PreviewGlobalLimit: 2, PreviewBeforeMS: 1, PreviewAfterMS: 1, PreviewMaxMS: 2, PreviewGridMS: 1, MediaMaxFiles: 10, MediaMaxDepth: 2}
+	state := settingsmodel.NewRuntimeSettingsState(defaults)
 	applier := RuntimeSettingsApplier{State: state, Scanner: scanner, PreviewLimits: limits, PreviewCache: previewCache, Assets: assetService, Scheduler: scheduler}
 	settingsStore, _ := store.NewRuntimeSettingsStore(db)
 	record, err := settingsStore.Seed(t.Context(), defaults)
@@ -195,7 +206,7 @@ func TestRuntimeSettingsApplierUpdatesSchedulerAndBothCaches(t *testing.T) {
 		if (err == nil) != allowed {
 			t.Fatalf("preview publication = %v, allowed=%v", err, allowed)
 		}
-		result, err := assetService.Thumbnails(t.Context(), projects.AssetSpec{MediaID: index.MediaID("library", "clip.mp4"), DurationMS: 1000, Count: 1, Width: 80})
+		result, err := assetService.Thumbnails(t.Context(), previewpkg.AssetSpec{MediaID: index.MediaID("library", "clip.mp4"), DurationMS: 1000, Count: 1, Width: 80})
 		if (err == nil) != allowed {
 			t.Fatalf("asset publication = %v, allowed=%v", err, allowed)
 		}

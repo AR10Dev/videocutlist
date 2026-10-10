@@ -11,7 +11,6 @@ import (
 
 	"videocutlist/internal/library/media/index"
 	"videocutlist/internal/library/media/probe"
-	"videocutlist/internal/projects"
 	"videocutlist/internal/projects/model"
 )
 
@@ -49,7 +48,7 @@ func TestDetectPassesMediaDescriptorAsChildFD(t *testing.T) {
 	}
 	mediaID := index.MediaID("root", "clip.mp4")
 	service := Service{Scanner: scanner, Catalog: detectionCatalog{record: index.Record{Media: index.Media{ID: mediaID, SizeBytes: info.Size(), MtimeNS: info.ModTime().UnixNano(), Metadata: probe.Metadata{DurationMS: 1000}}, RootAlias: "root", RelativePath: "clip.mp4"}}, FFmpegPath: script}
-	got, err := service.Detect(context.Background(), projects.DetectionRequest{MediaID: mediaID, ProjectRevision: 1, Kind: model.DetectSilence, MinDurationMS: 1})
+	got, err := service.Detect(context.Background(), Request{MediaID: mediaID, ProjectRevision: 1, Kind: model.DetectSilence, MinDurationMS: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,7 +58,7 @@ func TestDetectPassesMediaDescriptorAsChildFD(t *testing.T) {
 }
 
 func TestParseDetectionCandidatesConvertsTimesAndAssociatesProject(t *testing.T) {
-	r := projects.DetectionRequest{MediaID: "m_test", ProjectID: "p_test", ProjectRevision: 2, Kind: model.DetectSilence}
+	r := Request{MediaID: "m_test", ProjectID: "p_test", ProjectRevision: 2, Kind: model.DetectSilence}
 	got := parse(r, 10000, "[silencedetect] silence_start: 1.2\n[silencedetect] silence_end: 2.5\n")
 	if len(got) != 1 || got[0].StartMS != 1200 || got[0].EndMS != 2500 || got[0].ProjectID != r.ProjectID {
 		t.Fatalf("unexpected candidates: %#v", got)
@@ -67,7 +66,7 @@ func TestParseDetectionCandidatesConvertsTimesAndAssociatesProject(t *testing.T)
 }
 
 func TestParseSceneChangesAsPoints(t *testing.T) {
-	r := projects.DetectionRequest{MediaID: "m_test", ProjectID: "p_test", ProjectRevision: 2, Kind: model.DetectScene}
+	r := Request{MediaID: "m_test", ProjectID: "p_test", ProjectRevision: 2, Kind: model.DetectScene}
 	got := parse(r, 3000, "[showinfo] pts_time:1.250\\n")
 	if len(got) != 1 {
 		t.Fatalf("unexpected scene points: %#v", got)
@@ -110,7 +109,7 @@ func TestDetectionSlotsDefaultToOne(t *testing.T) {
 }
 
 func TestParseRejectsUnmatchedAndClampsDuration(t *testing.T) {
-	r := projects.DetectionRequest{MediaID: "m_test", ProjectID: "p_test", ProjectRevision: 2, Kind: model.DetectSilence}
+	r := Request{MediaID: "m_test", ProjectID: "p_test", ProjectRevision: 2, Kind: model.DetectSilence}
 	got := parse(r, 1000, "silence_end: 0.5\nsilence_start: 0.8\nsilence_end: 2.0\n")
 	if len(got) != 1 || got[0].StartMS != 800 || got[0].EndMS != 1000 {
 		t.Fatalf("unexpected bounded candidates: %#v", got)

@@ -17,7 +17,7 @@ func TestCredentialPersistsAcrossDatabaseRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	clock := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
-	credentials, err := mcp.NewCredentialStoreWithClock(database, func() time.Time { return clock })
+	credentials, err := mcp.NewCredentialStoreWithClock(newMCPRepository(t, database), func() time.Time { return clock })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,7 +45,7 @@ func TestCredentialPersistsAcrossDatabaseRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = reopened.Close() }()
-	restarted, err := mcp.NewCredentialStoreWithClock(reopened, func() time.Time { return clock })
+	restarted, err := mcp.NewCredentialStoreWithClock(newMCPRepository(t, reopened), func() time.Time { return clock })
 	if err != nil {
 		t.Fatal(err)
 	}

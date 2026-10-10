@@ -9,9 +9,9 @@ import (
 	"os"
 	"strconv"
 
+	librarymedia "videocutlist/internal/library/media"
 	"videocutlist/internal/library/media/index"
-	"videocutlist/internal/projects"
-	"videocutlist/internal/projects/model"
+	"videocutlist/internal/preview"
 )
 
 func (s *Server) preview(writer http.ResponseWriter, request *http.Request, media string, id string) {
@@ -70,7 +70,7 @@ func (s *Server) preview(writer http.ResponseWriter, request *http.Request, medi
 	}
 }
 
-func (s *Server) assetSpec(request *http.Request, item Media, waveform bool) (AssetSpec, error) {
+func (s *Server) assetSpec(request *http.Request, item librarymedia.Media, waveform bool) (AssetSpec, error) {
 	keys := []string{"startMs", "durationMs"}
 	if waveform {
 		keys = append(keys, "samples")
@@ -174,7 +174,7 @@ func (s *Server) waveform(w http.ResponseWriter, r *http.Request, media, id stri
 		return
 	}
 	result, err := s.config.Assets.Waveform(r.Context(), spec)
-	if errors.Is(err, projects.ErrNoAudio) {
+	if errors.Is(err, preview.ErrNoAudio) {
 		httpx.Error(w, 400, "no_audio", "Media has no audio stream.", id)
 		return
 	}
@@ -195,7 +195,7 @@ func previewError(w http.ResponseWriter, id string, err error) {
 		notFound(w, id)
 	case errors.Is(err, index.ErrSourceChanged):
 		httpx.Error(w, http.StatusConflict, "source_changed", "Media changed; refresh the library and try again.", id)
-	case errors.Is(err, projects.ErrGlobalLimit):
+	case errors.Is(err, preview.ErrGlobalLimit):
 		w.Header().Set("Retry-After", "1")
 		httpx.Error(w, http.StatusTooManyRequests, "preview_busy", "Preview capacity is full; retry later.", id)
 	default:
@@ -218,7 +218,7 @@ func assetError(w http.ResponseWriter, id string, err error) {
 	}
 }
 
-func (s *Server) previewSpec(request *http.Request, item Media) (PreviewSpec, error) {
+func (s *Server) previewSpec(request *http.Request, item librarymedia.Media) (PreviewSpec, error) {
 	beforeDefault, afterDefault, maxPreview, grid := s.config.BeforeMS, s.config.AfterMS, s.config.MaxPreviewMS, s.config.GridMS
 	if s.config.RuntimeSettings != nil {
 		settings := s.config.RuntimeSettings.Snapshot()
@@ -253,5 +253,5 @@ func (s *Server) previewSpec(request *http.Request, item Media) (PreviewSpec, er
 	if item.DurationMS < 1 {
 		return PreviewSpec{}, errors.New("duration")
 	}
-	return projects.NormalizePreview(item.ID, item.DurationMS, center, mute, model.WindowConfig{BeforeMS: before, AfterMS: after, MaxMS: maxPreview, GridMS: grid})
+	return preview.NormalizePreview(item.ID, item.DurationMS, center, mute, preview.WindowConfig{BeforeMS: before, AfterMS: after, MaxMS: maxPreview, GridMS: grid})
 }

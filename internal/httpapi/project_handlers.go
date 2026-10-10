@@ -6,7 +6,9 @@ import (
 	"net/http"
 
 	store "videocutlist/internal/db"
-	jobqueue "videocutlist/internal/jobs"
+	"videocutlist/internal/detection"
+	jobs "videocutlist/internal/jobs"
+	jobqueue "videocutlist/internal/jobs/model"
 	"videocutlist/internal/projects"
 )
 
@@ -148,7 +150,7 @@ func (s *Server) preflightExport(writer http.ResponseWriter, request *http.Reque
 		httpx.Error(writer, 400, "invalid_export", "Export is invalid.", id)
 		return
 	}
-	result, err := s.config.Preflight.Preflight(request.Context(), project, owned, input)
+	result, err := s.config.Preflight.Preflight(request.Context(), owned, input)
 	if err != nil {
 		httpx.Error(writer, 400, "preflight_failed", "Export preflight failed.", id)
 		return
@@ -199,8 +201,8 @@ func (s *Server) createDetection(writer http.ResponseWriter, request *http.Reque
 		httpx.Error(writer, http.StatusBadRequest, "invalid_idempotency_key", "A valid Idempotency-Key is required.", id)
 		return
 	}
-	var input DetectionRequest
-	if httpx.ReadJSON(request, &input) != nil || input.ProjectItemID == "" || projects.ValidateDetectionRequest(input) != nil {
+	var input detection.Request
+	if httpx.ReadJSON(request, &input) != nil || input.ProjectItemID == "" || detection.ValidateRequest(input) != nil {
 		httpx.Error(writer, http.StatusBadRequest, "invalid_detection", "Detection request is invalid.", id)
 		return
 	}
@@ -211,7 +213,7 @@ func (s *Server) createDetection(writer http.ResponseWriter, request *http.Reque
 			httpx.Error(writer, http.StatusTooManyRequests, "detection_busy", "Detection capacity is full.", id)
 		case errors.Is(err, jobqueue.ErrAdmissionConflict):
 			httpx.Error(writer, http.StatusConflict, "idempotency_conflict", "Idempotency-Key was already used for a different command.", id)
-		case errors.Is(err, store.ErrRevisionConflict), errors.Is(err, jobqueue.ErrSourceChanged):
+		case errors.Is(err, store.ErrRevisionConflict), errors.Is(err, jobs.ErrSourceChanged):
 			httpx.Error(writer, http.StatusConflict, "stale_project", "Detection request is stale.", id)
 		case errors.Is(err, store.ErrProjectNotFound):
 			resourceError(writer, id, err)

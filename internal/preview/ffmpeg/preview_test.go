@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"videocutlist/internal/fdinput"
-	"videocutlist/internal/projects/model"
+	"videocutlist/internal/preview"
 )
 
 func init() {
@@ -34,7 +34,7 @@ func TestBuildPreviewArgsUsesInheritedFD(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	args, err := BuildPreviewArgs(model.PreviewSpec{DurationMS: 1, Width: 1280, Height: 720, FPS: 30, Audio: true})
+	args, err := BuildPreviewArgs(preview.TranscodeSpec{DurationMS: 1, Width: 1280, Height: 720, FPS: 30, Audio: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +56,7 @@ func TestStartHonorsCancellation(t *testing.T) {
 		}
 	})
 	ctx, cancel := context.WithCancel(context.Background())
-	running, err := (Runner{Path: os.Args[0]}).Start(ctx, source, model.PreviewSpec{DurationMS: 1, Width: 16, Height: 16, FPS: 1})
+	running, err := (Runner{Path: os.Args[0]}).Start(ctx, source, preview.TranscodeSpec{DurationMS: 1, Width: 16, Height: 16, FPS: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,12 +93,5 @@ func TestTimingEmitsOnlyLifecycleMilestones(t *testing.T) {
 	defer mu.Unlock()
 	if emissions != 3 {
 		t.Fatalf("final emissions = %d, want exactly completion added", emissions)
-	}
-}
-
-func TestBoundedStderr(t *testing.T) {
-	buffer := &boundedBuffer{limit: 4}
-	if _, err := buffer.Write([]byte("123456")); err != nil || buffer.String() != "1234" {
-		t.Fatalf("bounded stderr = %q, %v", buffer.String(), err)
 	}
 }

@@ -21,15 +21,22 @@ import (
 	exporter "videocutlist/internal/export"
 	"videocutlist/internal/httpapi"
 	jobqueue "videocutlist/internal/jobs"
+	"videocutlist/internal/jobs/model"
+	"videocutlist/internal/jobs/view"
+	librarymedia "videocutlist/internal/library/media"
+	librarycatalog "videocutlist/internal/library/media/catalog"
 	"videocutlist/internal/library/media/index"
 	"videocutlist/internal/library/media/probe"
 	"videocutlist/internal/mcp"
+	"videocutlist/internal/preview"
+	"videocutlist/internal/preview/adapters"
 	"videocutlist/internal/preview/assets"
 	"videocutlist/internal/preview/cache"
 	"videocutlist/internal/preview/ffmpeg"
 	"videocutlist/internal/projects"
 	"videocutlist/internal/runtime"
 	"videocutlist/internal/settings"
+	settingsmodel "videocutlist/internal/settings/model"
 	"videocutlist/internal/web/webassets"
 )
 
@@ -56,7 +63,11 @@ func run(ctx context.Context) (runErr error) {
 			runErr = errors.Join(runErr, fmt.Errorf("close database: %w", closeErr))
 		}
 	}()
-	mcpCredentials, err := mcp.NewCredentialStore(db)
+	mcpStorage, err := store.NewMCPStorage(db)
+	if err != nil {
+		return err
+	}
+	mcpCredentials, err := mcp.NewCredentialStore(mcpStorage)
 	if err != nil {
 		return err
 	}
@@ -64,16 +75,20 @@ func run(ctx context.Context) (runErr error) {
 	if err != nil {
 		return err
 	}
-	effectiveSettings, err := runtimeSettingsStore.Seed(ctx, cfg.RuntimeSettings())
+	effectiveSettings, err := config.BootstrapRuntimeSettings(ctx, runtimeSettingsStore, cfg.RuntimeSettings())
 	if err != nil {
 		return err
 	}
 	if err := cfg.ApplyRuntimeSettings(effectiveSettings.Settings); err != nil {
 		return fmt.Errorf("load runtime settings: %w", err)
 	}
-	runtimeState := store.NewRuntimeSettingsState(effectiveSettings.Settings)
+	runtimeState := settingsmodel.NewRuntimeSettingsState(effectiveSettings.Settings)
 	projectStore, _ := store.NewProjectStore(db)
-	unifiedJobs, err := jobqueue.NewJobsStore(db)
+	jobStorage, err := store.NewJobStorage(db)
+	if err != nil {
+		return err
+	}
+	unifiedJobs, err := jobqueue.NewJobsStore(jobStorage)
 	if err != nil {
 		return err
 	}
@@ -98,26 +113,28 @@ func run(ctx context.Context) (runErr error) {
 	if err := cacheStore.CleanupPartials(); err != nil {
 		return err
 	}
-	limiter, err := projects.NewPreviewLimits(cfg.PreviewGlobalLimit)
+	limiter, err := preview.NewPreviewLimits(cfg.PreviewGlobalLimit)
 	if err != nil {
 		return err
 	}
 	validator := func(ctx context.Context, file *os.File) error {
 		return ffmpeg.ValidateFile(ctx, cfg.FFprobePath, file)
 	}
-	mediaCatalog := runtime.MediaCatalog{Scanner: scanner, Store: mediaStore}
-	mediaService := &projects.MediaUseCase{Catalog: mediaCatalog, Configured: len(cfg.MediaRoots) > 0}
-	detectionService := projects.NewDetectionUseCase(&detection.Service{Scanner: scanner, Catalog: mediaStore, FFmpegPath: cfg.FFmpegPath, Capacity: limiter})
+	mediaCatalog := librarycatalog.MediaCatalog{Scanner: scanner, Store: mediaStore}
+	mediaService := &librarymedia.MediaUseCase{Catalog: mediaCatalog, Configured: len(cfg.MediaRoots) > 0}
+	mediaImportService := &librarymedia.ImportUseCase{Configured: len(cfg.MediaRoots) > 0, UnifiedJobs: unifiedJobs}
+	detector := &detection.Service{Scanner: scanner, Catalog: mediaStore, FFmpegPath: cfg.FFmpegPath, Capacity: limiter}
+	detectionService := projects.NewDetectionUseCase(detector)
 	detectionService.Catalog = mediaCatalog
-	detectionService.Projects = runtime.ProjectRepository{Store: projectStore}
-	previewRunner := runtime.PreviewRunner{Scanner: scanner, Media: mediaStore, FFmpeg: ffmpeg.Runner{Path: cfg.FFmpegPath}}
-	previewManager, err := projects.NewPreviewManager(runtime.PreviewCache{Store: cacheStore}, previewRunner, validator, limiter)
+	detectionService.Projects = projects.StoreRepository{Store: projectStore}
+	previewRunner := adapters.PreviewRunner{Scanner: scanner, Media: mediaStore, FFmpeg: ffmpeg.Runner{Path: cfg.FFmpegPath}}
+	previewManager, err := preview.NewPreviewManager(adapters.PreviewCache{Store: cacheStore}, previewRunner, validator, limiter)
 	if err != nil {
 		return err
 	}
-	previewService := projects.PreviewUseCase{Catalog: mediaCatalog, Manager: previewManager}
+	previewService := preview.PreviewUseCase{Catalog: mediaCatalog, Manager: previewManager}
 	assetService := &assets.Service{Scanner: scanner, Media: mediaStore, FFmpegPath: cfg.FFmpegPath, CacheDir: cfg.CacheDir, MaxBytes: timelineCacheBytes, Capacity: limiter}
-	projectService := projects.ProjectUseCase{Repository: runtime.ProjectRepository{Store: projectStore}, Media: mediaCatalog}
+	projectService := projects.ProjectUseCase{Repository: projects.StoreRepository{Store: projectStore}, Media: mediaCatalog}
 	artifacts := exporter.NewArtifactStore()
 	if err := artifacts.Reconcile(ctx, unifiedJobs, cfg.FFprobePath, cfg.Destinations); err != nil {
 		return err
@@ -137,22 +154,22 @@ func run(ctx context.Context) (runErr error) {
 			}
 		}
 	}()
-	exportExecutor := runtime.NewExportExecutor(unifiedJobs, scanner, mediaStore, exporter.Service{
-		FFmpegPath: cfg.FFmpegPath, FFprobePath: cfg.FFprobePath, OutputDir: cfg.ExportDir, Destinations: cfg.Destinations, Artifacts: artifacts, Capacity: limiter,
-	})
-	exportExecutor.Settings = runtimeState
-	batchExports := projects.BatchExportUseCase{Projects: runtime.ProjectRepository{Store: projectStore}, Media: mediaCatalog, Jobs: unifiedJobs, Settings: runtimeState, RemoveArtifacts: artifacts.Remove}
-	queuedJobs := runtime.QueuedJobs{Jobs: unifiedJobs, Exports: &batchExports, Media: mediaService, Detection: detectionService, Catalog: mediaCatalog}
+	exportExecutor := exporter.Executor{
+		Jobs: unifiedJobs, Scanner: scanner, Media: mediaStore,
+		Service:  exporter.Service{FFmpegPath: cfg.FFmpegPath, FFprobePath: cfg.FFprobePath, OutputDir: cfg.ExportDir, Destinations: cfg.Destinations, Artifacts: artifacts, Capacity: limiter},
+		Settings: runtimeState,
+	}
+	batchExports := projects.BatchExportUseCase{Projects: projects.StoreRepository{Store: projectStore}, Media: mediaCatalog, Jobs: unifiedJobs, Settings: runtimeState}
+	queuedExports := exporter.QueuedExecutor{Jobs: unifiedJobs, Media: mediaCatalog, RunSnapshot: exportExecutor.RunSnapshot, RemoveArtifacts: artifacts.Remove}
+	queuedJobs := runtime.QueuedJobs{Exports: queuedExports, Scans: librarymedia.ScanExecutor{Jobs: unifiedJobs, Media: mediaService, Catalog: mediaCatalog}, Detection: detection.QueuedExecutor{Jobs: unifiedJobs, Catalog: mediaCatalog, Detector: detector}}
+	batchDownloads := exporter.BatchArchiveService{Jobs: unifiedJobs, Service: exportExecutor.Service, Downloads: exportExecutor}
 	scheduler, err := jobqueue.NewScheduler(unifiedJobs, jobqueue.SchedulerConfig{QueueCapacity: cfg.ExportLimit * 4, WorkerLimit: cfg.ExportLimit, Logger: logger}, queuedJobs.Run)
 	if err != nil {
 		return err
 	}
 	batchExports.Scheduler = scheduler
-	mediaService.Scheduler, mediaService.UnifiedJobs = scheduler, unifiedJobs
+	mediaImportService.Scheduler = scheduler
 	detectionService.Scheduler, detectionService.UnifiedJobs = scheduler, unifiedJobs
-	batchExports.RunSnapshot = func(ctx context.Context, jobID string, snapshot projects.ExportSnapshot) (string, error) {
-		return exportExecutor.ExecuteBatchSnapshot(ctx, jobID, snapshot)
-	}
 	scheduler.Start()
 	defer func() {
 		cleanup, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -166,14 +183,14 @@ func run(ctx context.Context) (runErr error) {
 		if _, err := rand.Read(startupKey); err != nil {
 			return fmt.Errorf("create startup scan key: %w", err)
 		}
-		if _, err := mediaService.StartImport(ctx, "startup-"+hex.EncodeToString(startupKey)); err != nil && !errors.Is(err, jobqueue.ErrQueueFull) {
+		if _, err := mediaImportService.StartImport(ctx, "startup-"+hex.EncodeToString(startupKey)); err != nil && !errors.Is(err, model.ErrQueueFull) {
 			if ctx.Err() != nil {
 				return nil
 			}
 			return fmt.Errorf("start initial media scan: %w", err)
 		}
 	}
-	jobService := projects.JobUseCase{Jobs: unifiedJobs}
+	jobService := view.JobUseCase{Jobs: unifiedJobs}
 	authenticator, err := httpapi.NewAuthenticator(httpapi.AuthConfig{
 		Mode: cfg.AuthMode, BearerToken: cfg.BearerToken, ListenAddress: cfg.ListenAddress,
 	})
@@ -181,13 +198,13 @@ func run(ctx context.Context) (runErr error) {
 		return err
 	}
 	settingsApplier := runtime.RuntimeSettingsApplier{State: runtimeState, Scanner: scanner, PreviewLimits: limiter, PreviewCache: cacheStore, Assets: assetService, Scheduler: scheduler}
-	proposalService, err := mcp.NewProposalService(db, mcpCredentials, projectService, mediaCatalog, exportExecutor, scheduler)
+	proposalService, err := mcp.NewProposalService(mcpStorage, mcpCredentials, projectService, mediaCatalog, projects.ExportPreflightUseCase{Export: exportExecutor}, scheduler)
 	if err != nil {
 		return err
 	}
 	apiServer, err := httpapi.New(httpapi.Config{
 		Authenticator: authenticator, Media: mediaService, Preview: previewService, Assets: assetService,
-		Projects: projectService, BatchExports: batchExports, Preflight: exportExecutor, Jobs: jobService, Detection: detectionService, Download: exportExecutor, MediaImport: mediaService,
+		Projects: projectService, BatchExports: batchExports, Preflight: projects.ExportPreflightUseCase{Export: exportExecutor}, Jobs: jobService, Detection: detectionService, Download: exportExecutor, BatchDownload: batchDownloads, MediaImport: mediaImportService,
 		Settings: config.NewRuntimeService(runtimeSettingsStore, runtimeState, settingsApplier.Apply), RuntimeSettings: runtimeState, MCPCredentials: mcpCredentials, ExportProposals: proposalService,
 		Destinations: destinationMetadata(cfg.Destinations),
 		Ready:        db.PingContext, Logger: logger, Metrics: httpapi.NewMetrics(),
@@ -204,6 +221,8 @@ func run(ctx context.Context) (runErr error) {
 	mcpTransportConfig := mcp.TransportConfig{
 		Enabled: cfg.MCPEnabled, EnabledFunc: func() bool { return runtimeState.Snapshot().MCPEnabled }, Credentials: mcpCredentials, Tools: mcpTools, AllowedOrigins: cfg.AllowedOrigins,
 		MaxConcurrentRequests: cfg.PreviewGlobalLimit,
+		Logger:                logger,
+		PublicBaseURL:         cfg.PublicBaseURL,
 		RequestInfo: func(request *http.Request) mcp.RequestInfo {
 			forwarded := httpapi.GetForwardedInfo(request.Context())
 			return mcp.RequestInfo{ClientIP: forwarded.ClientIP, Host: forwarded.Host, Proto: forwarded.Proto}
@@ -249,16 +268,40 @@ func run(ctx context.Context) (runErr error) {
 		failed <- server.Serve(listener)
 	}()
 	select {
-	case err := <-failed:
-		if !errors.Is(err, http.ErrServerClosed) {
-			return err
+	case serveErr := <-failed:
+		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		shutdownErr := shutdownHTTPServer(server, mcpTransport, shutdown, 10*time.Second)
+		if errors.Is(serveErr, http.ErrServerClosed) {
+			return shutdownErr
 		}
-		return nil
+		return errors.Join(fmt.Errorf("serve HTTP: %w", serveErr), shutdownErr)
 	case <-ctx.Done():
 		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		return server.Shutdown(shutdown)
+		return shutdownHTTPServer(server, mcpTransport, shutdown, 10*time.Second)
 	}
+}
+
+func shutdownHTTPServer(server *http.Server, mcpTransport *mcp.Transport, gracefulCtx context.Context, cleanupTimeout time.Duration) error {
+	httpErr := server.Shutdown(gracefulCtx)
+	var closeErr error
+	if httpErr != nil {
+		closeErr = server.Close()
+	}
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), cleanupTimeout)
+	defer cancel()
+	mcpErr := mcpTransport.Shutdown(cleanupCtx)
+	if httpErr != nil {
+		httpErr = fmt.Errorf("drain HTTP server: %w", httpErr)
+	}
+	if closeErr != nil {
+		closeErr = fmt.Errorf("close HTTP server: %w", closeErr)
+	}
+	if mcpErr != nil {
+		mcpErr = fmt.Errorf("drain MCP application calls: %w", mcpErr)
+	}
+	return errors.Join(httpErr, closeErr, mcpErr)
 }
 
 func destinationMetadata(values []exporter.Destination) []httpapi.DestinationMetadata {

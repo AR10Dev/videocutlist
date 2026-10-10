@@ -10,10 +10,28 @@ import (
 	"time"
 
 	store "videocutlist/internal/db"
+	librarymedia "videocutlist/internal/library/media"
 	"videocutlist/internal/mcp"
+	"videocutlist/internal/preview"
 	"videocutlist/internal/projects"
 	"videocutlist/internal/projects/model"
 )
+
+type projectToolsCatalog struct{ toolMedia }
+
+func (m projectToolsCatalog) Get(ctx context.Context, id string) (librarymedia.Media, error) {
+	return m.toolMedia.Get(ctx, id)
+}
+
+func (m projectToolsCatalog) Browse(context.Context, string, string, int) (librarymedia.FolderPage, error) {
+	return librarymedia.FolderPage{}, nil
+}
+
+func (m projectToolsCatalog) Refresh(context.Context) error { return nil }
+
+func (m projectToolsCatalog) Preview(context.Context, preview.PreviewSpec) (preview.TranscodeSpec, error) {
+	return preview.TranscodeSpec{}, nil
+}
 
 type projectToolsService struct {
 	mu          sync.Mutex
@@ -33,8 +51,8 @@ func (s *projectToolsService) Create(_ context.Context, id string, input project
 	return project, nil
 }
 
-func (s *projectToolsService) CreateInTx(ctx context.Context, _ *sql.Tx, id string, input projects.ProjectInput, _ []projects.Media) (projects.Project, error) {
-	return s.Create(ctx, id, input)
+func (s *projectToolsService) PrepareCreate(_ context.Context, id string, input projects.ProjectInput, _ []librarymedia.Media) (projects.PreparedProject, error) {
+	return projects.PreparedProject{Project: projects.Project{ID: id, Document: input.Document}}, nil
 }
 
 func (s *projectToolsService) Get(_ context.Context, id string) (projects.Project, error) {
@@ -103,14 +121,19 @@ func (s *changingProjectService) Get(_ context.Context, _ string) (projects.Proj
 func TestProjectToolsScopeCreationAndRevisionConflict(t *testing.T) {
 	allowedMediaID := "m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	privateMediaID := "m_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-	media := toolMedia{items: []projects.Media{
+	media := toolMedia{items: []librarymedia.Media{
 		{ID: allowedMediaID, RootID: "camera", Name: "allowed.mp4", DurationMS: 10_000},
 		{ID: privateMediaID, RootID: "private", Name: "secret.mp4", DurationMS: 10_000},
 	}}
-	service := &projectToolsService{projects: map[string]projects.Project{
-		"p_private": {ID: "p_private", Revision: 1, Document: model.Document{SchemaVersion: model.ProjectSchemaVersion, Name: "Private", Items: []model.ProjectItem{{ID: "i_aaaaaaaaaaaaaaaaaaaaaaaa", MediaID: privateMediaID}}}},
-	}}
-	credentials, secret := projectToolsCredentials(t)
+	database, credentials, secret := projectToolsCredentials(t)
+	projectStore, err := store.NewProjectStore(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := projects.ProjectUseCase{Repository: projects.StoreRepository{Store: projectStore}, Media: projectToolsCatalog{toolMedia: media}}
+	if _, err := service.Create(t.Context(), "p_private", projects.ProjectInput{Document: model.Document{SchemaVersion: model.ProjectSchemaVersion, Name: "Private", Items: []model.ProjectItem{{ID: "i_aaaaaaaaaaaaaaaaaaaaaaaa", MediaID: privateMediaID}}}}); err != nil {
+		t.Fatal(err)
+	}
 	handler := newTransport(t, mcp.TransportConfig{Enabled: true, Credentials: credentials, Tools: append(mcp.MediaTools(media), mcp.ProjectTools(service, media, credentials)...)})
 	session := initialize(t, handler, secret)
 
@@ -127,9 +150,14 @@ func TestProjectToolsScopeCreationAndRevisionConflict(t *testing.T) {
 	if created.Code != 200 || !contains(created.Body.String(), "Project created.") {
 		t.Fatalf("created project = %s", created.Body.String())
 	}
-	service.mu.Lock()
-	createdID := service.lastCreated
-	service.mu.Unlock()
+	page, err := service.List(t.Context(), "", 50)
+	if err != nil || len(page.Items) != 2 {
+		t.Fatalf("created project list = %#v, err=%v", page, err)
+	}
+	createdID := page.Items[1].ID
+	if createdID == "p_private" {
+		createdID = page.Items[0].ID
+	}
 	credential, err := credentials.Get(t.Context(), credentialID(t, credentials, secret))
 	if err != nil || credential.ProjectScope.Kind != mcp.ProjectScopeSelected || !credential.AllowsProjectSummary(createdID) || credential.AllowsProjectSummary("p_ungranted") {
 		t.Fatalf("created project grant = %#v, err=%v", credential.ProjectScope, err)
@@ -179,7 +207,7 @@ func TestProjectToolsScopeCreationAndRevisionConflict(t *testing.T) {
 }
 
 func TestProjectToolsInvalidArgumentsReturnInvalidInput(t *testing.T) {
-	credentials, secret := projectToolsCredentials(t)
+	_, credentials, secret := projectToolsCredentials(t)
 	service := &projectToolsService{projects: map[string]projects.Project{
 		"p_existing": {ID: "p_existing", Revision: 1},
 	}}
@@ -212,12 +240,12 @@ func TestProjectToolsInvalidArgumentsReturnInvalidInput(t *testing.T) {
 }
 
 func TestCutlistInvalidTargetReportsInvalidInputWithoutSaving(t *testing.T) {
-	credentials, secret := projectToolsCredentials(t)
+	_, credentials, secret := projectToolsCredentials(t)
 	mediaID := "m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	service := &projectToolsService{projects: map[string]projects.Project{
 		"p_private": {ID: "p_private", Revision: 1, Document: model.Document{Items: []model.ProjectItem{{ID: "i_existing", MediaID: mediaID}}}},
 	}}
-	handler := newTransport(t, mcp.TransportConfig{Enabled: true, Credentials: credentials, Tools: mcp.ProjectTools(service, toolMedia{items: []projects.Media{{ID: mediaID, RootID: "camera"}}}, credentials)})
+	handler := newTransport(t, mcp.TransportConfig{Enabled: true, Credentials: credentials, Tools: mcp.ProjectTools(service, toolMedia{items: []librarymedia.Media{{ID: mediaID, RootID: "camera"}}}, credentials)})
 	session := initialize(t, handler, secret)
 	response := serve(handler, sessionRequest(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"update_cutlist","arguments":{"projectId":"p_private","expectedRevision":1,"operations":[{"type":"add","itemId":"i_missing","position":0,"segment":{"startMs":100,"endMs":200,"included":true}}]}}}`, secret, session))
 	if response.Code != 200 || !contains(response.Body.String(), `"code":"invalid_input"`) {
@@ -230,7 +258,7 @@ func TestCutlistInvalidTargetReportsInvalidInputWithoutSaving(t *testing.T) {
 
 func TestProjectToolsAllProjectScope(t *testing.T) {
 	mediaID := "m_ccccccccccccccccccccccccccccccccccccccccccc"
-	media := toolMedia{items: []projects.Media{{ID: mediaID, RootID: "camera", Name: "clip.mp4", DurationMS: 10_000}}}
+	media := toolMedia{items: []librarymedia.Media{{ID: mediaID, RootID: "camera", Name: "clip.mp4", DurationMS: 10_000}}}
 	service := &projectToolsService{projects: map[string]projects.Project{"p_allowed": {ID: "p_allowed", Revision: 1, Document: model.Document{SchemaVersion: model.ProjectSchemaVersion, Name: "Allowed", Items: []model.ProjectItem{{ID: "i_cccccccccccccccccccccccc", MediaID: mediaID}}}}}}
 	credentials, secret := projectToolsAllCredentials(t)
 	handler := newTransport(t, mcp.TransportConfig{Enabled: true, Credentials: credentials, Tools: mcp.ProjectTools(service, media, credentials)})
@@ -244,7 +272,7 @@ func TestProjectToolsAllProjectScope(t *testing.T) {
 func TestGetProjectRejectsOutOfScopeSnapshotAfterAuthorization(t *testing.T) {
 	allowedMediaID := "m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	privateMediaID := "m_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-	media := toolMedia{items: []projects.Media{
+	media := toolMedia{items: []librarymedia.Media{
 		{ID: allowedMediaID, RootID: "camera", Name: "allowed.mp4", DurationMS: 10_000},
 		{ID: privateMediaID, RootID: "private", Name: "secret.mp4", DurationMS: 10_000},
 	}}
@@ -262,7 +290,7 @@ func TestGetProjectRejectsOutOfScopeSnapshotAfterAuthorization(t *testing.T) {
 		},
 	}}
 	service := &changingProjectService{projectToolsService: &projectToolsService{}, first: first, second: second}
-	credentials, secret := projectToolsCredentials(t)
+	_, credentials, secret := projectToolsCredentials(t)
 	handler := newTransport(t, mcp.TransportConfig{Enabled: true, Credentials: credentials, Tools: mcp.ProjectTools(service, media, credentials)})
 	session := initialize(t, handler, secret)
 
@@ -276,7 +304,7 @@ func TestGetProjectRejectsOutOfScopeSnapshotAfterAuthorization(t *testing.T) {
 	}
 }
 
-func createdProjectItemID(t *testing.T, service *projectToolsService, id string) string {
+func createdProjectItemID(t *testing.T, service projects.ProjectService, id string) string {
 	t.Helper()
 	project, err := service.Get(t.Context(), id)
 	if err != nil || len(project.Items) != 1 {
@@ -285,14 +313,14 @@ func createdProjectItemID(t *testing.T, service *projectToolsService, id string)
 	return project.Items[0].ID
 }
 
-func projectToolsCredentials(t *testing.T) (*mcp.CredentialStore, string) {
+func projectToolsCredentials(t *testing.T) (*sql.DB, *mcp.CredentialStore, string) {
 	t.Helper()
 	database, err := store.OpenDatabase(t.Context(), t.TempDir()+"/mcp-projects.db")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = database.Close() })
-	credentials, err := mcp.NewCredentialStore(database)
+	credentials, err := mcp.NewCredentialStore(newMCPRepository(t, database))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -301,7 +329,7 @@ func projectToolsCredentials(t *testing.T) (*mcp.CredentialStore, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return credentials, created.Secret
+	return database, credentials, created.Secret
 }
 
 func projectToolsAllCredentials(t *testing.T) (*mcp.CredentialStore, string) {
@@ -311,7 +339,7 @@ func projectToolsAllCredentials(t *testing.T) (*mcp.CredentialStore, string) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = database.Close() })
-	credentials, err := mcp.NewCredentialStore(database)
+	credentials, err := mcp.NewCredentialStore(newMCPRepository(t, database))
 	if err != nil {
 		t.Fatal(err)
 	}

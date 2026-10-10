@@ -1,16 +1,26 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
+	testsupport "videocutlist/internal/testsupport"
 
-	"videocutlist/internal/db"
+	store "videocutlist/internal/db"
+	exporter "videocutlist/internal/export"
 	jobqueue "videocutlist/internal/jobs"
+	jobmodel "videocutlist/internal/jobs/model"
+	librarymedia "videocutlist/internal/library/media"
+	"videocutlist/internal/preview"
 	"videocutlist/internal/projects"
 	"videocutlist/internal/projects/model"
 )
@@ -28,41 +38,41 @@ func (p *proposalProjects) Save(context.Context, string, projects.ProjectInput) 
 }
 
 type proposalMedia struct {
-	item  projects.Media
-	extra map[string]projects.Media
+	item  librarymedia.Media
+	extra map[string]librarymedia.Media
 }
 
-func (m *proposalMedia) Get(_ context.Context, id string) (projects.Media, error) {
+func (m *proposalMedia) Get(_ context.Context, id string) (librarymedia.Media, error) {
 	if id == m.item.ID {
 		return m.item, nil
 	}
 	if item, ok := m.extra[id]; ok {
 		return item, nil
 	}
-	return projects.Media{}, store.ErrMediaNotFound
+	return librarymedia.Media{}, store.ErrMediaNotFound
 }
-func (m *proposalMedia) List(context.Context, string, int) (projects.MediaPage, error) {
-	return projects.MediaPage{}, nil
+func (m *proposalMedia) List(context.Context, string, int) (librarymedia.MediaPage, error) {
+	return librarymedia.MediaPage{}, nil
 }
-func (m *proposalMedia) Browse(context.Context, string, string, int) (projects.FolderPage, error) {
-	return projects.FolderPage{}, nil
+func (m *proposalMedia) Browse(context.Context, string, string, int) (librarymedia.FolderPage, error) {
+	return librarymedia.FolderPage{}, nil
 }
 func (m *proposalMedia) Refresh(context.Context) error { return nil }
-func (m *proposalMedia) Preview(context.Context, projects.PreviewSpec) (model.PreviewSpec, error) {
-	return model.PreviewSpec{}, nil
+func (m *proposalMedia) Preview(context.Context, preview.PreviewSpec) (preview.TranscodeSpec, error) {
+	return preview.TranscodeSpec{}, nil
 }
 
 type proposalPreflight struct{}
 
-func (proposalPreflight) Preflight(_ context.Context, _ string, _ projects.Project, input projects.ExportInput) (projects.ExportPreflight, error) {
+func (proposalPreflight) Preflight(_ context.Context, _ projects.Project, input projects.ExportInput) (exporter.PreflightResult, error) {
 	selection := input.StreamIndexes
 	if len(selection) == 0 {
 		selection = []int{0, 1}
 	}
-	return projects.ExportPreflight{Allowed: true, Selection: selection, Findings: []projects.ExportFinding{{Severity: "warn", Code: "stream_copy_cut_may_not_be_frame_exact", Message: "Stream-copy boundaries are keyframe-limited."}}}, nil
+	return exporter.PreflightResult{Allowed: true, Selection: selection, Findings: []exporter.Finding{{Severity: "warn", Code: "stream_copy_cut_may_not_be_frame_exact", Message: "Stream-copy boundaries are keyframe-limited."}}}, nil
 }
 
-func newProposalTestService(t *testing.T, unattended bool) (*ProposalService, *proposalProjects, *proposalMedia, string, *time.Time) {
+func newProposalTestService(t *testing.T, unattended bool) (*ProposalService, *proposalProjects, *proposalMedia, string, *time.Time, *sql.DB) {
 	t.Helper()
 	ctx := t.Context()
 	database, err := store.OpenDatabase(ctx, t.TempDir()+"/proposals.db")
@@ -71,7 +81,11 @@ func newProposalTestService(t *testing.T, unattended bool) (*ProposalService, *p
 	}
 	t.Cleanup(func() { _ = database.Close() })
 	now := time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)
-	credentials, err := NewCredentialStoreWithClock(database, func() time.Time { return now })
+	mcpStorage, err := store.NewMCPStorage(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentials, err := NewCredentialStoreWithClock(mcpStorage, func() time.Time { return now })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -91,21 +105,21 @@ func newProposalTestService(t *testing.T, unattended bool) (*ProposalService, *p
 		t.Fatal(err)
 	}
 	projectService := &proposalProjects{project: projects.Project{ID: projectID, Revision: 1, Document: model.Document{SchemaVersion: model.ProjectSchemaVersion, Name: "Proposal", Items: []model.ProjectItem{{ID: itemID, MediaID: mediaID, Segments: []model.Segment{{StartMS: 1000, EndMS: 2000}}}}}}}
-	mediaService := &proposalMedia{item: projects.Media{ID: mediaID, RootID: "root_a", Name: "clip.mp4", DurationMS: 10_000, SizeBytes: 100, ETag: "source-v1"}}
-	jobs, err := jobqueue.NewJobsStore(database)
+	mediaService := &proposalMedia{item: librarymedia.Media{ID: mediaID, RootID: "root_a", Name: "clip.mp4", DurationMS: 10_000, SizeBytes: 100, ETag: "source-v1"}}
+	jobs, err := testsupport.NewJobsStore(database)
 	if err != nil {
 		t.Fatal(err)
 	}
-	scheduler, err := jobqueue.NewScheduler(jobs, jobqueue.SchedulerConfig{QueueCapacity: 4, WorkerLimit: 1}, func(context.Context, jobqueue.Job) error { return nil })
+	scheduler, err := jobqueue.NewScheduler(jobs, jobqueue.SchedulerConfig{QueueCapacity: 4, WorkerLimit: 1}, func(context.Context, jobmodel.Job) error { return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
-	service, err := NewProposalService(database, credentials, projectService, mediaService, proposalPreflight{}, scheduler)
+	service, err := NewProposalService(mcpStorage, credentials, projectService, mediaService, proposalPreflight{}, scheduler)
 	if err != nil {
 		t.Fatal(err)
 	}
 	service.now = func() time.Time { return now }
-	return service, projectService, mediaService, created.ID, &now
+	return service, projectService, mediaService, created.ID, &now, database
 }
 
 func prepareProposal(t *testing.T, service *ProposalService, credentialID string) ExportProposal {
@@ -121,7 +135,7 @@ func prepareProposal(t *testing.T, service *ProposalService, credentialID string
 }
 
 func TestProposalRequiresExactApprovalAndDuplicateExecutionReturnsSameBatch(t *testing.T) {
-	service, _, _, credentialID, _ := newProposalTestService(t, false)
+	service, _, _, credentialID, _, database := newProposalTestService(t, false)
 	proposal := prepareProposal(t, service, credentialID)
 	if proposal.ExpiresAt.Sub(proposal.CreatedAt) != ProposalTTL || proposal.Accuracy != "keyframe_limited" || proposal.RequiresReencoding || len(proposal.Findings) == 0 || len(proposal.Snapshots) != 1 || proposal.Snapshots[0].Source.ETag != "source-v1" {
 		t.Fatalf("proposal did not bind validated inputs: %#v", proposal)
@@ -150,14 +164,104 @@ func TestProposalRequiresExactApprovalAndDuplicateExecutionReturnsSameBatch(t *t
 		t.Fatalf("duplicate results = batches %q counts %v", batches, counts)
 	}
 	var count int
-	if err := service.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM jobs WHERE proposal_id=? AND credential_id=?`, proposal.ID, credentialID).Scan(&count); err != nil || count != 1 {
+	if err := database.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM jobs WHERE proposal_id=? AND credential_id=?`, proposal.ID, credentialID).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("persisted jobs = %d, %v", count, err)
+	}
+}
+
+type proposalDownloadStub struct{}
+
+func (proposalDownloadStub) Download(context.Context, string, int) (io.ReadCloser, string, error) {
+	return nil, "", nil
+}
+
+func TestStartExportMCPResponsePreservesMinimalJobShapeOnReplay(t *testing.T) {
+	service, _, _, credentialID, _, database := newProposalTestService(t, false)
+	proposal := prepareProposal(t, service, credentialID)
+	if _, err := service.Approve(t.Context(), proposal.ID); err != nil {
+		t.Fatal(err)
+	}
+	jobs, err := testsupport.NewJobsStore(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var startExport Tool
+	for _, tool := range ExportTools(service, jobs, proposalDownloadStub{}) {
+		if tool.Name == "start_export" {
+			startExport = tool
+			break
+		}
+	}
+	if startExport.Call == nil {
+		t.Fatal("start_export tool was not registered")
+	}
+	args, err := json.Marshal(map[string]string{"proposalId": proposal.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	toolContext := Context{Request: httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/mcp", nil), Credential: Credential{ID: credentialID}}
+	var first []byte
+	for attempt := range 2 {
+		result, err := startExport.Call(toolContext, args)
+		if err != nil {
+			t.Fatalf("start_export attempt %d: %v", attempt, err)
+		}
+		serialized, err := json.Marshal(result)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var envelope struct {
+			Content           []ToolContent   `json:"content"`
+			StructuredContent json.RawMessage `json:"structuredContent"`
+		}
+		if err := json.Unmarshal(serialized, &envelope); err != nil {
+			t.Fatal(err)
+		}
+		if len(envelope.Content) != 1 || envelope.Content[0].Text != "Export started." {
+			t.Fatalf("start_export content = %s", serialized)
+		}
+		var response struct {
+			BatchID string                       `json:"batchId"`
+			Jobs    []map[string]json.RawMessage `json:"jobs"`
+		}
+		if err := json.Unmarshal(envelope.StructuredContent, &response); err != nil {
+			t.Fatal(err)
+		}
+		if response.BatchID == "" || len(response.Jobs) != 1 {
+			t.Fatalf("start_export response = %s", serialized)
+		}
+		job := response.Jobs[0]
+		wantKeys := []string{"id", "batchId", "projectItemId", "type", "state", "revision", "progress", "createdAt", "updatedAt"}
+		if len(job) != len(wantKeys) {
+			t.Fatalf("start_export job fields = %v, want %v", job, wantKeys)
+		}
+		for _, key := range wantKeys {
+			if _, ok := job[key]; !ok {
+				t.Errorf("start_export job missing %q: %v", key, job)
+			}
+		}
+		var id, batchID, itemID, kind, state string
+		var revision int64
+		var progress float64
+		for key, target := range map[string]any{"id": &id, "batchId": &batchID, "projectItemId": &itemID, "type": &kind, "state": &state, "revision": &revision, "progress": &progress} {
+			if err := json.Unmarshal(job[key], target); err != nil {
+				t.Fatalf("decode %s: %v", key, err)
+			}
+		}
+		if id == "" || batchID != response.BatchID || itemID != "i_proposaltest01" || kind != "export" || state != "queued" || revision != 0 || progress != 0 {
+			t.Fatalf("start_export job identity/state = %v", job)
+		}
+		if attempt == 0 {
+			first = serialized
+		} else if !bytes.Equal(first, serialized) {
+			t.Fatalf("start_export replay changed JSON: first=%s replay=%s", first, serialized)
+		}
 	}
 }
 
 func TestProposalSnapshotsOnlyExplicitlySelectedItems(t *testing.T) {
 	t.Run("shared media", func(t *testing.T) {
-		service, projectService, _, credentialID, _ := newProposalTestService(t, false)
+		service, projectService, _, credentialID, _, _ := newProposalTestService(t, false)
 		projectService.project.Items = append(projectService.project.Items, model.ProjectItem{
 			ID: "i_proposaltest02", MediaID: "m_proposaltest01",
 			Segments: []model.Segment{{StartMS: 3000, EndMS: 4000}},
@@ -174,7 +278,7 @@ func TestProposalSnapshotsOnlyExplicitlySelectedItems(t *testing.T) {
 		}
 	})
 	t.Run("distinct media", func(t *testing.T) {
-		service, projectService, mediaService, credentialID, _ := newProposalTestService(t, false)
+		service, projectService, mediaService, credentialID, _, _ := newProposalTestService(t, false)
 		selectedID := projectService.project.Items[0].ID
 		unselected := model.ProjectItem{
 			ID:      "i_proposaltest02",
@@ -185,7 +289,7 @@ func TestProposalSnapshotsOnlyExplicitlySelectedItems(t *testing.T) {
 			}},
 		}
 		projectService.project.Items = append(projectService.project.Items, unselected)
-		mediaService.extra = map[string]projects.Media{
+		mediaService.extra = map[string]librarymedia.Media{
 			unselected.MediaID: {
 				ID:         unselected.MediaID,
 				RootID:     "root_a",
@@ -219,7 +323,7 @@ func TestProposalSnapshotsOnlyExplicitlySelectedItems(t *testing.T) {
 }
 
 func TestProposalExpiryBoundaryAndChangedInputs(t *testing.T) {
-	service, projectService, mediaService, credentialID, now := newProposalTestService(t, false)
+	service, projectService, mediaService, credentialID, now, _ := newProposalTestService(t, false)
 	proposal := prepareProposal(t, service, credentialID)
 	*now = proposal.ExpiresAt
 	if _, err := service.Approve(t.Context(), proposal.ID); !errors.Is(err, ErrProposalExpired) {
@@ -246,8 +350,40 @@ func TestProposalExpiryBoundaryAndChangedInputs(t *testing.T) {
 	}
 }
 
+func TestProposalConcurrentApprovalRetainsFirstTimestamp(t *testing.T) {
+	service, _, _, credentialID, now, _ := newProposalTestService(t, false)
+	proposal := prepareProposal(t, service, credentialID)
+	firstTime := *now
+	secondTime := firstTime.Add(time.Second)
+	secondService := *service
+	service.now = func() time.Time { return firstTime }
+	secondService.now = func() time.Time { return secondTime }
+
+	services := []*ProposalService{service, &secondService}
+	approved := make([]ExportProposal, len(services))
+	errs := make([]error, len(services))
+	var wait sync.WaitGroup
+	for index, approver := range services {
+		wait.Go(func() {
+			approved[index], errs[index] = approver.Approve(t.Context(), proposal.ID)
+		})
+	}
+	wait.Wait()
+	for index, err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent approval %d: %v", index, err)
+		}
+	}
+	if approved[0].ApprovedAt == nil || approved[1].ApprovedAt == nil || !approved[0].ApprovedAt.Equal(*approved[1].ApprovedAt) {
+		t.Fatalf("concurrent approval timestamps = %#v and %#v", approved[0].ApprovedAt, approved[1].ApprovedAt)
+	}
+	if !approved[0].ApprovedAt.Equal(firstTime) && !approved[0].ApprovedAt.Equal(secondTime) {
+		t.Fatalf("approval timestamp = %s, want one transaction's timestamp", approved[0].ApprovedAt)
+	}
+}
+
 func TestProposalSupportsExplicitMediaRangesWithoutProjectWrite(t *testing.T) {
-	service, _, _, credentialID, _ := newProposalTestService(t, false)
+	service, _, _, credentialID, _, _ := newProposalTestService(t, false)
 	proposal, err := service.Prepare(t.Context(), ProposalRequest{
 		CredentialID: credentialID,
 		MediaID:      "m_proposaltest01",
@@ -270,7 +406,7 @@ func TestProposalSupportsExplicitMediaRangesWithoutProjectWrite(t *testing.T) {
 }
 
 func TestProposalUnattendedCredentialBypassesOnlyApproval(t *testing.T) {
-	service, _, media, credentialID, _ := newProposalTestService(t, true)
+	service, _, media, credentialID, _, database := newProposalTestService(t, true)
 	proposal := prepareProposal(t, service, credentialID)
 
 	media.item.ETag = "source-v2"
@@ -278,7 +414,7 @@ func TestProposalUnattendedCredentialBypassesOnlyApproval(t *testing.T) {
 		t.Fatalf("unattended execution with changed source = %v, want stale proposal", err)
 	}
 	var count int
-	if err := service.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM jobs WHERE proposal_id=? AND credential_id=?`, proposal.ID, credentialID).Scan(&count); err != nil || count != 0 {
+	if err := database.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM jobs WHERE proposal_id=? AND credential_id=?`, proposal.ID, credentialID).Scan(&count); err != nil || count != 0 {
 		t.Fatalf("stale unattended proposal admitted %d jobs: %v", count, err)
 	}
 
@@ -290,7 +426,7 @@ func TestProposalUnattendedCredentialBypassesOnlyApproval(t *testing.T) {
 }
 
 func TestProposalRejectsAllExcludedMediaRanges(t *testing.T) {
-	service, _, _, credentialID, _ := newProposalTestService(t, false)
+	service, _, _, credentialID, _, _ := newProposalTestService(t, false)
 	_, err := service.Prepare(t.Context(), ProposalRequest{
 		CredentialID: credentialID,
 		MediaID:      "m_proposaltest01",
@@ -303,7 +439,7 @@ func TestProposalRejectsAllExcludedMediaRanges(t *testing.T) {
 }
 
 func TestProposalPendingListPaginatesWithStableCursor(t *testing.T) {
-	service, _, _, credentialID, _ := newProposalTestService(t, false)
+	service, _, _, credentialID, _, _ := newProposalTestService(t, false)
 	for range 3 {
 		prepareProposal(t, service, credentialID)
 	}
@@ -324,15 +460,15 @@ func TestProposalPendingListPaginatesWithStableCursor(t *testing.T) {
 }
 
 func TestProposalPendingListRejectsInvalidCursor(t *testing.T) {
-	service, _, _, _, _ := newProposalTestService(t, false)
+	service, _, _, _, _, _ := newProposalTestService(t, false)
 	if _, _, err := service.ListPending(t.Context(), "invalid-cursor", 25); !errors.Is(err, ErrInvalidProposalCursor) {
 		t.Fatalf("invalid pending cursor error = %v", err)
 	}
 }
 
 func TestProposalPendingListReportsPersistenceFailure(t *testing.T) {
-	service, _, _, _, _ := newProposalTestService(t, false)
-	if err := service.db.Close(); err != nil {
+	service, _, _, _, _, database := newProposalTestService(t, false)
+	if err := database.Close(); err != nil {
 		t.Fatal(err)
 	}
 	_, _, err := service.ListPending(t.Context(), "", 25)
@@ -406,7 +542,7 @@ func TestProposalPrepareEnforcesResolvedSelectionBounds(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			service, project, media, credentialID, _ := newProposalTestService(t, true)
+			service, project, media, credentialID, _, _ := newProposalTestService(t, true)
 			request := ProposalRequest{CredentialID: credentialID, ProjectID: project.project.ID, ProjectRevision: project.project.Revision, Export: proposalExportInput()}
 			tt.modify(project, media, &request)
 			proposal, err := service.Prepare(t.Context(), request)
@@ -424,7 +560,7 @@ func TestProposalPrepareEnforcesResolvedSelectionBounds(t *testing.T) {
 }
 
 func TestProposalExecuteAcceptsDurationBoundaries(t *testing.T) {
-	service, project, media, credentialID, _ := newProposalTestService(t, true)
+	service, project, media, credentialID, _, _ := newProposalTestService(t, true)
 	media.item.DurationMS = 600_000
 	project.project.Items[0].Segments = []model.Segment{{StartMS: 0, EndMS: 600_000}}
 	for i := 1; i < 3; i++ {
@@ -444,7 +580,7 @@ func TestProposalExecuteAcceptsDurationBoundaries(t *testing.T) {
 }
 
 func TestProposalMediaKeepsRangeAndDurationBounds(t *testing.T) {
-	service, _, media, credentialID, _ := newProposalTestService(t, true)
+	service, _, media, credentialID, _, _ := newProposalTestService(t, true)
 	media.item.DurationMS = 700_000
 	request := ProposalRequest{CredentialID: credentialID, MediaID: media.item.ID, Export: proposalExportInput()}
 	request.Ranges = []model.Segment{{StartMS: 0, EndMS: 600_001}}
@@ -495,7 +631,7 @@ func TestProposalExecuteRejectsOversizedStoredSnapshots(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			service, _, media, credentialID, _ := newProposalTestService(t, true)
+			service, _, media, credentialID, _, database := newProposalTestService(t, true)
 			media.item.DurationMS = 700_000
 			proposal := prepareProposal(t, service, credentialID)
 			payload := proposalPayload{Snapshots: proposal.Snapshots}
@@ -504,14 +640,14 @@ func TestProposalExecuteRejectsOversizedStoredSnapshots(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := service.db.ExecContext(t.Context(), `UPDATE export_proposals SET payload_json=? WHERE id=?`, string(raw), proposal.ID); err != nil {
+			if _, err := database.ExecContext(t.Context(), `UPDATE export_proposals SET payload_json=? WHERE id=?`, string(raw), proposal.ID); err != nil {
 				t.Fatal(err)
 			}
 			if _, _, err := service.Execute(t.Context(), proposal.ID, credentialID); !errors.Is(err, ErrProposalData) {
 				t.Fatalf("execute tampered snapshot error = %v, want invalid stored proposal", err)
 			}
 			var count int
-			if err := service.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM jobs WHERE proposal_id=?`, proposal.ID).Scan(&count); err != nil || count != 0 {
+			if err := database.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM jobs WHERE proposal_id=?`, proposal.ID).Scan(&count); err != nil || count != 0 {
 				t.Fatalf("tampered snapshot created %d jobs: %v", count, err)
 			}
 		})

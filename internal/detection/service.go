@@ -16,7 +16,7 @@ import (
 	"videocutlist/internal/fdinput"
 	jobqueue "videocutlist/internal/jobs"
 	"videocutlist/internal/library/media/index"
-	"videocutlist/internal/projects"
+	"videocutlist/internal/preview"
 	"videocutlist/internal/projects/model"
 )
 
@@ -24,7 +24,7 @@ type Service struct {
 	Scanner    *index.Scanner
 	Catalog    index.Catalog
 	FFmpegPath string
-	Capacity   projects.ProcessLimiter
+	Capacity   preview.ProcessLimiter
 
 	slotMu sync.Mutex
 	slots  chan struct{}
@@ -38,8 +38,8 @@ var scenePoint = regexp.MustCompile(`pts_time:([0-9.]+)`)
 const maxDetectionCandidates = 1000
 const maxDetectionInput = 1 << 20
 
-func (s *Service) Detect(ctx context.Context, request projects.DetectionRequest) (candidates []model.Candidate, err error) {
-	if err := projects.ValidateDetectionRequest(request); err != nil {
+func (s *Service) Detect(ctx context.Context, request Request) (candidates []model.Candidate, err error) {
+	if err := ValidateRequest(request); err != nil {
 		return nil, err
 	}
 	if s.Scanner == nil || s.Catalog == nil || s.FFmpegPath == "" {
@@ -90,7 +90,7 @@ func (s *Service) Detect(ctx context.Context, request projects.DetectionRequest)
 	}
 	defer releaseDetection()
 	if s.Capacity != nil {
-		release, err := projects.AcquireProcess(ctx, s.Capacity)
+		release, err := preview.AcquireProcess(ctx, s.Capacity)
 		if err != nil {
 			return nil, err
 		}
@@ -138,7 +138,7 @@ func (s *Service) acquireSlot(ctx context.Context) (func(), error) {
 		return nil, ctx.Err()
 	}
 }
-func parse(request projects.DetectionRequest, duration int64, text string) []model.Candidate {
+func parse(request Request, duration int64, text string) []model.Candidate {
 	var out []model.Candidate
 	scanner := bufio.NewScanner(strings.NewReader(text))
 	var start float64
@@ -182,7 +182,7 @@ func finiteFloat(value string) (float64, bool) {
 	return parsed, err == nil && !math.IsNaN(parsed) && !math.IsInf(parsed, 0)
 }
 
-func appendRangeCandidate(out *[]model.Candidate, request projects.DetectionRequest, duration, start, end float64) {
+func appendRangeCandidate(out *[]model.Candidate, request Request, duration, start, end float64) {
 	if len(*out) >= maxDetectionCandidates || !validDetectionTime(duration, start) || !validDetectionTime(duration, end) {
 		return
 	}
@@ -194,7 +194,7 @@ func appendRangeCandidate(out *[]model.Candidate, request projects.DetectionRequ
 	*out = append(*out, rangeCandidate(request, start, end))
 }
 
-func appendPointCandidate(out *[]model.Candidate, request projects.DetectionRequest, duration, point float64) {
+func appendPointCandidate(out *[]model.Candidate, request Request, duration, point float64) {
 	if len(*out) >= maxDetectionCandidates || !validDetectionTime(duration, point) || duration <= 0 {
 		return
 	}
@@ -207,10 +207,10 @@ func validDetectionTime(duration, value float64) bool {
 	return duration > 0 && !math.IsNaN(value) && !math.IsInf(value, 0) && value >= 0
 }
 
-func rangeCandidate(r projects.DetectionRequest, start, end float64) model.Candidate {
+func rangeCandidate(r Request, start, end float64) model.Candidate {
 	return model.Candidate{ID: fmt.Sprintf("c_%s_%x", r.Kind, uint64(start*1000)), MediaID: r.MediaID, ProjectID: r.ProjectID, ProjectRevision: r.ProjectRevision, StartMS: int64(start * 1000), EndMS: int64(end * 1000), Source: r.Kind}
 }
 
-func pointCandidate(r projects.DetectionRequest, pointMS int64) model.Candidate {
+func pointCandidate(r Request, pointMS int64) model.Candidate {
 	return model.Candidate{ID: fmt.Sprintf("c_%s_%d", r.Kind, pointMS), MediaID: r.MediaID, ProjectID: r.ProjectID, ProjectRevision: r.ProjectRevision, PointMS: &pointMS, Source: r.Kind}
 }

@@ -6,7 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	detectiondomain "videocutlist/internal/detection"
 
+	librarymedia "videocutlist/internal/library/media"
+	previewdomain "videocutlist/internal/preview"
 	"videocutlist/internal/projects"
 	"videocutlist/internal/projects/model"
 )
@@ -15,9 +18,9 @@ const maxPreviewBase64Bytes = 512 << 10
 
 // PreviewDetectionTools exposes bounded, scoped preview generation and detection.
 func PreviewDetectionTools(media MediaReader, preview interface {
-	Start(context.Context, projects.PreviewSpec) (projects.PreviewResult, error)
+	Start(context.Context, previewdomain.PreviewSpec) (previewdomain.PreviewResult, error)
 }, detection interface {
-	Create(context.Context, string, projects.DetectionRequest) (projects.DetectionJob, error)
+	Create(context.Context, string, detectiondomain.Request) (detectiondomain.Job, error)
 }, project projects.ProjectService) []Tool {
 	if media == nil || preview == nil || detection == nil || project == nil {
 		return nil
@@ -35,7 +38,7 @@ func PreviewDetectionTools(media MediaReader, preview interface {
 			if err != nil {
 				return ToolResult{}, err
 			}
-			spec, err := projects.NormalizePreview(item.ID, item.DurationMS, args.CenterMS, args.Mute, model.WindowConfig{BeforeMS: args.BeforeMS, AfterMS: args.AfterMS, MaxMS: 15_000, GridMS: 500})
+			spec, err := previewdomain.NormalizePreview(item.ID, item.DurationMS, args.CenterMS, args.Mute, previewdomain.WindowConfig{BeforeMS: args.BeforeMS, AfterMS: args.AfterMS, MaxMS: 15_000, GridMS: 500})
 			if err != nil {
 				return ToolResult{}, ErrInvalidInput
 			}
@@ -74,7 +77,7 @@ func PreviewDetectionTools(media MediaReader, preview interface {
 			if err != nil || owned.Revision != args.ProjectRevision || !projectContainsMedia(owned, args.ProjectItemID, args.MediaID) {
 				return ToolResult{}, errors.New("stale project")
 			}
-			job, err := detection.Create(ctx.Request.Context(), args.ProjectID, projects.DetectionRequest{MediaID: args.MediaID, ProjectItemID: args.ProjectItemID, ProjectRevision: args.ProjectRevision, Kind: args.Kind, NoiseDB: args.NoiseDB, MinDurationMS: args.MinDurationMS, SceneThreshold: args.SceneThreshold, CredentialID: ctx.Credential.ID})
+			job, err := detection.Create(ctx.Request.Context(), args.ProjectID, detectiondomain.Request{MediaID: args.MediaID, ProjectItemID: args.ProjectItemID, ProjectRevision: args.ProjectRevision, Kind: args.Kind, NoiseDB: args.NoiseDB, MinDurationMS: args.MinDurationMS, SceneThreshold: args.SceneThreshold, CredentialID: ctx.Credential.ID})
 			if err != nil {
 				return ToolResult{}, err
 			}
@@ -110,10 +113,10 @@ func previewArguments(raw json.RawMessage) (previewArgs, error) {
 	return args, nil
 }
 
-func previewMedia(ctx Context, media MediaReader, raw json.RawMessage) (projects.Media, error) {
+func previewMedia(ctx Context, media MediaReader, raw json.RawMessage) (librarymedia.Media, error) {
 	args, err := previewArguments(raw)
 	if err != nil {
-		return projects.Media{}, err
+		return librarymedia.Media{}, err
 	}
 	return media.Get(ctx.Request.Context(), args.MediaID)
 }
@@ -131,7 +134,7 @@ type detectionArgs struct {
 
 func detectionArguments(raw json.RawMessage) (detectionArgs, error) {
 	var args detectionArgs
-	if err := decodeToolArguments(raw, &args); err != nil || args.ProjectID == "" || !validProjectID(args.ProjectID) || !validSafeIdentifier(args.ProjectItemID) || args.MediaID == "" || !validMediaCursor(args.MediaID) || args.ProjectRevision < 1 || projects.ValidateDetectionRequest(projects.DetectionRequest{MediaID: args.MediaID, ProjectRevision: args.ProjectRevision, Kind: args.Kind, NoiseDB: args.NoiseDB, MinDurationMS: args.MinDurationMS, SceneThreshold: args.SceneThreshold}) != nil {
+	if err := decodeToolArguments(raw, &args); err != nil || args.ProjectID == "" || !validProjectID(args.ProjectID) || !validSafeIdentifier(args.ProjectItemID) || args.MediaID == "" || !validMediaCursor(args.MediaID) || args.ProjectRevision < 1 || detectiondomain.ValidateRequest(detectiondomain.Request{MediaID: args.MediaID, ProjectRevision: args.ProjectRevision, Kind: args.Kind, NoiseDB: args.NoiseDB, MinDurationMS: args.MinDurationMS, SceneThreshold: args.SceneThreshold}) != nil {
 		return detectionArgs{}, ErrInvalidInput
 	}
 	return args, nil

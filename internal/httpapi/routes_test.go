@@ -6,47 +6,24 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"regexp"
 	"strings"
 	"testing"
+	"videocutlist/internal/jobs/view"
 
-	jobqueue "videocutlist/internal/jobs"
+	jobqueue "videocutlist/internal/jobs/model"
+	librarymedia "videocutlist/internal/library/media"
 	"videocutlist/internal/projects"
 	"videocutlist/internal/projects/model"
 )
 
 func TestV2RouteBoundaries(t *testing.T) {
 	media := "m_" + strings.Repeat("a", 43)
-	project := "p_" + strings.Repeat("b", 12)
-	job := "j_" + strings.Repeat("c", 12)
-	batch := "b_" + strings.Repeat("d", 12)
-	tests := []struct {
-		method, path string
-		kind         routeKind
-		id           string
-	}{
-		{http.MethodGet, "/api/v2/media/" + media, routeGetMedia, media},
-		{http.MethodGet, "/api/v2/jobs/" + job, routeGetJob, job},
-		{http.MethodGet, "/media/v2/media/" + media + "/preview", routePreview, media},
-		{http.MethodHead, "/media/v2/media/" + media + "/preview", routePreview, media},
-		{http.MethodGet, "/media/v2/media/" + media + "/thumbnails", routeThumbnails, media},
-		{http.MethodGet, "/media/v2/media/" + media + "/waveform", routeWaveform, media},
-		{http.MethodGet, "/media/v2/jobs/" + job + "/outputs/0", routeDownloadOutput, job + ":0"},
-		{http.MethodGet, "/media/v2/batches/" + batch + "/download", routeDownloadBatch, batch},
-		{http.MethodGet, "/media/v2/projects/" + project + "/interchange/csv", routeExportInterchange, project + ":csv"},
-		{http.MethodPost, "/api/v2/projects/" + project + "/interchange/csv", routeImportInterchange, project + ":csv"},
-	}
-	for _, test := range tests {
-		t.Run(test.method+" "+test.path, func(t *testing.T) {
-			got := parseRoute(test.method, test.path)
-			if got.kind != test.kind || got.id != test.id {
-				t.Fatalf("route=%#v, want kind=%d id=%q", got, test.kind, test.id)
-			}
-		})
-	}
 	for _, test := range []struct{ method, path string }{
 		{http.MethodGet, "/api/v1/media/" + media},
 		{http.MethodGet, "/api/v2/media/" + media + "/preview"},
@@ -86,88 +63,49 @@ func TestRouteCoverageInventory(t *testing.T) {
 	inventory := []struct {
 		method, path string
 		kind         routeKind
+		id           string
 	}{
-		{http.MethodGet, "/api/v2/media", routeListMedia},
-		{http.MethodGet, "/api/v2/media/tree", routeBrowseMedia},
-		{http.MethodGet, "/api/v2/media/status", routeMediaStatus},
-		{http.MethodPost, "/api/v2/media/refresh", routeRefreshMedia},
-		{http.MethodPost, "/api/v2/settings/media/refresh", routeRefreshSettings},
-		{http.MethodPost, "/api/v2/media/import", routeStartMediaImport},
-		{http.MethodGet, "/api/v2/media/import/" + job, routeGetMediaImport},
-		{http.MethodDelete, "/api/v2/media/import/" + job, routeCancelMediaImport},
-		{http.MethodGet, "/api/v2/media/" + media, routeGetMedia},
-		{http.MethodGet, "/media/v2/media/" + media + "/preview", routePreview},
-		{http.MethodHead, "/media/v2/media/" + media + "/preview", routePreview},
-		{http.MethodGet, "/media/v2/media/" + media + "/thumbnails", routeThumbnails},
-		{http.MethodGet, "/media/v2/media/" + media + "/waveform", routeWaveform},
-		{http.MethodGet, "/api/v2/projects", routeListProjects},
-		{http.MethodGet, "/api/v2/projects/" + project, routeGetProject},
-		{http.MethodPut, "/api/v2/projects/" + project, routePutProject},
-		{http.MethodPost, "/api/v2/projects/" + project + "/exports", routeCreateExport},
-		{http.MethodPost, "/api/v2/projects/" + project + "/exports/preflight", routePreflightExport},
-		{http.MethodPost, "/api/v2/projects/" + project + "/interchange/csv", routeImportInterchange},
-		{http.MethodGet, "/media/v2/projects/" + project + "/interchange/chapters", routeExportInterchange},
-		{http.MethodPost, "/api/v2/projects/" + project + "/detections", routeCreateDetection},
-		{http.MethodGet, "/api/v2/jobs/" + job, routeGetJob},
-		{http.MethodGet, "/api/v2/jobs/" + job + "/events", routeStreamJob},
-		{http.MethodGet, "/api/v2/batches/" + batch + "/events", routeStreamBatch},
-		{http.MethodDelete, "/api/v2/jobs/" + job, routeCancelJob},
-		{http.MethodPost, "/api/v2/jobs/" + job + "/retry", routeRetryJob},
-		{http.MethodGet, "/media/v2/jobs/" + job + "/outputs/0", routeDownloadOutput},
-		{http.MethodGet, "/api/v2/batches", routeListBatches},
-		{http.MethodGet, "/media/v2/batches/" + batch + "/download", routeDownloadBatch},
-		{http.MethodGet, "/api/v2/batches/" + batch, routeGetBatch},
-		{http.MethodDelete, "/api/v2/batches/" + batch, routeCancelBatch},
-		{http.MethodPost, "/api/v2/automation", routeAutomation},
-		{http.MethodGet, "/api/v2/destinations", routeListDestinations},
-		{http.MethodGet, "/api/v2/settings", routeGetSettings},
-		{http.MethodPut, "/api/v2/settings", routePutSettings},
-		{http.MethodGet, "/api/v2/export-proposals/" + proposal, routeGetExportProposal},
-		{http.MethodPost, "/api/v2/export-proposals/" + proposal + "/approval", routeApproveExportProposal},
-		{http.MethodGet, "/api/v2/settings/mcp", routeGetMCPSettings},
-		{http.MethodPost, "/api/v2/settings/mcp/credentials", routeCreateMCPCredential},
-		{http.MethodDelete, "/api/v2/settings/mcp/credentials/" + credential, routeRevokeMCPCredential},
-	}
-	// Retain the positive parser cases and their exact extracted IDs alongside the route inventory.
-	parserCases := []struct {
-		name, method, path string
-		kind               routeKind
-		id                 string
-	}{
-		{"list", http.MethodGet, "/api/v2/media", routeListMedia, ""},
-		{"browse root", http.MethodGet, "/api/v2/media/tree", routeBrowseMedia, ""},
-		{"status", http.MethodGet, "/api/v2/media/status", routeMediaStatus, ""},
-		{"refresh", http.MethodPost, "/api/v2/media/refresh", routeRefreshMedia, ""},
-		{"settings get", http.MethodGet, "/api/v2/settings", routeGetSettings, ""},
-		{"settings put", http.MethodPut, "/api/v2/settings", routePutSettings, ""},
-		{"settings refresh", http.MethodPost, "/api/v2/settings/media/refresh", routeRefreshSettings, ""},
-		{"mcp settings", http.MethodGet, "/api/v2/settings/mcp", routeGetMCPSettings, ""},
-		{"mcp credential create", http.MethodPost, "/api/v2/settings/mcp/credentials", routeCreateMCPCredential, ""},
-		{"mcp credential revoke", http.MethodDelete, "/api/v2/settings/mcp/credentials/" + credential, routeRevokeMCPCredential, credential},
-		{"media", http.MethodGet, "/api/v2/media/" + media, routeGetMedia, media},
-		{"preview head", http.MethodHead, "/media/v2/media/" + media + "/preview", routePreview, media},
-		{"thumbnails", http.MethodGet, "/media/v2/media/" + media + "/thumbnails", routeThumbnails, media},
-		{"waveform", http.MethodGet, "/media/v2/media/" + media + "/waveform", routeWaveform, media},
-		{"project put", http.MethodPut, "/api/v2/projects/" + project, routePutProject, project},
-		{"export", http.MethodPost, "/api/v2/projects/" + project + "/exports", routeCreateExport, project},
-		{"export preflight", http.MethodPost, "/api/v2/projects/" + project + "/exports/preflight", routePreflightExport, project},
-		{"csv import", http.MethodPost, "/api/v2/projects/" + project + "/interchange/csv", routeImportInterchange, project + ":csv"},
-		{"chapter export", http.MethodGet, "/media/v2/projects/" + project + "/interchange/chapters", routeExportInterchange, project + ":chapters"},
-		{"detection", http.MethodPost, "/api/v2/projects/" + project + "/detections", routeCreateDetection, project},
-		{"job delete", http.MethodDelete, "/api/v2/jobs/" + job, routeCancelJob, job},
-		{"job retry", http.MethodPost, "/api/v2/jobs/" + job + "/retry", routeRetryJob, job},
-		{"batch list", http.MethodGet, "/api/v2/batches", routeListBatches, ""},
-		{"batch download", http.MethodGet, "/media/v2/batches/" + batch + "/download", routeDownloadBatch, batch},
-		{"batch get", http.MethodGet, "/api/v2/batches/" + batch, routeGetBatch, batch},
-		{"batch delete", http.MethodDelete, "/api/v2/batches/" + batch, routeCancelBatch, batch},
-	}
-	for _, test := range parserCases {
-		t.Run("parser/"+test.name, func(t *testing.T) {
-			got := parseRoute(test.method, test.path)
-			if got.kind != test.kind || got.id != test.id {
-				t.Fatalf("route=%#v, want kind=%d id=%q", got, test.kind, test.id)
-			}
-		})
+		{http.MethodGet, "/api/v2/media", routeListMedia, ""},
+		{http.MethodGet, "/api/v2/media/tree", routeBrowseMedia, ""},
+		{http.MethodGet, "/api/v2/media/status", routeMediaStatus, ""},
+		{http.MethodPost, "/api/v2/media/refresh", routeRefreshMedia, ""},
+		{http.MethodPost, "/api/v2/settings/media/refresh", routeRefreshSettings, ""},
+		{http.MethodPost, "/api/v2/media/import", routeStartMediaImport, ""},
+		{http.MethodGet, "/api/v2/media/import/" + job, routeGetMediaImport, job},
+		{http.MethodDelete, "/api/v2/media/import/" + job, routeCancelMediaImport, job},
+		{http.MethodGet, "/api/v2/media/" + media, routeGetMedia, media},
+		{http.MethodGet, "/media/v2/media/" + media + "/preview", routePreview, media},
+		{http.MethodHead, "/media/v2/media/" + media + "/preview", routePreview, media},
+		{http.MethodGet, "/media/v2/media/" + media + "/thumbnails", routeThumbnails, media},
+		{http.MethodGet, "/media/v2/media/" + media + "/waveform", routeWaveform, media},
+		{http.MethodGet, "/api/v2/projects", routeListProjects, ""},
+		{http.MethodGet, "/api/v2/projects/" + project, routeGetProject, project},
+		{http.MethodPut, "/api/v2/projects/" + project, routePutProject, project},
+		{http.MethodPost, "/api/v2/projects/" + project + "/exports", routeCreateExport, project},
+		{http.MethodPost, "/api/v2/projects/" + project + "/exports/preflight", routePreflightExport, project},
+		{http.MethodPost, "/api/v2/projects/" + project + "/interchange/csv", routeImportInterchange, project + ":csv"},
+		{http.MethodGet, "/media/v2/projects/" + project + "/interchange/chapters", routeExportInterchange, project + ":chapters"},
+		{http.MethodGet, "/media/v2/projects/" + project + "/interchange/csv", routeExportInterchange, project + ":csv"},
+		{http.MethodPost, "/api/v2/projects/" + project + "/detections", routeCreateDetection, project},
+		{http.MethodGet, "/api/v2/jobs/" + job, routeGetJob, job},
+		{http.MethodGet, "/api/v2/jobs/" + job + "/events", routeStreamJob, job},
+		{http.MethodGet, "/api/v2/batches/" + batch + "/events", routeStreamBatch, batch},
+		{http.MethodDelete, "/api/v2/jobs/" + job, routeCancelJob, job},
+		{http.MethodPost, "/api/v2/jobs/" + job + "/retry", routeRetryJob, job},
+		{http.MethodGet, "/media/v2/jobs/" + job + "/outputs/0", routeDownloadOutput, job + ":0"},
+		{http.MethodGet, "/api/v2/batches", routeListBatches, ""},
+		{http.MethodGet, "/media/v2/batches/" + batch + "/download", routeDownloadBatch, batch},
+		{http.MethodGet, "/api/v2/batches/" + batch, routeGetBatch, batch},
+		{http.MethodDelete, "/api/v2/batches/" + batch, routeCancelBatch, batch},
+		{http.MethodPost, "/api/v2/automation", routeAutomation, ""},
+		{http.MethodGet, "/api/v2/destinations", routeListDestinations, ""},
+		{http.MethodGet, "/api/v2/settings", routeGetSettings, ""},
+		{http.MethodPut, "/api/v2/settings", routePutSettings, ""},
+		{http.MethodGet, "/api/v2/export-proposals/" + proposal, routeGetExportProposal, proposal},
+		{http.MethodPost, "/api/v2/export-proposals/" + proposal + "/approval", routeApproveExportProposal, proposal},
+		{http.MethodGet, "/api/v2/settings/mcp", routeGetMCPSettings, ""},
+		{http.MethodPost, "/api/v2/settings/mcp/credentials", routeCreateMCPCredential, ""},
+		{http.MethodDelete, "/api/v2/settings/mcp/credentials/" + credential, routeRevokeMCPCredential, credential},
 	}
 	contract := openAPIOperations(t)
 	normalize := strings.NewReplacer(media, "{mediaId}", project, "{projectId}", job, "{jobId}", batch, "{batchId}", credential, "{credentialId}", proposal, "{proposalId}", "/outputs/0", "/outputs/{position}", "/interchange/csv", "/interchange/{format}", "/interchange/chapters", "/interchange/{format}")
@@ -185,8 +123,8 @@ func TestRouteCoverageInventory(t *testing.T) {
 			t.Errorf("production operation missing from OpenAPI: %s", operation)
 		}
 		covered[operation] = true
-		if got := parseRoute(entry.method, entry.path); got.kind != entry.kind {
-			t.Errorf("%s %s: got route kind %d, want %d", entry.method, entry.path, got.kind, entry.kind)
+		if got := parseRoute(entry.method, entry.path); got.kind != entry.kind || got.id != entry.id {
+			t.Errorf("%s %s: got route %#v, want kind=%d id=%q", entry.method, entry.path, got, entry.kind, entry.id)
 		}
 		seen[entry.kind] = true
 	}
@@ -209,6 +147,202 @@ func TestRouteCoverageInventory(t *testing.T) {
 	}
 	if len(seen) != int(routeStreamBatch) {
 		t.Fatalf("route inventory accounts for %d kinds, want %d", len(seen), routeStreamBatch)
+	}
+}
+
+func TestRouteDispatchRejectsMalformedAndNoncanonicalPaths(t *testing.T) {
+	valid := "m_" + strings.Repeat("a", 43)
+	cases := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodGet, "/api/v2/media/%ZZ"},
+		{http.MethodGet, "/api/v2/media/%2e%2e/etc"},
+		{http.MethodGet, "/api/v2/media/" + valid + "%2Fpreview"},
+		{http.MethodGet, "/api/v2/media/" + valid + "%5cpreview"},
+		{http.MethodGet, "/api/v2//media/" + valid},
+		{http.MethodPatch, "/api/v2/media"},
+		{http.MethodHead, "/api/v2/media"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
+			if got := parseRoute(tc.method, tc.path); got.kind != routeUnknown {
+				t.Fatalf("parseRoute accepted malformed/noncanonical route: %#v", got)
+			}
+			if tc.method == http.MethodGet && validRoutePath(tc.path) {
+				t.Fatalf("validRoutePath accepted %q", tc.path)
+			}
+		})
+	}
+	if got := parseRoute(http.MethodHead, "/media/v2/media/"+valid+"/preview"); got.kind != routePreview {
+		t.Fatalf("preview HEAD route = %#v, want preview", got)
+	}
+	if got := parseRoute(http.MethodHead, "/media/v2/media/"+valid+"/thumbnails"); got.kind != routeUnknown {
+		t.Fatalf("non-preview HEAD route = %#v, want unknown", got)
+	}
+}
+
+func TestProductionRouterRejectsMalformedPathsAndMethods(t *testing.T) {
+	authenticator, err := NewAuthenticator(AuthConfig{Mode: "none"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	media := &routeTestMedia{}
+	projects := &routeTestCountingProjects{}
+	server, err := New(Config{Authenticator: authenticator, Media: media, Preview: routeTestPreview{}, Projects: projects, BatchExports: &routeTestBatchExports{}, Jobs: &routeTestJobs{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct{ method, path string }{
+		{http.MethodGet, "/api/v2/media/m_bad"},
+		{http.MethodGet, "/api/v2/projects/m_" + strings.Repeat("a", 43)},
+		{http.MethodGet, "/media/v2/media/m_" + strings.Repeat("a", 43)},
+		{http.MethodGet, "/api/v2/media/%2e%2e/etc"},
+		{http.MethodGet, "/api/v2/media/m_" + strings.Repeat("a", 43) + "%2Fpreview"},
+		{http.MethodGet, "/api/v2/media/m_" + strings.Repeat("a", 43) + "%5cpreview"},
+		{http.MethodPost, "/api/v2/projects/p_" + strings.Repeat("b", 12) + "/interchange/json"},
+		{http.MethodGet, "/media/v2/projects/p_" + strings.Repeat("b", 12) + "/interchange/json"},
+		{http.MethodGet, "/api/v2//media"},
+		{http.MethodPatch, "/api/v2/media"},
+		{http.MethodHead, "/api/v2/media"},
+		{http.MethodHead, "/media/v2/media/m_" + strings.Repeat("a", 43) + "/thumbnails"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			server.ServeHTTP(recorder, httptest.NewRequest(tc.method, "http://api.test"+tc.path, nil))
+			assertRouteNotFound(t, recorder)
+		})
+	}
+	if media.gets != 0 || projects.gets != 0 {
+		t.Fatalf("invalid routes invoked domains: media=%d projects=%d", media.gets, projects.gets)
+	}
+
+	// net/http's request constructor rejects malformed escapes before ServeHTTP;
+	// send the raw request line to exercise the actual production socket parser.
+	listener := httptest.NewServer(server)
+	defer listener.Close()
+	address := strings.TrimPrefix(listener.URL, "http://")
+	conn, err := net.Dial("tcp", address)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := conn.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	if _, err := io.WriteString(conn, "GET /api/v2/media/%ZZ HTTP/1.1\r\nHost: api.test\r\nConnection: close\r\n\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	response, err := http.ReadResponse(bufio.NewReader(conn), &http.Request{Method: http.MethodGet})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := response.Body.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("raw malformed escape status=%d", response.StatusCode)
+	}
+}
+
+func assertRouteNotFound(t *testing.T, response *httptest.ResponseRecorder) {
+	t.Helper()
+	if response.Code != http.StatusNotFound || response.Header().Get("Location") != "" {
+		t.Fatalf("status=%d location=%q body=%s", response.Code, response.Header().Get("Location"), response.Body.String())
+	}
+	var envelope struct {
+		Error struct {
+			Code      string `json:"code"`
+			Message   string `json:"message"`
+			RequestID string `json:"requestId"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil || envelope.Error.Code != "not_found" || envelope.Error.Message == "" || envelope.Error.RequestID == "" || response.Header().Get("X-Request-ID") != envelope.Error.RequestID {
+		t.Fatalf("invalid error envelope/header: %s (%v)", response.Body.String(), err)
+	}
+}
+
+func TestProductionRouteLabelsStayBounded(t *testing.T) {
+	var logs bytes.Buffer
+	metrics := NewMetrics()
+	authenticator, err := NewAuthenticator(AuthConfig{Mode: "none"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	media := &routeTestMedia{}
+	server, err := New(Config{
+		Authenticator: authenticator,
+		Media:         media,
+		Preview:       routeTestPreview{},
+		Projects:      routeTestProjects{},
+		BatchExports:  &routeTestBatchExports{},
+		Jobs:          &routeTestJobs{},
+		Logger:        log.New(&logs, "", 0),
+		Metrics:       metrics,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	validID := "m_" + strings.Repeat("q", 43)
+	invalidPath := "/api/v2/media/private-route-label-secret"
+	for _, path := range []string{invalidPath, "/api/v2/media/" + validID} {
+		response := httptest.NewRecorder()
+		server.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "http://api.test"+path, nil))
+		if path == invalidPath {
+			assertRouteNotFound(t, response)
+		} else if response.Code != http.StatusOK {
+			t.Fatalf("valid route status=%d body=%s", response.Code, response.Body.String())
+		}
+	}
+	if media.gets != 1 {
+		t.Fatalf("media domain calls=%d, want only valid ID dispatched", media.gets)
+	}
+	if strings.Contains(logs.String(), "private-route-label-secret") || strings.Contains(logs.String(), validID) {
+		t.Fatalf("logs contain raw route identifier: %s", logs.String())
+	}
+	var entries []struct {
+		Route string `json:"route"`
+	}
+	for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+		var entry struct {
+			Route string `json:"route"`
+		}
+		if err := json.Unmarshal([]byte(line), &entry); err != nil {
+			t.Fatalf("decode route log %q: %v", line, err)
+		}
+		entries = append(entries, entry)
+	}
+	if len(entries) != 2 || entries[0].Route != "/api/v2/unknown" || entries[1].Route != "/api/v2/media/{mediaId}" {
+		t.Fatalf("production log routes = %#v", entries)
+	}
+	families, err := metrics.registry.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, metric := range []struct {
+		route, status string
+		want          float64
+	}{
+		{"/api/v2/unknown", "4xx", 1},
+		{"/api/v2/media/{mediaId}", "2xx", 1},
+	} {
+		labels := map[string]string{"route": metric.route, "method": http.MethodGet, "status_class": metric.status}
+		if got := metricValue(families, "http_requests_total", labels); got != metric.want {
+			t.Errorf("production metric %v = %v, want %v", labels, got, metric.want)
+		}
+	}
+	for _, family := range families {
+		for _, metric := range family.GetMetric() {
+			for _, label := range metric.GetLabel() {
+				if strings.Contains(label.GetValue(), validID) || strings.Contains(label.GetValue(), "private-route-label-secret") {
+					t.Fatalf("metric %s label %s contains raw route data %q", family.GetName(), label.GetName(), label.GetValue())
+				}
+			}
+		}
 	}
 }
 
@@ -238,21 +372,21 @@ type routeTestMedia struct {
 	browseLimit int
 }
 
-func (m *routeTestMedia) List(context.Context, string, int) (MediaPage, error) {
-	return MediaPage{}, nil
+func (m *routeTestMedia) List(context.Context, string, int) (librarymedia.MediaPage, error) {
+	return librarymedia.MediaPage{}, nil
 }
-func (m *routeTestMedia) Browse(_ context.Context, folderID, cursor string, limit int) (FolderPage, error) {
+func (m *routeTestMedia) Browse(_ context.Context, folderID, cursor string, limit int) (librarymedia.FolderPage, error) {
 	m.browses++
 	m.folderID, m.cursor, m.browseLimit = folderID, cursor, limit
-	return FolderPage{Folders: []projects.FolderNode{{ID: "f_folder", Label: "Folder"}}}, nil
+	return librarymedia.FolderPage{Folders: []librarymedia.FolderNode{{ID: "f_folder", Label: "Folder"}}}, nil
 }
-func (m *routeTestMedia) Get(context.Context, string) (Media, error) {
+func (m *routeTestMedia) Get(context.Context, string) (librarymedia.Media, error) {
 	m.gets++
-	return Media{}, nil
+	return librarymedia.Media{}, nil
 }
 func (m *routeTestMedia) RefreshMedia(context.Context) error { return nil }
-func (m *routeTestMedia) Status() LibraryStatus {
-	return LibraryStatus{State: LibraryReadyEmpty, Message: "No supported media was found."}
+func (m *routeTestMedia) Status() librarymedia.LibraryStatus {
+	return librarymedia.LibraryStatus{State: librarymedia.LibraryReadyEmpty, Message: "No supported media was found."}
 }
 
 type routeTestMediaImport struct {
@@ -261,13 +395,13 @@ type routeTestMediaImport struct {
 	key    string
 }
 
-func (m *routeTestMediaImport) StartImport(_ context.Context, key string) (projects.ImportJob, error) {
+func (m *routeTestMediaImport) StartImport(_ context.Context, key string) (librarymedia.ImportJob, error) {
 	m.starts++
 	m.key = key
-	return projects.ImportJob{ID: "j_scanresult1234", State: "queued"}, m.err
+	return librarymedia.ImportJob{ID: "j_scanresult1234", State: "queued"}, m.err
 }
-func (m *routeTestMediaImport) ImportStatus(context.Context, string) (projects.ImportJob, error) {
-	return projects.ImportJob{}, nil
+func (m *routeTestMediaImport) ImportStatus(context.Context, string) (librarymedia.ImportJob, error) {
+	return librarymedia.ImportJob{}, nil
 }
 func (m *routeTestMediaImport) CancelImport(context.Context, string) error { return nil }
 
@@ -551,6 +685,16 @@ func TestV2HTTPSeparatesJSONAndNativeMediaResponses(t *testing.T) {
 
 type routeTestProjects struct{}
 
+type routeTestCountingProjects struct {
+	routeTestProjects
+	gets int
+}
+
+func (p *routeTestCountingProjects) Get(ctx context.Context, id string) (Project, error) {
+	p.gets++
+	return p.routeTestProjects.Get(ctx, id)
+}
+
 func (routeTestProjects) Create(context.Context, string, projects.ProjectInput) (Project, error) {
 	return Project{}, nil
 }
@@ -569,9 +713,9 @@ type routeTestBatchExports struct {
 	listErr    error
 }
 
-func (b *routeTestBatchExports) Submit(context.Context, projects.BatchExportRequest) (string, []projects.Job, error) {
+func (b *routeTestBatchExports) Submit(context.Context, projects.BatchExportRequest) (string, []view.Job, error) {
 	b.submits++
-	return "b_aaaaaaaaaaaa", []projects.Job{{ID: "j_aaaaaaaaaaaa", State: "queued"}}, nil
+	return "b_aaaaaaaaaaaa", []view.Job{{ID: "j_aaaaaaaaaaaa", State: "queued"}}, nil
 }
 func (b *routeTestBatchExports) Progress(context.Context, string) (jobqueue.JobState, float64, error) {
 	b.progress++
@@ -579,7 +723,7 @@ func (b *routeTestBatchExports) Progress(context.Context, string) (jobqueue.JobS
 }
 func (b *routeTestBatchExports) Get(context.Context, string) (projects.Batch, error) {
 	b.progress++
-	return projects.Batch{BatchID: "b_aaaaaaaaaaaa", State: "running", Progress: .5, Jobs: []projects.Job{}}, nil
+	return projects.Batch{BatchID: "b_aaaaaaaaaaaa", State: "running", Progress: .5, Jobs: []view.Job{}}, nil
 }
 func (b *routeTestBatchExports) List(_ context.Context, cursor string, limit int) (projects.BatchPage, error) {
 	b.listCursor, b.listLimit = cursor, limit
@@ -592,7 +736,7 @@ func (b *routeTestBatchExports) List(_ context.Context, cursor string, limit int
 	return projects.BatchPage{Items: []projects.Batch{}}, nil
 }
 func (b *routeTestBatchExports) Retry(context.Context, string, string) (projects.Batch, error) {
-	return projects.Batch{BatchID: "b_aaaaaaaaaaaa", State: "queued", Jobs: []projects.Job{}}, nil
+	return projects.Batch{BatchID: "b_aaaaaaaaaaaa", State: "queued", Jobs: []view.Job{}}, nil
 }
 func (b *routeTestBatchExports) Cancel(context.Context, string) error {
 	b.cancels++
@@ -601,10 +745,10 @@ func (b *routeTestBatchExports) Cancel(context.Context, string) error {
 
 type routeTestJobs struct {
 	gets, cancels int
-	job           Job
+	job           view.Job
 }
 
-func (j *routeTestJobs) Get(context.Context, string) (Job, error) {
+func (j *routeTestJobs) Get(context.Context, string) (view.Job, error) {
 	j.gets++
 	return j.job, nil
 }
@@ -618,7 +762,7 @@ func TestDetectionJobResponsesUseUnifiedJobContract(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	jobs := &routeTestJobs{job: Job{
+	jobs := &routeTestJobs{job: view.Job{
 		ID: "j_detection", Type: "detection", State: "succeeded", MediaID: "m_media", ProjectID: "p_project", ProjectRevision: 7, Kind: model.DetectSilence,
 		Candidates: []model.Candidate{{ID: "c_candidate", MediaID: "m_media", ProjectID: "p_project", ProjectRevision: 7, StartMS: 100, EndMS: 200, Source: model.DetectSilence}},
 	}}
@@ -698,18 +842,18 @@ func TestAssetHeadersArePrivateAndInputsBounded(t *testing.T) {
 
 type assetTestMedia struct{ id string }
 
-func (m *assetTestMedia) List(context.Context, string, int) (MediaPage, error) {
-	return MediaPage{}, nil
+func (m *assetTestMedia) List(context.Context, string, int) (librarymedia.MediaPage, error) {
+	return librarymedia.MediaPage{}, nil
 }
-func (m *assetTestMedia) Browse(context.Context, string, string, int) (FolderPage, error) {
-	return FolderPage{}, nil
+func (m *assetTestMedia) Browse(context.Context, string, string, int) (librarymedia.FolderPage, error) {
+	return librarymedia.FolderPage{}, nil
 }
-func (m *assetTestMedia) Get(context.Context, string) (Media, error) {
-	return Media{ID: m.id, DurationMS: 1000, Streams: map[string]any{"audio": map[string]any{}}}, nil
+func (m *assetTestMedia) Get(context.Context, string) (librarymedia.Media, error) {
+	return librarymedia.Media{ID: m.id, DurationMS: 1000, Streams: map[string]any{"audio": map[string]any{}}}, nil
 }
 func (m *assetTestMedia) RefreshMedia(context.Context) error { return nil }
-func (m *assetTestMedia) Status() LibraryStatus {
-	return LibraryStatus{State: LibraryReadyEmpty, Message: "No supported media was found."}
+func (m *assetTestMedia) Status() librarymedia.LibraryStatus {
+	return librarymedia.LibraryStatus{State: librarymedia.LibraryReadyEmpty, Message: "No supported media was found."}
 }
 
 func TestServerRejectsEncodedSlashInMediaID(t *testing.T) {
@@ -821,7 +965,7 @@ func TestValidOpaqueIDs(t *testing.T) {
 // OpenAPI generator validates the complete YAML and schema references.
 func openAPIOperations(t *testing.T) map[string]bool {
 	t.Helper()
-	file, err := os.Open("../../docs/contracts/api.openapi.yaml")
+	file, err := os.Open("../../api/api.openapi.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}

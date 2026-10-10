@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	store "videocutlist/internal/db"
+	settingsmodel "videocutlist/internal/settings/model"
 )
 
 func TestLoadDefaults(t *testing.T) {
@@ -197,7 +197,7 @@ func TestLoadAllowsAnUnconfiguredMediaLibrary(t *testing.T) {
 	if err != nil || config.MediaRoots == nil || len(config.MediaRoots) != 0 {
 		t.Fatalf("config=%#v err=%v", config.MediaRoots, err)
 	}
-	if err := store.ValidateRuntimeSettings(config.RuntimeSettings()); err != nil {
+	if err := settingsmodel.ValidateRuntimeSettings(config.RuntimeSettings()); err != nil {
 		t.Fatalf("unconfigured defaults cannot be persisted: %v", err)
 	}
 }

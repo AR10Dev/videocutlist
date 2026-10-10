@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"videocutlist/internal/exportpolicy"
+	"videocutlist/internal/processio"
 )
 
 func (s Service) checkCapabilities(ctx context.Context, policy exportpolicy.Policy, strategy string) error {
@@ -48,16 +49,17 @@ func (s Service) ffmpegFeature(ctx context.Context, listing, feature string) (bo
 		path = "ffmpeg"
 	}
 	cmd := exec.Command(path, "-hide_banner", listing)
-	var stdout, stderr limitedBuffer
-	stdout.limit, stderr.limit = maxStderrBytes, maxStderrBytes
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	overflow := errors.New("stderr exceeds limit")
+	stdout := processio.NewLimitedBuffer(maxStderrBytes, overflow)
+	stderr := processio.NewLimitedBuffer(maxStderrBytes, overflow)
+	cmd.Stdout, cmd.Stderr = stdout, stderr
 	if err := runCommand(ctx, cmd); err != nil {
 		if ctx.Err() != nil {
 			return false, ctx.Err()
 		}
 		return false, fmt.Errorf("FFmpeg capability check failed: %w", err)
 	}
-	if stdout.err != nil || stderr.err != nil {
+	if stdout.Err() != nil || stderr.Err() != nil {
 		return false, errors.New("FFmpeg capability output exceeded limit")
 	}
 	for line := range strings.SplitSeq(stdout.String(), "\n") {

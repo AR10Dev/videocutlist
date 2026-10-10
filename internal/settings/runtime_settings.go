@@ -4,23 +4,23 @@ import (
 	"fmt"
 	"time"
 
-	"videocutlist/internal/db"
 	exporter "videocutlist/internal/export"
+	settingsmodel "videocutlist/internal/settings/model"
 )
 
 // RuntimeSettings returns the validated environment values that may be
 // persisted and changed by the runtime settings API.
-func (c Config) RuntimeSettings() store.RuntimeSettings {
-	destinations := make([]store.RuntimeDestination, len(c.Destinations))
+func (c Config) RuntimeSettings() settingsmodel.RuntimeSettings {
+	destinations := make([]settingsmodel.RuntimeDestination, len(c.Destinations))
 	for i, destination := range c.Destinations {
-		destinations[i] = store.RuntimeDestination{ID: destination.ID, Label: destination.Label, Description: destination.Description, Kind: destination.Kind, Root: destination.Root, Retention: destination.RetentionText, MediaRoot: destination.MediaRoot}
+		destinations[i] = settingsmodel.RuntimeDestination{ID: destination.ID, Label: destination.Label, Description: destination.Description, Kind: destination.Kind, Root: destination.Root, Retention: destination.RetentionText, MediaRoot: destination.MediaRoot}
 	}
-	return store.RuntimeSettings{MediaRoots: c.MediaRoots, Destinations: destinations, ExportLimit: c.ExportLimit, CacheMaxBytes: c.CacheMaxBytes, PreviewGlobalLimit: c.PreviewGlobalLimit, PreviewBeforeMS: c.PreviewBeforeMS, PreviewAfterMS: c.PreviewAfterMS, PreviewMaxMS: c.PreviewMaxMS, PreviewGridMS: c.PreviewGridMS, MediaMaxFiles: c.MediaMaxFiles, MediaMaxDepth: c.MediaMaxDepth, MCPEnabled: c.MCPEnabled}
+	return settingsmodel.RuntimeSettings{MediaRoots: c.MediaRoots, Destinations: destinations, ExportLimit: c.ExportLimit, CacheMaxBytes: c.CacheMaxBytes, PreviewGlobalLimit: c.PreviewGlobalLimit, PreviewBeforeMS: c.PreviewBeforeMS, PreviewAfterMS: c.PreviewAfterMS, PreviewMaxMS: c.PreviewMaxMS, PreviewGridMS: c.PreviewGridMS, MediaMaxFiles: c.MediaMaxFiles, MediaMaxDepth: c.MediaMaxDepth, MCPEnabled: c.MCPEnabled}
 }
 
 // ApplyRuntimeSettings replaces the mutable runtime portion of Config.
-func (c *Config) ApplyRuntimeSettings(settings store.RuntimeSettings) error {
-	if err := store.ValidateRuntimeSettings(settings); err != nil {
+func (c *Config) ApplyRuntimeSettings(settings settingsmodel.RuntimeSettings) error {
+	if err := settingsmodel.ValidateRuntimeSettings(settings); err != nil {
 		return err
 	}
 	destinations := make([]exporter.Destination, len(settings.Destinations))

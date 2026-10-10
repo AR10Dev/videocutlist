@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"videocutlist/internal/jobs/view"
 )
 
 func TestJobEventStreamStalledSocketWriteDeadlineReleasesCapacity(t *testing.T) {
@@ -121,12 +122,12 @@ type stalledSocketJobs struct {
 	calls   atomic.Int64
 }
 
-func (s *stalledSocketJobs) Get(_ context.Context, id string) (Job, error) {
+func (s *stalledSocketJobs) Get(_ context.Context, id string) (view.Job, error) {
 	if s.calls.Add(1) == 1 {
 		close(s.started)
-		return Job{ID: id, Type: "export", State: "running", Revision: 1, Warnings: []string{s.warning}}, nil
+		return view.Job{ID: id, Type: "export", State: "running", Revision: 1, Warnings: []string{s.warning}}, nil
 	}
-	return Job{ID: id, Type: "export", State: "succeeded", Revision: 2}, nil
+	return view.Job{ID: id, Type: "export", State: "succeeded", Revision: 2}, nil
 }
 
 func (*stalledSocketJobs) Cancel(context.Context, string) error { return nil }

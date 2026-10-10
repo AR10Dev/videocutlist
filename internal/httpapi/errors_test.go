@@ -11,9 +11,9 @@ import (
 	"testing"
 
 	store "videocutlist/internal/db"
+	librarymedia "videocutlist/internal/library/media"
 	"videocutlist/internal/projects"
 	"videocutlist/internal/projects/model"
-	"videocutlist/internal/runtime"
 )
 
 type errorProjectRepository struct{ err error }
@@ -26,12 +26,12 @@ func (r errorProjectRepository) Save(context.Context, string, int64, model.Docum
 }
 
 type errorMediaCatalog struct {
-	runtime.MediaCatalog
+	librarymedia.MediaCatalog
 	err error
 }
 
-func (m errorMediaCatalog) Get(_ context.Context, id string) (projects.Media, error) {
-	return projects.Media{ID: id, DurationMS: 1000}, m.err
+func (m errorMediaCatalog) Get(_ context.Context, id string) (librarymedia.Media, error) {
+	return librarymedia.Media{ID: id, DurationMS: 1000}, m.err
 }
 
 func TestProjectValidationErrorsGiveSafeActions(t *testing.T) {
@@ -90,7 +90,7 @@ func TestProjectAndMediaErrorsPreserveClassification(t *testing.T) {
 				t.Fatal(err)
 			}
 			catalog := errorMediaCatalog{err: test.mediaErr}
-			server, err := New(Config{Authenticator: auth, Media: &projects.MediaUseCase{Catalog: catalog}, Preview: routeTestPreview{}, Projects: projects.ProjectUseCase{Repository: errorProjectRepository{test.repositoryErr}, Media: catalog}, BatchExports: &routeTestBatchExports{}, Jobs: &routeTestJobs{}})
+			server, err := New(Config{Authenticator: auth, Media: &librarymedia.MediaUseCase{Catalog: catalog, Configured: true}, Preview: routeTestPreview{}, Projects: projects.ProjectUseCase{Repository: errorProjectRepository{test.repositoryErr}, Media: catalog}, BatchExports: &routeTestBatchExports{}, Jobs: &routeTestJobs{}})
 			if err != nil {
 				t.Fatal(err)
 			}

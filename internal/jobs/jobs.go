@@ -1,240 +1,135 @@
-// Package jobs owns durable background work persistence and state transitions.
+// Package jobs owns durable background work decisions and state transitions.
 package jobs
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
-	_ "embed"
-	"errors"
+	"encoding/hex"
 	"fmt"
-	"regexp"
-	"time"
+	"hash"
+
+	"videocutlist/internal/jobs/model"
 )
 
-//go:embed migrations/001_jobs.sql
-var migration string
-
-//go:embed migrations/002_command_admissions.sql
-var commandAdmissionsMigration string
-
-//go:embed migrations/003_job_revisions.sql
-var jobRevisionsMigration string
-
-// Migrate creates the durable job schema.
-func Migrate(ctx context.Context, db *sql.DB) error {
-	if db == nil {
-		return errors.New("job database is required")
+func (s *JobsStore) Create(ctx context.Context, job model.Job) (model.Job, error) {
+	if err := model.ValidateNewJob(job); err != nil {
+		return model.Job{}, err
 	}
-	if _, err := db.ExecContext(ctx, migration); err != nil {
-		return err
-	}
-	for _, column := range []struct{ name, definition string }{
-		{"proposal_id", "TEXT"},
-		{"credential_id", "TEXT"},
-	} {
-		var present int
-		if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('jobs') WHERE name = ?`, column.name).Scan(&present); err != nil {
-			return err
-		}
-		if present == 0 {
-			if _, err := db.ExecContext(ctx, `ALTER TABLE jobs ADD COLUMN `+column.name+` `+column.definition); err != nil {
-				return err
-			}
-		}
-	}
-	if _, err := db.ExecContext(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS jobs_proposal_item ON jobs (proposal_id, project_item_id) WHERE proposal_id IS NOT NULL`); err != nil {
-		return err
-	}
-	if _, err := db.ExecContext(ctx, commandAdmissionsMigration); err != nil {
-		return err
-	}
-	var revisionPresent int
-	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('jobs') WHERE name = 'revision'`).Scan(&revisionPresent); err != nil {
-		return err
-	}
-	if revisionPresent == 0 {
-		if _, err := db.ExecContext(ctx, jobRevisionsMigration); err != nil {
-			return err
-		}
-	}
-	return nil
+	return s.storage.CreateJob(ctx, job)
 }
 
-var (
-	jobIDPattern   = regexp.MustCompile(`^j_[A-Za-z0-9_-]{12,64}$`)
-	batchIDPattern = regexp.MustCompile(`^b_[A-Za-z0-9_-]{12,64}$`)
-)
-
-// JobKind identifies durable work. All kinds share one state machine.
-type JobKind string
-
-type JobState string
-
-const (
-	JobQueued    JobState = "queued"
-	JobRunning   JobState = "running"
-	JobSucceeded JobState = "succeeded"
-	JobFailed    JobState = "failed"
-	JobCancelled JobState = "cancelled"
-
-	JobExport JobKind = "export"
-	JobDetect JobKind = "detection"
-	JobScan   JobKind = "library_scan"
-)
-
-var (
-	ErrJobNotFound = errors.New("job not found")
-	ErrJobState    = errors.New("invalid job transition")
-)
-
-// Job is the durable, transport-neutral work record. Request and Result are
-// opaque JSON payloads; callers must only put safe identifiers and metadata in them.
-type Job struct {
-	ID, BatchID, ProjectID, ProjectItemID string
-	ProposalID, CredentialID              string
-	Kind                                  JobKind
-	State                                 JobState
-	RequestJSON                           string
-	ResultJSON, ErrorCode                 sql.NullString
-	CreatedAt, UpdatedAt                  time.Time
-	Revision                              int64
+func (s *JobsStore) Get(ctx context.Context, id string) (model.Job, error) {
+	return s.storage.GetJob(ctx, id)
 }
 
-type JobsStore struct{ db *sql.DB }
-
-func NewJobsStore(db *sql.DB) (*JobsStore, error) {
-	if db == nil {
-		return nil, errors.New("job database is required")
-	}
-	return &JobsStore{db: db}, nil
-}
-
-func (s *JobsStore) Create(ctx context.Context, job Job) (Job, error) {
-	if err := validateNewJob(job); err != nil {
-		return Job{}, err
-	}
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err := s.db.ExecContext(ctx, `INSERT INTO jobs (id,batch_id,kind,project_id,project_item_id,proposal_id,credential_id,state,request_json,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)`, job.ID, job.BatchID, job.Kind, nullString(job.ProjectID), nullString(job.ProjectItemID), nullString(job.ProposalID), nullString(job.CredentialID), JobQueued, job.RequestJSON, now, now)
-	if err != nil {
-		return Job{}, fmt.Errorf("create job: %w", err)
-	}
-	return s.Get(ctx, job.ID)
-}
-
-func (s *JobsStore) Get(ctx context.Context, id string) (Job, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id,batch_id,kind,COALESCE(project_id,''),COALESCE(project_item_id,''),COALESCE(proposal_id,''),COALESCE(credential_id,''),state,request_json,result_json,error_code,created_at,updated_at,revision FROM jobs WHERE id=?`, id)
-	return scanUnifiedJob(row)
-}
-
-func (s *JobsStore) Cancel(ctx context.Context, id string) (Job, error) {
+func (s *JobsStore) Cancel(ctx context.Context, id string) (model.Job, error) {
 	job, err := s.Get(ctx, id)
 	if err != nil {
-		return Job{}, err
+		return model.Job{}, err
 	}
-	if job.State != JobQueued && job.State != JobRunning {
+	if job.State != model.JobQueued && job.State != model.JobRunning {
 		if isTerminal(job.State) {
 			return job, nil
 		}
-		return Job{}, ErrJobState
+		return model.Job{}, model.ErrJobState
 	}
-	return s.transition(ctx, id, job.State, JobCancelled, sql.NullString{}, sql.NullString{})
+	return s.transition(ctx, id, job.State, model.JobCancelled, emptyString(), emptyString())
 }
 
-func isTerminal(state JobState) bool {
-	return state == JobSucceeded || state == JobFailed || state == JobCancelled
+func isTerminal(state model.JobState) bool {
+	return state == model.JobSucceeded || state == model.JobFailed || state == model.JobCancelled
 }
-func (s *JobsStore) Start(ctx context.Context, id string) (Job, error) {
-	return s.transition(ctx, id, JobQueued, JobRunning, sql.NullString{}, sql.NullString{})
+
+func (s *JobsStore) Start(ctx context.Context, id string) (model.Job, error) {
+	return s.transition(ctx, id, model.JobQueued, model.JobRunning, emptyString(), emptyString())
 }
-func (s *JobsStore) Succeed(ctx context.Context, id, result string) (Job, error) {
-	return s.transition(ctx, id, JobRunning, JobSucceeded, sql.NullString{String: result, Valid: true}, sql.NullString{})
+
+func (s *JobsStore) Succeed(ctx context.Context, id, result string) (model.Job, error) {
+	return s.transition(ctx, id, model.JobRunning, model.JobSucceeded, presentString(result), emptyString())
 }
-func (s *JobsStore) Fail(ctx context.Context, id, code string) (Job, error) {
-	return s.transition(ctx, id, JobRunning, JobFailed, sql.NullString{}, sql.NullString{String: code, Valid: code != ""})
+
+func (s *JobsStore) Fail(ctx context.Context, id, code string) (model.Job, error) {
+	return s.transition(ctx, id, model.JobRunning, model.JobFailed, emptyString(), optionalString(code))
 }
 
 // FailWithResult records partial results before publishing a failed job.
-func (s *JobsStore) FailWithResult(ctx context.Context, id, result, code string) (Job, error) {
-	return s.transition(ctx, id, JobRunning, JobFailed, sql.NullString{String: result, Valid: result != ""}, sql.NullString{String: code, Valid: code != ""})
+func (s *JobsStore) FailWithResult(ctx context.Context, id, result, code string) (model.Job, error) {
+	return s.transition(ctx, id, model.JobRunning, model.JobFailed, optionalString(result), optionalString(code))
 }
 
-func (s *JobsStore) transition(ctx context.Context, id string, from, to JobState, resultJSON, errorCode sql.NullString) (Job, error) {
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	r, err := s.db.ExecContext(ctx, `UPDATE jobs SET state=?,result_json=?,error_code=?,updated_at=?,revision=revision+1 WHERE id=? AND state=?`, to, resultJSON, errorCode, now, id, from)
-	if err != nil {
-		return Job{}, err
-	}
-	n, err := r.RowsAffected()
-	if err != nil {
-		return Job{}, err
-	}
-	if n == 1 {
-		return s.Get(ctx, id)
-	}
-	if _, err := s.Get(ctx, id); err != nil {
-		return Job{}, err
-	}
-	return Job{}, ErrJobState
+func (s *JobsStore) transition(ctx context.Context, id string, from, to model.JobState, resultJSON, errorCode sql.NullString) (model.Job, error) {
+	return s.storage.TransitionJob(ctx, id, from, to, resultJSON, errorCode)
 }
 
-// Batch returns derived state and progress; it stores neither separately.
-func (s *JobsStore) Batch(ctx context.Context, batchID string) (JobState, float64, error) {
-	var total, terminal, running, failed, cancelled int
-	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(state IN ('succeeded','failed','cancelled')),0), COALESCE(SUM(state='running'),0), COALESCE(SUM(state='failed'),0), COALESCE(SUM(state='cancelled'),0) FROM jobs WHERE batch_id=?`, batchID).Scan(&total, &terminal, &running, &failed, &cancelled)
+// Batch returns the domain-derived state and progress; storage owns only the counts.
+func (s *JobsStore) Batch(ctx context.Context, batchID string) (model.JobState, float64, error) {
+	counts, err := s.storage.BatchJobCounts(ctx, batchID)
 	if err != nil {
 		return "", 0, err
 	}
-	if total == 0 {
-		return "", 0, ErrJobNotFound
+	if counts.Total == 0 {
+		return "", 0, model.ErrJobNotFound
 	}
-	state := JobQueued
-	if terminal == total {
-		if failed > 0 {
-			state = JobFailed
-		} else if cancelled > 0 {
-			state = JobCancelled
+	state := model.JobQueued
+	if counts.Terminal == counts.Total {
+		if counts.Failed > 0 {
+			state = model.JobFailed
+		} else if counts.Cancelled > 0 {
+			state = model.JobCancelled
 		} else {
-			state = JobSucceeded
+			state = model.JobSucceeded
 		}
-	} else if running > 0 {
-		state = JobRunning
+	} else if counts.Running > 0 {
+		state = model.JobRunning
 	}
-	return state, float64(terminal) / float64(total), nil
+	return state, float64(counts.Terminal) / float64(counts.Total), nil
 }
 
 func (s *JobsStore) Recover(ctx context.Context) (int64, error) {
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	r, err := s.db.ExecContext(ctx, `UPDATE jobs SET state=?,error_code=?,updated_at=?,revision=revision+1 WHERE state=?`, JobFailed, "interrupted_by_restart", now, JobRunning)
-	if err != nil {
-		return 0, err
-	}
-	return r.RowsAffected()
-}
-func validJobKind(k JobKind) bool { return k == JobExport || k == JobDetect || k == JobScan }
-func nullString(v string) any {
-	if v == "" {
-		return nil
-	}
-	return v
+	return s.storage.RecoverRunningJobs(ctx)
 }
 
-type unifiedJobScanner interface{ Scan(...any) error }
+func (s *JobsStore) ListByBatch(ctx context.Context, batchID string) ([]model.Job, error) {
+	return s.storage.ListJobsByBatch(ctx, batchID)
+}
 
-func scanUnifiedJob(row unifiedJobScanner) (Job, error) {
-	var j Job
-	var c, u string
-	err := row.Scan(&j.ID, &j.BatchID, &j.Kind, &j.ProjectID, &j.ProjectItemID, &j.ProposalID, &j.CredentialID, &j.State, &j.RequestJSON, &j.ResultJSON, &j.ErrorCode, &c, &u, &j.Revision)
-	if errors.Is(err, sql.ErrNoRows) {
-		return Job{}, ErrJobNotFound
-	}
+// BatchCursor returns a deterministic digest of the ordered child snapshot.
+// It identifies a snapshot, not an event history.
+func (s *JobsStore) BatchCursor(ctx context.Context, batchID string) (string, error) {
+	entries, err := s.storage.BatchCursorSnapshot(ctx, batchID)
 	if err != nil {
-		return Job{}, err
+		return "", err
 	}
-	if j.CreatedAt, err = time.Parse(time.RFC3339Nano, c); err != nil {
-		return Job{}, err
+	if len(entries) == 0 {
+		return "", model.ErrJobNotFound
 	}
-	if j.UpdatedAt, err = time.Parse(time.RFC3339Nano, u); err != nil {
-		return Job{}, err
+	hash := sha256.New()
+	writeBatchCursor(hash, batchID, entries)
+	return "b2_" + hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+func writeBatchCursor(hash hash.Hash, batchID string, entries []model.BatchCursorEntry) {
+	_, _ = fmt.Fprintf(hash, "%s\x00", batchID)
+	for _, entry := range entries {
+		_, _ = fmt.Fprintf(hash, "%s\x00%d\x00%s\x00", entry.ID, entry.Revision, entry.State)
 	}
-	return j, nil
+}
+
+func (s *JobsStore) ListByProposal(ctx context.Context, proposalID string) ([]model.Job, error) {
+	return s.storage.ListJobsByProposal(ctx, proposalID)
+}
+
+func (s *JobsStore) ListBatchIDs(ctx context.Context, kind model.JobKind, after *model.BatchPosition, limit int) ([]model.BatchPosition, error) {
+	return s.storage.ListBatchIDs(ctx, kind, after, limit)
+}
+
+func emptyString() sql.NullString { return sql.NullString{} }
+
+func presentString(value string) sql.NullString {
+	return sql.NullString{String: value, Valid: true}
+}
+
+func optionalString(value string) sql.NullString {
+	return sql.NullString{String: value, Valid: value != ""}
 }

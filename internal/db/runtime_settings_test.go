@@ -9,13 +9,13 @@ import (
 	"testing"
 
 	"videocutlist/internal/db"
-	"videocutlist/internal/preview"
+	settingsmodel "videocutlist/internal/settings/model"
 )
 
-func validRuntimeSettings() store.RuntimeSettings {
-	return store.RuntimeSettings{
+func validRuntimeSettings() settingsmodel.RuntimeSettings {
+	return settingsmodel.RuntimeSettings{
 		MediaRoots:   map[string]string{"camera": "/media/camera"},
-		Destinations: []store.RuntimeDestination{{ID: "download", Label: "Downloads", Kind: "download", Root: "/exports", Retention: "24h"}},
+		Destinations: []settingsmodel.RuntimeDestination{{ID: "download", Label: "Downloads", Kind: "download", Root: "/exports", Retention: "24h"}},
 		ExportLimit:  1, CacheMaxBytes: 1024, PreviewGlobalLimit: 2,
 		PreviewBeforeMS: 2000, PreviewAfterMS: 6000, PreviewMaxMS: 15000, PreviewGridMS: 500,
 		MediaMaxFiles: 100, MediaMaxDepth: 5,
@@ -68,7 +68,7 @@ func TestRuntimeSettingsSeedPersistsAndDoesNotOverwrite(t *testing.T) {
 	}
 }
 
-func TestRuntimeSettingsSeedAddsNewDefaultDestinations(t *testing.T) {
+func TestRuntimeSettingsSeedDoesNotRefreshExistingRecord(t *testing.T) {
 	ctx := context.Background()
 	db, err := store.OpenDatabase(ctx, t.TempDir()+"/settings.db")
 	if err != nil {
@@ -80,25 +80,21 @@ func TestRuntimeSettingsSeedAddsNewDefaultDestinations(t *testing.T) {
 		}
 	})
 	settings, _ := store.NewRuntimeSettingsStore(db)
-	legacy := validRuntimeSettings()
-	first, err := settings.Seed(ctx, legacy)
+	initial := validRuntimeSettings()
+	first, err := settings.Seed(ctx, initial)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defaults := legacy
+	defaults := validRuntimeSettings()
 	defaults.ExportLimit = 9
-	defaults.Destinations = append(append([]store.RuntimeDestination{}, legacy.Destinations...), store.RuntimeDestination{
-		ID: "server", Label: "Server", Kind: "archive", Root: "/exports",
-	})
-	migrated, err := settings.Seed(ctx, defaults)
+	defaults.MediaRoots = map[string]string{"camera": "/media/reconfigured"}
+	defaults.Destinations = []settingsmodel.RuntimeDestination{{ID: "server", Label: "Server", Kind: "archive", Root: "/new-exports"}}
+	seeded, err := settings.Seed(ctx, defaults)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if migrated.Revision != first.Revision+1 || len(migrated.Settings.Destinations) != 2 || migrated.Settings.Destinations[1].ID != "server" {
-		t.Fatalf("migrated settings = %#v", migrated)
-	}
-	if migrated.Settings.ExportLimit != legacy.ExportLimit {
-		t.Fatalf("seed overwrote saved settings: export limit = %d", migrated.Settings.ExportLimit)
+	if seeded.Revision != first.Revision || !reflect.DeepEqual(seeded.Settings, first.Settings) {
+		t.Fatalf("seed refreshed existing settings: first=%#v seeded=%#v", first, seeded)
 	}
 }
 
@@ -130,7 +126,7 @@ func TestRuntimeSettingsRejectsInvalidAndStaleUpdatesAtomically(t *testing.T) {
 	if got.Revision != initial.Revision || !reflect.DeepEqual(got.Settings, initial.Settings) {
 		t.Fatalf("invalid update changed persisted settings: got=%#v initial=%#v", got, initial)
 	}
-	if _, err := settings.Update(ctx, initial.Revision-1, validRuntimeSettings()); !errors.Is(err, store.ErrRuntimeSettingsRevisionConflict) {
+	if _, err := settings.Update(ctx, initial.Revision-1, validRuntimeSettings()); !errors.Is(err, settingsmodel.ErrRuntimeSettingsRevisionConflict) {
 		t.Fatalf("stale update err=%v", err)
 	}
 	afterStale, err := settings.Get(ctx)
@@ -217,7 +213,7 @@ func TestRuntimeSettingsRejectsUnsafePreviewConcurrency(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, limit := range []int{1, preview.MaxGlobalProcesses} {
+	for _, limit := range []int{1, settingsmodel.MaxMediaProcesses} {
 		update := initial.Settings
 		update.PreviewGlobalLimit = limit
 		initial, err = settings.Update(t.Context(), initial.Revision, update)
@@ -225,65 +221,18 @@ func TestRuntimeSettingsRejectsUnsafePreviewConcurrency(t *testing.T) {
 			t.Fatalf("valid limit %d: %v", limit, err)
 		}
 	}
-	for _, limit := range []int{0, preview.MaxGlobalProcesses + 1, math.MaxInt} {
+	for _, limit := range []int{0, settingsmodel.MaxMediaProcesses + 1, math.MaxInt} {
 		update := initial.Settings
 		update.PreviewGlobalLimit = limit
 		if _, err := settings.Update(t.Context(), initial.Revision, update); err == nil {
 			t.Fatalf("accepted unsafe preview concurrency %d", limit)
 		}
 	}
-	if _, err := database.ExecContext(t.Context(), `UPDATE runtime_settings SET document_json = json_set(document_json, '$.previewGlobalLimit', ?)`, preview.MaxGlobalProcesses+1); err != nil {
+	if _, err := database.ExecContext(t.Context(), `UPDATE runtime_settings SET document_json = json_set(document_json, '$.previewGlobalLimit', ?)`, settingsmodel.MaxMediaProcesses+1); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := settings.Get(t.Context()); err == nil {
 		t.Fatal("loaded unsafe persisted preview concurrency")
-	}
-}
-
-func TestRuntimeSettingsSeedRefreshesDeploymentOwnedPaths(t *testing.T) {
-	ctx := t.Context()
-	database, err := store.OpenDatabase(ctx, t.TempDir()+"/settings.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := database.Close(); err != nil {
-			t.Error(err)
-		}
-	})
-	settings, err := store.NewRuntimeSettingsStore(database)
-	if err != nil {
-		t.Fatal(err)
-	}
-	initial := validRuntimeSettings()
-	initial.MediaRoots = map[string]string{"camera": "/media/old"}
-	initial.Destinations = []store.RuntimeDestination{{ID: "download", Label: "Downloads", Kind: "download", Root: "/exports/old", Retention: "24h"}}
-	first, err := settings.Seed(ctx, initial)
-	if err != nil {
-		t.Fatal(err)
-	}
-	mutable := first.Settings
-	mutable.ExportLimit = 9
-	updated, err := settings.Update(ctx, first.Revision, mutable)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	deployment := initial
-	deployment.MediaRoots = map[string]string{"camera": "/media/current"}
-	deployment.Destinations = []store.RuntimeDestination{{ID: "download", Label: "Downloads", Kind: "download", Root: "/exports/current", Retention: "24h"}}
-	refreshed, err := settings.Seed(ctx, deployment)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if refreshed.Revision != updated.Revision+1 {
-		t.Fatalf("revision = %d, want %d", refreshed.Revision, updated.Revision+1)
-	}
-	if refreshed.Settings.MediaRoots["camera"] != "/media/current" || refreshed.Settings.Destinations[0].Root != "/exports/current" {
-		t.Fatalf("deployment paths = %#v", refreshed.Settings)
-	}
-	if refreshed.Settings.ExportLimit != mutable.ExportLimit {
-		t.Fatalf("seed overwrote mutable export limit: %d", refreshed.Settings.ExportLimit)
 	}
 }
 
@@ -292,11 +241,11 @@ func TestRuntimeSettingsRejectsOverflowingPreviewWindow(t *testing.T) {
 	settings.PreviewBeforeMS = math.MaxInt
 	settings.PreviewAfterMS = 1
 	settings.PreviewMaxMS = math.MaxInt
-	if err := store.ValidateRuntimeSettings(settings); err == nil {
+	if err := settingsmodel.ValidateRuntimeSettings(settings); err == nil {
 		t.Fatal("accepted a default preview window larger than the maximum")
 	}
 	settings.PreviewBeforeMS = math.MaxInt - 1
-	if err := store.ValidateRuntimeSettings(settings); err != nil {
+	if err := settingsmodel.ValidateRuntimeSettings(settings); err != nil {
 		t.Fatalf("rejected a window exactly at the maximum: %v", err)
 	}
 }

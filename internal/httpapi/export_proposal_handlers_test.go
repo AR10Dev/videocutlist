@@ -7,13 +7,18 @@ import (
 	"strings"
 	"testing"
 	"time"
-
 	store "videocutlist/internal/db"
-	jobqueue "videocutlist/internal/jobs"
+	exporter "videocutlist/internal/export"
+	jobservice "videocutlist/internal/jobs"
+	jobqueue "videocutlist/internal/jobs/model"
+	librarymedia "videocutlist/internal/library/media"
 	"videocutlist/internal/mcp"
+	"videocutlist/internal/preview"
 	"videocutlist/internal/projects"
 	"videocutlist/internal/projects/model"
 	settingsdomain "videocutlist/internal/settings"
+	settingsmodel "videocutlist/internal/settings/model"
+	testsupport "videocutlist/internal/testsupport"
 )
 
 type proposalHTTPProjects struct{ project projects.Project }
@@ -28,24 +33,26 @@ func (p proposalHTTPProjects) Save(context.Context, string, projects.ProjectInpu
 	return projects.Project{}, nil
 }
 
-type proposalHTTPMedia struct{ media projects.Media }
+type proposalHTTPMedia struct{ media librarymedia.Media }
 
-func (m proposalHTTPMedia) Get(context.Context, string) (projects.Media, error) { return m.media, nil }
-func (m proposalHTTPMedia) List(context.Context, string, int) (projects.MediaPage, error) {
-	return projects.MediaPage{}, nil
+func (m proposalHTTPMedia) Get(context.Context, string) (librarymedia.Media, error) {
+	return m.media, nil
 }
-func (m proposalHTTPMedia) Browse(context.Context, string, string, int) (projects.FolderPage, error) {
-	return projects.FolderPage{}, nil
+func (m proposalHTTPMedia) List(context.Context, string, int) (librarymedia.MediaPage, error) {
+	return librarymedia.MediaPage{}, nil
+}
+func (m proposalHTTPMedia) Browse(context.Context, string, string, int) (librarymedia.FolderPage, error) {
+	return librarymedia.FolderPage{}, nil
 }
 func (m proposalHTTPMedia) Refresh(context.Context) error { return nil }
-func (m proposalHTTPMedia) Preview(context.Context, projects.PreviewSpec) (model.PreviewSpec, error) {
-	return model.PreviewSpec{}, nil
+func (m proposalHTTPMedia) Preview(context.Context, preview.PreviewSpec) (preview.TranscodeSpec, error) {
+	return preview.TranscodeSpec{}, nil
 }
 
 type proposalHTTPPreflight struct{}
 
-func (proposalHTTPPreflight) Preflight(context.Context, string, projects.Project, projects.ExportInput) (projects.ExportPreflight, error) {
-	return projects.ExportPreflight{Allowed: true, Selection: []int{0}}, nil
+func (proposalHTTPPreflight) Preflight(context.Context, projects.Project, projects.ExportInput) (exporter.PreflightResult, error) {
+	return exporter.PreflightResult{Allowed: true, Selection: []int{0}}, nil
 }
 
 func TestExportProposalHTTPApprovalAndSettingsListDetails(t *testing.T) {
@@ -63,7 +70,8 @@ func TestExportProposalHTTPApprovalAndSettingsListDetails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	credentials, _ := mcp.NewCredentialStore(database)
+	mcpStorage := newMCPTestStorage(t, database)
+	credentials, _ := mcp.NewCredentialStore(mcpStorage)
 	expires := time.Now().UTC().Add(time.Hour)
 	created, err := credentials.Create(t.Context(), mcp.CredentialInput{Name: "assistant", Permissions: []mcp.Permission{mcp.PermissionExportsPrepare, mcp.PermissionExportsRun}, MediaScope: mcp.MediaScope{Kind: mcp.MediaScopeAll}, ProjectScope: mcp.ProjectScope{Kind: mcp.ProjectScopeAll}, ExpiresAt: &expires})
 	if err != nil {
@@ -73,9 +81,9 @@ func TestExportProposalHTTPApprovalAndSettingsListDetails(t *testing.T) {
 	if _, err := database.ExecContext(t.Context(), `INSERT INTO projects (id,revision,document_json,created_at,updated_at) VALUES (?,1,'{}',?,?)`, projectID, time.Now().UTC().Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 		t.Fatal(err)
 	}
-	jobs, _ := jobqueue.NewJobsStore(database)
-	scheduler, _ := jobqueue.NewScheduler(jobs, jobqueue.SchedulerConfig{QueueCapacity: 4, WorkerLimit: 1}, func(context.Context, jobqueue.Job) error { return nil })
-	service, err := mcp.NewProposalService(database, credentials, proposalHTTPProjects{project: projects.Project{ID: projectID, Revision: 1, Document: model.Document{SchemaVersion: model.ProjectSchemaVersion, Name: "Proposal", Items: []model.ProjectItem{{ID: "i_proposalhttp1", MediaID: mediaID, Segments: []model.Segment{{StartMS: 100, EndMS: 200}}}}}}}, proposalHTTPMedia{media: projects.Media{ID: mediaID, RootID: "root_a", Name: "clip.mp4", DurationMS: 1000, SizeBytes: 10, ETag: "v1"}}, proposalHTTPPreflight{}, scheduler)
+	jobs, _ := testsupport.NewJobsStore(database)
+	scheduler, _ := jobservice.NewScheduler(jobs, jobservice.SchedulerConfig{QueueCapacity: 4, WorkerLimit: 1}, func(context.Context, jobqueue.Job) error { return nil })
+	service, err := mcp.NewProposalService(mcpStorage, credentials, proposalHTTPProjects{project: projects.Project{ID: projectID, Revision: 1, Document: model.Document{SchemaVersion: model.ProjectSchemaVersion, Name: "Proposal", Items: []model.ProjectItem{{ID: "i_proposalhttp1", MediaID: mediaID, Segments: []model.Segment{{StartMS: 100, EndMS: 200}}}}}}}, proposalHTTPMedia{media: librarymedia.Media{ID: mediaID, RootID: "root_a", Name: "clip.mp4", DurationMS: 1000, SizeBytes: 10, ETag: "v1"}}, proposalHTTPPreflight{}, scheduler)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +98,7 @@ func TestExportProposalHTTPApprovalAndSettingsListDetails(t *testing.T) {
 		}
 	}
 	authenticator, _ := NewAuthenticator(AuthConfig{Mode: "none"})
-	server, err := New(Config{Authenticator: authenticator, Media: &routeTestMedia{}, Preview: routeTestPreview{}, Projects: routeTestProjects{}, BatchExports: &routeTestBatchExports{}, Jobs: &routeTestJobs{}, Settings: settingsdomain.NewRuntimeService(runtimeSettings, nil, nil), RuntimeSettings: store.NewRuntimeSettingsState(record.Settings), MCPCredentials: credentials, ExportProposals: service})
+	server, err := New(Config{Authenticator: authenticator, Media: &routeTestMedia{}, Preview: routeTestPreview{}, Projects: routeTestProjects{}, BatchExports: &routeTestBatchExports{}, Jobs: &routeTestJobs{}, Settings: settingsdomain.NewRuntimeService(runtimeSettings, nil, nil), RuntimeSettings: settingsmodel.NewRuntimeSettingsState(record.Settings), MCPCredentials: credentials, ExportProposals: service})
 	if err != nil {
 		t.Fatal(err)
 	}

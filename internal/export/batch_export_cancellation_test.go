@@ -7,30 +7,31 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+	testsupport "videocutlist/internal/testsupport"
 
 	store "videocutlist/internal/db"
 	exporter "videocutlist/internal/export"
-	jobqueue "videocutlist/internal/jobs"
-	"videocutlist/internal/projects"
-	"videocutlist/internal/projects/model"
+	jobqueue "videocutlist/internal/jobs/model"
+	librarymedia "videocutlist/internal/library/media"
+	"videocutlist/internal/preview"
 )
 
 type exportRaceMediaCatalog struct {
-	media projects.Media
+	media librarymedia.Media
 }
 
-func (c exportRaceMediaCatalog) List(context.Context, string, int) (projects.MediaPage, error) {
-	return projects.MediaPage{}, nil
+func (c exportRaceMediaCatalog) List(context.Context, string, int) (librarymedia.MediaPage, error) {
+	return librarymedia.MediaPage{}, nil
 }
-func (c exportRaceMediaCatalog) Browse(context.Context, string, string, int) (projects.FolderPage, error) {
-	return projects.FolderPage{}, nil
+func (c exportRaceMediaCatalog) Browse(context.Context, string, string, int) (librarymedia.FolderPage, error) {
+	return librarymedia.FolderPage{}, nil
 }
-func (c exportRaceMediaCatalog) Get(context.Context, string) (projects.Media, error) {
+func (c exportRaceMediaCatalog) Get(context.Context, string) (librarymedia.Media, error) {
 	return c.media, nil
 }
 func (c exportRaceMediaCatalog) Refresh(context.Context) error { return nil }
-func (c exportRaceMediaCatalog) Preview(context.Context, projects.PreviewSpec) (model.PreviewSpec, error) {
-	return model.PreviewSpec{}, nil
+func (c exportRaceMediaCatalog) Preview(context.Context, preview.PreviewSpec) (preview.TranscodeSpec, error) {
+	return preview.TranscodeSpec{}, nil
 }
 
 func TestBatchExportCancellationCleansPublishedArtifactsAfterCAS(t *testing.T) {
@@ -52,7 +53,7 @@ func TestBatchExportCancellationCleansPublishedArtifactsAfterCAS(t *testing.T) {
 					t.Error(err)
 				}
 			})
-			jobs, err := jobqueue.NewJobsStore(database)
+			jobs, err := testsupport.NewJobsStore(database)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -80,11 +81,11 @@ func TestBatchExportCancellationCleansPublishedArtifactsAfterCAS(t *testing.T) {
 				return artifacts.Remove(id)
 			}
 			result := `{"outputName":"published.mkv"}`
-			uc := projects.BatchExportUseCase{
-				Media:           exportRaceMediaCatalog{media: projects.Media{ID: "m_media", ETag: "v1", SizeBytes: 1, DurationMS: 100}},
+			uc := exporter.QueuedExecutor{
+				Media:           exportRaceMediaCatalog{media: librarymedia.Media{ID: "m_media", ETag: "v1", SizeBytes: 1, DurationMS: 100}},
 				Jobs:            jobs,
 				RemoveArtifacts: removeArtifacts,
-				RunSnapshot: func(context.Context, string, projects.ExportSnapshot) (string, error) {
+				RunSnapshot: func(context.Context, string, exporter.ExportSnapshot) (string, error) {
 					if test.cancelFirst {
 						if _, err := jobs.Cancel(context.Background(), job.ID); err != nil {
 							return "", err
@@ -93,7 +94,7 @@ func TestBatchExportCancellationCleansPublishedArtifactsAfterCAS(t *testing.T) {
 					return result, nil
 				},
 			}
-			err = uc.RunQueuedSnapshot(t.Context(), job)
+			err = uc.Run(t.Context(), job)
 			stored, getErr := jobs.Get(t.Context(), job.ID)
 			if getErr != nil {
 				t.Fatal(getErr)

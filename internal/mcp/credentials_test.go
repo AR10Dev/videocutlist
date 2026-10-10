@@ -231,10 +231,12 @@ func TestAuditIsSafeAndBoundedPerCredential(t *testing.T) {
 		{Operation: "get_media", Outcome: "denied", ResourceIDs: []string{"m_media", "m_media"}},
 		{Operation: "raw content", Outcome: "denied"},
 	} {
-		if _, err := credentials.RecordAudit(ctx, created.ID, input); !errors.Is(err, mcp.ErrAuditInvalid) {
-			if input.Outcome == "allowed" {
-				continue
+		_, err := credentials.RecordAudit(ctx, created.ID, input)
+		if input.Outcome == "allowed" {
+			if err != nil {
+				t.Fatalf("safe audit input %#v error = %v", input, err)
 			}
+		} else if !errors.Is(err, mcp.ErrAuditInvalid) {
 			t.Fatalf("unsafe audit input %#v error = %v", input, err)
 		}
 	}
@@ -245,7 +247,23 @@ func TestAuditIsSafeAndBoundedPerCredential(t *testing.T) {
 	if len(first) != 1 || !reflect.DeepEqual(first[0].ResourceIDs, []string{"m_media", "p_project"}) || first[0].JobID != "j_job" {
 		t.Fatalf("safe audit entries = %#v", first)
 	}
-	for i := 0; i < mcp.MaxAuditEntriesPerCredential+3; i++ {
+	// Seed bulk history once; exercise retention through the public operation at the cap.
+	tx, err := database.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	for range mcp.MaxAuditEntriesPerCredential - 2 {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO mcp_audit_entries
+(credential_id, operation, outcome, resource_ids_json, occurred_at)
+VALUES (?, 'job_status', 'allowed', '["j_item"]', ?)`, created.ID, now.Format(time.RFC3339Nano)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	for range 5 {
 		if _, err := credentials.RecordAudit(ctx, created.ID, mcp.AuditInput{Operation: "job_status", Outcome: "allowed", ResourceIDs: []string{"j_item"}}); err != nil {
 			t.Fatal(err)
 		}
@@ -256,6 +274,13 @@ func TestAuditIsSafeAndBoundedPerCredential(t *testing.T) {
 	}
 	if count != mcp.MaxAuditEntriesPerCredential {
 		t.Fatalf("audit count = %d, want %d", count, mcp.MaxAuditEntriesPerCredential)
+	}
+	var oldest int64
+	if err := database.QueryRowContext(ctx, `SELECT MIN(id) FROM mcp_audit_entries WHERE credential_id = ?`, created.ID).Scan(&oldest); err != nil {
+		t.Fatal(err)
+	}
+	if oldest != first[0].ID+4 {
+		t.Fatalf("oldest audit ID = %d, want %d", oldest, first[0].ID+4)
 	}
 	entries, err := credentials.ListAudit(ctx, created.ID, mcp.MaxAuditEntriesPerCredential+100)
 	if err != nil {
@@ -288,9 +313,18 @@ func newCredentialStore(t *testing.T) (*sql.DB, *mcp.CredentialStore, *time.Time
 	t.Cleanup(func() { _ = database.Close() })
 	now := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
 	current := now
-	credentials, err := mcp.NewCredentialStoreWithClock(database, func() time.Time { return current })
+	credentials, err := mcp.NewCredentialStoreWithClock(newMCPRepository(t, database), func() time.Time { return current })
 	if err != nil {
 		t.Fatal(err)
 	}
 	return database, credentials, &current
+}
+
+func newMCPRepository(t *testing.T, database *sql.DB) *store.MCPStorage {
+	t.Helper()
+	repository, err := store.NewMCPStorage(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return repository
 }

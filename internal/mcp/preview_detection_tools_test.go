@@ -11,33 +11,36 @@ import (
 	"testing"
 	"time"
 	store "videocutlist/internal/db"
+	"videocutlist/internal/detection"
+	librarymedia "videocutlist/internal/library/media"
+	"videocutlist/internal/preview"
 	"videocutlist/internal/projects"
 	"videocutlist/internal/projects/model"
 )
 
-type previewToolMedia struct{ item projects.Media }
+type previewToolMedia struct{ item librarymedia.Media }
 
-func (m previewToolMedia) List(context.Context, string, int) (projects.MediaPage, error) {
-	return projects.MediaPage{Items: []projects.Media{m.item}}, nil
+func (m previewToolMedia) List(context.Context, string, int) (librarymedia.MediaPage, error) {
+	return librarymedia.MediaPage{Items: []librarymedia.Media{m.item}}, nil
 }
-func (m previewToolMedia) Get(_ context.Context, id string) (projects.Media, error) {
+func (m previewToolMedia) Get(_ context.Context, id string) (librarymedia.Media, error) {
 	if id != m.item.ID {
-		return projects.Media{}, errors.New("media unavailable")
+		return librarymedia.Media{}, errors.New("media unavailable")
 	}
 	return m.item, nil
 }
 
 type previewToolPreview struct{ data []byte }
 
-func (p previewToolPreview) Start(context.Context, projects.PreviewSpec) (projects.PreviewResult, error) {
-	return projects.PreviewResult{Reader: io.NopCloser(bytes.NewReader(p.data)), StartMS: 0, DurationMS: 1000}, nil
+func (p previewToolPreview) Start(context.Context, preview.PreviewSpec) (preview.PreviewResult, error) {
+	return preview.PreviewResult{Reader: io.NopCloser(bytes.NewReader(p.data)), StartMS: 0, DurationMS: 1000}, nil
 }
 
-type previewToolDetection struct{ request projects.DetectionRequest }
+type previewToolDetection struct{ request detection.Request }
 
-func (d *previewToolDetection) Create(_ context.Context, projectID string, request projects.DetectionRequest) (projects.DetectionJob, error) {
+func (d *previewToolDetection) Create(_ context.Context, projectID string, request detection.Request) (detection.Job, error) {
 	d.request = request
-	return projects.DetectionJob{ID: "j_aaaaaaaaaaaa", Type: "detection", State: "queued", ProjectID: projectID, MediaID: request.MediaID, Kind: request.Kind}, nil
+	return detection.Job{ID: "j_aaaaaaaaaaaa", Type: "detection", State: "queued", ProjectID: projectID, MediaID: request.MediaID, Kind: request.Kind}, nil
 }
 
 type previewToolProjects struct{ project projects.Project }
@@ -57,7 +60,7 @@ func (s previewToolProjects) List(context.Context, string, int) (projects.Projec
 
 func TestPreviewDetectionToolsUseBoundedOpaqueInputs(t *testing.T) {
 	mediaID := "m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	media := previewToolMedia{item: projects.Media{ID: mediaID, RootID: "root", DurationMS: 10_000}}
+	media := previewToolMedia{item: librarymedia.Media{ID: mediaID, RootID: "root", DurationMS: 10_000}}
 	project := previewToolProjects{project: projects.Project{ID: "p_test", Revision: 1, Document: model.Document{Items: []model.ProjectItem{{ID: "i_aaaaaaaaaaaaaaaaaaaaaaaa", MediaID: mediaID}}}}}
 	detection := &previewToolDetection{}
 	tools := PreviewDetectionTools(media, previewToolPreview{data: []byte("preview")}, detection, project)
@@ -93,7 +96,7 @@ func TestPreviewDetectionToolsUseBoundedOpaqueInputs(t *testing.T) {
 
 func TestPreviewDetectionToolsRejectInvalidInput(t *testing.T) {
 	mediaID := "m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	media := previewToolMedia{item: projects.Media{ID: mediaID, RootID: "root", DurationMS: 10_000}}
+	media := previewToolMedia{item: librarymedia.Media{ID: mediaID, RootID: "root", DurationMS: 10_000}}
 	project := previewToolProjects{project: projects.Project{ID: "p_test", Revision: 1}}
 	tools := PreviewDetectionTools(media, previewToolPreview{}, &previewToolDetection{}, project)
 	ctx := Context{Request: testRequest()}
@@ -135,7 +138,11 @@ func TestDetectionTransportAuthorizesSelectedMedia(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = database.Close() })
-	credentials, err := NewCredentialStoreWithClock(database, time.Now)
+	mcpStorage, err := store.NewMCPStorage(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentials, err := NewCredentialStoreWithClock(mcpStorage, time.Now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,24 +160,24 @@ func TestDetectionTransportAuthorizesSelectedMedia(t *testing.T) {
 		t.Fatal(err)
 	}
 	mediaID := "m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	media := previewToolMedia{item: projects.Media{ID: mediaID, RootID: "root", DurationMS: 10_000}}
+	media := previewToolMedia{item: librarymedia.Media{ID: mediaID, RootID: "root", DurationMS: 10_000}}
 	project := previewToolProjects{project: projects.Project{ID: "p_test", Revision: 1, Document: model.Document{Items: []model.ProjectItem{{ID: "i_aaaaaaaaaaaaaaaaaaaaaaaa", MediaID: mediaID}}}}}
 	detection := &previewToolDetection{}
-	transport := &transport{config: TransportConfig{Credentials: credentials, Tools: PreviewDetectionTools(media, previewToolPreview{}, detection, project)}}
+	transport := &Transport{config: TransportConfig{Credentials: credentials, Tools: PreviewDetectionTools(media, previewToolPreview{}, detection, project)}}
 	result, rpcErr := transport.callTool(testRequest(), []byte(`{"name":"start_detection","arguments":{"projectId":"p_test","projectItemId":"i_aaaaaaaaaaaaaaaaaaaaaaaa","mediaId":"`+mediaID+`","projectRevision":1,"kind":"scene"}}`), credential)
 	if rpcErr != nil {
 		t.Fatalf("authorized detection rejected: %#v", rpcErr)
 	}
-	toolResult, ok := result.(ToolResult)
-	if !ok || toolResult.IsError || toolResult.StructuredContent["id"] != "j_aaaaaaaaaaaa" {
+	toolResult := result
+	if toolResult.IsError || toolResult.StructuredContent["id"] != "j_aaaaaaaaaaaa" {
 		t.Fatalf("detection did not return queued job: %#v", result)
 	}
 	result, rpcErr = transport.callTool(testRequest(), []byte(`{"name":"start_detection","arguments":{"projectItemId":"i_aaaaaaaaaaaaaaaaaaaaaaaa","mediaId":"`+mediaID+`","projectRevision":1,"kind":"scene"}}`), credential)
 	if rpcErr != nil {
 		t.Fatalf("invalid tool arguments returned RPC error: %#v", rpcErr)
 	}
-	toolResult, ok = result.(ToolResult)
-	if !ok || !toolResult.IsError {
+	toolResult = result
+	if !toolResult.IsError {
 		t.Fatalf("missing project ID did not return a tool error: %#v", result)
 	}
 	publicError, ok := toolResult.StructuredContent["error"].(map[string]any)

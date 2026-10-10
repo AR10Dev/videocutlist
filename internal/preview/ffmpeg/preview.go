@@ -2,7 +2,6 @@
 package ffmpeg
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -14,8 +13,8 @@ import (
 	"time"
 
 	"videocutlist/internal/fdinput"
-	"videocutlist/internal/projects"
-	"videocutlist/internal/projects/model"
+	"videocutlist/internal/preview"
+	"videocutlist/internal/processio"
 )
 
 const (
@@ -44,7 +43,7 @@ type Runner struct {
 
 // BuildPreviewArgs builds a fixed argument array. It deliberately has no
 // source path argument: Start provides the validated file as inherited fd 3.
-func BuildPreviewArgs(spec model.PreviewSpec) ([]string, error) {
+func BuildPreviewArgs(spec preview.TranscodeSpec) ([]string, error) {
 	if spec.StartMS < 0 || spec.DurationMS < 1 || spec.Width < 1 || spec.Height < 1 || spec.Width > 1280 || spec.Height > 720 || spec.FPS < 1 || spec.FPS > 30 {
 		return nil, errors.New("invalid preview spec")
 	}
@@ -73,7 +72,7 @@ func BuildPreviewArgs(spec model.PreviewSpec) ([]string, error) {
 func milliseconds(value int64) string { return fmt.Sprintf("%d.%03d", value/1000, value%1000) }
 
 // Start transcodes an already-open original, never a client-provided path.
-func (r Runner) Start(ctx context.Context, source *os.File, spec model.PreviewSpec) (*projects.RunningPreview, error) {
+func (r Runner) Start(ctx context.Context, source *os.File, spec preview.TranscodeSpec) (*preview.RunningPreview, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -103,7 +102,7 @@ func (r Runner) Start(ctx context.Context, source *os.File, spec model.PreviewSp
 	if err != nil {
 		return nil, fmt.Errorf("ffmpeg stdout: %w", err)
 	}
-	stderr := &boundedBuffer{limit: limit}
+	stderr := processio.NewTruncatedBuffer(limit)
 	cmd.Stderr = stderr
 	spawned := time.Now()
 	if err := cmd.Start(); err != nil {
@@ -149,32 +148,7 @@ func (r Runner) Start(ctx context.Context, source *os.File, spec model.PreviewSp
 		})
 		return waitErr
 	}
-	return &projects.RunningPreview{Stdout: &timedReadCloser{ReadCloser: stdout, state: state}, PID: cmd.Process.Pid, Wait: wait}, nil
-}
-
-type boundedBuffer struct {
-	mu sync.Mutex
-	bytes.Buffer
-	limit int
-}
-
-func (b *boundedBuffer) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if remaining := b.limit - b.Len(); remaining > 0 {
-		if len(p) > remaining {
-			_, _ = b.Buffer.Write(p[:remaining])
-		} else {
-			_, _ = b.Buffer.Write(p)
-		}
-	}
-	return len(p), nil
-}
-
-func (b *boundedBuffer) String() string {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return b.Buffer.String()
+	return &preview.RunningPreview{Stdout: &timedReadCloser{ReadCloser: stdout, state: state}, PID: cmd.Process.Pid, Wait: wait}, nil
 }
 
 type timedReadCloser struct {

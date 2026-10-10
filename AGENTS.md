@@ -6,8 +6,9 @@
   make the smallest complete change and remove superseded code.
 - Keep each change focused. Separate dependency upgrades, unrelated refactors,
   and redesigns unless they are inseparable from the task.
-- Follow the existing layout; do not scaffold layers or rename directories just
-  to match a template. Add abstractions only for a demonstrated boundary or need.
+- Follow the ownership and repository layout rules below when changing package
+  boundaries, frontend state ownership, or repository tooling. Add abstractions
+  only for a demonstrated boundary or need.
 
 ## Ownership and repository layout
 
@@ -24,10 +25,10 @@ interaction and reactivity. Tailwind CSS and daisyUI own presentation.
 - Backend dependencies flow from HTTP handlers to domain services to storage or
   external services. Keep SQL out of handlers and HTTP concerns out of storage.
   These are responsibility boundaries, not a requirement for wrapper packages.
-- The frontend lives in `client/`, not `web/`. Keep feature-specific UI and logic
-  together under `client/src/features/`; extract shared components by
+- The frontend lives in `web/`. Keep feature-specific UI and logic
+  together under `web/src/features/`; extract shared components by
   responsibility or reuse, not line count. Give helpers domain-specific names.
-- Centralize HTTP access in `client/src/api.ts`. Pages/features compose UI and
+- Centralize HTTP access in `web/src/api.ts`. Pages/features compose UI and
   domain state; reusable presentation components should not own networking,
   authorization, or business rules.
 
@@ -50,9 +51,9 @@ interaction and reactivity. Tailwind CSS and daisyUI own presentation.
   unexpected failures. Document deliberate exceptions in the API contract.
 - Keep request/response types independent of database models where needed to
   prevent schema changes from accidentally changing JSON responses.
-- Update `docs/contracts/api.openapi.yaml` with API changes and regenerate the
-  Effect HttpApi in `client/src/generated/effect-api.ts` via
-  `pnpm --dir client run api:generate` (the Effect generator alias). Do not
+- Update `api/api.openapi.yaml` with API changes and regenerate the
+  Effect HttpApi in `web/src/generated/effect-api.ts` via
+  `pnpm --dir web run api:generate` (the Effect generator alias). Do not
   hand-edit generated types.
 - Use reviewed, checked-in migrations for every database schema change; include
   relevant migration checks and avoid undocumented manual schema changes.
@@ -104,7 +105,7 @@ interaction and reactivity. Tailwind CSS and daisyUI own presentation.
   lockfiles and Go's `go.mod`/`go.sum`; avoid unnecessary committed `replace`
   directives. Keep Tailwind/daisyUI major upgrades compatible and separately scoped.
 - Use the configured formatters/linters: `gofmt` for Go and the scripts in
-  `client/package.json` for frontend code; do not introduce competing tools.
+  `web/package.json` for frontend code; do not introduce competing tools.
 - Test behavior at its natural boundary: domain rules, database integration,
   HTTP handlers, Solid state/utilities, and critical end-to-end journeys. Bug
   fixes normally include a regression test. Prefer inexpensive real dependencies
@@ -112,7 +113,7 @@ interaction and reactivity. Tailwind CSS and daisyUI own presentation.
 - Run targeted checks while iterating. Before handoff, run `make smoke` once:
   it includes `make check` (lint, vet, race tests, Vitest, production builds,
   embedded-frontend checks) and Playwright. Also run
-  `pnpm --dir client run format:check` and `go test -race ./...`.
+  `pnpm --dir web run format:check` and `go test -race ./...`.
 - Run `make test-real-media` when changing production media workflows; its first
   run downloads the verified Sintel fixture. CI is the merge gate, not a substitute
   for reporting local validation accurately.

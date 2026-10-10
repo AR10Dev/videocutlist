@@ -10,9 +10,14 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	testsupport "videocutlist/internal/testsupport"
 
 	store "videocutlist/internal/db"
-	jobqueue "videocutlist/internal/jobs"
+	"videocutlist/internal/detection"
+	jobservice "videocutlist/internal/jobs"
+	jobqueue "videocutlist/internal/jobs/model"
+	librarymedia "videocutlist/internal/library/media"
+	"videocutlist/internal/preview"
 	"videocutlist/internal/projects/model"
 )
 
@@ -33,23 +38,23 @@ func (p *detectionCommandProjects) Save(context.Context, string, int64, model.Do
 }
 
 type detectionCommandMedia struct {
-	media Media
+	media librarymedia.Media
 	reads atomic.Int64
 }
 
-func (m *detectionCommandMedia) List(context.Context, string, int) (MediaPage, error) {
-	return MediaPage{}, nil
+func (m *detectionCommandMedia) List(context.Context, string, int) (librarymedia.MediaPage, error) {
+	return librarymedia.MediaPage{}, nil
 }
-func (m *detectionCommandMedia) Browse(context.Context, string, string, int) (FolderPage, error) {
-	return FolderPage{}, nil
+func (m *detectionCommandMedia) Browse(context.Context, string, string, int) (librarymedia.FolderPage, error) {
+	return librarymedia.FolderPage{}, nil
 }
-func (m *detectionCommandMedia) Get(context.Context, string) (Media, error) {
+func (m *detectionCommandMedia) Get(context.Context, string) (librarymedia.Media, error) {
 	m.reads.Add(1)
 	return m.media, nil
 }
 func (m *detectionCommandMedia) Refresh(context.Context) error { return nil }
-func (m *detectionCommandMedia) Preview(context.Context, PreviewSpec) (model.PreviewSpec, error) {
-	return model.PreviewSpec{}, nil
+func (m *detectionCommandMedia) Preview(context.Context, preview.PreviewSpec) (preview.TranscodeSpec, error) {
+	return preview.TranscodeSpec{}, nil
 }
 
 func detectionCommandFixture(t *testing.T) (*DetectionUseCase, *detectionCommandProjects, *detectionCommandMedia, string, *sql.DB) {
@@ -60,23 +65,23 @@ func detectionCommandFixture(t *testing.T) (*DetectionUseCase, *detectionCommand
 	if err != nil {
 		t.Fatal(err)
 	}
-	jobs, err := jobqueue.NewJobsStore(database)
+	jobs, err := testsupport.NewJobsStore(database)
 	if err != nil {
 		t.Fatal(err)
 	}
-	scheduler, err := jobqueue.NewScheduler(jobs, jobqueue.SchedulerConfig{QueueCapacity: 4, WorkerLimit: 1}, func(context.Context, jobqueue.Job) error { return nil })
+	scheduler, err := jobservice.NewScheduler(jobs, jobservice.SchedulerConfig{QueueCapacity: 4, WorkerLimit: 1}, func(context.Context, jobqueue.Job) error { return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
 	project := &detectionCommandProjects{record: ProjectRecord{Revision: 7, Document: model.Document{Items: []model.ProjectItem{{ID: "i_detection123456789012345", MediaID: "m_detection"}}}}}
-	media := &detectionCommandMedia{media: Media{ID: "m_detection", ETag: "etag-original"}}
+	media := &detectionCommandMedia{media: librarymedia.Media{ID: "m_detection", ETag: "etag-original"}}
 	useCase := &DetectionUseCase{Catalog: media, Projects: project, UnifiedJobs: jobs, Scheduler: scheduler}
 	t.Cleanup(func() { _ = scheduler.Shutdown(context.Background()); _ = database.Close() })
 	return useCase, project, media, path, database
 }
 
-func detectionCommandRequest() DetectionRequest {
-	return DetectionRequest{MediaID: "m_detection", ProjectItemID: "i_detection123456789012345", ProjectRevision: 7, Kind: model.DetectSilence, SourceFingerprint: "etag-original", CredentialID: "credential_secret", MinDurationMS: 100}
+func detectionCommandRequest() detection.Request {
+	return detection.Request{MediaID: "m_detection", ProjectItemID: "i_detection123456789012345", ProjectRevision: 7, Kind: model.DetectSilence, SourceFingerprint: "etag-original", CredentialID: "credential_secret", MinDurationMS: 100}
 }
 
 func TestDetectionCommandReplayAfterEditAndRestart(t *testing.T) {
@@ -89,7 +94,7 @@ func TestDetectionCommandReplayAfterEditAndRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var snapshot DetectionRequest
+	var snapshot detection.Request
 	if err := json.Unmarshal([]byte(stored.RequestJSON), &snapshot); err != nil {
 		t.Fatal(err)
 	}
@@ -106,11 +111,11 @@ func TestDetectionCommandReplayAfterEditAndRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	jobs, err := jobqueue.NewJobsStore(database)
+	jobs, err := testsupport.NewJobsStore(database)
 	if err != nil {
 		t.Fatal(err)
 	}
-	scheduler, err := jobqueue.NewScheduler(jobs, jobqueue.SchedulerConfig{QueueCapacity: 4, WorkerLimit: 1}, func(context.Context, jobqueue.Job) error { return nil })
+	scheduler, err := jobservice.NewScheduler(jobs, jobservice.SchedulerConfig{QueueCapacity: 4, WorkerLimit: 1}, func(context.Context, jobqueue.Job) error { return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +160,7 @@ func TestDetectionCommandRejectsChangedPayloadAndStaleRevisionWithoutAdmission(t
 	}
 	changedSource := request
 	changedSource.SourceFingerprint = "etag-old"
-	if _, err := useCase.Submit(t.Context(), "p_detection", "source-key", changedSource); !errors.Is(err, jobqueue.ErrSourceChanged) {
+	if _, err := useCase.Submit(t.Context(), "p_detection", "source-key", changedSource); !errors.Is(err, jobservice.ErrSourceChanged) {
 		t.Fatalf("stale source error = %v", err)
 	}
 	if _, found, err := useCase.Scheduler.LookupCommand(t.Context(), detectionCommandAdmission("source-key", "p_detection", changedSource)); err != nil || found {
@@ -198,7 +203,7 @@ func TestDetectionCommandConcurrentDuplicateAdmitsOnce(t *testing.T) {
 	}
 }
 
-func detectionCommandAdmission(key, projectID string, request DetectionRequest) jobqueue.CommandAdmission {
+func detectionCommandAdmission(key, projectID string, request detection.Request) jobqueue.CommandAdmission {
 	admission, _ := detectionAdmission(key, projectID, request)
 	return admission
 }

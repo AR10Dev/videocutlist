@@ -14,6 +14,7 @@ var (
 	jobIDPattern        = regexp.MustCompile(`^j_[A-Za-z0-9_-]{12,64}$`)
 	batchIDPattern      = regexp.MustCompile(`^b_[A-Za-z0-9_-]{12,64}$`)
 	credentialIDPattern = regexp.MustCompile(`^c_[A-Za-z0-9_-]{12,64}$`)
+	proposalIDPattern   = regexp.MustCompile(`^ep_[A-Za-z0-9_-]{12,64}$`)
 )
 
 type routeKind uint8
@@ -66,8 +67,7 @@ type route struct {
 	id   string
 }
 
-// RouteCoverageKinds exposes the production route-kind inventory to black-box
-// tests without exposing route parsing or filesystem details.
+// RouteCoverageKinds exposes the production inventory for black-box tests.
 func RouteCoverageKinds() []string {
 	return []string{
 		"list_media", "browse_media", "media_status", "refresh_media", "start_media_import",
@@ -79,8 +79,6 @@ func RouteCoverageKinds() []string {
 		"get_export_proposal", "approve_export_proposal", "get_mcp_settings", "create_mcp_credential", "revoke_mcp_credential", "stream_batch",
 	}
 }
-
-// RouteCoverageKind resolves a representative route to its production kind.
 func RouteCoverageKind(method, path string) string {
 	r := parseRoute(method, path)
 	kinds := RouteCoverageKinds()
@@ -89,136 +87,62 @@ func RouteCoverageKind(method, path string) string {
 	}
 	return kinds[r.kind-1]
 }
-
 func validMediaID(value string) bool      { return mediaIDPattern.MatchString(value) }
 func validFolderID(value string) bool     { return folderIDPattern.MatchString(value) }
 func validProjectID(value string) bool    { return projectIDPattern.MatchString(value) }
 func validJobID(value string) bool        { return jobIDPattern.MatchString(value) }
 func validBatchID(value string) bool      { return batchIDPattern.MatchString(value) }
 func validCredentialID(value string) bool { return credentialIDPattern.MatchString(value) }
-func validProposalID(value string) bool {
-	return strings.HasPrefix(value, "ep_") && len(value) >= 15 && len(value) <= 67 && regexp.MustCompile(`^[A-Za-z0-9_-]+$`).MatchString(value)
-}
+func validProposalID(value string) bool   { return proposalIDPattern.MatchString(value) }
 
-func parseRoute(method, path string) route {
-	var prefix string
-	native := false
-	switch {
-	case strings.HasPrefix(path, "/api/v2/"):
-		prefix = "/api/v2/"
-	case strings.HasPrefix(path, "/media/v2/"):
-		prefix, native = "/media/v2/", true
-	default:
-		return route{}
-	}
-	if strings.Contains(path, "\\") {
-		return route{}
-	}
-	parts := strings.Split(strings.TrimPrefix(path, prefix), "/")
-	for i := range parts {
-		decoded, err := url.PathUnescape(parts[i])
-		if err != nil || decoded == "" || decoded != parts[i] && strings.Contains(decoded, "/") {
-			return route{}
-		}
-		parts[i] = decoded
-	}
-	parsed := parseRouteParts(method, parts)
-	if parsed.kind == routeUnknown || isNativeRoute(parsed.kind) != native {
-		return route{}
-	}
-	return parsed
-}
-
-func isNativeRoute(kind routeKind) bool {
-	switch kind {
-	case routePreview, routeThumbnails, routeWaveform, routeDownloadOutput, routeDownloadBatch, routeExportInterchange:
-		return true
-	default:
+// Reject paths ServeMux would otherwise clean or redirect, and encoded separators.
+func validRoutePath(path string) bool {
+	if !strings.HasPrefix(path, "/api/v2/") && !strings.HasPrefix(path, "/media/v2/") {
 		return false
 	}
+	for part := range strings.SplitSeq(strings.TrimPrefix(path, "/"), "/") {
+		decoded, err := url.PathUnescape(part)
+		if err != nil || decoded == "" || decoded == "." || decoded == ".." || strings.ContainsAny(decoded, "/\\") {
+			return false
+		}
+	}
+	return true
 }
 
-func parseRouteParts(method string, parts []string) route {
-	switch {
-	case len(parts) == 1 && parts[0] == "media" && method == http.MethodGet:
-		return route{kind: routeListMedia}
-	case len(parts) == 2 && parts[0] == "media" && parts[1] == "tree" && method == http.MethodGet:
-		return route{kind: routeBrowseMedia}
-	case len(parts) == 2 && parts[0] == "media" && parts[1] == "status" && method == http.MethodGet:
-		return route{kind: routeMediaStatus}
-	case len(parts) == 1 && parts[0] == "destinations" && method == http.MethodGet:
-		return route{kind: routeListDestinations}
-	case len(parts) == 1 && parts[0] == "settings" && method == http.MethodGet:
-		return route{kind: routeGetSettings}
-	case len(parts) == 1 && parts[0] == "settings" && method == http.MethodPut:
-		return route{kind: routePutSettings}
-	case len(parts) == 3 && parts[0] == "settings" && parts[1] == "media" && parts[2] == "refresh" && method == http.MethodPost:
-		return route{kind: routeRefreshSettings}
-	case len(parts) == 2 && parts[0] == "settings" && parts[1] == "mcp" && method == http.MethodGet:
-		return route{kind: routeGetMCPSettings}
-	case len(parts) == 3 && parts[0] == "settings" && parts[1] == "mcp" && parts[2] == "credentials" && method == http.MethodPost:
-		return route{kind: routeCreateMCPCredential}
-	case len(parts) == 4 && parts[0] == "settings" && parts[1] == "mcp" && parts[2] == "credentials" && validCredentialID(parts[3]) && method == http.MethodDelete:
-		return route{kind: routeRevokeMCPCredential, id: parts[3]}
-	case len(parts) == 2 && parts[0] == "media" && parts[1] == "refresh" && method == http.MethodPost:
-		return route{kind: routeRefreshMedia}
-	case len(parts) == 2 && parts[0] == "media" && parts[1] == "import" && method == http.MethodPost:
-		return route{kind: routeStartMediaImport}
-	case len(parts) == 3 && parts[0] == "media" && parts[1] == "import" && validJobID(parts[2]) && method == http.MethodGet:
-		return route{kind: routeGetMediaImport, id: parts[2]}
-	case len(parts) == 3 && parts[0] == "media" && parts[1] == "import" && validJobID(parts[2]) && method == http.MethodDelete:
-		return route{kind: routeCancelMediaImport, id: parts[2]}
-	case len(parts) == 2 && parts[0] == "media" && validMediaID(parts[1]) && method == http.MethodGet:
-		return route{kind: routeGetMedia, id: parts[1]}
-	case len(parts) == 3 && parts[0] == "media" && validMediaID(parts[1]) && parts[2] == "preview" && (method == http.MethodGet || method == http.MethodHead):
-		return route{kind: routePreview, id: parts[1]}
-	case len(parts) == 3 && parts[0] == "media" && validMediaID(parts[1]) && parts[2] == "thumbnails" && method == http.MethodGet:
-		return route{kind: routeThumbnails, id: parts[1]}
-	case len(parts) == 3 && parts[0] == "media" && validMediaID(parts[1]) && parts[2] == "waveform" && method == http.MethodGet:
-		return route{kind: routeWaveform, id: parts[1]}
-	case len(parts) == 1 && parts[0] == "projects" && method == http.MethodGet:
-		return route{kind: routeListProjects}
-	case len(parts) == 2 && parts[0] == "projects" && validProjectID(parts[1]) && method == http.MethodGet:
-		return route{kind: routeGetProject, id: parts[1]}
-	case len(parts) == 2 && parts[0] == "projects" && validProjectID(parts[1]) && method == http.MethodPut:
-		return route{kind: routePutProject, id: parts[1]}
-	case len(parts) == 4 && parts[0] == "projects" && validProjectID(parts[1]) && parts[2] == "exports" && parts[3] == "preflight" && method == http.MethodPost:
-		return route{kind: routePreflightExport, id: parts[1]}
-	case len(parts) == 3 && parts[0] == "projects" && validProjectID(parts[1]) && parts[2] == "exports" && method == http.MethodPost:
-		return route{kind: routeCreateExport, id: parts[1]}
-	case len(parts) == 4 && parts[0] == "projects" && validProjectID(parts[1]) && parts[2] == "interchange" && (parts[3] == "csv" || parts[3] == "chapters") && method == http.MethodPost:
-		return route{kind: routeImportInterchange, id: parts[1] + ":" + parts[3]}
-	case len(parts) == 4 && parts[0] == "projects" && validProjectID(parts[1]) && parts[2] == "interchange" && (parts[3] == "csv" || parts[3] == "chapters") && method == http.MethodGet:
-		return route{kind: routeExportInterchange, id: parts[1] + ":" + parts[3]}
-	case len(parts) == 3 && parts[0] == "projects" && validProjectID(parts[1]) && parts[2] == "detections" && method == http.MethodPost:
-		return route{kind: routeCreateDetection, id: parts[1]}
-	case len(parts) == 2 && parts[0] == "jobs" && validJobID(parts[1]) && method == http.MethodGet:
-		return route{kind: routeGetJob, id: parts[1]}
-	case len(parts) == 3 && parts[0] == "jobs" && validJobID(parts[1]) && parts[2] == "events" && method == http.MethodGet:
-		return route{kind: routeStreamJob, id: parts[1]}
-	case len(parts) == 4 && parts[0] == "jobs" && validJobID(parts[1]) && parts[2] == "outputs" && method == http.MethodGet:
-		return route{kind: routeDownloadOutput, id: parts[1] + ":" + parts[3]}
-	case len(parts) == 3 && parts[0] == "batches" && validBatchID(parts[1]) && parts[2] == "download" && method == http.MethodGet:
-		return route{kind: routeDownloadBatch, id: parts[1]}
-	case len(parts) == 2 && parts[0] == "jobs" && validJobID(parts[1]) && method == http.MethodDelete:
-		return route{kind: routeCancelJob, id: parts[1]}
-	case len(parts) == 3 && parts[0] == "jobs" && validJobID(parts[1]) && parts[2] == "retry" && method == http.MethodPost:
-		return route{kind: routeRetryJob, id: parts[1]}
-	case len(parts) == 1 && parts[0] == "batches" && method == http.MethodGet:
-		return route{kind: routeListBatches}
-	case len(parts) == 3 && parts[0] == "batches" && validBatchID(parts[1]) && parts[2] == "events" && method == http.MethodGet:
-		return route{kind: routeStreamBatch, id: parts[1]}
-	case len(parts) == 2 && parts[0] == "batches" && validBatchID(parts[1]) && method == http.MethodGet:
-		return route{kind: routeGetBatch, id: parts[1]}
-	case len(parts) == 2 && parts[0] == "batches" && validBatchID(parts[1]) && method == http.MethodDelete:
-		return route{kind: routeCancelBatch, id: parts[1]}
-	case len(parts) == 2 && parts[0] == "export-proposals" && validProposalID(parts[1]) && method == http.MethodGet:
-		return route{kind: routeGetExportProposal, id: parts[1]}
-	case len(parts) == 3 && parts[0] == "export-proposals" && validProposalID(parts[1]) && parts[2] == "approval" && method == http.MethodPost:
-		return route{kind: routeApproveExportProposal, id: parts[1]}
-	case len(parts) == 1 && parts[0] == "automation" && method == http.MethodPost:
-		return route{kind: routeAutomation}
-	default:
+var coverageMux = newRouteMux(nil)
+
+// parseRoute is a coverage helper, not the production dispatcher. It asks the
+// same ServeMux for its pattern and validates the corresponding wildcard values.
+func parseRoute(method, path string) route {
+	if !validRoutePath(path) {
 		return route{}
 	}
+	u, err := url.ParseRequestURI(path)
+	if err != nil {
+		return route{}
+	}
+	r := &http.Request{Method: method, URL: u}
+	_, pattern := coverageMux.Handler(r)
+	for _, definition := range routeDefinitions {
+		if definition.pattern != pattern || method == http.MethodHead && definition.kind != routePreview {
+			continue
+		}
+		_, template, _ := strings.Cut(pattern, " ")
+		parts := strings.Split(u.EscapedPath(), "/")
+		for i, part := range strings.Split(template, "/") {
+			if strings.HasPrefix(part, "{") {
+				value, err := url.PathUnescape(parts[i])
+				if err != nil {
+					return route{}
+				}
+				r.SetPathValue(strings.Trim(part, "{}"), value)
+			}
+		}
+		id, valid := routeResource(r)
+		if !valid {
+			return route{}
+		}
+		return route{kind: definition.kind, id: id}
+	}
+	return route{}
 }

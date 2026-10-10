@@ -6,8 +6,8 @@ import (
 	"errors"
 	"net/http"
 
-	jobqueue "videocutlist/internal/jobs"
-	"videocutlist/internal/projects"
+	jobqueue "videocutlist/internal/jobs/model"
+	librarymedia "videocutlist/internal/library/media"
 )
 
 func (s *Server) browseMedia(writer http.ResponseWriter, request *http.Request, id string) {
@@ -71,9 +71,9 @@ func (s *Server) refreshMedia(writer http.ResponseWriter, request *http.Request,
 	httpx.WriteJSON(writer, http.StatusAccepted, job)
 }
 
-func (s *Server) startMediaScan(ctx context.Context, key string) (projects.ImportJob, error) {
+func (s *Server) startMediaScan(ctx context.Context, key string) (librarymedia.ImportJob, error) {
 	if s.config.MediaImport == nil {
-		return projects.ImportJob{}, errors.New("unified media scan is not configured")
+		return librarymedia.ImportJob{}, errors.New("unified media scan is not configured")
 	}
 	return s.config.MediaImport.StartImport(ctx, key)
 }

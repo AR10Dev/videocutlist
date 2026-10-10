@@ -5,6 +5,7 @@
 
 # Build output and dependency caches (including nested frontend assets)
 dist/
+/web/.vitest/
 node_modules/
 .pnpm-store/
 test-results/

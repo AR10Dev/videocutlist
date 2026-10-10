@@ -11,9 +11,10 @@ import (
 	"sync"
 	"testing"
 	"time"
+	testsupport "videocutlist/internal/testsupport"
 
 	"videocutlist/internal/db"
-	jobqueue "videocutlist/internal/jobs"
+	jobqueue "videocutlist/internal/jobs/model"
 	"videocutlist/internal/library/media/index"
 )
 
@@ -29,7 +30,7 @@ func TestRunRecoversUnifiedJobsOnStartup(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	jobs, err := jobqueue.NewJobsStore(db)
+	jobs, err := testsupport.NewJobsStore(db)
 	if err != nil {
 		t.Fatal(err)
 	}

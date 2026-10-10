@@ -5,13 +5,13 @@ import (
 	"strings"
 	"testing"
 
-	"videocutlist/internal/db"
+	settingsmodel "videocutlist/internal/settings/model"
 )
 
 func TestBrowserSettingsRedactsDeploymentPaths(t *testing.T) {
-	settings := store.RuntimeSettings{
+	settings := settingsmodel.RuntimeSettings{
 		MediaRoots:   map[string]string{"camera": "/srv/media/camera"},
-		Destinations: []store.RuntimeDestination{{ID: "exports", Label: "Exports", Kind: "download", Root: "/srv/exports", MediaRoot: "/srv/media"}},
+		Destinations: []settingsmodel.RuntimeDestination{{ID: "exports", Label: "Exports", Kind: "download", Root: "/srv/exports", MediaRoot: "/srv/media"}},
 	}
 	data, err := json.Marshal(browserSettings(settings))
 	if err != nil {

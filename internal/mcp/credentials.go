@@ -8,7 +8,6 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
-	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -20,6 +19,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	store "videocutlist/internal/db"
 )
 
 const (
@@ -189,27 +190,40 @@ type AuditEntry struct {
 	OccurredAt   time.Time `json:"occurredAt"`
 }
 
-// CredentialStore persists scoped assistant credentials and audit entries.
+// CredentialRepository persists credentials and bounded audit history. Grant
+// callbacks apply MCP policy and receive no SQL handle.
+type CredentialRepository interface {
+	CreateCredential(context.Context, store.MCPCredentialRecord) error
+	GetCredential(context.Context, string) (store.MCPCredentialRecord, error)
+	GetCredentialByTokenIdentifier(context.Context, string) (store.MCPCredentialRecord, error)
+	ListCredentials(context.Context, string, int) ([]store.MCPCredentialRecord, error)
+	RevokeCredential(context.Context, string, string) (store.MCPCredentialRecord, error)
+	TouchCredential(context.Context, string, string) (store.MCPCredentialRecord, bool, error)
+	UpdateCredentialProjectScope(context.Context, string, string, func(store.MCPCredentialRecord) (store.MCPProjectScopeUpdate, error)) (store.MCPCredentialRecord, error)
+	CreateProjectAndGrant(context.Context, store.ProjectRecord, string, string, func(store.MCPCredentialRecord) (store.MCPProjectScopeUpdate, error)) (store.ProjectRecord, store.MCPCredentialRecord, error)
+	AppendAudit(context.Context, store.MCPAuditRecord, int) (store.MCPAuditRecord, error)
+	ListAudit(context.Context, string, int64, int) ([]store.MCPAuditRecord, error)
+}
+
+// CredentialStore applies credential and authorization policy over a repository.
 type CredentialStore struct {
-	db  *sql.DB
-	now func() time.Time
+	repository CredentialRepository
+	now        func() time.Time
 }
 
-// NewCredentialStore constructs a store over an already migrated database.
-func NewCredentialStore(db *sql.DB) (*CredentialStore, error) {
-	return NewCredentialStoreWithClock(db, time.Now)
+func NewCredentialStore(repository CredentialRepository) (*CredentialStore, error) {
+	return NewCredentialStoreWithClock(repository, time.Now)
 }
 
-// NewCredentialStoreWithClock is useful for deterministic expiry tests while
-// keeping production time sourced from the system clock.
-func NewCredentialStoreWithClock(db *sql.DB, now func() time.Time) (*CredentialStore, error) {
-	if db == nil {
-		return nil, errors.New("mcp credential database is required")
+// NewCredentialStoreWithClock uses an injected clock for deterministic expiry tests.
+func NewCredentialStoreWithClock(repository CredentialRepository, now func() time.Time) (*CredentialStore, error) {
+	if repository == nil {
+		return nil, errors.New("mcp credential repository is required")
 	}
 	if now == nil {
 		return nil, errors.New("mcp credential clock is required")
 	}
-	return &CredentialStore{db: db, now: now}, nil
+	return &CredentialStore{repository: repository, now: now}, nil
 }
 
 // Create generates a high-entropy bearer token and persists only its SHA-256
@@ -248,24 +262,16 @@ func (s *CredentialStore) Create(ctx context.Context, input CredentialInput) (Cr
 	}
 	created := s.currentTime()
 	createdText := formatTime(created)
-	var expires any
+	var expires *string
 	if normalized.ExpiresAt != nil {
-		expires = formatTime(*normalized.ExpiresAt)
+		expires = new(formatTime(*normalized.ExpiresAt))
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return CreatedCredential{}, fmt.Errorf("begin credential creation: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-	_, err = tx.ExecContext(ctx, `INSERT INTO mcp_credentials
-(id, token_identifier, token_verifier, name, permissions_json, media_scope_json, project_scope_json, expires_at, revoked_at, unattended_exports, created_at, last_used_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, NULL, ?)`,
-		id, tokenIdentifier, verifier, normalized.Name, string(permissions), string(mediaScope), string(projectScope), expires, normalized.UnattendedExports, createdText, createdText)
-	if err != nil {
-		return CreatedCredential{}, fmt.Errorf("create mcp credential: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return CreatedCredential{}, fmt.Errorf("commit mcp credential: %w", err)
+	if err := s.repository.CreateCredential(ctx, store.MCPCredentialRecord{
+		ID: id, TokenIdentifier: tokenIdentifier, TokenVerifier: verifier, Name: normalized.Name,
+		PermissionsJSON: string(permissions), MediaScopeJSON: string(mediaScope), ProjectScopeJSON: string(projectScope),
+		ExpiresAt: expires, UnattendedExports: boolInt(normalized.UnattendedExports), CreatedAt: createdText, UpdatedAt: createdText,
+	}); err != nil {
+		return CreatedCredential{}, err
 	}
 	credential := Credential{
 		ID: id, TokenIdentifier: tokenIdentifier, Name: normalized.Name,
@@ -308,15 +314,13 @@ func (s *CredentialStore) List(ctx context.Context, cursor string, limit int) ([
 		return nil, nil, ErrCredentialNotFound
 	}
 	limit = boundedLimit(limit, credentialPageDefault, credentialPageLimit)
-	rows, err := s.db.QueryContext(ctx, `SELECT id, token_identifier, token_verifier, name, permissions_json, media_scope_json, project_scope_json, expires_at, revoked_at, unattended_exports, created_at, last_used_at, updated_at
-FROM mcp_credentials WHERE id > ? ORDER BY id LIMIT ?`, cursor, limit+1)
+	records, err := s.repository.ListCredentials(ctx, cursor, limit+1)
 	if err != nil {
-		return nil, nil, fmt.Errorf("list mcp credentials: %w", err)
+		return nil, nil, err
 	}
-	defer func() { _ = rows.Close() }()
-	credentials := make([]Credential, 0, 16)
-	for rows.Next() {
-		record, err := scanCredential(rows)
+	credentials := make([]Credential, 0, min(len(records), limit))
+	for _, storageRecord := range records {
+		record, err := credentialFromStorageRecord(storageRecord)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -325,9 +329,6 @@ FROM mcp_credentials WHERE id > ? ORDER BY id LIMIT ?`, cursor, limit+1)
 			return credentials, new(next), nil
 		}
 		credentials = append(credentials, record.Credential)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, nil, err
 	}
 	return credentials, nil, nil
 }
@@ -338,76 +339,72 @@ func (s *CredentialStore) GrantProject(ctx context.Context, credentialID, projec
 	if !validCredentialID(credentialID) || !validSafeIdentifier(projectID) {
 		return Credential{}, ErrCredentialNotFound
 	}
-	var granted Credential
-	err := s.withTransaction(ctx, func(tx *sql.Tx) error {
-		var err error
-		granted, err = s.grantProjectTx(ctx, tx, credentialID, projectID)
-		return err
+	now := s.currentTime()
+	storageRecord, err := s.repository.UpdateCredentialProjectScope(ctx, credentialID, formatTime(now), func(storageRecord store.MCPCredentialRecord) (store.MCPProjectScopeUpdate, error) {
+		return s.projectGrant(storageRecord, projectID, now)
 	})
-	if err != nil {
-		return Credential{}, err
-	}
-	return granted, nil
-}
-
-func (s *CredentialStore) withTransaction(ctx context.Context, fn func(*sql.Tx) error) (err error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin mcp transaction: %w", err)
-	}
-	defer func() {
-		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, sql.ErrTxDone) {
-			err = errors.Join(err, fmt.Errorf("rollback mcp transaction: %w", rollbackErr))
-		}
-	}()
-	if err := fn(tx); err != nil {
-		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit mcp transaction: %w", err)
-	}
-	return nil
-}
-
-func (s *CredentialStore) grantProjectTx(ctx context.Context, tx *sql.Tx, credentialID, projectID string) (Credential, error) {
-	if tx == nil || !validCredentialID(credentialID) || !validSafeIdentifier(projectID) {
+	if errors.Is(err, store.ErrMCPCredentialNotFound) {
 		return Credential{}, ErrCredentialNotFound
 	}
-	record, err := scanCredential(tx.QueryRowContext(ctx, `SELECT id, token_identifier, token_verifier, name, permissions_json, media_scope_json, project_scope_json, expires_at, revoked_at, unattended_exports, created_at, last_used_at, updated_at FROM mcp_credentials WHERE id = ?`, credentialID))
-	if errors.Is(err, sql.ErrNoRows) {
-		return Credential{}, ErrCredentialNotFound
+	if errors.Is(err, store.ErrMCPCredentialInactive) {
+		return Credential{}, ErrCredentialUnauthorized
 	}
 	if err != nil {
 		return Credential{}, err
 	}
-	if err := record.activeAt(s.currentTime()); err != nil {
+	credential, err := credentialFromStorageRecord(storageRecord)
+	if err != nil {
 		return Credential{}, err
+	}
+	return cloneCredential(credential.Credential), nil
+}
+
+func (s *CredentialStore) CreateProjectAndGrant(ctx context.Context, project store.ProjectRecord, credentialID string) (store.ProjectRecord, Credential, error) {
+	if !validCredentialID(credentialID) || !validSafeIdentifier(project.ID) {
+		return store.ProjectRecord{}, Credential{}, ErrCredentialNotFound
+	}
+	now := s.currentTime()
+	projectID := project.ID
+	projectRecord, credentialRecord, err := s.repository.CreateProjectAndGrant(ctx, project, credentialID, formatTime(now), func(storageRecord store.MCPCredentialRecord) (store.MCPProjectScopeUpdate, error) {
+		return s.projectGrant(storageRecord, projectID, now)
+	})
+	if errors.Is(err, store.ErrMCPCredentialNotFound) {
+		return store.ProjectRecord{}, Credential{}, ErrCredentialNotFound
+	}
+	if errors.Is(err, store.ErrMCPCredentialInactive) {
+		return store.ProjectRecord{}, Credential{}, ErrCredentialUnauthorized
+	}
+	if err != nil {
+		return store.ProjectRecord{}, Credential{}, err
+	}
+	credential, err := credentialFromStorageRecord(credentialRecord)
+	if err != nil {
+		return store.ProjectRecord{}, Credential{}, err
+	}
+	return projectRecord, cloneCredential(credential.Credential), nil
+}
+
+func (s *CredentialStore) projectGrant(storageRecord store.MCPCredentialRecord, projectID string, now time.Time) (store.MCPProjectScopeUpdate, error) {
+	record, err := credentialFromStorageRecord(storageRecord)
+	if err != nil {
+		return store.MCPProjectScopeUpdate{}, err
+	}
+	if err := record.activeAt(now); err != nil {
+		return store.MCPProjectScopeUpdate{}, err
 	}
 	if record.ProjectScope.Kind == ProjectScopeAll || slices.Contains(record.ProjectScope.ProjectIDs, projectID) {
-		return cloneCredential(record.Credential), nil
+		return store.MCPProjectScopeUpdate{}, nil
 	}
 	if len(record.ProjectScope.ProjectIDs) >= scopeIDLimit {
-		return Credential{}, ErrCredentialInvalid
+		return store.MCPProjectScopeUpdate{}, ErrCredentialInvalid
 	}
 	record.ProjectScope.ProjectIDs = append(record.ProjectScope.ProjectIDs, projectID)
 	slices.Sort(record.ProjectScope.ProjectIDs)
 	scope, err := json.Marshal(record.ProjectScope)
 	if err != nil {
-		return Credential{}, err
+		return store.MCPProjectScopeUpdate{}, err
 	}
-	now := s.currentTime()
-	result, err := tx.ExecContext(ctx, `UPDATE mcp_credentials SET project_scope_json = ?, updated_at = ? WHERE id = ? AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)`, string(scope), formatTime(now), credentialID, formatTime(now))
-	if err != nil {
-		return Credential{}, fmt.Errorf("grant mcp project: %w", err)
-	}
-	updated, err := result.RowsAffected()
-	if err != nil {
-		return Credential{}, err
-	}
-	if updated != 1 {
-		return Credential{}, ErrCredentialUnauthorized
-	}
-	return cloneCredential(record.Credential), nil
+	return store.MCPProjectScopeUpdate{ProjectScopeJSON: string(scope), Changed: true}, nil
 }
 
 // Revoke marks a credential revoked. It is idempotent and cannot be reversed.
@@ -415,18 +412,18 @@ func (s *CredentialStore) Revoke(ctx context.Context, id string) (Credential, er
 	if !validCredentialID(id) {
 		return Credential{}, ErrCredentialNotFound
 	}
-	now := s.currentTime()
-	result, err := s.db.ExecContext(ctx, `UPDATE mcp_credentials
-SET revoked_at = COALESCE(revoked_at, ?), updated_at = ? WHERE id = ?`, formatTime(now), formatTime(now), id)
-	if err != nil {
-		return Credential{}, fmt.Errorf("revoke mcp credential: %w", err)
-	}
-	if affected, err := result.RowsAffected(); err != nil {
-		return Credential{}, err
-	} else if affected == 0 {
+	storageRecord, err := s.repository.RevokeCredential(ctx, id, formatTime(s.currentTime()))
+	if errors.Is(err, store.ErrMCPCredentialNotFound) {
 		return Credential{}, ErrCredentialNotFound
 	}
-	return s.Get(ctx, id)
+	if err != nil {
+		return Credential{}, err
+	}
+	record, err := credentialFromStorageRecord(storageRecord)
+	if err != nil {
+		return Credential{}, err
+	}
+	return cloneCredential(record.Credential), nil
 }
 
 // Authenticate verifies a bearer secret and updates last-used state only while
@@ -506,25 +503,26 @@ func (s *CredentialStore) TouchLastUsed(ctx context.Context, id string) (Credent
 	if err := record.activeAt(now); err != nil {
 		return Credential{}, err
 	}
-	result, err := s.db.ExecContext(ctx, `UPDATE mcp_credentials
-SET last_used_at = ?, updated_at = ?
-WHERE id = ? AND revoked_at IS NULL`, formatTime(now), formatTime(now), id)
-	if err != nil {
-		return Credential{}, fmt.Errorf("update mcp credential usage: %w", err)
+	storageRecord, updated, err := s.repository.TouchCredential(ctx, id, formatTime(now))
+	if errors.Is(err, store.ErrMCPCredentialNotFound) {
+		return Credential{}, ErrCredentialNotFound
 	}
-	affected, err := result.RowsAffected()
 	if err != nil {
 		return Credential{}, err
 	}
-	if affected != 1 {
-		active, activeErr := s.getRecord(ctx, id)
-		if activeErr != nil {
-			return Credential{}, activeErr
+	if !updated {
+		record, err = credentialFromStorageRecord(storageRecord)
+		if err != nil {
+			return Credential{}, err
 		}
-		if statusErr := active.activeAt(s.currentTime()); statusErr != nil {
+		if statusErr := record.activeAt(s.currentTime()); statusErr != nil {
 			return Credential{}, statusErr
 		}
-		record = active
+	} else {
+		record, err = credentialFromStorageRecord(storageRecord)
+		if err != nil {
+			return Credential{}, err
+		}
 	}
 	record.LastUsedAt = new(now)
 	return cloneCredential(record.Credential), nil
@@ -545,38 +543,21 @@ func (s *CredentialStore) RecordAudit(ctx context.Context, credentialID string, 
 		return AuditEntry{}, ErrAuditInvalid
 	}
 	now := s.currentTime()
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return AuditEntry{}, fmt.Errorf("begin mcp audit: %w", err)
+	var jobID *string
+	if normalized.JobID != "" {
+		jobID = new(normalized.JobID)
 	}
-	defer func() { _ = tx.Rollback() }()
-	var exists int
-	if err := tx.QueryRowContext(ctx, `SELECT 1 FROM mcp_credentials WHERE id = ?`, credentialID).Scan(&exists); errors.Is(err, sql.ErrNoRows) {
+	record, err := s.repository.AppendAudit(ctx, store.MCPAuditRecord{
+		CredentialID: credentialID, Operation: normalized.Operation, Outcome: normalized.Outcome,
+		ResourceIDsJSON: string(resources), JobID: jobID, OccurredAt: formatTime(now),
+	}, MaxAuditEntriesPerCredential)
+	if errors.Is(err, store.ErrMCPCredentialNotFound) {
 		return AuditEntry{}, ErrCredentialNotFound
-	} else if err != nil {
-		return AuditEntry{}, fmt.Errorf("check mcp credential for audit: %w", err)
 	}
-	result, err := tx.ExecContext(ctx, `INSERT INTO mcp_audit_entries
-(credential_id, operation, outcome, resource_ids_json, job_id, occurred_at)
-VALUES (?, ?, ?, ?, ?, ?)`, credentialID, normalized.Operation, normalized.Outcome, string(resources), nullableString(normalized.JobID), formatTime(now))
-	if err != nil {
-		return AuditEntry{}, fmt.Errorf("record mcp audit: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx, `DELETE FROM mcp_audit_entries
-WHERE credential_id = ? AND id IN (
-  SELECT id FROM mcp_audit_entries WHERE credential_id = ?
-  ORDER BY id DESC LIMIT -1 OFFSET ?
-)`, credentialID, credentialID, MaxAuditEntriesPerCredential); err != nil {
-		return AuditEntry{}, fmt.Errorf("bound mcp audit: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return AuditEntry{}, fmt.Errorf("commit mcp audit: %w", err)
-	}
-	id, err := result.LastInsertId()
 	if err != nil {
 		return AuditEntry{}, err
 	}
-	return AuditEntry{ID: id, CredentialID: credentialID, Operation: normalized.Operation, Outcome: normalized.Outcome, ResourceIDs: slices.Clone(normalized.ResourceIDs), JobID: normalized.JobID, OccurredAt: now}, nil
+	return auditEntryFromStorageRecord(record)
 }
 
 // ListAudit returns the newest bounded audit entries for a credential.
@@ -593,29 +574,17 @@ func (s *CredentialStore) ListAuditBefore(ctx context.Context, credentialID stri
 		return nil, err
 	}
 	limit = boundedLimit(limit, auditPageDefault, auditPageLimit)
-	var rows *sql.Rows
-	var err error
-	if beforeID == 0 {
-		rows, err = s.db.QueryContext(ctx, `SELECT id, credential_id, operation, outcome, resource_ids_json, job_id, occurred_at
-FROM mcp_audit_entries WHERE credential_id = ? ORDER BY id DESC LIMIT ?`, credentialID, limit)
-	} else {
-		rows, err = s.db.QueryContext(ctx, `SELECT id, credential_id, operation, outcome, resource_ids_json, job_id, occurred_at
-FROM mcp_audit_entries WHERE credential_id = ? AND id < ? ORDER BY id DESC LIMIT ?`, credentialID, beforeID, limit)
-	}
+	records, err := s.repository.ListAudit(ctx, credentialID, beforeID, limit)
 	if err != nil {
-		return nil, fmt.Errorf("list mcp audit: %w", err)
+		return nil, err
 	}
-	defer func() { _ = rows.Close() }()
-	entries := make([]AuditEntry, 0, limit)
-	for rows.Next() {
-		entry, err := scanAuditEntry(rows)
+	entries := make([]AuditEntry, 0, len(records))
+	for _, record := range records {
+		entry, err := auditEntryFromStorageRecord(record)
 		if err != nil {
 			return nil, err
 		}
 		entries = append(entries, entry)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
 	}
 	return entries, nil
 }
@@ -905,7 +874,7 @@ func normalizeAuditInput(input AuditInput) (AuditInput, error) {
 	if !validIDList(input.ResourceIDs) {
 		return AuditInput{}, ErrAuditInvalid
 	}
-	slices.Sort(input.ResourceIDs)
+	// Preserve transport order so primary resource IDs remain first in audit records.
 	return input, nil
 }
 
@@ -978,23 +947,25 @@ func (s *CredentialStore) currentTime() time.Time {
 }
 
 func (s *CredentialStore) getRecord(ctx context.Context, id string) (credentialRecord, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id, token_identifier, token_verifier, name, permissions_json, media_scope_json, project_scope_json, expires_at, revoked_at, unattended_exports, created_at, last_used_at, updated_at
-FROM mcp_credentials WHERE id = ?`, id)
-	record, err := scanCredential(row)
-	if errors.Is(err, sql.ErrNoRows) {
+	storageRecord, err := s.repository.GetCredential(ctx, id)
+	if errors.Is(err, store.ErrMCPCredentialNotFound) {
 		return credentialRecord{}, ErrCredentialNotFound
 	}
-	return record, err
+	if err != nil {
+		return credentialRecord{}, err
+	}
+	return credentialFromStorageRecord(storageRecord)
 }
 
 func (s *CredentialStore) getByTokenIdentifier(ctx context.Context, identifier string) (credentialRecord, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id, token_identifier, token_verifier, name, permissions_json, media_scope_json, project_scope_json, expires_at, revoked_at, unattended_exports, created_at, last_used_at, updated_at
-FROM mcp_credentials WHERE token_identifier = ?`, identifier)
-	record, err := scanCredential(row)
-	if errors.Is(err, sql.ErrNoRows) {
+	storageRecord, err := s.repository.GetCredentialByTokenIdentifier(ctx, identifier)
+	if errors.Is(err, store.ErrMCPCredentialNotFound) {
 		return credentialRecord{}, ErrCredentialNotFound
 	}
-	return record, err
+	if err != nil {
+		return credentialRecord{}, err
+	}
+	return credentialFromStorageRecord(storageRecord)
 }
 
 type credentialRecord struct {
@@ -1002,33 +973,25 @@ type credentialRecord struct {
 	tokenVerifier string
 }
 
-type credentialScanner interface {
-	Scan(...any) error
-}
-
-func scanCredential(row credentialScanner) (credentialRecord, error) {
-	var record credentialRecord
-	var permissionsJSON, mediaScopeJSON, projectScopeJSON string
-	var projectScope ProjectScope
-	var expires, revoked, lastUsed sql.NullString
-	var unattended int
-	var created, updated string
-	if err := row.Scan(&record.ID, &record.TokenIdentifier, &record.tokenVerifier, &record.Name, &permissionsJSON, &mediaScopeJSON, &projectScopeJSON, &expires, &revoked, &unattended, &created, &lastUsed, &updated); err != nil {
-		return credentialRecord{}, err
+func credentialFromStorageRecord(storageRecord store.MCPCredentialRecord) (credentialRecord, error) {
+	record := credentialRecord{
+		Credential:    Credential{ID: storageRecord.ID, TokenIdentifier: storageRecord.TokenIdentifier, Name: storageRecord.Name},
+		tokenVerifier: storageRecord.TokenVerifier,
 	}
+	var projectScope ProjectScope
 	if !validCredentialID(record.ID) || !strings.HasPrefix(record.TokenIdentifier, "t_") || !validSafeIdentifier(record.TokenIdentifier) || len(record.tokenVerifier) != sha256.Size*2 {
 		return credentialRecord{}, ErrCredentialData
 	}
 	if _, err := hex.DecodeString(record.tokenVerifier); err != nil {
 		return credentialRecord{}, ErrCredentialData
 	}
-	if err := decodeJSON(permissionsJSON, &record.Permissions); err != nil {
+	if err := decodeJSON(storageRecord.PermissionsJSON, &record.Permissions); err != nil {
 		return credentialRecord{}, fmt.Errorf("%w: permissions", ErrCredentialData)
 	}
-	if err := decodeJSON(mediaScopeJSON, &record.MediaScope); err != nil {
+	if err := decodeJSON(storageRecord.MediaScopeJSON, &record.MediaScope); err != nil {
 		return credentialRecord{}, fmt.Errorf("%w: media scope", ErrCredentialData)
 	}
-	if err := decodeJSON(projectScopeJSON, &projectScope); err != nil {
+	if err := decodeJSON(storageRecord.ProjectScopeJSON, &projectScope); err != nil {
 		return credentialRecord{}, fmt.Errorf("%w: project scope", ErrCredentialData)
 	}
 	if normalized, err := normalizePermissions(record.Permissions); err != nil {
@@ -1046,33 +1009,33 @@ func scanCredential(row credentialScanner) (credentialRecord, error) {
 	} else {
 		record.ProjectScope = normalized
 	}
-	if !validCredentialName(record.Name) || unattended != 0 && unattended != 1 {
+	if !validCredentialName(record.Name) || storageRecord.UnattendedExports != 0 && storageRecord.UnattendedExports != 1 {
 		return credentialRecord{}, ErrCredentialData
 	}
-	record.UnattendedExports = unattended == 1
+	record.UnattendedExports = storageRecord.UnattendedExports == 1
 	var err error
-	if record.CreatedAt, err = parseTime(created); err != nil {
+	if record.CreatedAt, err = parseTime(storageRecord.CreatedAt); err != nil {
 		return credentialRecord{}, fmt.Errorf("%w: created time", ErrCredentialData)
 	}
-	if _, err = parseTime(updated); err != nil {
+	if _, err = parseTime(storageRecord.UpdatedAt); err != nil {
 		return credentialRecord{}, fmt.Errorf("%w: updated time", ErrCredentialData)
 	}
-	if expires.Valid {
-		value, err := parseTime(expires.String)
+	if storageRecord.ExpiresAt != nil {
+		value, err := parseTime(*storageRecord.ExpiresAt)
 		if err != nil {
 			return credentialRecord{}, fmt.Errorf("%w: expiry", ErrCredentialData)
 		}
 		record.ExpiresAt = new(value)
 	}
-	if revoked.Valid {
-		value, err := parseTime(revoked.String)
+	if storageRecord.RevokedAt != nil {
+		value, err := parseTime(*storageRecord.RevokedAt)
 		if err != nil {
 			return credentialRecord{}, fmt.Errorf("%w: revocation", ErrCredentialData)
 		}
 		record.RevokedAt = new(value)
 	}
-	if lastUsed.Valid {
-		value, err := parseTime(lastUsed.String)
+	if storageRecord.LastUsedAt != nil {
+		value, err := parseTime(*storageRecord.LastUsedAt)
 		if err != nil {
 			return credentialRecord{}, fmt.Errorf("%w: last used", ErrCredentialData)
 		}
@@ -1081,23 +1044,20 @@ func scanCredential(row credentialScanner) (credentialRecord, error) {
 	return record, nil
 }
 
-func scanAuditEntry(row credentialScanner) (AuditEntry, error) {
+func auditEntryFromStorageRecord(record store.MCPAuditRecord) (AuditEntry, error) {
 	var entry AuditEntry
-	var resourcesJSON string
-	var jobID sql.NullString
-	var occurred string
-	if err := row.Scan(&entry.ID, &entry.CredentialID, &entry.Operation, &entry.Outcome, &resourcesJSON, &jobID, &occurred); err != nil {
-		return AuditEntry{}, err
-	}
-	if entry.ID < 1 || !validCredentialID(entry.CredentialID) || !validAuditAtom(entry.Operation) || !validAuditAtom(entry.Outcome) || jobID.Valid && !validSafeIdentifier(jobID.String) || decodeJSON(resourcesJSON, &entry.ResourceIDs) != nil || !validIDList(entry.ResourceIDs) || len(entry.ResourceIDs) > auditResourceLimit {
+	if record.ID < 1 || !validCredentialID(record.CredentialID) || !validAuditAtom(record.Operation) || !validAuditAtom(record.Outcome) || record.JobID != nil && !validSafeIdentifier(*record.JobID) || decodeJSON(record.ResourceIDsJSON, &entry.ResourceIDs) != nil || !validIDList(entry.ResourceIDs) || len(entry.ResourceIDs) > auditResourceLimit {
 		return AuditEntry{}, ErrAuditData
 	}
-	occurredAt, err := parseTime(occurred)
+	occurredAt, err := parseTime(record.OccurredAt)
 	if err != nil {
 		return AuditEntry{}, ErrAuditData
 	}
+	entry.ID, entry.CredentialID, entry.Operation, entry.Outcome = record.ID, record.CredentialID, record.Operation, record.Outcome
 	entry.OccurredAt = occurredAt
-	entry.JobID = jobID.String
+	if record.JobID != nil {
+		entry.JobID = *record.JobID
+	}
 	return entry, nil
 }
 
@@ -1155,11 +1115,11 @@ func parseTime(value string) (time.Time, error) {
 	return time.Parse(time.RFC3339Nano, value)
 }
 
-func nullableString(value string) any {
-	if value == "" {
-		return nil
+func boolInt(value bool) int {
+	if value {
+		return 1
 	}
-	return value
+	return 0
 }
 
 func boundedLimit(value, fallback, maximum int) int {

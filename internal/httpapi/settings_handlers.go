@@ -9,19 +9,19 @@ import (
 	"net/http"
 	"os"
 
-	store "videocutlist/internal/db"
-	jobqueue "videocutlist/internal/jobs"
+	jobqueue "videocutlist/internal/jobs/model"
 	settings "videocutlist/internal/settings"
+	settingsmodel "videocutlist/internal/settings/model"
 )
 
 type settingsUpdateRequest struct {
-	Revision int64                 `json:"revision"`
-	Settings store.RuntimeSettings `json:"settings"`
+	Revision int64                         `json:"revision"`
+	Settings settingsmodel.RuntimeSettings `json:"settings"`
 }
 
 // browserSettings is intentionally a projection: deployment paths are never
 // serialized into a browser response.
-func browserSettings(settings store.RuntimeSettings) map[string]any {
+func browserSettings(settings settingsmodel.RuntimeSettings) map[string]any {
 	data := map[string]any{}
 	encoded, _ := json.Marshal(settings)
 	_ = json.Unmarshal(encoded, &data)
@@ -100,7 +100,7 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, id string) 
 	record, err := s.config.Settings.Update(r.Context(), input.Revision, input.Settings, document.Settings)
 	if err != nil {
 		switch {
-		case errors.Is(err, store.ErrRuntimeSettingsRevisionConflict):
+		case errors.Is(err, settingsmodel.ErrRuntimeSettingsRevisionConflict):
 			httpx.Error(w, http.StatusConflict, "settings_revision_conflict", "Settings changed; reload before updating.", id)
 		case errors.Is(err, settings.ErrDeploymentSettingsReadOnly):
 			httpx.Error(w, http.StatusBadRequest, "deployment_settings_read_only", "Deployment paths and destinations are server-managed.", id)

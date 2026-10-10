@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	db "videocutlist/internal/db"
-	store "videocutlist/internal/jobs"
+	store "videocutlist/internal/jobs/model"
 )
 
 func TestUnifiedJobsTransitionsAndDerivedBatch(t *testing.T) {
@@ -21,7 +21,7 @@ func TestUnifiedJobsTransitionsAndDerivedBatch(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	jobs, err := store.NewJobsStore(db)
+	jobs, err := newTestJobsStore(db)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,34 +83,6 @@ func TestUnifiedJobsTransitionsAndDerivedBatch(t *testing.T) {
 	}
 }
 
-func TestJobRevisionMigrationBackfillsExistingRows(t *testing.T) {
-	database, err := db.OpenDatabase(t.Context(), t.TempDir()+"/legacy-jobs.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = database.Close() }()
-	if _, err := database.ExecContext(t.Context(), `ALTER TABLE jobs DROP COLUMN revision`); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := database.ExecContext(t.Context(), `INSERT INTO jobs (id,batch_id,kind,state,request_json,created_at,updated_at) VALUES ('j_legacyjob001','b_legacyjob001','library_scan','queued','{}','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z')`); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.Migrate(t.Context(), database); err != nil {
-		t.Fatal(err)
-	}
-	jobs, err := store.NewJobsStore(database)
-	if err != nil {
-		t.Fatal(err)
-	}
-	job, err := jobs.Get(t.Context(), "j_legacyjob001")
-	if err != nil || job.Revision != 1 {
-		t.Fatalf("backfilled job = %#v, %v", job, err)
-	}
-	if err := store.Migrate(t.Context(), database); err != nil {
-		t.Fatalf("reapply migration: %v", err)
-	}
-}
-
 func TestJobRevisionSurvivesDatabaseReopen(t *testing.T) {
 	path := t.TempDir() + "/revisions.db"
 	database, err := db.OpenDatabase(t.Context(), path)
@@ -122,7 +94,7 @@ func TestJobRevisionSurvivesDatabaseReopen(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	jobs, err := store.NewJobsStore(database)
+	jobs, err := newTestJobsStore(database)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +116,7 @@ func TestJobRevisionSurvivesDatabaseReopen(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	jobs, err = store.NewJobsStore(reopened)
+	jobs, err = newTestJobsStore(reopened)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -167,7 +139,7 @@ func TestBatchMissingReturnsNotFound(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = database.Close() })
-	jobs, err := store.NewJobsStore(database)
+	jobs, err := newTestJobsStore(database)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,14 +148,10 @@ func TestBatchMissingReturnsNotFound(t *testing.T) {
 	}
 }
 
-func TestJobsMigrationReplacesQueueIndexOnExistingDatabase(t *testing.T) {
+func TestGooseSchemaProvidesQueueOrderIndex(t *testing.T) {
 	path := t.TempDir() + "/jobs.db"
 	first, err := db.OpenDatabase(t.Context(), path)
 	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := first.ExecContext(t.Context(), `DROP INDEX jobs_state_created_id; CREATE INDEX IF NOT EXISTS jobs_state_updated ON jobs (state, updated_at)`); err != nil {
-		_ = first.Close()
 		t.Fatal(err)
 	}
 	if err := first.Close(); err != nil {
@@ -229,7 +197,7 @@ func TestUnifiedJobsPersistPerRootScanResults(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	jobs, err := store.NewJobsStore(db)
+	jobs, err := newTestJobsStore(db)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -261,7 +229,7 @@ func TestUnifiedJobsFailWithResultPersistsPartialScan(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	jobs, err := store.NewJobsStore(db)
+	jobs, err := newTestJobsStore(db)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -290,7 +258,7 @@ func TestUnifiedJobsCreateValidatesOpaqueIDs(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	jobs, err := store.NewJobsStore(db)
+	jobs, err := newTestJobsStore(db)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,7 +286,7 @@ func TestUnifiedJobsCancellationFailureAndRestartRecovery(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	jobs, err := store.NewJobsStore(db)
+	jobs, err := newTestJobsStore(db)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -379,7 +347,7 @@ func TestUnifiedJobsConcurrentTerminalTransitions(t *testing.T) {
 			t.Error(err)
 		}
 	})
-	jobs, _ := store.NewJobsStore(db)
+	jobs, _ := newTestJobsStore(db)
 	ctx := t.Context()
 	if _, err := jobs.Create(ctx, store.Job{ID: "j_000000000008", BatchID: "b_000000000008", Kind: store.JobDetect, ProjectID: "p", ProjectItemID: "i", RequestJSON: `{"kind":"scene"}`}); err != nil {
 		t.Fatal(err)

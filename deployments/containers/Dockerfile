@@ -1,17 +1,17 @@
-FROM node:26-bookworm-slim AS client
-WORKDIR /src/client
+FROM node:26-bookworm-slim AS web
+WORKDIR /src/web
 RUN npm install --global pnpm@10.34.5
-COPY client/package.json client/pnpm-lock.yaml ./
+COPY web/package.json web/pnpm-lock.yaml ./
 RUN pnpm install --frozen-lockfile
-COPY client/ ./
+COPY web/ ./
 RUN pnpm run build
 
-FROM golang:1.26-bookworm AS server
+FROM golang:1.26.9-bookworm AS server
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-COPY --from=client /src/client/dist /src/internal/web/webassets/dist
+COPY --from=web /src/web/dist /src/internal/web/webassets/dist
 RUN CGO_ENABLED=0 go build -tags embed_frontend -trimpath -o /videocutlist ./cmd/videocutlist
 
 FROM debian:bookworm-slim

@@ -9,9 +9,11 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"videocutlist/internal/detection"
+	"videocutlist/internal/jobs/view"
 
 	store "videocutlist/internal/db"
-	jobqueue "videocutlist/internal/jobs"
+	jobqueue "videocutlist/internal/jobs/model"
 	"videocutlist/internal/projects"
 )
 
@@ -23,10 +25,10 @@ type contractBatchService struct {
 	retryJobID, retryKey string
 }
 
-func (s *contractBatchService) Submit(_ context.Context, request projects.BatchExportRequest) (string, []projects.Job, error) {
+func (s *contractBatchService) Submit(_ context.Context, request projects.BatchExportRequest) (string, []view.Job, error) {
 	s.submits++
 	s.request = request
-	return "b_contract1234", []projects.Job{{ID: "j_contract1234", State: string(jobqueue.JobQueued)}}, s.err
+	return "b_contract1234", []view.Job{{ID: "j_contract1234", State: string(jobqueue.JobQueued)}}, s.err
 }
 func (*contractBatchService) Progress(context.Context, string) (jobqueue.JobState, float64, error) {
 	return jobqueue.JobQueued, 0, nil
@@ -49,9 +51,9 @@ type contractDetectionService struct {
 	creates int
 }
 
-func (s *contractDetectionService) Submit(context.Context, string, string, DetectionRequest) (DetectionJob, error) {
+func (s *contractDetectionService) Submit(context.Context, string, string, detection.Request) (detection.Job, error) {
 	s.creates++
-	return DetectionJob{ID: "j_detection1234", State: "queued"}, s.err
+	return detection.Job{ID: "j_detection1234", State: "queued"}, s.err
 }
 
 type contractJobService struct {
@@ -59,8 +61,8 @@ type contractJobService struct {
 	cancelErr error
 }
 
-func (s *contractJobService) Get(context.Context, string) (Job, error) {
-	return Job{}, s.getErr
+func (s *contractJobService) Get(context.Context, string) (view.Job, error) {
+	return view.Job{}, s.getErr
 }
 func (s *contractJobService) Cancel(context.Context, string) error { return s.cancelErr }
 

@@ -6,13 +6,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"sync"
 	"testing"
 	"time"
-
-	"videocutlist/internal/projects/model"
 )
 
 var accept = func(_ context.Context, file *os.File) error {
@@ -100,18 +97,6 @@ func TestCommitRejectsReplacedPartialAfterValidation(t *testing.T) {
 				t.Fatalf("external content changed: %q, %v", body, err)
 			}
 		})
-	}
-}
-
-func TestPreviewKeyAndPathAreFrozen(t *testing.T) {
-	spec := model.PreviewSpec{MediaID: "m_test", SizeBytes: 3, MtimeNS: 4, StartMS: 5, DurationMS: 6, Width: 1280, Height: 720, FPS: 30, Audio: true, Encoder: "software-h264-v1"}
-	key := model.PreviewKey(spec)
-	if got, want := key, "9fd5a59c541b3e2faab0b0c8a72daf70b258cfbfc6adfe6b2ae65024fece9f5f"; got != want {
-		t.Fatalf("key = %s, want %s", got, want)
-	}
-	path, err := RelativePath(key)
-	if err != nil || path != filepath.Join("previews", "9f", "d5", key+".mp4") {
-		t.Fatalf("path = %q, %v", path, err)
 	}
 }
 
@@ -629,18 +614,34 @@ func TestOpenCoordinatesReplacementAfterValidation(t *testing.T) {
 	replacementLaunched = true
 	go func() {
 		defer close(replacementDone)
-		close(replacementStarted)
 		partial, err := store.Begin(key)
 		if err == nil {
 			_, err = partial.Write([]byte("new"))
 		}
 		if err == nil {
-			err = partial.Commit(t.Context(), accept)
+			err = partial.Commit(t.Context(), func(ctx context.Context, file *os.File) error {
+				defer close(replacementStarted)
+				path, err := store.path(key)
+				if err != nil {
+					return err
+				}
+				mutex := store.pathMutex(path)
+				if mutex.TryLock() {
+					mutex.Unlock()
+					return errors.New("Open did not retain its path lock during validation")
+				}
+				return accept(ctx, file)
+			})
 		}
 		replacementErr = err
 	}()
-	<-replacementStarted
-	waitForBlockedMutex(t, "(*Partial).Commit", 50*time.Millisecond)
+	select {
+	case <-replacementStarted:
+	case <-replacementDone:
+		t.Fatalf("replacement did not reach validation: %v", replacementErr)
+	case <-time.After(time.Second):
+		t.Fatal("replacement did not enter validation")
+	}
 	select {
 	case <-replacementDone:
 		t.Fatalf("replacement completed while Open held the path lock: %v", replacementErr)
@@ -672,32 +673,6 @@ func TestOpenCoordinatesReplacementAfterValidation(t *testing.T) {
 	}
 	if body, err := os.ReadFile(path); err != nil || string(body) != "old" {
 		t.Fatalf("existing preview changed during replacement attempt: %q, %v", body, err)
-	}
-}
-
-func waitForBlockedMutex(t *testing.T, function string, timeout time.Duration) {
-	t.Helper()
-	deadline := time.NewTimer(timeout)
-	defer deadline.Stop()
-	for {
-		stacks := make([]byte, 1<<20)
-		n := runtime.Stack(stacks, true)
-		blocked := false
-		for _, stack := range strings.Split(string(stacks[:n]), "goroutine ") {
-			if strings.Contains(stack, "[sync.Mutex.Lock]") && strings.Contains(stack, function) {
-				blocked = true
-				break
-			}
-		}
-		if blocked {
-			return
-		}
-		select {
-		case <-deadline.C:
-			t.Fatalf("goroutine did not block at %s; stack snapshot:\n%s", function, stacks[:n])
-		default:
-			runtime.Gosched()
-		}
 	}
 }
 

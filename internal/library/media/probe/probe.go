@@ -3,7 +3,6 @@ package probe
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -16,6 +15,7 @@ import (
 	"strings"
 
 	"videocutlist/internal/fdinput"
+	"videocutlist/internal/processio"
 )
 
 const maxOutputBytes = 1 << 20
@@ -101,9 +101,8 @@ func (c Client) frameTimestamps(ctx context.Context, source *os.File, keyframes 
 	args = append(args, "-show_frames", "-show_entries", "frame=best_effort_timestamp_time", "-of", "csv=p=0", fdinput.Path(3))
 	cmd := exec.CommandContext(ctx, path, args...)
 	cmd.ExtraFiles = []*os.File{source}
-	var stderr limitedBuffer
-	stderr.limit = maxOutputBytes
-	cmd.Stderr = &stderr
+	stderr := processio.NewLimitedBuffer(maxOutputBytes, ErrOutputTooLarge)
+	cmd.Stderr = stderr
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, fmt.Errorf("ffprobe frames: %w", err)
@@ -139,7 +138,7 @@ func (c Client) frameTimestamps(ctx context.Context, source *os.File, keyframes 
 		_ = cmd.Process.Kill()
 	}
 	waitErr := cmd.Wait()
-	if errors.Is(stderr.err, ErrOutputTooLarge) {
+	if errors.Is(stderr.Err(), ErrOutputTooLarge) {
 		return nil, ErrOutputTooLarge
 	}
 	if parseErr != nil {
@@ -176,16 +175,16 @@ func (c Client) run(ctx context.Context, input string, files []*os.File) (Metada
 		input,
 	)
 	cmd.ExtraFiles = files
-	var stdout, stderr limitedBuffer
-	stdout.limit, stderr.limit = maxOutputBytes, maxOutputBytes
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	stdout := processio.NewLimitedBuffer(maxOutputBytes, ErrOutputTooLarge)
+	stderr := processio.NewLimitedBuffer(maxOutputBytes, ErrOutputTooLarge)
+	cmd.Stdout, cmd.Stderr = stdout, stderr
 	if err := cmd.Run(); err != nil {
-		if errors.Is(stdout.err, ErrOutputTooLarge) || errors.Is(stderr.err, ErrOutputTooLarge) {
+		if errors.Is(stdout.Err(), ErrOutputTooLarge) || errors.Is(stderr.Err(), ErrOutputTooLarge) {
 			return Metadata{}, ErrOutputTooLarge
 		}
 		return Metadata{}, fmt.Errorf("ffprobe: %w", err)
 	}
-	if stdout.err != nil || stderr.err != nil {
+	if stdout.Err() != nil || stderr.Err() != nil {
 		return Metadata{}, ErrOutputTooLarge
 	}
 	metadata, err := normalize(stdout.Bytes())
@@ -193,23 +192,6 @@ func (c Client) run(ctx context.Context, input string, files []*os.File) (Metada
 		return Metadata{}, fmt.Errorf("ffprobe metadata: %w", err)
 	}
 	return metadata, nil
-}
-
-type limitedBuffer struct {
-	bytes.Buffer
-	limit int
-	err   error
-}
-
-func (b *limitedBuffer) Write(p []byte) (int, error) {
-	if b.err != nil {
-		return 0, b.err
-	}
-	if b.Len()+len(p) > b.limit {
-		b.err = ErrOutputTooLarge
-		return 0, b.err
-	}
-	return b.Buffer.Write(p)
 }
 
 type response struct {

@@ -2,341 +2,18 @@ package projects
 
 import (
 	"context"
-	"crypto/sha256"
-	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"reflect"
-	"strconv"
 	"strings"
-	"sync"
 	"testing"
-	"testing/synctest"
 	"time"
 
 	"videocutlist/internal/db"
-	jobqueue "videocutlist/internal/jobs"
+	librarymedia "videocutlist/internal/library/media"
+	"videocutlist/internal/preview"
 	"videocutlist/internal/projects/model"
 )
-
-type browseContextKey struct{}
-
-type catalogStub struct {
-	refreshes                  int
-	refreshErr                 error
-	browse                     FolderPage
-	browseContext              context.Context
-	browseFolder, browseCursor string
-	browseLimit                int
-}
-
-func (c *catalogStub) List(context.Context, string, int) (MediaPage, error) { return MediaPage{}, nil }
-func (c *catalogStub) Browse(ctx context.Context, folder, cursor string, limit int) (FolderPage, error) {
-	c.browseContext, c.browseFolder, c.browseCursor, c.browseLimit = ctx, folder, cursor, limit
-	return c.browse, nil
-}
-func (c *catalogStub) Get(context.Context, string) (Media, error) { return Media{}, nil }
-func (c *catalogStub) Refresh(context.Context) error              { c.refreshes++; return c.refreshErr }
-func (c *catalogStub) Preview(context.Context, PreviewSpec) (model.PreviewSpec, error) {
-	return model.PreviewSpec{}, nil
-}
-
-func TestImportJobResultMapsPersistedRootStatuses(t *testing.T) {
-	job := jobqueue.Job{
-		ID: "j_scanresult1234", State: jobqueue.JobSucceeded,
-		ResultJSON: sql.NullString{Valid: true, String: `{"library":{"state":"ready_with_media"},"empty":{"state":"ready_empty","errorCode":"scan_limit"}}`},
-	}
-	got := importJobResult(job)
-	if got.Progress != 1 || got.RootResults["library"].State != LibraryReadyWithMedia || got.RootResults["empty"].ErrorCode != "scan_limit" {
-		t.Fatalf("import result = %#v", got)
-	}
-}
-
-type unifiedJobsStub struct{ job jobqueue.Job }
-
-func (s unifiedJobsStub) Get(context.Context, string) (jobqueue.Job, error)    { return s.job, nil }
-func (s unifiedJobsStub) Cancel(context.Context, string) (jobqueue.Job, error) { return s.job, nil }
-
-func TestJobUseCaseMapsSafeScanResults(t *testing.T) {
-	got, err := (JobUseCase{Jobs: unifiedJobsStub{job: jobqueue.Job{
-		ID: "j_scanresult1234", Kind: jobqueue.JobScan, State: jobqueue.JobFailed,
-		ErrorCode:  sql.NullString{Valid: true, String: "/tmp/private"},
-		ResultJSON: sql.NullString{Valid: true, String: `{"library":{"state":"ready_with_media"},"../../secret":{"state":"failed","errorCode":"/tmp/root"},"bad":{"state":"unknown"}}`},
-	}}}).Get(context.Background(), "j_scanresult1234")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got.RootResults) != 1 || got.RootResults["library"].State != LibraryReadyWithMedia || got.ErrorCode != nil {
-		t.Fatalf("job = %#v", got)
-	}
-}
-
-func TestJobUseCasePreservesDetectionLifecycle(t *testing.T) {
-	created := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
-	updated := created.Add(time.Second)
-	for _, test := range []struct {
-		state    jobqueue.JobState
-		progress float64
-	}{
-		{jobqueue.JobQueued, 0},
-		{jobqueue.JobRunning, .5},
-		{jobqueue.JobSucceeded, 1},
-	} {
-		t.Run(string(test.state), func(t *testing.T) {
-			record := jobqueue.Job{
-				ID: "j_detection1234", Kind: jobqueue.JobDetect, State: test.state, Revision: 4,
-				ProjectID: "p_project", ProjectItemID: "i_item", BatchID: "b_detection1234",
-				RequestJSON: `{"mediaId":"m_media","projectRevision":7,"kind":"scene"}`,
-				CreatedAt:   created, UpdatedAt: updated,
-			}
-			got, err := (JobUseCase{Jobs: unifiedJobsStub{job: record}}).Get(t.Context(), record.ID)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got.Progress != test.progress || got.Revision != record.Revision || !got.CreatedAt.Equal(created) || !got.UpdatedAt.Equal(updated) || got.ProjectID != record.ProjectID || got.ProjectRevision != 7 {
-				t.Fatalf("detection %s lifecycle = %#v", test.state, got)
-			}
-		})
-	}
-}
-
-func TestMediaImportCommandReplaysAcrossRestart(t *testing.T) {
-	ctx := t.Context()
-	path := t.TempDir() + "/jobs.db"
-	database, err := store.OpenDatabase(ctx, path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	jobs, err := jobqueue.NewJobsStore(database)
-	if err != nil {
-		t.Fatal(err)
-	}
-	scheduler, err := jobqueue.NewScheduler(jobs, jobqueue.SchedulerConfig{QueueCapacity: 4, WorkerLimit: 1}, func(context.Context, jobqueue.Job) error { return nil })
-	if err != nil {
-		t.Fatal(err)
-	}
-	useCase := &MediaUseCase{Configured: true, Scheduler: scheduler, UnifiedJobs: jobs}
-	first, err := useCase.StartImport(ctx, "library-key")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := database.Close(); err != nil {
-		t.Fatal(err)
-	}
-
-	reopened, err := store.OpenDatabase(ctx, path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		if err := reopened.Close(); err != nil {
-			t.Error(err)
-		}
-	}()
-	reopenedJobs, err := jobqueue.NewJobsStore(reopened)
-	if err != nil {
-		t.Fatal(err)
-	}
-	reopenedScheduler, err := jobqueue.NewScheduler(reopenedJobs, jobqueue.SchedulerConfig{QueueCapacity: 4, WorkerLimit: 1}, func(context.Context, jobqueue.Job) error { return nil })
-	if err != nil {
-		t.Fatal(err)
-	}
-	replayed, err := (&MediaUseCase{Configured: true, Scheduler: reopenedScheduler, UnifiedJobs: reopenedJobs}).StartImport(ctx, "library-key")
-	if err != nil || replayed.ID != first.ID {
-		t.Fatalf("replayed = %#v, want original %#v, err=%v", replayed, first, err)
-	}
-}
-
-func TestMediaImportCapacityFailureLeavesNoCommandRecord(t *testing.T) {
-	ctx := t.Context()
-	database, err := store.OpenDatabase(ctx, t.TempDir()+"/jobs.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		if err := database.Close(); err != nil {
-			t.Error(err)
-		}
-	}()
-	jobs, err := jobqueue.NewJobsStore(database)
-	if err != nil {
-		t.Fatal(err)
-	}
-	scheduler, err := jobqueue.NewScheduler(jobs, jobqueue.SchedulerConfig{QueueCapacity: 1, WorkerLimit: 1}, func(context.Context, jobqueue.Job) error { return nil })
-	if err != nil {
-		t.Fatal(err)
-	}
-	useCase := &MediaUseCase{Configured: true, Scheduler: scheduler, UnifiedJobs: jobs}
-	if _, err := useCase.StartImport(ctx, "accepted-scan"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := useCase.StartImport(ctx, "capacity-scan"); !errors.Is(err, jobqueue.ErrQueueFull) {
-		t.Fatalf("full queue error = %v", err)
-	}
-	digest := sha256.Sum256([]byte(`{}`))
-	_, found, err := scheduler.LookupCommand(ctx, jobqueue.CommandAdmission{Key: "capacity-scan", Scope: "library-scan", Kind: "library-scan", Target: "library", Digest: hex.EncodeToString(digest[:])})
-	if err != nil || found {
-		t.Fatalf("failed admission record found=%v err=%v", found, err)
-	}
-}
-
-func TestMediaBrowseForwardsToCatalog(t *testing.T) {
-	want := FolderPage{Folders: []FolderNode{{ID: "f_opaque", Label: "clips"}}}
-	catalog := &catalogStub{browse: want}
-	useCase := &MediaUseCase{Catalog: catalog, Configured: true}
-	ctx := context.WithValue(context.Background(), browseContextKey{}, "request")
-	got, err := useCase.Browse(ctx, "f_parent", "m_cursor", 25)
-	if err != nil || len(got.Folders) != 1 || got.Folders[0].ID != want.Folders[0].ID {
-		t.Fatalf("browse = %#v, err = %v", got, err)
-	}
-	if catalog.browseContext != ctx || catalog.browseFolder != "f_parent" || catalog.browseCursor != "m_cursor" || catalog.browseLimit != 25 {
-		t.Fatalf("browse arguments context=%v folder=%q cursor=%q limit=%d", catalog.browseContext, catalog.browseFolder, catalog.browseCursor, catalog.browseLimit)
-	}
-}
-
-type blockingRefreshCatalog struct {
-	catalogStub
-	started  chan struct{}
-	release  chan struct{}
-	finished chan struct{}
-}
-
-func (c *blockingRefreshCatalog) Refresh(ctx context.Context) error {
-	defer close(c.finished)
-	close(c.started)
-	select {
-	case <-c.release:
-		c.refreshes++
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-func TestMediaRefreshIsSynchronous(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		catalog := &blockingRefreshCatalog{started: make(chan struct{}), release: make(chan struct{}), finished: make(chan struct{})}
-		useCase := &MediaUseCase{Catalog: catalog, Configured: true}
-		release := sync.OnceFunc(func() { close(catalog.release) })
-		returned := make(chan error, 1)
-		finished := make(chan struct{})
-		defer func() {
-			release()
-			select {
-			case <-catalog.finished:
-			case <-time.After(time.Second):
-				t.Error("refresh stub did not finish after release")
-			}
-			select {
-			case <-finished:
-			case <-time.After(time.Second):
-				t.Error("RefreshMedia call did not finish after release")
-			}
-		}()
-		go func() { returned <- useCase.RefreshMedia(t.Context()); close(finished) }()
-		select {
-		case <-catalog.started:
-		case <-time.After(time.Second):
-			t.Fatal("catalog refresh did not start")
-		}
-		// Settle every runnable goroutine before checking whether the caller returned.
-		// An asynchronous wrapper cannot hide behind a descheduled completion send.
-		synctest.Wait()
-		select {
-		case err := <-returned:
-			t.Fatalf("refresh returned before catalog finished: %v", err)
-		default:
-		}
-		release()
-		select {
-		case <-finished:
-		case <-time.After(time.Second):
-			t.Fatal("RefreshMedia did not return after catalog release")
-		}
-		if err := <-returned; err != nil {
-			t.Fatal(err)
-		}
-		if catalog.refreshes != 1 {
-			t.Fatalf("refreshes = %d", catalog.refreshes)
-		}
-	})
-}
-
-type boundedRecoveryCatalog struct {
-	recoveryStarted chan struct{}
-	releaseRecovery chan struct{}
-	mu              sync.Mutex
-	refreshes       int
-}
-
-func (c *boundedRecoveryCatalog) List(ctx context.Context, _ string, _ int) (MediaPage, error) {
-	close(c.recoveryStarted)
-	select {
-	case <-c.releaseRecovery:
-		return MediaPage{}, nil
-	case <-ctx.Done():
-		return MediaPage{}, ctx.Err()
-	}
-}
-func (c *boundedRecoveryCatalog) Browse(context.Context, string, string, int) (FolderPage, error) {
-	return FolderPage{}, nil
-}
-func (c *boundedRecoveryCatalog) Get(context.Context, string) (Media, error) { return Media{}, nil }
-func (c *boundedRecoveryCatalog) Refresh(ctx context.Context) error {
-	c.mu.Lock()
-	c.refreshes++
-	refreshes := c.refreshes
-	c.mu.Unlock()
-	if refreshes > 1 {
-		return errors.New("newer refresh failed")
-	}
-	return ctx.Err()
-}
-func (c *boundedRecoveryCatalog) Preview(context.Context, PreviewSpec) (model.PreviewSpec, error) {
-	return model.PreviewSpec{}, nil
-}
-
-func TestCancelledRefreshCannotOverwriteNewerFailure(t *testing.T) {
-	catalog := &boundedRecoveryCatalog{recoveryStarted: make(chan struct{}), releaseRecovery: make(chan struct{})}
-	useCase := &MediaUseCase{Catalog: catalog, Configured: true}
-	cancelled := make(chan error, 1)
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() { cancelled <- useCase.RefreshMedia(ctx) }()
-	cancel()
-	<-catalog.recoveryStarted
-	if err := useCase.RefreshMedia(context.Background()); err == nil {
-		t.Fatal("newer refresh unexpectedly succeeded")
-	}
-	close(catalog.releaseRecovery)
-	<-cancelled
-	if got := useCase.Status(); got.State != LibraryFailed {
-		t.Fatalf("status after newer refresh failure = %#v", got)
-	}
-}
-
-func TestMediaRefreshFailureCanRetry(t *testing.T) {
-	catalog := &catalogStub{refreshErr: errors.New("refresh failed")}
-	useCase := &MediaUseCase{Catalog: catalog, Configured: true}
-	if err := useCase.RefreshMedia(context.Background()); err == nil {
-		t.Fatal("failed refresh succeeded")
-	}
-	catalog.refreshErr = nil
-	if err := useCase.RefreshMedia(context.Background()); err != nil {
-		t.Fatalf("retry = %v", err)
-	}
-}
-
-func TestMediaLibraryStatusNeverExposesRefreshError(t *testing.T) {
-	catalog := &catalogStub{refreshErr: errors.New("scan /private/media/clip.mp4 failed")}
-	useCase := &MediaUseCase{Catalog: catalog, Configured: true}
-	if err := useCase.RefreshMedia(context.Background()); err == nil {
-		t.Fatal("refresh succeeded")
-	}
-	if got := useCase.Status(); got.State != LibraryFailed || got.Message != "Media library scan failed. Try refreshing it." {
-		t.Fatalf("status = %#v", got)
-	}
-}
 
 type projectsStub struct {
 	saves    int
@@ -367,7 +44,7 @@ func (p *projectsStub) Save(_ context.Context, _ string, revision int64, documen
 func TestProjectUseCaseSavesValidatedBatchAtomically(t *testing.T) {
 	mediaID := "m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	repository := &projectsStub{}
-	catalog := &projectCatalogStub{media: map[string]Media{mediaID: {ID: mediaID, DurationMS: 1_000}}}
+	catalog := &projectCatalogStub{media: map[string]librarymedia.Media{mediaID: {ID: mediaID, DurationMS: 1_000}}}
 	useCase := ProjectUseCase{Repository: repository, Media: catalog}
 	document := model.Document{SchemaVersion: model.ProjectSchemaVersion, Name: "Batch", Items: []model.ProjectItem{
 		{ID: "i_aaaaaaaaaaaaaaaaaaaaaaaa", MediaID: mediaID, Segments: []model.Segment{{StartMS: 0, EndMS: 300}}, EditorState: &model.UIState{Zoom: 1}},
@@ -415,89 +92,22 @@ func TestProjectUseCaseSavesValidatedBatchAtomically(t *testing.T) {
 	}
 }
 
-type projectCatalogStub struct{ media map[string]Media }
+type projectCatalogStub struct{ media map[string]librarymedia.Media }
 
-func (c *projectCatalogStub) Get(_ context.Context, id string) (Media, error) {
+func (c *projectCatalogStub) Get(_ context.Context, id string) (librarymedia.Media, error) {
 	media, ok := c.media[id]
 	if !ok {
-		return Media{}, store.ErrMediaNotFound
+		return librarymedia.Media{}, store.ErrMediaNotFound
 	}
 	return media, nil
 }
-func (*projectCatalogStub) List(context.Context, string, int) (MediaPage, error) {
-	return MediaPage{}, nil
+func (*projectCatalogStub) List(context.Context, string, int) (librarymedia.MediaPage, error) {
+	return librarymedia.MediaPage{}, nil
 }
-func (*projectCatalogStub) Browse(context.Context, string, string, int) (FolderPage, error) {
-	return FolderPage{}, nil
+func (*projectCatalogStub) Browse(context.Context, string, string, int) (librarymedia.FolderPage, error) {
+	return librarymedia.FolderPage{}, nil
 }
 func (*projectCatalogStub) Refresh(context.Context) error { return nil }
-func (*projectCatalogStub) Preview(context.Context, PreviewSpec) (model.PreviewSpec, error) {
-	return model.PreviewSpec{}, nil
-}
-
-func TestJobUseCaseCancelsThroughUnifiedStore(t *testing.T) {
-	db, err := store.OpenDatabase(context.Background(), t.TempDir()+"/jobs.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := db.Close(); err != nil {
-			t.Error(err)
-		}
-	})
-	jobs, err := jobqueue.NewJobsStore(db)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := jobs.Create(context.Background(), jobqueue.Job{ID: "j_aaaaaaaaaaaa", BatchID: "b_aaaaaaaaaaaa", Kind: jobqueue.JobScan, RequestJSON: `{}`}); err != nil {
-		t.Fatal(err)
-	}
-	if err := (JobUseCase{Jobs: jobs}).Cancel(context.Background(), "j_aaaaaaaaaaaa"); err != nil {
-		t.Fatal(err)
-	}
-	job, err := jobs.Get(context.Background(), "j_aaaaaaaaaaaa")
-	if err != nil || job.State != jobqueue.JobCancelled {
-		t.Fatalf("cancelled job = %#v, %v", job, err)
-	}
-}
-
-func TestExportJobResultIsSafeAndStateCompatible(t *testing.T) {
-	retainUntil := time.Date(2026, 8, 20, 12, 0, 0, 0, time.UTC)
-	record := jobqueue.Job{ID: "j_aaaaaaaaaaaa", State: jobqueue.JobSucceeded, ResultJSON: sql.NullString{String: `{"outputName":"export.mkv","sizeBytes":42,"retainUntil":"` + retainUntil.Format(time.RFC3339) + `","appliedStrategies":[{"segment":1,"outputName":"export.mkv","strategy":"hybrid_smart_cut"},{"segment":2,"strategy":"stream_copy"}],"warnings":[{"message":"Cut may start at an earlier keyframe."}],"outputDir":"/exports/private","stderr":"secret"}`, Valid: true}}
-	job := jobResult(record)
-	if job.Result == nil || job.Result.OutputName != "export.mkv" || len(job.Result.OutputNames) != 0 || job.Result.SizeBytes != 42 || !job.Result.RetainUntil.Equal(retainUntil) || job.AppliedStrategy != "" || len(job.Result.AppliedStrategies) != 2 || job.Result.AppliedStrategies[0].OutputName != "export.mkv" || job.Result.AppliedStrategies[1].Segment != 2 || job.Result.AppliedStrategies[1].Strategy != "stream_copy" || len(job.Warnings) != 1 || job.Warnings[0] != "Cut may start at an earlier keyframe." || job.ErrorCode != nil {
-		t.Fatalf("job = %#v", job)
-	}
-
-	failed := jobResult(jobqueue.Job{ID: record.ID, State: jobqueue.JobFailed, ErrorCode: sql.NullString{String: "media_unavailable", Valid: true}, ResultJSON: record.ResultJSON})
-	if failed.Result != nil || len(failed.Warnings) != 0 || failed.ErrorCode == nil || *failed.ErrorCode != "media_unavailable" {
-		t.Fatalf("failed job = %#v", failed)
-	}
-}
-
-func TestExportJobMalformedResultFailsClosed(t *testing.T) {
-	job := jobResult(jobqueue.Job{ID: "j_aaaaaaaaaaaa", State: jobqueue.JobSucceeded, ResultJSON: sql.NullString{String: `{"outputName":"/exports/private.mkv","warnings":[`, Valid: true}})
-	if job.Result != nil || len(job.Warnings) != 0 {
-		t.Fatalf("malformed result leaked: %#v", job)
-	}
-	job = jobResult(jobqueue.Job{ID: "j_aaaaaaaaaaaa", State: jobqueue.JobSucceeded, ResultJSON: sql.NullString{String: `{"outputName":"/exports/private.mkv","sizeBytes":1,"retainUntil":"2026-08-20T12:00:00Z","warnings":[{"message":"secret"}]}`, Valid: true}})
-	if job.Result != nil || len(job.Warnings) != 0 {
-		t.Fatalf("unsafe result leaked: %#v", job)
-	}
-	job = jobResult(jobqueue.Job{ID: "j_aaaaaaaaaaaa", State: jobqueue.JobSucceeded, ResultJSON: sql.NullString{String: `{"outputName":"export.mkv","sizeBytes":1,"retainUntil":"2026-08-20T12:00:00Z","appliedStrategies":[{"segment":1,"outputName":"/exports/private.mkv","strategy":"stream_copy"}]}`, Valid: true}})
-	if job.Result != nil {
-		t.Fatalf("unsafe applied strategy leaked: %#v", job)
-	}
-	for _, name := range []string{".", "..", "C:export.mkv", "dir/export.mkv", `dir\\export.mkv`, "export\x00.mkv", strings.Repeat("x", 256)} {
-		job = jobResult(jobqueue.Job{ID: "j_aaaaaaaaaaaa", State: jobqueue.JobSucceeded, ResultJSON: sql.NullString{String: `{"outputName":` + strconv.Quote(name) + `,"sizeBytes":1,"retainUntil":"2026-08-20T12:00:00Z","warnings":[{"message":"secret"}]}`, Valid: true}})
-		if job.Result != nil || len(job.Warnings) != 0 {
-			t.Fatalf("unsafe %q leaked: %#v", name, job)
-		}
-	}
-
-	message := strings.Repeat("x", 501)
-	job = jobResult(jobqueue.Job{ID: "j_aaaaaaaaaaaa", State: jobqueue.JobSucceeded, ResultJSON: sql.NullString{String: `{"outputName":"export.mkv","sizeBytes":1,"retainUntil":"2026-08-20T12:00:00Z","warnings":[{"message":"` + message + `"}]}`, Valid: true}})
-	if len(job.Warnings) != 1 || len(job.Warnings[0]) != 500 {
-		t.Fatalf("warnings = %#v", job.Warnings)
-	}
+func (*projectCatalogStub) Preview(context.Context, preview.PreviewSpec) (preview.TranscodeSpec, error) {
+	return preview.TranscodeSpec{}, nil
 }

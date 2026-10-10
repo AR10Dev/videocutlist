@@ -8,40 +8,11 @@ import (
 	"sync"
 	"testing"
 
+	"videocutlist/internal/db/migrations"
+	"videocutlist/internal/jobs/model"
+
 	_ "modernc.org/sqlite"
 )
-
-func TestMigrateCommandAdmissionsPreservesExistingJobs(t *testing.T) {
-	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "legacy.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		if err := db.Close(); err != nil {
-			t.Error(err)
-		}
-	}()
-	_, err = db.Exec(`CREATE TABLE jobs (id TEXT PRIMARY KEY, batch_id TEXT NOT NULL, kind TEXT NOT NULL, project_id TEXT, project_item_id TEXT, proposal_id TEXT, credential_id TEXT, state TEXT NOT NULL, request_json TEXT NOT NULL, result_json TEXT, error_code TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
-		INSERT INTO jobs (id,batch_id,kind,state,request_json,created_at,updated_at) VALUES ('j_000000000100','b_000000000100','library_scan','queued','{}','2025-01-01T00:00:00Z','2025-01-01T00:00:00Z');`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := Migrate(t.Context(), db); err != nil {
-		t.Fatal(err)
-	}
-	store, err := NewJobsStore(db)
-	if err != nil {
-		t.Fatal(err)
-	}
-	job, err := store.Get(t.Context(), "j_000000000100")
-	if err != nil || job.State != JobQueued {
-		t.Fatalf("legacy job = %#v, err = %v", job, err)
-	}
-	var admissions int
-	if err := db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM command_admissions`).Scan(&admissions); err != nil || admissions != 0 {
-		t.Fatalf("new admission rows = %d, err = %v", admissions, err)
-	}
-}
 
 func TestSchedulerCommandAdmissionIsAtomicIdempotentAndDurable(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "jobs.db")
@@ -50,23 +21,23 @@ func TestSchedulerCommandAdmissionIsAtomicIdempotentAndDurable(t *testing.T) {
 		t.Fatal(err)
 	}
 	db.SetMaxOpenConns(1)
-	if err := Migrate(t.Context(), db); err != nil {
+	if err := migrations.Apply(t.Context(), db); err != nil {
 		t.Fatal(err)
 	}
-	store, err := NewJobsStore(db)
+	store, err := newTestJobsStore(db)
 	if err != nil {
 		t.Fatal(err)
 	}
-	scheduler, err := NewScheduler(store, SchedulerConfig{QueueCapacity: 2, WorkerLimit: 1}, func(context.Context, Job) error { return nil })
+	scheduler, err := NewScheduler(store, SchedulerConfig{QueueCapacity: 2, WorkerLimit: 1}, func(context.Context, model.Job) error { return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
-	command := CommandAdmission{Key: "request_key-1", Scope: "export", Kind: "submit", Target: "p_project", Digest: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}
-	admitted := []Job{{ID: "j_000000000101", BatchID: "b_000000000101", Kind: JobScan, RequestJSON: `{}`}}
+	command := model.CommandAdmission{Key: "request_key-1", Scope: "export", Kind: "submit", Target: "p_project", Digest: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"}
+	admitted := []model.Job{{ID: "j_000000000101", BatchID: "b_000000000101", Kind: model.JobScan, RequestJSON: `{}`}}
 
 	const deliveries = 8
 	var wg sync.WaitGroup
-	results := make(chan CommandAdmissionResult, deliveries)
+	results := make(chan model.CommandAdmissionResult, deliveries)
 	errs := make(chan error, deliveries)
 	for range deliveries {
 		wg.Go(func() {
@@ -97,11 +68,11 @@ func TestSchedulerCommandAdmissionIsAtomicIdempotentAndDurable(t *testing.T) {
 	}
 
 	command.Digest = "1123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	if _, err := scheduler.SubmitCommand(t.Context(), command, admitted); !errors.Is(err, ErrAdmissionConflict) {
-		t.Fatalf("changed digest = %v, want ErrAdmissionConflict", err)
+	if _, err := scheduler.SubmitCommand(t.Context(), command, admitted); !errors.Is(err, model.ErrAdmissionConflict) {
+		t.Fatalf("changed digest = %v, want model.ErrAdmissionConflict", err)
 	}
 	command.Digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	duplicateID := []Job{{ID: admitted[0].ID, BatchID: "b_000000000102", Kind: JobScan, RequestJSON: `{}`}}
+	duplicateID := []model.Job{{ID: admitted[0].ID, BatchID: "b_000000000102", Kind: model.JobScan, RequestJSON: `{}`}}
 	failed := command
 	failed.Key = "rollback_key"
 	if _, err := scheduler.SubmitCommand(t.Context(), failed, duplicateID); err == nil {
@@ -109,12 +80,12 @@ func TestSchedulerCommandAdmissionIsAtomicIdempotentAndDurable(t *testing.T) {
 	}
 	full := command
 	full.Key = "capacity_key"
-	capacityJobs := []Job{
-		{ID: "j_000000000102", BatchID: "b_000000000102", Kind: JobScan, RequestJSON: `{}`},
-		{ID: "j_000000000103", BatchID: "b_000000000102", Kind: JobScan, RequestJSON: `{}`},
+	capacityJobs := []model.Job{
+		{ID: "j_000000000102", BatchID: "b_000000000102", Kind: model.JobScan, RequestJSON: `{}`},
+		{ID: "j_000000000103", BatchID: "b_000000000102", Kind: model.JobScan, RequestJSON: `{}`},
 	}
-	if _, err := scheduler.SubmitCommand(t.Context(), full, capacityJobs); !errors.Is(err, ErrQueueFull) {
-		t.Fatalf("over-capacity command = %v, want ErrQueueFull", err)
+	if _, err := scheduler.SubmitCommand(t.Context(), full, capacityJobs); !errors.Is(err, model.ErrQueueFull) {
+		t.Fatalf("over-capacity command = %v, want model.ErrQueueFull", err)
 	}
 	var records int
 	if err := db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM command_admissions WHERE idempotency_key IN (?,?)`, failed.Key, full.Key).Scan(&records); err != nil || records != 0 {
@@ -137,14 +108,14 @@ func TestSchedulerCommandAdmissionIsAtomicIdempotentAndDurable(t *testing.T) {
 		}
 	}()
 	db.SetMaxOpenConns(1)
-	if err := Migrate(t.Context(), db); err != nil {
+	if err := migrations.Apply(t.Context(), db); err != nil {
 		t.Fatal(err)
 	}
-	store, err = NewJobsStore(db)
+	store, err = newTestJobsStore(db)
 	if err != nil {
 		t.Fatal(err)
 	}
-	scheduler, err = NewScheduler(store, SchedulerConfig{QueueCapacity: 1, WorkerLimit: 1}, func(context.Context, Job) error { return nil })
+	scheduler, err = NewScheduler(store, SchedulerConfig{QueueCapacity: 1, WorkerLimit: 1}, func(context.Context, model.Job) error { return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +124,7 @@ func TestSchedulerCommandAdmissionIsAtomicIdempotentAndDurable(t *testing.T) {
 			t.Error(err)
 		}
 	}()
-	result, err := scheduler.SubmitCommand(t.Context(), command, []Job{{ID: "j_ignored_replay", BatchID: "b_ignored_replay", Kind: JobScan, RequestJSON: `{}`}})
+	result, err := scheduler.SubmitCommand(t.Context(), command, []model.Job{{ID: "j_ignored_replay", BatchID: "b_ignored_replay", Kind: model.JobScan, RequestJSON: `{}`}})
 	if err != nil || !result.Replayed || len(result.Jobs) != 1 || result.Jobs[0].ID != admitted[0].ID {
 		t.Fatalf("reopened admission = %#v, %v", result, err)
 	}
