@@ -167,7 +167,7 @@ func TestMetricsHandlerDoesNotRewriteWriterFailure(t *testing.T) {
 }
 
 func TestMetricsRequiresDeploymentAuthentication(t *testing.T) {
-	auth, err := NewAuthenticator(AuthConfig{Mode: "bearer", BearerToken: "private-metrics-token"})
+	auth, err := NewAuthenticator(AuthConfig{Mode: "bearer", BearerToken: "private-metrics-token-0123456789abcdef"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +181,7 @@ func TestMetricsRequiresDeploymentAuthentication(t *testing.T) {
 	}{
 		{"", http.StatusUnauthorized},
 		{"wrong", http.StatusUnauthorized},
-		{"private-metrics-token", http.StatusOK},
+		{"private-metrics-token-0123456789abcdef", http.StatusOK},
 	} {
 		request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 		if test.token != "" {

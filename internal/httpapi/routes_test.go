@@ -886,7 +886,7 @@ func TestServerRejectsEncodedSlashInMediaID(t *testing.T) {
 }
 
 func TestAutomationRequiresBearerLoopbackAndNoOrigin(t *testing.T) {
-	authenticator, err := NewAuthenticator(AuthConfig{Mode: "bearer", BearerToken: "secret"})
+	authenticator, err := NewAuthenticator(AuthConfig{Mode: "bearer", BearerToken: "deployment-test-secret-0123456789abcdef"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -913,22 +913,22 @@ func TestAutomationRequiresBearerLoopbackAndNoOrigin(t *testing.T) {
 		t.Fatalf("unauthenticated=%d", got)
 	}
 	for _, address := range []string{"192.0.2.1", "", "not-an-ip"} {
-		if got := request(newServer(address), "secret", "").Code; got != http.StatusForbidden {
+		if got := request(newServer(address), "deployment-test-secret-0123456789abcdef", "").Code; got != http.StatusForbidden {
 			t.Fatalf("listener %q status=%d", address, got)
 		}
 	}
-	if got := request(newServer("127.0.0.1"), "secret", "https://example.test").Code; got != http.StatusForbidden {
+	if got := request(newServer("127.0.0.1"), "deployment-test-secret-0123456789abcdef", "https://example.test").Code; got != http.StatusForbidden {
 		t.Fatalf("origin=%d", got)
 	}
 	tooLarge := httptest.NewRequest(http.MethodPost, "http://api.test/api/v2/automation", strings.NewReader(`{"action":"job.status","jobId":"j_aaaaaaaaaaaa","input":"`+strings.Repeat("x", maxAutomationBodyBytes)+`"}`))
-	tooLarge.Header.Set("Authorization", "Bearer secret")
+	tooLarge.Header.Set("Authorization", "Bearer deployment-test-secret-0123456789abcdef")
 	recorder := httptest.NewRecorder()
 	newServer("127.0.0.1").ServeHTTP(recorder, tooLarge)
 	if recorder.Code != http.StatusRequestEntityTooLarge {
 		t.Fatalf("body limit=%d", recorder.Code)
 	}
 	unsupported := httptest.NewRequest(http.MethodPost, "http://api.test/api/v2/automation", strings.NewReader(`{"action":"filesystem.read","path":"/secret/source"}`))
-	unsupported.Header.Set("Authorization", "Bearer secret")
+	unsupported.Header.Set("Authorization", "Bearer deployment-test-secret-0123456789abcdef")
 	recorder = httptest.NewRecorder()
 	newServer("127.0.0.1").ServeHTTP(recorder, unsupported)
 	if recorder.Code != http.StatusBadRequest || strings.Contains(recorder.Body.String(), "/secret/source") {
@@ -941,7 +941,7 @@ func TestAutomationRequiresBearerLoopbackAndNoOrigin(t *testing.T) {
 	} {
 		recorder = httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodPost, "http://api.test/api/v2/automation", strings.NewReader(command))
-		req.Header.Set("Authorization", "Bearer secret")
+		req.Header.Set("Authorization", "Bearer deployment-test-secret-0123456789abcdef")
 		newServer("127.0.0.1").ServeHTTP(recorder, req)
 		if recorder.Code != http.StatusBadRequest {
 			t.Fatalf("invalid command status=%d body=%s", recorder.Code, recorder.Body.String())
