@@ -125,6 +125,7 @@ self.addEventListener("message", (event) => {
     stopped = true;
     if (downloads.get(key) === record) downloads.delete(key);
     clearTimeout(record.expiry);
+    clearTimeout(headerTimeout);
     controller.abort();
     if (record.reader)
       void record.reader
@@ -140,6 +141,7 @@ self.addEventListener("message", (event) => {
     if (message.data?.type === "cancel") stop("Download cancelled.");
   };
   event.waitUntil(lifetime);
+  const headerTimeout = setTimeout(() => stop("Download response timed out. Try again."), 120_000);
 
   void (async () => {
     try {
@@ -153,6 +155,7 @@ self.addEventListener("message", (event) => {
         redirect: "error",
         signal: controller.signal,
       });
+      clearTimeout(headerTimeout);
       if (controller.signal.aborted) return;
       if (!upstream.ok) {
         stop(`Download failed (${upstream.status}). Try again.`, upstream.status);
