@@ -16,7 +16,7 @@ for (const root of process.argv.slice(2).map((path) => resolve(path))) {
     );
   const infrastructure = [
     "web/src/api.ts",
-    "web/src/features/app/server.ts",
+    "web/src/app/server.ts",
     "web/src/features/queue/jobStream.ts",
   ].filter((file) => existsSync(resolve(root, file)));
   const assets = resolve(root, "web/dist/assets");

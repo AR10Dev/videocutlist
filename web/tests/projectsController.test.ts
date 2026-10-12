@@ -2,7 +2,7 @@ import type * as EffectApiTypes from "../src/generated/effect-api";
 import { Effect, Layer } from "effect";
 import * as AtomRegistry from "effect/reactivity/AtomRegistry";
 import * as KeyValueStore from "effect/persistence/KeyValueStore";
-import { createPersistencePolicy } from "../src/features/app/persistence";
+import { createPersistencePolicy } from "../src/app/persistence";
 import {
   recoveryKey,
   rememberedProjectKey,
@@ -12,7 +12,7 @@ import * as Atom from "effect/reactivity/Atom";
 import { createSignal, type Setter } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import type { ApiClient, NativeMediaApiClient } from "../src/api";
-import { createServerState, readServerAtom } from "../src/features/app/server";
+import { createServerState, readServerAtom } from "../src/app/server";
 import { createTimelineHistory } from "../src/features/editor/timeline";
 import { createProjectsTestController as createProjectsController } from "./projectCommands";
 import type { EditableProjectItem } from "../src/features/projects/model";
@@ -445,6 +445,7 @@ type SaveRequest = {
 
 type SaveWorkspace = {
   controller: ReturnType<typeof createProjectsController>;
+  server: ReturnType<typeof createServerState>;
   state: () => SaveWorkspaceState;
   edit: (changes: Partial<SaveWorkspaceState>) => void;
   switchMedia: () => void;
@@ -619,6 +620,7 @@ async function withSaveWorkspace(
   try {
     await exercise({
       controller,
+      server,
       state,
       storage,
       requests,
@@ -790,6 +792,92 @@ describe("workspace save command", () => {
       });
     },
   );
+});
+
+const sourceProjectFixture = {
+  id: "p_saveworkflow01",
+  revision: 2,
+  updatedAt: "2026-01-01T00:00:00Z",
+  schemaVersion: 2,
+  name: "Saved result",
+  items: [
+    {
+      id: `i_${"a".repeat(24)}`,
+      mediaId: media.id,
+      segments: [{ id: "s_saved", startMs: 100, endMs: 300 }],
+      exportOptions: { streamIndexes: [2], mode: "merge" },
+    },
+    {
+      id: `i_${"b".repeat(24)}`,
+      mediaId: media.id,
+      segments: [],
+      exportOptions: {},
+    },
+  ],
+} satisfies EffectApiTypes.Project;
+
+describe("project document source isolation", () => {
+  it("copies saved result items, segments, export options, and optional stream indexes", async () => {
+    const sourceProject = structuredClone(sourceProjectFixture);
+    await withSaveWorkspace(async ({ controller, server }) => {
+      const mutation = server.runtime.fn((_input: unknown) => Effect.succeed(sourceProject));
+      Object.defineProperty(server.generatedApi, "mutation", {
+        configurable: true,
+        value: () => mutation,
+      });
+
+      const saved = await Effect.runPromise(controller.saveProjectEffect());
+      expect(saved).toBeDefined();
+      const copy = saved!;
+      const sourceItem = sourceProject.items[0];
+      const copiedItem = copy.items[0];
+      expect(copy).not.toBe(sourceProject);
+      expect(copy.items).not.toBe(sourceProject.items);
+      expect(copiedItem).not.toBe(sourceItem);
+      expect(copiedItem.segments).not.toBe(sourceItem.segments);
+      expect(copiedItem.segments[0]).not.toBe(sourceItem.segments[0]);
+      expect(copiedItem.exportOptions).not.toBe(sourceItem.exportOptions);
+      expect(copiedItem.exportOptions.streamIndexes).not.toBe(
+        sourceItem.exportOptions.streamIndexes,
+      );
+      expect(copy.items[1].exportOptions.streamIndexes).toBeUndefined();
+
+      sourceItem.segments[0].startMs = 800;
+      sourceItem.exportOptions.streamIndexes![0] = 9;
+      expect(copiedItem.segments[0].startMs).toBe(100);
+      expect(copiedItem.exportOptions.streamIndexes).toEqual([2]);
+    });
+  });
+
+  it("isolates imported source edits while media restoration is waiting", async () => {
+    const sourceProject = structuredClone(sourceProjectFixture);
+    const mediaRead = deferred<EffectApiTypes.Media>();
+    const mediaReadStarted = deferred<void>();
+    await withSaveWorkspace(async ({ controller, server, state }) => {
+      server.media = () =>
+        server.runtime.atom(
+          Effect.gen(function* () {
+            mediaReadStarted.resolve();
+            return yield* Effect.promise(() => mediaRead.promise);
+          }),
+        );
+
+      const loading = controller.loadProject(sourceProject.id, sourceProject, true);
+      await mediaReadStarted.promise;
+      sourceProject.items[0].segments[0].startMs = 800;
+      sourceProject.items[0].exportOptions.streamIndexes![0] = 9;
+      mediaRead.resolve(media);
+      await loading;
+
+      const restored = state().items[0];
+      expect(sourceProject.items[0].segments[0].startMs).toBe(800);
+      expect(restored.timeline.present.segments[0].startMs).toBe(100);
+      expect(restored.exportOptions.streamIndexes).toEqual([2]);
+      expect(restored.exportOptions.streamIndexes).not.toBe(
+        sourceProject.items[0].exportOptions.streamIndexes,
+      );
+    });
+  });
 });
 
 const storedRecovery = {

@@ -6,8 +6,8 @@ import { RegistryContext, RegistryProvider } from "@effect/atom-solid";
 import { createComponent, createRoot, untrack, useContext } from "solid-js";
 import { describe, expect, it, vi } from "@effect/vitest";
 import { authenticationRequiredEvent, createApiClient } from "../src/api";
-import { createWorkspaceController } from "../src/features/app/controller";
-import { createServerState } from "../src/features/app/server";
+import { createWorkspaceController } from "../src/app/controller";
+import { createServerState } from "../src/app/server";
 import type { Batch, Job } from "../src/generated/effect-api";
 
 describe("workspace server atoms", () => {

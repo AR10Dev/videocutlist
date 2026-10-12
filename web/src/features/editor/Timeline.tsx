@@ -8,7 +8,7 @@ import {
   timelineTimeFromPointer,
   visibleTimelineWindow,
 } from "./timeline";
-import { useWorkspace } from "../app/WorkspaceContext";
+import { useWorkspace } from "../../app/WorkspaceContext";
 import { TimelineCanvas } from "./TimelineCanvas";
 
 type DragTarget =

@@ -1,7 +1,7 @@
 import { createMemo, For, Show } from "solid-js";
 import { ArrowDown, ArrowUp, Play, Repeat2, Scissors, Trash2 } from "lucide-solid";
 import { formatTime, segmentIncluded, type Segment } from "../preview/model";
-import { useWorkspace } from "../app/WorkspaceContext";
+import { useWorkspace } from "../../app/WorkspaceContext";
 
 export function CutsView() {
   const workspace = useWorkspace();

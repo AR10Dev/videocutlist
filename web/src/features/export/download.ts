@@ -4,7 +4,7 @@ import * as AsyncResult from "effect/reactivity/AsyncResult";
 import * as Atom from "effect/reactivity/Atom";
 import { onCleanup } from "solid-js";
 import type { Authentication, StreamingApiClient } from "../../api";
-import type { ServerState } from "../app/server";
+import type { ServerState } from "../../app/server";
 
 /** One command per view: the native atom owns the transfer fiber and its result. */
 export function createExportDownload(

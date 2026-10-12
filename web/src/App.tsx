@@ -1,4 +1,7 @@
 import { createEffect, onCleanup, Show } from "solid-js";
+import { Dialog } from "@kobalte/core/dialog";
+import { DropdownMenu } from "@kobalte/core/dropdown-menu";
+import { Tabs } from "@kobalte/core/tabs";
 import {
   AlertCircle,
   CheckCircle2,
@@ -17,9 +20,9 @@ import { LibraryView } from "./features/media/LibraryView";
 import { SettingsView } from "./features/settings/SettingsView";
 import { ProjectDialog } from "./features/projects/ProjectDialog";
 import { ProjectConflictNotice, RecoveryNotice } from "./features/projects/ProjectNotices";
-import { createWorkspaceController } from "./features/app/controller";
-import { createWorkspacePanelController } from "./features/app/panelController";
-import { WorkspaceProvider } from "./features/app/WorkspaceContext";
+import { createWorkspaceController } from "./app/controller";
+import { createWorkspacePanelController } from "./app/panelController";
+import { WorkspaceProvider } from "./app/WorkspaceContext";
 import { applyAppearance } from "./features/settings/model";
 
 export function App() {
@@ -62,13 +65,9 @@ export function App() {
     resetPanelWidth,
     resizePanelWithKeyboard,
     beginPanelResize,
-    moveTask,
   } = panel;
-  let shortcutClose: HTMLButtonElement | undefined;
-  let shortcutDialog: HTMLDialogElement | undefined;
+  let projectMenuTrigger: HTMLButtonElement | undefined;
   let shortcutReturnFocus: HTMLElement | undefined;
-  let shortcutWasOpen = false;
-  let projectMenu: HTMLDetailsElement | undefined;
   let disposed = false;
   const scheduledFrames = new Set<number>();
   const scheduleFrame = (callback: () => void) => {
@@ -78,34 +77,11 @@ export function App() {
     });
     scheduledFrames.add(frame);
   };
-  const scheduleMicrotask = (callback: () => void) => {
-    queueMicrotask(() => {
-      if (!disposed) callback();
-    });
-  };
-
-  const closeProjectMenu = () => projectMenu?.removeAttribute("open");
-  const openProjectDialog = () => {
-    closeProjectMenu();
-    setProjectToolsOpen(true);
-  };
-  const closeProjectDialog = () => {
-    setProjectToolsOpen(false);
-    scheduleMicrotask(() => projectMenu?.querySelector<HTMLElement>("summary")?.focus());
-  };
-  const shortcutFocusTarget = () => {
-    const active = document.activeElement;
-    if (projectMenu?.contains(active))
-      return projectMenu.querySelector<HTMLElement>("summary") ?? undefined;
-    return active instanceof HTMLElement ? active : undefined;
-  };
   const openHelp = () => {
-    shortcutReturnFocus = shortcutFocusTarget();
-    closeProjectMenu();
+    shortcutReturnFocus = projectMenuTrigger;
     controller.editor.setShortcutHelpOpen(true);
   };
   const loadProjectFromMenu = () => {
-    closeProjectMenu();
     const id = window.prompt("Project ID to load", "");
     if (id)
       void controller.projects.loadProject(
@@ -125,29 +101,6 @@ export function App() {
     void openSettings();
   };
   createEffect(() => {
-    const open = controller.editor.shortcutHelpOpen();
-    if (open) {
-      if (!shortcutWasOpen) {
-        shortcutWasOpen = true;
-        shortcutReturnFocus ??= shortcutFocusTarget();
-      }
-      scheduleMicrotask(() => {
-        if (!controller.editor.shortcutHelpOpen() || !shortcutDialog) return;
-        if (!shortcutDialog.open) shortcutDialog.showModal();
-        shortcutClose?.focus();
-      });
-      return;
-    }
-    if (!shortcutWasOpen) return;
-    shortcutWasOpen = false;
-    if (shortcutDialog?.open) shortcutDialog.close();
-    const returnFocus = shortcutReturnFocus;
-    shortcutReturnFocus = undefined;
-    scheduleMicrotask(() => {
-      if (returnFocus?.isConnected) returnFocus.focus();
-    });
-  });
-  createEffect(() => {
     if (controller.projects.saveConflict()) openMediaPanel(false);
   });
   onCleanup(() => {
@@ -166,7 +119,7 @@ export function App() {
             narrowViewport() &&
             event.key === "Escape" &&
             !event.defaultPrevented &&
-            !event.target.closest("dialog") &&
+            !event.target.closest(".modal, dialog, [role='menu']") &&
             (mediaOpen() || tasksOpen())
           ) {
             event.preventDefault();
@@ -178,7 +131,10 @@ export function App() {
           <RecoveryNotice />
           <ProjectConflictNotice />
           <Show when={projectSaveState() === "failed" && !controller.projects.saveConflict()}>
-            <div class="alert alert-error" role="alert">
+            <div
+              class="alert alert-error flex flex-wrap items-center justify-between gap-2 [&>span]:min-w-0 [&>span]:wrap-anywhere"
+              role="alert"
+            >
               <span>{controller.projects.saveError()}</span>
               <button
                 class="btn btn-ghost btn-xs"
@@ -191,120 +147,120 @@ export function App() {
           </Show>
         </div>
         <Show when={projectToolsOpen()}>
-          <ProjectDialog onClose={closeProjectDialog} />
+          <ProjectDialog
+            onClose={() => setProjectToolsOpen(false)}
+            onCloseAutoFocus={() => projectMenuTrigger?.focus()}
+          />
         </Show>
-        <Show when={controller.editor.shortcutHelpOpen()}>
-          <dialog
-            ref={(element) => (shortcutDialog = element)}
-            class="modal"
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="shortcut-help-heading"
-            onCancel={(event) => {
-              event.preventDefault();
-              controller.editor.setShortcutHelpOpen(false);
-            }}
-          >
-            <div class="modal-box">
-              <h2 id="shortcut-help-heading" class="text-lg font-bold">
-                Keyboard shortcuts
-              </h2>
-              <p class="shortcut-help">
-                Shortcuts work while reviewing the timeline, not while typing.
-              </p>
-              <div
-                class="grid grid-cols-1 gap-2 sm:grid-cols-2"
-                aria-label="Keyboard shortcut reference"
+        <Dialog
+          open={controller.editor.shortcutHelpOpen()}
+          onOpenChange={controller.editor.setShortcutHelpOpen}
+        >
+          <Dialog.Portal>
+            <div class="modal modal-open">
+              <Dialog.Overlay class="modal-backdrop" />
+              <Dialog.Content
+                aria-modal="true"
+                class="modal-box"
+                onOpenAutoFocus={() => {
+                  shortcutReturnFocus ??=
+                    document.activeElement instanceof HTMLElement
+                      ? document.activeElement
+                      : undefined;
+                }}
+                onCloseAutoFocus={() => {
+                  shortcutReturnFocus?.focus();
+                  shortcutReturnFocus = undefined;
+                }}
               >
-                <span>
-                  <kbd class="kbd kbd-sm">Space</kbd> Play or pause
-                </span>
-                <span>
-                  <kbd class="kbd kbd-sm">←</kbd> <kbd class="kbd kbd-sm">→</kbd> Seek one second
-                </span>
-                <span>
-                  <kbd class="kbd kbd-sm">,</kbd> <kbd class="kbd kbd-sm">.</kbd> Preview step
-                </span>
-                <span>
-                  <kbd class="kbd kbd-sm">←</kbd> <kbd class="kbd kbd-sm">→</kbd> Nudge a selected
-                  boundary by 100 ms
-                </span>
-                <span>
-                  <kbd class="kbd kbd-sm">←</kbd> <kbd class="kbd kbd-sm">→</kbd> Resize a focused
-                  panel separator by 16 px
-                </span>
-                <span>
-                  <kbd class="kbd kbd-sm">Home</kbd> / <kbd class="kbd kbd-sm">R</kbd> Reset a
-                  focused panel separator
-                </span>
-                <span>
-                  <kbd class="kbd kbd-sm">I</kbd> / <kbd class="kbd kbd-sm">O</kbd> Set In / Out
-                </span>
-                <span>
-                  <kbd class="kbd kbd-sm">C</kbd> Start a new segment draft
-                </span>
-                <span>
-                  <kbd class="kbd kbd-sm">P</kbd> Play active cut
-                </span>
-                <span>
-                  <kbd class="kbd kbd-sm">L</kbd> Loop active cut
-                </span>
-                <span>
-                  <kbd class="kbd kbd-sm">R</kbd> Preview cuts in order
-                </span>
-                <span>
-                  <kbd class="kbd kbd-sm">B</kbd> Split active cut
-                </span>
-                <span>
-                  <kbd class="kbd kbd-sm">Delete</kbd> / <kbd class="kbd kbd-sm">Backspace</kbd>{" "}
-                  Remove active cut
-                </span>
-                <span>
-                  <kbd class="kbd kbd-sm">Ctrl/Cmd+Z</kbd> Undo
-                </span>
-                <span>
-                  <kbd class="kbd kbd-sm">Ctrl/Cmd+Y</kbd> Redo
-                </span>
-                <span>
-                  <kbd class="kbd kbd-sm">E</kbd> Create clips
-                </span>
-                <span>
-                  <kbd class="kbd kbd-sm">A</kbd> / <kbd class="kbd kbd-sm">Y</kbd> Accept detection
-                  candidate
-                </span>
-                <span>
-                  <kbd class="kbd kbd-sm">R</kbd> / <kbd class="kbd kbd-sm">X</kbd> /{" "}
-                  <kbd class="kbd kbd-sm">N</kbd> / <kbd class="kbd kbd-sm">Delete</kbd> /{" "}
-                  <kbd class="kbd kbd-sm">Backspace</kbd> Reject detection candidate
-                </span>
-                <span>
-                  <kbd class="kbd kbd-sm">Shift+/</kbd> Open this reference
-                </span>
-                <span>
-                  <kbd class="kbd kbd-sm">Esc</kbd> Deselect the active cut or clear incomplete
-                  marks
-                </span>
-              </div>
-              <div class="modal-action">
-                <button
-                  ref={(element) => (shortcutClose = element)}
-                  class="btn btn-primary"
-                  type="button"
-                  onClick={() => controller.editor.setShortcutHelpOpen(false)}
+                <Dialog.Title id="shortcut-help-heading" class="text-lg font-bold">
+                  Keyboard shortcuts
+                </Dialog.Title>
+                <p class="shortcut-help">
+                  Shortcuts work while reviewing the timeline, not while typing.
+                </p>
+                <div
+                  class="grid grid-cols-1 gap-2 sm:grid-cols-2"
+                  aria-label="Keyboard shortcut reference"
                 >
-                  Close
-                </button>
-              </div>
+                  <span>
+                    <kbd class="kbd kbd-sm">Space</kbd> Play or pause
+                  </span>
+                  <span>
+                    <kbd class="kbd kbd-sm">←</kbd> <kbd class="kbd kbd-sm">→</kbd> Seek one second
+                  </span>
+                  <span>
+                    <kbd class="kbd kbd-sm">,</kbd> <kbd class="kbd kbd-sm">.</kbd> Preview step
+                  </span>
+                  <span>
+                    <kbd class="kbd kbd-sm">←</kbd> <kbd class="kbd kbd-sm">→</kbd> Nudge a selected
+                    boundary by 100 ms
+                  </span>
+                  <span>
+                    <kbd class="kbd kbd-sm">←</kbd> <kbd class="kbd kbd-sm">→</kbd> Resize a focused
+                    panel separator by 16 px
+                  </span>
+                  <span>
+                    <kbd class="kbd kbd-sm">Home</kbd> / <kbd class="kbd kbd-sm">R</kbd> Reset a
+                    focused panel separator
+                  </span>
+                  <span>
+                    <kbd class="kbd kbd-sm">I</kbd> / <kbd class="kbd kbd-sm">O</kbd> Set In / Out
+                  </span>
+                  <span>
+                    <kbd class="kbd kbd-sm">C</kbd> Start a new segment draft
+                  </span>
+                  <span>
+                    <kbd class="kbd kbd-sm">P</kbd> Play active cut
+                  </span>
+                  <span>
+                    <kbd class="kbd kbd-sm">L</kbd> Loop active cut
+                  </span>
+                  <span>
+                    <kbd class="kbd kbd-sm">R</kbd> Preview cuts in order
+                  </span>
+                  <span>
+                    <kbd class="kbd kbd-sm">B</kbd> Split active cut
+                  </span>
+                  <span>
+                    <kbd class="kbd kbd-sm">Delete</kbd> / <kbd class="kbd kbd-sm">Backspace</kbd>{" "}
+                    Remove active cut
+                  </span>
+                  <span>
+                    <kbd class="kbd kbd-sm">Ctrl/Cmd+Z</kbd> Undo
+                  </span>
+                  <span>
+                    <kbd class="kbd kbd-sm">Ctrl/Cmd+Y</kbd> Redo
+                  </span>
+                  <span>
+                    <kbd class="kbd kbd-sm">E</kbd> Create clips
+                  </span>
+                  <span>
+                    <kbd class="kbd kbd-sm">A</kbd> / <kbd class="kbd kbd-sm">Y</kbd> Accept
+                    detection candidate
+                  </span>
+                  <span>
+                    <kbd class="kbd kbd-sm">R</kbd> / <kbd class="kbd kbd-sm">X</kbd> /{" "}
+                    <kbd class="kbd kbd-sm">N</kbd> / <kbd class="kbd kbd-sm">Delete</kbd> /{" "}
+                    <kbd class="kbd kbd-sm">Backspace</kbd> Reject detection candidate
+                  </span>
+                  <span>
+                    <kbd class="kbd kbd-sm">Shift+/</kbd> Open this reference
+                  </span>
+                  <span>
+                    <kbd class="kbd kbd-sm">Esc</kbd> Deselect the active cut or clear incomplete
+                    marks
+                  </span>
+                </div>
+                <div class="modal-action">
+                  <Dialog.CloseButton class="btn btn-primary" aria-label="Close">
+                    Close
+                  </Dialog.CloseButton>
+                </div>
+              </Dialog.Content>
             </div>
-            <form method="dialog" class="modal-backdrop">
-              <button
-                type="button"
-                aria-label="Close shortcut help"
-                onClick={() => controller.editor.setShortcutHelpOpen(false)}
-              />
-            </form>
-          </dialog>
-        </Show>
+          </Dialog.Portal>
+        </Dialog>
         <Show when={narrowViewport() && (mediaOpen() || tasksOpen())}>
           <button
             class="drawer-backdrop"
@@ -360,7 +316,7 @@ export function App() {
             </div>
             <div class="project-header-actions">
               <button
-                class="btn btn-ghost btn-sm btn-square"
+                class="btn btn-ghost btn-sm btn-square min-h-8 min-w-8"
                 type="button"
                 title={projectSaveState() === "failed" ? "Retry save" : "Save project"}
                 aria-label="Save project from project header"
@@ -370,7 +326,7 @@ export function App() {
                 <Save size={16} aria-hidden="true" />
               </button>
               <button
-                class="btn btn-ghost btn-sm btn-square"
+                class="btn btn-ghost btn-sm btn-square min-h-8 min-w-8"
                 type="button"
                 title={settingsOpen() ? "Back to editor" : "Settings"}
                 aria-label={settingsOpen() ? "Back to editor" : "Settings"}
@@ -378,53 +334,92 @@ export function App() {
               >
                 <Settings size={16} aria-hidden="true" />
               </button>
-              <details class="project-menu dropdown" ref={(element) => (projectMenu = element)}>
-                <summary class="btn btn-ghost btn-sm btn-square" title="Project menu">
+              <DropdownMenu modal={false} placement="bottom-end">
+                <DropdownMenu.Trigger
+                  ref={(element) => (projectMenuTrigger = element)}
+                  class="btn btn-ghost btn-sm btn-square min-h-8 min-w-8"
+                  title="Project menu"
+                  aria-label="Project menu"
+                >
                   <Ellipsis size={17} aria-hidden="true" />
-                  <span class="sr-only">Project menu</span>
-                </summary>
-                <ul class="dropdown-content menu menu-sm z-50 w-60 rounded-box bg-base-200 p-2 shadow-lg">
-                  <li>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        closeProjectMenu();
-                        controller.projects.newProject(
-                          !controller.dirty() || window.confirm("Discard unsaved changes?"),
-                        );
-                      }}
-                    >
-                      New project
-                    </button>
-                  </li>
-                  <li>
-                    <button type="button" onClick={loadProjectFromMenu}>
-                      <FolderOpen size={15} aria-hidden="true" /> Load project
-                    </button>
-                  </li>
-                  <li>
-                    <button type="button" onClick={openProjectDialog}>
-                      <FolderOpen size={15} aria-hidden="true" /> Project tools
-                    </button>
-                  </li>
-                  <li>
-                    <button type="button" onClick={openHelp}>
-                      <CircleHelp size={15} aria-hidden="true" /> Keyboard help
-                    </button>
-                  </li>
-                  <li class="menu-title panel-menu-title">Panel layout</li>
-                  <li>
-                    <button type="button" onClick={() => resetPanelWidth("media")}>
-                      Reset media panel size
-                    </button>
-                  </li>
-                  <li>
-                    <button type="button" onClick={() => resetPanelWidth("segments")}>
-                      Reset tasks panel size
-                    </button>
-                  </li>
-                </ul>
-              </details>
+                </DropdownMenu.Trigger>
+                <DropdownMenu.Portal>
+                  <DropdownMenu.Content
+                    as="ul"
+                    class="menu menu-sm z-70 max-h-[min(70dvh,540px)] w-60 overflow-y-auto rounded-box bg-base-200 p-2 shadow-lg"
+                    onCloseAutoFocus={(event) => {
+                      if (projectToolsOpen() || controller.editor.shortcutHelpOpen())
+                        event.preventDefault();
+                    }}
+                  >
+                    <li>
+                      <DropdownMenu.Item
+                        as="button"
+                        class="data-highlighted:bg-base-300"
+                        onSelect={() =>
+                          controller.projects.newProject(
+                            !controller.dirty() || window.confirm("Discard unsaved changes?"),
+                          )
+                        }
+                      >
+                        New project
+                      </DropdownMenu.Item>
+                    </li>
+                    <li>
+                      <DropdownMenu.Item
+                        as="button"
+                        class="data-highlighted:bg-base-300"
+                        onSelect={loadProjectFromMenu}
+                      >
+                        <FolderOpen size={15} aria-hidden="true" /> Load project
+                      </DropdownMenu.Item>
+                    </li>
+                    <li>
+                      <DropdownMenu.Item
+                        as="button"
+                        class="data-highlighted:bg-base-300"
+                        onSelect={() => setProjectToolsOpen(true)}
+                      >
+                        <FolderOpen size={15} aria-hidden="true" /> Project tools
+                      </DropdownMenu.Item>
+                    </li>
+                    <li>
+                      <DropdownMenu.Item
+                        as="button"
+                        class="data-highlighted:bg-base-300"
+                        onSelect={openHelp}
+                      >
+                        <CircleHelp size={15} aria-hidden="true" /> Keyboard help
+                      </DropdownMenu.Item>
+                    </li>
+                    <DropdownMenu.Group as="li">
+                      <DropdownMenu.GroupLabel class="menu-title text-[0.7rem] text-base-content/72">
+                        Panel layout
+                      </DropdownMenu.GroupLabel>
+                      <ul>
+                        <li>
+                          <DropdownMenu.Item
+                            as="button"
+                            class="data-highlighted:bg-base-300"
+                            onSelect={() => resetPanelWidth("media")}
+                          >
+                            Reset media panel size
+                          </DropdownMenu.Item>
+                        </li>
+                        <li>
+                          <DropdownMenu.Item
+                            as="button"
+                            class="data-highlighted:bg-base-300"
+                            onSelect={() => resetPanelWidth("segments")}
+                          >
+                            Reset tasks panel size
+                          </DropdownMenu.Item>
+                        </li>
+                      </ul>
+                    </DropdownMenu.Group>
+                  </DropdownMenu.Content>
+                </DropdownMenu.Portal>
+              </DropdownMenu>
             </div>
           </header>
           <Show when={!settingsOpen()}>
@@ -481,7 +476,13 @@ export function App() {
                 onDblClick={() => resetPanelWidth("segments")}
                 onKeyDown={(event) => resizePanelWithKeyboard("segments", event)}
               />
-              <aside
+              <Tabs
+                as="aside"
+                value={activeTask()}
+                onChange={(value) => {
+                  if (value === "cuts" || value === "detection" || value === "export")
+                    selectTask(value);
+                }}
                 id="segments-panel"
                 class="task-panel"
                 classList={{
@@ -493,97 +494,55 @@ export function App() {
                 role={narrowViewport() ? "dialog" : undefined}
                 aria-modal={narrowViewport() ? "true" : undefined}
               >
-                <div class="task-tabs tabs" role="tablist" aria-label="Workspace tasks">
-                  <button
+                <Tabs.List class="tabs mb-4 grid grid-cols-3 gap-0.5" aria-label="Workspace tasks">
+                  <Tabs.Trigger
                     id="cuts-tab"
-                    class="tab"
-                    role="tab"
-                    type="button"
-                    aria-selected={activeTask() === "cuts"}
-                    aria-controls="cuts-tabpanel"
-                    tabIndex={activeTask() === "cuts" ? 0 : -1}
-                    onClick={() => selectTask("cuts")}
-                    onKeyDown={(event) => {
-                      if (event.key === "ArrowRight" || event.key === "ArrowDown") {
-                        event.preventDefault();
-                        moveTask("cuts", 1);
-                      } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
-                        event.preventDefault();
-                        moveTask("cuts", -1);
-                      }
-                    }}
+                    value="cuts"
+                    class="tab min-h-11 min-w-0 px-1 text-[0.8rem] aria-selected:rounded-md aria-selected:bg-primary aria-selected:font-bold aria-selected:text-primary-content"
                   >
                     Cuts
-                  </button>
-                  <button
+                  </Tabs.Trigger>
+                  <Tabs.Trigger
                     id="detection-tab"
-                    class="tab"
-                    role="tab"
-                    type="button"
-                    aria-selected={activeTask() === "detection"}
-                    aria-controls="detection-tabpanel"
-                    tabIndex={activeTask() === "detection" ? 0 : -1}
+                    value="detection"
+                    class="tab min-h-11 min-w-0 px-1 text-[0.8rem] aria-selected:rounded-md aria-selected:bg-primary aria-selected:font-bold aria-selected:text-primary-content"
                     disabled={!selected() || !controller.activeItemId()}
-                    onClick={() => selectTask("detection")}
-                    onKeyDown={(event) => {
-                      if (event.key === "ArrowRight" || event.key === "ArrowDown") {
-                        event.preventDefault();
-                        moveTask("detection", 1);
-                      } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
-                        event.preventDefault();
-                        moveTask("detection", -1);
-                      }
-                    }}
                   >
                     Auto-detect
-                  </button>
-                  <button
+                  </Tabs.Trigger>
+                  <Tabs.Trigger
                     id="export-tab"
-                    class="tab"
-                    role="tab"
-                    type="button"
-                    aria-selected={activeTask() === "export"}
-                    aria-controls="export-tabpanel"
-                    tabIndex={activeTask() === "export" ? 0 : -1}
-                    onClick={() => selectTask("export")}
-                    onKeyDown={(event) => {
-                      if (event.key === "ArrowRight" || event.key === "ArrowDown") {
-                        event.preventDefault();
-                        moveTask("export", 1);
-                      } else if (event.key === "ArrowLeft" || event.key === "ArrowUp") {
-                        event.preventDefault();
-                        moveTask("export", -1);
-                      }
-                    }}
+                    value="export"
+                    class="tab min-h-11 min-w-0 px-1 text-[0.8rem] aria-selected:rounded-md aria-selected:bg-primary aria-selected:font-bold aria-selected:text-primary-content"
                   >
                     Export
-                  </button>
-                </div>
-                <div
+                  </Tabs.Trigger>
+                </Tabs.List>
+                <Tabs.Content
                   id="cuts-tabpanel"
-                  role="tabpanel"
-                  aria-labelledby="cuts-tab"
+                  value="cuts"
+                  forceMount
                   hidden={activeTask() !== "cuts"}
                 >
                   <CutsView />
-                </div>
-                <div
+                </Tabs.Content>
+                <Tabs.Content
                   id="export-tabpanel"
-                  role="tabpanel"
-                  aria-labelledby="export-tab"
+                  value="export"
+                  forceMount
                   hidden={activeTask() !== "export"}
                 >
                   <ExportView />
-                </div>
-                <div
+                </Tabs.Content>
+                <Tabs.Content
                   id="detection-tabpanel"
-                  role="tabpanel"
-                  aria-labelledby="detection-tab"
+                  value="detection"
+                  forceMount
                   hidden={activeTask() !== "detection"}
                 >
                   <DetectionView />
-                </div>
-              </aside>
+                </Tabs.Content>
+              </Tabs>
             </>
           }
         >

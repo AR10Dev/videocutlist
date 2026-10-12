@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import type { ServerState } from "../app/server";
+import type { ServerState } from "../../app/server";
 import type { NativeMediaApiClient } from "../../api";
 import type { Media } from "../../generated/effect-api";
 

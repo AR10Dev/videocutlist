@@ -8,7 +8,7 @@ import {
   type AppSettings,
   type Appearance,
 } from "./model";
-import { useWorkspace } from "../app/WorkspaceContext";
+import { useWorkspace } from "../../app/WorkspaceContext";
 import { MCPSettings } from "./MCPSettings";
 
 export function SettingsView(props: { onClose?: () => void } = {}) {
@@ -67,7 +67,7 @@ export function SettingsView(props: { onClose?: () => void } = {}) {
         <label>
           Theme
           <select
-            class="select select-bordered select-sm mt-1 w-full"
+            class="select select-sm mt-1 w-full min-w-0"
             value={appearance()}
             onChange={(event) => {
               const value = event.currentTarget.value as Appearance;
@@ -147,7 +147,7 @@ export function SettingsView(props: { onClose?: () => void } = {}) {
         <label>
           Cut strategy
           <select
-            class="select select-bordered select-sm mt-1 w-full"
+            class="select select-sm mt-1 w-full min-w-0"
             value={settings().cutStrategy}
             onChange={(event) =>
               saveSettings({
@@ -163,7 +163,7 @@ export function SettingsView(props: { onClose?: () => void } = {}) {
         <label>
           Filename template
           <input
-            class="input input-bordered input-sm mt-1 w-full"
+            class="input input-sm mt-1 w-full min-w-0"
             maxLength={maxFilenameTemplateLength}
             value={settings().filenameTemplate}
             onInput={(event) => {
@@ -215,7 +215,7 @@ export function SettingsView(props: { onClose?: () => void } = {}) {
             <label>
               Export concurrency{" "}
               <input
-                class="input input-bordered input-sm mt-1 w-full"
+                class="input input-sm mt-1 w-full min-w-0"
                 type="number"
                 min="1"
                 max="64"
@@ -233,7 +233,7 @@ export function SettingsView(props: { onClose?: () => void } = {}) {
             <label>
               Preview global concurrency{" "}
               <input
-                class="input input-bordered input-sm mt-1 w-full"
+                class="input input-sm mt-1 w-full min-w-0"
                 type="number"
                 min="1"
                 max="64"
@@ -249,7 +249,7 @@ export function SettingsView(props: { onClose?: () => void } = {}) {
             <label>
               Preview before (seconds){" "}
               <input
-                class="input input-bordered input-sm mt-1 w-full"
+                class="input input-sm mt-1 w-full min-w-0"
                 type="number"
                 min="0.001"
                 step="0.1"
@@ -269,7 +269,7 @@ export function SettingsView(props: { onClose?: () => void } = {}) {
             <label>
               Preview after (seconds){" "}
               <input
-                class="input input-bordered input-sm mt-1 w-full"
+                class="input input-sm mt-1 w-full min-w-0"
                 type="number"
                 min="0.001"
                 step="0.1"
@@ -287,7 +287,7 @@ export function SettingsView(props: { onClose?: () => void } = {}) {
             <label>
               Preview maximum window (seconds){" "}
               <input
-                class="input input-bordered input-sm mt-1 w-full"
+                class="input input-sm mt-1 w-full min-w-0"
                 type="number"
                 min="0.001"
                 step="0.1"
@@ -305,7 +305,7 @@ export function SettingsView(props: { onClose?: () => void } = {}) {
             <label>
               Preview grid (seconds){" "}
               <input
-                class="input input-bordered input-sm mt-1 w-full"
+                class="input input-sm mt-1 w-full min-w-0"
                 type="number"
                 min="0.001"
                 step="0.1"
@@ -324,7 +324,7 @@ export function SettingsView(props: { onClose?: () => void } = {}) {
             <label>
               Media scan file limit{" "}
               <input
-                class="input input-bordered input-sm mt-1 w-full"
+                class="input input-sm mt-1 w-full min-w-0"
                 type="number"
                 min="1"
                 value={runtimeSettings()?.mediaMaxFiles ?? ""}
@@ -339,7 +339,7 @@ export function SettingsView(props: { onClose?: () => void } = {}) {
             <label>
               Media scan depth limit{" "}
               <input
-                class="input input-bordered input-sm mt-1 w-full"
+                class="input input-sm mt-1 w-full min-w-0"
                 type="number"
                 min="1"
                 value={runtimeSettings()?.mediaMaxDepth ?? ""}
@@ -355,7 +355,7 @@ export function SettingsView(props: { onClose?: () => void } = {}) {
             <label>
               Disposable cache size (MB){" "}
               <input
-                class="input input-bordered input-sm mt-1 w-full"
+                class="input input-sm mt-1 w-full min-w-0"
                 type="number"
                 min="1"
                 value={

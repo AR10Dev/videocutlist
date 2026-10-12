@@ -13,7 +13,7 @@ import {
   VolumeX,
 } from "lucide-solid";
 import { canStreamPreview, segmentIncluded } from "./model";
-import { useWorkspace } from "../app/WorkspaceContext";
+import { useWorkspace } from "../../app/WorkspaceContext";
 
 type IconButtonProps = {
   label: string;
@@ -39,7 +39,9 @@ function IconButton(props: IconButtonProps) {
         {props.children}
       </Tooltip.Trigger>
       <Tooltip.Portal>
-        <Tooltip.Content class="tooltip-content">{props.label}</Tooltip.Content>
+        <Tooltip.Content class="z-50 rounded border border-base-content/18 bg-neutral px-2 py-[5px] text-xs text-neutral-content">
+          {props.label}
+        </Tooltip.Content>
       </Tooltip.Portal>
     </Tooltip>
   );

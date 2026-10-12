@@ -6,10 +6,7 @@ import { Effect } from "effect";
 import { RegistryContext, RegistryProvider } from "@effect/atom-solid";
 import { createComponent, createRoot, untrack, useContext } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  createWorkspaceController,
-  type WorkspaceController,
-} from "../src/features/app/controller";
+import { createWorkspaceController, type WorkspaceController } from "../src/app/controller";
 import { serializeProjectItem } from "../src/features/projects/model";
 import { memoryStorage } from "./memoryStorage";
 

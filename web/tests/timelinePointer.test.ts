@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { timelineTimeFromPointer } from "./timeline";
+import { timelineTimeFromPointer } from "../src/features/editor/timeline";
 
 describe("timelineTimeFromPointer", () => {
   it("maps and clamps pointer positions to media time", () => {

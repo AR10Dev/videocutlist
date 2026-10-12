@@ -5,8 +5,8 @@ import * as Atom from "effect/reactivity/Atom";
 import * as AtomRegistry from "effect/reactivity/AtomRegistry";
 import type { Job, LibraryStatus } from "../../generated/effect-api";
 import { apiErrorCode, apiErrorStatus, uncertainCommandFailure } from "../../api";
-import { readServerAtom, runServerMutation, type ServerState } from "../app/server";
-import type { WorkspaceIdentity } from "../app/workspaceIdentity";
+import { readServerAtom, runServerMutation, type ServerState } from "../../app/server";
+import type { WorkspaceIdentity } from "../../app/workspaceIdentity";
 
 type Navigation = {
   folderId: string | undefined;

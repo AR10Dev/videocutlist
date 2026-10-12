@@ -8,7 +8,7 @@ import { createControllerTestRoot } from "./controllerTestEnvironment";
 import { untrack } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import type { ApiClient, NativeMediaApiClient } from "../src/api";
-import { createServerState } from "../src/features/app/server";
+import { createServerState } from "../src/app/server";
 import { createExportController } from "../src/features/export/controller";
 import { createTimelineHistory } from "../src/features/editor/timeline";
 import type { EditableProjectItem } from "../src/features/projects/model";

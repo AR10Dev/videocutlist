@@ -1,5 +1,5 @@
-import { isTerminalState } from "../queue/jobState";
-import type * as EffectApiTypes from "../../generated/effect-api";
+import { isTerminalState } from "../features/queue/jobState";
+import type * as EffectApiTypes from "../generated/effect-api";
 import { useAtomValue } from "@effect/atom-solid";
 import { Cause, Effect, Option, Schedule, Schema, Stream, type Context } from "effect";
 import * as AsyncResult from "effect/reactivity/AsyncResult";
@@ -16,8 +16,8 @@ import {
   type ApiClient,
   type ClientConfiguration,
   type NativeMediaApiClient,
-} from "../../api";
-import { VideoCutListApi } from "../../generated/effect-api";
+} from "../api";
+import { VideoCutListApi } from "../generated/effect-api";
 import {
   Batch as BatchSchema,
   Job as JobSchema,
@@ -27,8 +27,8 @@ import {
   type LibraryStatus as GeneratedLibraryStatus,
   type Project,
   type ProjectPage,
-} from "../../generated/effect-api";
-import { observeSnapshots } from "../queue/jobStream";
+} from "../generated/effect-api";
+import { observeSnapshots } from "../features/queue/jobStream";
 import {
   PANEL_PREFERENCES_KEY,
   defaultPanelPreferences,
@@ -39,7 +39,7 @@ import {
   browserPreferencesKey,
   browserPreferencesSchema,
   defaultBrowserPreferences,
-} from "../settings/model";
+} from "../features/settings/model";
 import {
   browserPersistenceLayer,
   createPersistencePolicy,

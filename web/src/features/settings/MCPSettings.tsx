@@ -1,6 +1,6 @@
 import { createEffect, For, Show } from "solid-js";
 import { exportRanges } from "../export/summary";
-import { useWorkspace } from "../app/WorkspaceContext";
+import { useWorkspace } from "../../app/WorkspaceContext";
 
 const permissionLabels: Record<string, string> = {
   "media:read": "Read media metadata",
@@ -142,11 +142,14 @@ export function MCPSettings() {
               </div>
             </div>
             <Show when={revealedMCPSecret()}>
-              <div class="alert alert-warning alert-soft my-3" role="alert">
+              <div
+                class="alert alert-warning alert-soft my-3 flex flex-wrap items-center justify-between gap-2 [&>span]:min-w-0 [&>span]:wrap-anywhere"
+                role="alert"
+              >
                 <div class="w-full">
                   <strong>Copy this secret now.</strong> It cannot be viewed again.
                   <input
-                    class="input input-sm mt-2 w-full font-mono"
+                    class="input input-sm mt-2 w-full font-mono min-w-0"
                     aria-label="One-time MCP bearer secret"
                     readOnly
                     value={revealedMCPSecret()}
@@ -162,7 +165,7 @@ export function MCPSettings() {
                 <label>
                   Credential name
                   <input
-                    class="input input-sm"
+                    class="input input-sm w-full min-w-0"
                     required
                     maxlength="120"
                     value={name()}
@@ -191,7 +194,7 @@ export function MCPSettings() {
                 <label>
                   Expiration
                   <select
-                    class="select select-sm"
+                    class="select select-sm w-full min-w-0"
                     value={expiry()}
                     onChange={(event) => updateMCPDraft("expiry", event.currentTarget.value)}
                   >
@@ -218,7 +221,7 @@ export function MCPSettings() {
                 <label>
                   Media scope
                   <select
-                    class="select select-sm"
+                    class="select select-sm w-full min-w-0"
                     value={mediaScope()}
                     onChange={(event) => updateMCPDraft("mediaScope", event.currentTarget.value)}
                   >
@@ -258,7 +261,7 @@ export function MCPSettings() {
                   <label>
                     Media IDs (comma or space separated)
                     <input
-                      class="input input-sm"
+                      class="input input-sm w-full min-w-0"
                       required
                       value={mediaIDs()}
                       onInput={(event) => updateMCPDraft("mediaIDs", event.currentTarget.value)}
@@ -268,7 +271,7 @@ export function MCPSettings() {
                 <label>
                   Project scope
                   <select
-                    class="select select-sm"
+                    class="select select-sm w-full min-w-0"
                     value={projectScope()}
                     onChange={(event) => updateMCPDraft("projectScope", event.currentTarget.value)}
                   >
@@ -280,7 +283,7 @@ export function MCPSettings() {
                   <label>
                     Project IDs (comma or space separated)
                     <input
-                      class="input input-sm"
+                      class="input input-sm w-full min-w-0"
                       required
                       value={projectIDs()}
                       onInput={(event) => updateMCPDraft("projectIDs", event.currentTarget.value)}

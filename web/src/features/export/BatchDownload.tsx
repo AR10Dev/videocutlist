@@ -1,6 +1,6 @@
 import { Show } from "solid-js";
 import { createApiClient, resolveBrowserConfiguration } from "../../api";
-import { useWorkspace } from "../app/WorkspaceContext";
+import { useWorkspace } from "../../app/WorkspaceContext";
 import { createExportDownload, downloadExport } from "./download";
 
 /** Prepare one authenticated archive without exposing server paths. */

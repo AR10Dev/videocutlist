@@ -1,6 +1,6 @@
 import * as AtomRegistry from "effect/reactivity/AtomRegistry";
 import { describe, expect, it } from "@effect/vitest";
-import { syncCommand } from "../src/features/app/syncCommand";
+import { syncCommand } from "../src/app/syncCommand";
 
 describe("syncCommand", () => {
   it("returns typed synchronous values and updates runtime-owned atoms", () => {

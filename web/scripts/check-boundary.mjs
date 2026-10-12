@@ -7,9 +7,9 @@ import { fileURLToPath } from "node:url";
 export const adapters = {
   "api.ts": ["http"],
   "main.tsx": ["provider"],
-  "features/app/server.ts": ["runtime", "persistence", "transport"],
-  "features/app/syncCommand.ts": ["command"],
-  "features/app/persistence.ts": ["storage", "persistence"],
+  "app/server.ts": ["runtime", "persistence", "transport"],
+  "app/syncCommand.ts": ["command"],
+  "app/persistence.ts": ["storage", "persistence"],
   "features/access/bootstrap.ts": ["http", "command"],
   "features/media/thumbnail.ts": ["http"],
   "features/preview/resources.ts": ["http"],

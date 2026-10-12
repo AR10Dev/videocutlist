@@ -7,10 +7,15 @@ import * as Schema from "effect/Schema";
 import * as AsyncResult from "effect/reactivity/AsyncResult";
 import * as Atom from "effect/reactivity/Atom";
 import { ApiFailure, apiErrorEnvelope, uncertainCommandFailure } from "../../api";
-import { readServerAtom, runServerMutation, useServerAtom, type ServerState } from "../app/server";
+import {
+  readServerAtom,
+  runServerMutation,
+  useServerAtom,
+  type ServerState,
+} from "../../app/server";
 import { createExportQueue } from "./queue";
 import { requestErrorMessage, resourceErrorMessage } from "./errors";
-import { syncCommand } from "../app/syncCommand";
+import { syncCommand } from "../../app/syncCommand";
 import { Batch as BatchSchema } from "../../generated/effect-api";
 import type { EditableProjectItem, ExportContainer } from "../projects/model";
 import {

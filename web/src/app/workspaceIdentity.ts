@@ -1,5 +1,5 @@
 import * as Atom from "effect/reactivity/Atom";
-import { newProjectId } from "../projects/lifecycle";
+import { newProjectId } from "../features/projects/lifecycle";
 import type { ServerState } from "./server";
 
 export type WorkspaceIdentity = {

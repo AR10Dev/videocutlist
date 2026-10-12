@@ -4,7 +4,7 @@ import { installEditorShortcuts } from "./shortcuts";
 import { Timeline } from "./Timeline";
 import { formatTime } from "../preview/model";
 import { PreviewPlayer } from "../preview/PreviewPlayer";
-import { useWorkspace } from "../app/WorkspaceContext";
+import { useWorkspace } from "../../app/WorkspaceContext";
 
 export function EditorView(props: {
   onChooseMedia: () => void;
@@ -70,7 +70,10 @@ export function EditorView(props: {
             </div>
             <Show when={workspace.metadataError()}>
               {(message) => (
-                <div class="alert alert-error mb-2" role="alert">
+                <div
+                  class="alert alert-error mb-2 flex flex-wrap items-center justify-between gap-2 [&>span]:min-w-0 [&>span]:wrap-anywhere"
+                  role="alert"
+                >
                   <span>{message()}</span>
                   <button
                     class="btn btn-ghost btn-xs"
@@ -114,7 +117,10 @@ export function EditorView(props: {
             </p>
             <Show when={workspace.preview.assetStatus()}>
               {(message) => (
-                <div class="alert alert-info mb-2" role="status">
+                <div
+                  class="alert alert-info mb-2 flex flex-wrap items-center justify-between gap-2 [&>span]:min-w-0 [&>span]:wrap-anywhere"
+                  role="status"
+                >
                   <span>{message()}</span>
                   <button
                     class="btn btn-ghost btn-xs"

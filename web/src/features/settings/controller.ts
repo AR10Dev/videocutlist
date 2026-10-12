@@ -10,7 +10,7 @@ import type {
   GetMCPSettings200,
   SettingsResponse as GeneratedSettingsResponse,
 } from "../../generated/effect-api";
-import { runServerMutation, serverResultError, type ServerState } from "../app/server";
+import { runServerMutation, serverResultError, type ServerState } from "../../app/server";
 import {
   validFilenameTemplateLength,
   defaultBrowserPreferences,

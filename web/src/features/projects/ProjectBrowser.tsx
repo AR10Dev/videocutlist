@@ -1,8 +1,8 @@
 import { useAtomValue } from "@effect/atom-solid";
 import { For, Show, onCleanup } from "solid-js";
 import * as AsyncResult from "effect/reactivity/AsyncResult";
-import { useServerAtom } from "../app/server";
-import { useWorkspace } from "../app/WorkspaceContext";
+import { useServerAtom } from "../../app/server";
+import { useWorkspace } from "../../app/WorkspaceContext";
 import { createProjectBrowser } from "./browser";
 
 export function ProjectBrowser() {

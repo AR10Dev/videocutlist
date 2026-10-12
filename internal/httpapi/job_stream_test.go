@@ -51,8 +51,15 @@ func TestBatchEventStreamSendsCurrentSnapshotAndResynchronizesCursor(t *testing.
 			if response.Code != http.StatusOK || response.Header().Get("Content-Type") != "text/event-stream" {
 				t.Fatalf("status=%d headers=%v body=%s", response.Code, response.Header(), response.Body.String())
 			}
-			body := response.Body.String()
-			if !strings.Contains(body, "id: b2_current\nevent: "+test.event+"\n") || !strings.Contains(body, `"batchId":"b_aaaaaaaaaaaa"`) || !strings.HasSuffix(body, "\n\n") {
+			batch, cursor, err := service.Snapshot(t.Context(), "b_aaaaaaaaaaaa")
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, err := json.Marshal(batch)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if body := response.Body.String(); body != "id: "+cursor+"\nevent: "+test.event+"\ndata: "+string(data)+"\n\n" {
 				t.Fatalf("unexpected batch SSE: %q", body)
 			}
 		})
@@ -165,21 +172,12 @@ func TestJobEventStreamSendsTerminalSnapshotAndResynchronizesInvalidCursor(t *te
 			if got := response.Header().Get("Content-Type"); got != "text/event-stream" {
 				t.Fatalf("Content-Type = %q", got)
 			}
-			body := response.Body.String()
-			if !strings.Contains(body, "event: "+test.event+"\n") || !strings.Contains(body, "id: j_aaaaaaaaaaaa:2\n") || !strings.Contains(body, "data: ") || !strings.HasSuffix(body, "\n\n") {
-				t.Fatalf("invalid SSE framing: %q", body)
-			}
-			data := strings.Split(strings.Split(body, "data: ")[1], "\n")[0]
-			var got struct {
-				ID       string `json:"id"`
-				State    string `json:"state"`
-				Revision int64  `json:"revision"`
-			}
-			if err := json.Unmarshal([]byte(data), &got); err != nil {
+			data, err := json.Marshal(job)
+			if err != nil {
 				t.Fatal(err)
 			}
-			if got.ID != job.ID || got.State != "succeeded" || got.Revision != 2 {
-				t.Fatalf("snapshot = %#v", got)
+			if body := response.Body.String(); body != "id: j_aaaaaaaaaaaa:2\nevent: "+test.event+"\ndata: "+string(data)+"\n\n" {
+				t.Fatalf("invalid SSE framing or snapshot: %q", body)
 			}
 		})
 	}

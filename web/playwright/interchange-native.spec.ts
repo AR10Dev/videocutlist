@@ -15,8 +15,8 @@ const media = {
 async function openProjectTools(page: import("@playwright/test").Page) {
   const mediaToggle = page.getByRole("button", { name: /media library/ }).first();
   if ((await mediaToggle.getAttribute("aria-expanded")) === "false") await mediaToggle.click();
-  await page.locator(".project-menu > summary").click();
-  await page.getByRole("button", { name: "Project tools", exact: true }).click();
+  await page.getByRole("button", { name: "Project menu", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Project tools", exact: true }).click();
   await page.getByText("Interchange", { exact: true }).click();
 }
 

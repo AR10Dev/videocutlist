@@ -131,8 +131,8 @@ test("project import remains dirty across conflict and recovery restores edits",
   });
 
   await page.goto("/");
-  await page.locator(".project-menu > summary").click();
-  await page.getByRole("button", { name: "Project tools", exact: true }).click();
+  await page.getByRole("button", { name: "Project menu", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Project tools", exact: true }).click();
   await page.getByText("Interchange", { exact: true }).click();
   await page.getByLabel("Import cut list", { exact: true }).setInputFiles({
     name: "review.videocutlist.json",
@@ -143,10 +143,10 @@ test("project import remains dirty across conflict and recovery restores edits",
   await expect(page.getByText("Cut list imported. Save the project to keep it.")).toBeVisible();
   await page.getByRole("button", { name: "Close project tools", exact: true }).click();
   page.once("dialog", (dialog) => void dialog.dismiss());
-  await page.locator(".project-menu > summary").click();
-  await page.getByRole("button", { name: "New project", exact: true }).click();
+  await page.getByRole("button", { name: "Project menu", exact: true }).click();
+  await page.getByRole("menuitem", { name: "New project", exact: true }).click();
   await expect(page.locator(".project-sidebar-header strong")).toHaveText("Imported edit");
-  await page.locator(".project-menu > summary").click();
+  await page.getByRole("button", { name: "Project menu", exact: true }).click();
   await page.getByRole("button", { name: "Save project from project header", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText("Another client saved this project");
   expect(writes[0].body).toMatchObject({ revision: 0, schemaVersion: 2, name: "Imported edit" });
@@ -172,8 +172,8 @@ test("project import remains dirty across conflict and recovery restores edits",
   await expect(page.getByRole("button", { name: "Recover local edits" })).toBeVisible();
   await page.getByRole("button", { name: "Recover local edits" }).click();
   await expect(page.getByRole("status", { name: "Project status" })).toHaveText("Unsaved changes");
-  await page.locator(".project-menu > summary").click();
-  await page.getByRole("button", { name: "Project tools", exact: true }).click();
+  await page.getByRole("button", { name: "Project menu", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Project tools", exact: true }).click();
   await expect(page.getByLabel("Project name")).toHaveValue("Recovered edit");
   await expect(page.locator(".cut-row[data-segment-id]")).toHaveCount(1);
 });

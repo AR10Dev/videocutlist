@@ -5,9 +5,9 @@ import { ChevronDown, Film, Folder, FolderOpen, LoaderCircle, RefreshCw } from "
 import { Option } from "effect";
 import * as Atom from "effect/reactivity/Atom";
 import * as AsyncResult from "effect/reactivity/AsyncResult";
-import type { ServerState } from "../app/server";
+import type { ServerState } from "../../app/server";
 import { createApiClient, resolveBrowserConfiguration, type ApiClient } from "../../api";
-import { useWorkspace } from "../app/WorkspaceContext";
+import { useWorkspace } from "../../app/WorkspaceContext";
 import { formatLibraryDuration, mediaSummary } from "./model";
 import { libraryThumbnail } from "./thumbnail";
 
@@ -115,7 +115,10 @@ export function LibraryView() {
           </div>
         </Show>
         <Show when={state().importJob?.state === "failed" || state().importJob?.errorCode}>
-          <div class="alert alert-error" role="alert">
+          <div
+            class="alert alert-error flex flex-wrap items-center justify-between gap-2 [&>span]:min-w-0 [&>span]:wrap-anywhere"
+            role="alert"
+          >
             <span>
               Media indexing failed
               {state().importJob?.errorCode ? ` (${state().importJob!.errorCode})` : ""}. Refresh to

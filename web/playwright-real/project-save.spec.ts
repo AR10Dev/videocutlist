@@ -148,12 +148,14 @@ test("creates, downloads, and verifies selected real-media export scenarios", as
     )
       saveRequests += 1;
   });
-  await page.locator(".project-menu > summary").click();
-  await page.getByRole("button", { name: "Project tools" }).click();
+  await page.getByRole("button", { name: "Project menu", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Project tools", exact: true }).click();
   const projectName = page.getByLabel("Project name");
   await projectName.fill(" ");
   await page.getByRole("button", { name: "Save project", exact: true }).click();
-  await expect(page.getByRole("alert").getByText("Project name is required.")).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "Project tools" }).getByRole("status")).toHaveText(
+    "Project name is required.",
+  );
   expect(saveRequests).toBe(0);
   await projectName.fill("Real media exports");
 

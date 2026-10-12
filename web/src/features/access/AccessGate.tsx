@@ -1,6 +1,6 @@
 import { useAtomValue } from "@effect/atom-solid";
 import { Show, type JSX } from "solid-js";
-import { useServerAtom } from "../app/server";
+import { useServerAtom } from "../../app/server";
 import type { AccessBootstrap } from "./bootstrap";
 
 export function AccessGate(props: { access: AccessBootstrap; renderWorkspace: () => JSX.Element }) {
@@ -41,7 +41,10 @@ export function AccessGate(props: { access: AccessBootstrap; renderWorkspace: ()
               your deployment uses proxy sign-in, authenticate there and reload instead.
             </p>
             <Show when={error()}>
-              <div class="alert alert-error" role="alert">
+              <div
+                class="alert alert-error flex flex-wrap items-center justify-between gap-2 [&>span]:min-w-0 [&>span]:wrap-anywhere"
+                role="alert"
+              >
                 {error()}
               </div>
             </Show>

@@ -10,7 +10,7 @@ import {
   parsePanelPreferences,
   panelPreferencesSchema,
   serializePanelPreferences,
-} from "../src/features/app/panelPreferences";
+} from "../src/app/panelPreferences";
 
 describe("workspace panel preferences", () => {
   it("falls back safely and round-trips valid preferences", () => {

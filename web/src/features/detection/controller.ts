@@ -15,7 +15,7 @@ import {
   type DetectionJob as GeneratedDetectionJob,
   type Job,
 } from "../../generated/effect-api";
-import { runServerMutation, type ServerState } from "../app/server";
+import { runServerMutation, type ServerState } from "../../app/server";
 import {
   acceptCandidates,
   type Candidate,

@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import * as AtomRegistry from "effect/reactivity/AtomRegistry";
 import { createApiClient } from "../src/api";
-import { createServerState } from "../src/features/app/server";
-import { createWorkspaceIdentity } from "../src/features/app/workspaceIdentity";
+import { createServerState } from "../src/app/server";
+import { createWorkspaceIdentity } from "../src/app/workspaceIdentity";
 
 function workspace() {
   const tasks: Array<() => void> = [];

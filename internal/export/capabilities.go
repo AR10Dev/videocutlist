@@ -13,22 +13,17 @@ import (
 )
 
 func (s Service) checkCapabilities(ctx context.Context, policy exportpolicy.Policy, strategy string) error {
-	features := []struct {
+	type feature struct {
 		listing string
 		name    string
-	}{
+	}
+	features := []feature{
 		{"-muxers", policy.Muxer},
 	}
 	if strategy == "precise_reencode" || strategy == "hybrid_smart_cut" {
 		features = append(features,
-			struct {
-				listing string
-				name    string
-			}{"-encoders", "libx264"},
-			struct {
-				listing string
-				name    string
-			}{"-encoders", "aac"},
+			feature{"-encoders", "libx264"},
+			feature{"-encoders", "aac"},
 		)
 	}
 	for _, feature := range features {

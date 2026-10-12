@@ -6,7 +6,12 @@ import * as AtomRegistry from "effect/reactivity/AtomRegistry";
 import * as AsyncResult from "effect/reactivity/AsyncResult";
 import * as Atom from "effect/reactivity/Atom";
 import { ApiFailure, apiErrorCode } from "../../api";
-import { readServerAtom, runServerMutation, useServerAtom, type ServerState } from "../app/server";
+import {
+  readServerAtom,
+  runServerMutation,
+  useServerAtom,
+  type ServerState,
+} from "../../app/server";
 import {
   newProjectId,
   recentProjectsKey,
@@ -26,6 +31,20 @@ import type { AppSettings } from "../settings/model";
 type Project = EffectApiTypes.Project;
 type Media = EffectApiTypes.Media;
 export type SaveState = "unsaved" | "saving" | "saved" | "failed";
+
+const copyProjectDocument = (project: Project): Project => ({
+  ...project,
+  items: project.items.map((item) => ({
+    ...item,
+    segments: item.segments.map((segment) => ({ ...segment })),
+    exportOptions: {
+      ...item.exportOptions,
+      streamIndexes: item.exportOptions.streamIndexes
+        ? [...item.exportOptions.streamIndexes]
+        : undefined,
+    },
+  })),
+});
 
 export type ProjectsControllerDeps = {
   server: ServerState;
@@ -223,19 +242,7 @@ export function createProjectsController(deps: ProjectsControllerDeps) {
         ),
       );
     }
-    const project: Project = {
-      ...result.value,
-      items: result.value.items.map((item) => ({
-        ...item,
-        segments: item.segments.map((segment) => ({ ...segment })),
-        exportOptions: {
-          ...item.exportOptions,
-          streamIndexes: item.exportOptions.streamIndexes
-            ? [...item.exportOptions.streamIndexes]
-            : undefined,
-        },
-      })),
-    };
+    const project = copyProjectDocument(result.value);
     Atom.batch(() => {
       deps.setRevision(project.revision);
       setSaveConflict(false);
@@ -356,19 +363,7 @@ export function createProjectsController(deps: ProjectsControllerDeps) {
         deps.server.registry.refresh(resource);
         loadedProject = yield* readServerAtom(deps.server, resource);
       }
-      const project: Project = {
-        ...loadedProject,
-        items: loadedProject.items.map((item) => ({
-          ...item,
-          segments: item.segments.map((segment) => ({ ...segment })),
-          exportOptions: {
-            ...item.exportOptions,
-            streamIndexes: item.exportOptions.streamIndexes
-              ? [...item.exportOptions.streamIndexes]
-              : undefined,
-          },
-        })),
-      };
+      const project = copyProjectDocument(loadedProject);
       const restored = yield* Effect.forEach(
         project.items,
         (entry) =>

@@ -2,7 +2,7 @@ import { RegistryProvider, RegistryContext } from "@effect/atom-solid";
 import * as AtomRegistry from "effect/reactivity/AtomRegistry";
 import { createComponent, createRoot, untrack, useContext } from "solid-js";
 import { createApiClient, type ApiClient, type ClientConfiguration } from "../src/api";
-import { createServerState, type ServerState } from "../src/features/app/server";
+import { createServerState, type ServerState } from "../src/app/server";
 
 export const controllerTestConfiguration: ClientConfiguration = {
   serverBaseUrl: "http://localhost",

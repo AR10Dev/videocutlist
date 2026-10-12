@@ -1,6 +1,6 @@
 import * as Atom from "effect/reactivity/Atom";
 import * as AtomRegistry from "effect/reactivity/AtomRegistry";
-import { createServerState } from "../src/features/app/server";
+import { createServerState } from "../src/app/server";
 import { createPreviewAssets } from "../src/features/preview/resources";
 import { createThumbnailObjectURL } from "../src/features/media/thumbnail";
 import { defaultBrowserPreferences } from "../src/features/settings/model";

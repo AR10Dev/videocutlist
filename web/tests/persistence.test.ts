@@ -3,7 +3,7 @@ import * as Atom from "effect/reactivity/Atom";
 import * as AtomRegistry from "effect/reactivity/AtomRegistry";
 import * as KeyValueStore from "effect/persistence/KeyValueStore";
 import { describe, expect, it } from "@effect/vitest";
-import { browserPersistenceLayer, createPersistencePolicy } from "../src/features/app/persistence";
+import { browserPersistenceLayer, createPersistencePolicy } from "../src/app/persistence";
 
 const valueSchema = Schema.Struct({ value: Schema.Number.check(Schema.isInt()) });
 

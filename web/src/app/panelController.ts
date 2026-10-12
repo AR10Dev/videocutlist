@@ -9,7 +9,7 @@ import {
   defaultPanelPreferences,
   type PanelPreferences,
 } from "./panelPreferences";
-import { workspaceTaskTabs, type WorkspaceTask } from "./panelState";
+import type { WorkspaceTask } from "./panelState";
 
 export { workspaceTaskTabs } from "./panelState";
 export type { WorkspaceTask } from "./panelState";
@@ -18,6 +18,7 @@ export type ResizablePanel = "media" | "segments";
 type PanelAction =
   | { type: "initialize"; narrow: boolean; viewportWidth: number }
   | { type: "viewport"; narrow: boolean; viewportWidth: number }
+  | { type: "viewport-width"; viewportWidth: number }
   | { type: "media"; open: boolean; persist: boolean; narrow: boolean }
   | { type: "tasks"; open: boolean; narrow: boolean; task?: WorkspaceTask }
   | { type: "task"; task: WorkspaceTask }
@@ -59,6 +60,7 @@ export function createWorkspacePanelController(deps: {
   const preferences = useAtomValue(() => panelPreferences.value);
   const panelState = useAtomValue(() => workspacePanelState);
   const [narrowViewport, setNarrowViewport] = createSignal(initialNarrowViewport);
+  const [viewportWidth, setViewportWidth] = createSignal(window.innerWidth);
   let disposed = false;
   let resizeState: { panel: ResizablePanel; startX: number; startWidth: number } | undefined;
   let pointerCapture: { target: HTMLElement; pointerId: number } | undefined;
@@ -84,11 +86,11 @@ export function createWorkspacePanelController(deps: {
   const mediaWidth = () =>
     narrowViewport()
       ? preferences().mediaWidth
-      : clampPanelPreferences(preferences(), window.innerWidth).mediaWidth;
+      : clampPanelPreferences(preferences(), viewportWidth()).mediaWidth;
   const segmentsWidth = () =>
     narrowViewport()
       ? preferences().segmentsWidth
-      : clampPanelPreferences(preferences(), window.innerWidth).segmentsWidth;
+      : clampPanelPreferences(preferences(), viewportWidth()).segmentsWidth;
 
   const panelCommand = runtime.fn(
     ({ action, after }: { action: PanelAction; after?: () => void }) =>
@@ -111,6 +113,15 @@ export function createWorkspacePanelController(deps: {
                 panelPreferences.value,
                 action.narrow ? restored : clampPanelPreferences(restored, action.viewportWidth),
               );
+              break;
+            }
+            case "viewport-width": {
+              const clamped = clampPanelPreferences(currentPreferences, action.viewportWidth);
+              if (
+                clamped.mediaWidth !== currentPreferences.mediaWidth ||
+                clamped.segmentsWidth !== currentPreferences.segmentsWidth
+              )
+                registry.set(panelPreferences.value, clamped);
               break;
             }
             case "viewport":
@@ -353,26 +364,6 @@ export function createWorkspacePanelController(deps: {
       resizeState.startWidth + (event.clientX - resizeState.startX) * direction,
     );
   };
-  const moveTask = (current: WorkspaceTask, direction: number) => {
-    const start = workspaceTaskTabs.indexOf(current);
-    let nextTask: WorkspaceTask | undefined;
-    for (let offset = 1; offset <= workspaceTaskTabs.length; offset += 1) {
-      const candidate =
-        workspaceTaskTabs[
-          (start + direction * offset + workspaceTaskTabs.length) % workspaceTaskTabs.length
-        ];
-      if (candidate !== "detection" || (deps.selected() && deps.activeItem())) {
-        nextTask = candidate;
-        break;
-      }
-    }
-    if (nextTask) {
-      void dispatch({ type: "task", task: nextTask }, () =>
-        scheduleFrame(() => document.getElementById(`${nextTask}-tab`)?.focus()),
-      );
-    }
-  };
-
   let hadSelectedMedia = false;
   let hadActiveItem = false;
   let previousSegmentCount = 0;
@@ -409,9 +400,12 @@ export function createWorkspacePanelController(deps: {
     const handleResize = () => {
       const nextNarrow = window.innerWidth < 1050;
       const wasNarrow = narrowViewport();
+      const width = window.innerWidth;
+      setViewportWidth(width);
       setNarrowViewport(nextNarrow);
       if (nextNarrow !== wasNarrow)
-        void dispatch({ type: "viewport", narrow: nextNarrow, viewportWidth: window.innerWidth });
+        void dispatch({ type: "viewport", narrow: nextNarrow, viewportWidth: width });
+      else if (!nextNarrow) void dispatch({ type: "viewport-width", viewportWidth: width });
     };
     window.addEventListener("resize", handleResize);
     onCleanup(() => window.removeEventListener("resize", handleResize));
@@ -454,6 +448,5 @@ export function createWorkspacePanelController(deps: {
     resetPanelWidth,
     resizePanelWithKeyboard,
     beginPanelResize,
-    moveTask,
   };
 }

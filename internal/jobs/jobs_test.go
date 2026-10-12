@@ -30,6 +30,10 @@ func TestUnifiedJobsTransitionsAndDerivedBatch(t *testing.T) {
 	if err != nil || job.State != store.JobQueued || job.Revision != 1 {
 		t.Fatalf("create = %#v, %v", job, err)
 	}
+	listed, err := jobs.ListByBatch(ctx, job.BatchID)
+	if err != nil || len(listed) != 1 || listed[0].ID != job.ID || listed[0].Revision != job.Revision {
+		t.Fatalf("batch jobs = %#v, %v", listed, err)
+	}
 	if _, err = jobs.Succeed(ctx, job.ID, `{}`); !errors.Is(err, store.ErrJobState) {
 		t.Fatalf("queued succeed = %v", err)
 	}
@@ -145,6 +149,11 @@ func TestBatchMissingReturnsNotFound(t *testing.T) {
 	}
 	if _, _, err := jobs.Batch(t.Context(), "b_missingbatch"); !errors.Is(err, store.ErrJobNotFound) {
 		t.Fatalf("missing batch = %v, want ErrJobNotFound", err)
+	}
+	for _, list := range []func(context.Context, string) ([]store.Job, error){jobs.ListByBatch, jobs.ListByProposal} {
+		if got, err := list(t.Context(), "missing"); got != nil || !errors.Is(err, store.ErrJobNotFound) {
+			t.Fatalf("missing job list = %#v, %v", got, err)
+		}
 	}
 }
 

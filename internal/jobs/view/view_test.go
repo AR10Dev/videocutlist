@@ -163,9 +163,28 @@ func TestLegacyBatchJobDisplaysResolvedExportOptions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	job := FromRecord(jobqueue.Job{ID: "j_aaaaaaaaaaaa", Kind: jobqueue.JobExport, RequestJSON: string(snapshot)})
-	if job.Mode != "separate" || job.Selection != "segments" || job.Strategy != "stream_copy_preferred" || job.Container != "mkv" {
-		t.Fatalf("legacy job options do not match worker defaults: %+v", job)
+	for _, request := range []string{string(snapshot), `{}`, `{"mode":"separate","selection":"segments","cutStrategy":"stream_copy_preferred","container":"mkv","destinationId":42}`} {
+		job := FromRecord(jobqueue.Job{ID: "j_aaaaaaaaaaaa", Kind: jobqueue.JobExport, RequestJSON: request})
+		if job.Mode != "separate" || job.Selection != "segments" || job.Strategy != "stream_copy_preferred" || job.Container != "mkv" {
+			t.Fatalf("legacy job options do not match worker defaults: %+v", job)
+		}
+	}
+}
+
+func TestDetectionProjectionRequestFallback(t *testing.T) {
+	for _, request := range []string{`{`, `[]`, `{"mediaId":42}`, `null`, `{}`} {
+		record := jobqueue.Job{
+			ID: "j_detection1234", Kind: jobqueue.JobDetect, State: jobqueue.JobFailed,
+			ProjectID: "p_project", Revision: 3, CreatedAt: time.Now(), RequestJSON: request,
+			ErrorCode: sql.NullString{Valid: true}, ResultJSON: sql.NullString{Valid: true, String: `[]`},
+		}
+		got := FromRecord(record)
+		if got.ID != record.ID || got.Revision != 3 || got.Progress != 1 || got.CreatedAt != record.CreatedAt || got.ErrorCode == nil || *got.ErrorCode != "" {
+			t.Fatalf("request %q fallback = %#v", request, got)
+		}
+		if (got.ProjectID == record.ProjectID) != (request == `null` || request == `{}`) {
+			t.Fatalf("request %q project identity = %q", request, got.ProjectID)
+		}
 	}
 }
 

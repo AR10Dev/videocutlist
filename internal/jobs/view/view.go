@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"videocutlist/internal/detection"
 	exporter "videocutlist/internal/export"
 	"videocutlist/internal/exportpolicy"
 	jobqueue "videocutlist/internal/jobs/model"
@@ -127,12 +126,7 @@ func FromRecord(value jobqueue.Job) Job {
 			job.MediaLabel = snapshot.MediaLabel
 		}
 	case jobqueue.JobDetect:
-		result, err := storeDetectionJobResult(value)
-		if err == nil {
-			job = detectionJobAsJob(result)
-			job.Progress = jobProgress(value.State)
-			job.CreatedAt, job.UpdatedAt = value.CreatedAt, value.UpdatedAt
-		}
+		job = detectionJobResult(value)
 	case jobqueue.JobScan:
 		result := librarymedia.ImportJobResult(value)
 		job = Job{ID: result.ID, Type: string(value.Kind), State: result.State, Progress: result.Progress, RootResults: result.RootResults, ErrorCode: stringPointer(result.ErrorCode), CreatedAt: value.CreatedAt, UpdatedAt: value.UpdatedAt}
@@ -141,8 +135,7 @@ func FromRecord(value jobqueue.Job) Job {
 		job = Job{ID: value.ID, Type: string(value.Kind), State: string(value.State), CreatedAt: value.CreatedAt, UpdatedAt: value.UpdatedAt}
 		job.Progress = jobProgress(value.State)
 		if value.ErrorCode.Valid {
-			code := value.ErrorCode.String
-			job.ErrorCode = &code
+			job.ErrorCode = new(value.ErrorCode.String)
 		}
 	}
 	job.BatchID = value.BatchID
@@ -151,28 +144,23 @@ func FromRecord(value jobqueue.Job) Job {
 	return job
 }
 
-func storeDetectionJobResult(value jobqueue.Job) (detection.Job, error) {
+func detectionJobResult(value jobqueue.Job) Job {
 	var request struct {
 		MediaID         string `json:"mediaId"`
 		ProjectRevision int64  `json:"projectRevision"`
 		Kind            string `json:"kind"`
 	}
 	if err := json.Unmarshal([]byte(value.RequestJSON), &request); err != nil {
-		return detection.Job{}, err
+		return Job{}
 	}
-	result := detection.Job{ID: value.ID, Type: string(value.Kind), State: string(value.State), MediaID: request.MediaID, ProjectID: value.ProjectID, ProjectRevision: request.ProjectRevision, Kind: model.DetectionKind(request.Kind)}
+	result := Job{ID: value.ID, Type: string(value.Kind), State: string(value.State), MediaID: request.MediaID, ProjectID: value.ProjectID, ProjectRevision: request.ProjectRevision, Kind: model.DetectionKind(request.Kind), Progress: jobProgress(value.State), CreatedAt: value.CreatedAt, UpdatedAt: value.UpdatedAt}
 	if value.ResultJSON.Valid {
 		_ = json.Unmarshal([]byte(value.ResultJSON.String), &result.Candidates)
 	}
 	if value.ErrorCode.Valid {
-		code := value.ErrorCode.String
-		result.ErrorCode = &code
+		result.ErrorCode = new(value.ErrorCode.String)
 	}
-	return result, nil
-}
-
-func detectionJobAsJob(value detection.Job) Job {
-	return Job{ID: value.ID, Type: value.Type, State: value.State, MediaID: value.MediaID, ProjectID: value.ProjectID, ProjectRevision: value.ProjectRevision, Kind: value.Kind, Candidates: value.Candidates, ErrorCode: value.ErrorCode}
+	return result
 }
 
 func jobProgress(state jobqueue.JobState) float64 {
@@ -188,23 +176,18 @@ func jobProgress(state jobqueue.JobState) float64 {
 
 func jobResult(record jobqueue.Job) Job {
 	job := Job{ID: record.ID, Type: "export", State: string(record.State), Progress: jobProgress(record.State), CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt}
-	var request struct {
+	type exportRequest struct {
 		Mode          string `json:"mode"`
 		Selection     string `json:"selection"`
 		StreamIndexes []int  `json:"streamIndexes,omitempty"`
 		CutStrategy   string `json:"cutStrategy"`
 		Container     string `json:"container"`
 	}
+	var request exportRequest
 	if json.Unmarshal([]byte(record.RequestJSON), &request) != nil || request.Mode == "" && request.CutStrategy == "" && request.Container == "" {
 		var snapshot exporter.ExportSnapshot
 		if json.Unmarshal([]byte(record.RequestJSON), &snapshot) == nil {
-			request = struct {
-				Mode          string `json:"mode"`
-				Selection     string `json:"selection"`
-				StreamIndexes []int  `json:"streamIndexes,omitempty"`
-				CutStrategy   string `json:"cutStrategy"`
-				Container     string `json:"container"`
-			}{
+			request = exportRequest{
 				Mode: snapshot.Item.ExportOptions.Mode, Selection: snapshot.Item.ExportOptions.Selection,
 				StreamIndexes: snapshot.Item.ExportOptions.StreamIndexes, CutStrategy: snapshot.Item.ExportOptions.CutStrategy,
 				Container: snapshot.Item.ExportOptions.Container,
@@ -212,37 +195,25 @@ func jobResult(record jobqueue.Job) Job {
 		}
 	}
 	options := (model.ExportOptions{Mode: request.Mode, Selection: request.Selection, CutStrategy: request.CutStrategy, Container: request.Container}).WithExportDefaults()
-	request.Mode, request.Selection = options.Mode, options.Selection
-	request.CutStrategy, request.Container = options.CutStrategy, options.Container
-	job.Strategy, job.Mode, job.Selection, job.SelectedStreams, job.Container = request.CutStrategy, request.Mode, request.Selection, slices.Clone(request.StreamIndexes), request.Container
+	job.Strategy, job.Mode, job.Selection, job.SelectedStreams, job.Container = options.CutStrategy, options.Mode, options.Selection, slices.Clone(request.StreamIndexes), options.Container
 	if record.State == jobqueue.JobFailed && record.ErrorCode.Valid {
-		value := record.ErrorCode.String
-		job.ErrorCode = &value
+		job.ErrorCode = new(record.ErrorCode.String)
 	}
 	if record.State == jobqueue.JobSucceeded && record.ResultJSON.Valid {
 		var result struct {
-			Container         string            `json:"container"`
-			OutputName        string            `json:"outputName"`
-			OutputNames       []string          `json:"outputNames"`
-			OutputFailures    []OutputFailure   `json:"outputFailures"`
-			SizeBytes         int64             `json:"sizeBytes"`
-			RetainUntil       time.Time         `json:"retainUntil"`
-			DestinationID     string            `json:"destinationId"`
-			DestinationKind   string            `json:"destinationKind"`
-			AppliedStrategy   string            `json:"appliedStrategy"`
-			AppliedStrategies []AppliedStrategy `json:"appliedStrategies"`
-			Warnings          []struct {
+			JobResult
+			AppliedStrategy string `json:"appliedStrategy"`
+			Warnings        []struct {
 				Code    string `json:"code"`
 				Message string `json:"message"`
 			} `json:"warnings"`
 			Verified bool `json:"verified"`
 		}
 		if json.Unmarshal([]byte(record.ResultJSON.String), &result) == nil && safeOutputNames(result.OutputName, result.OutputNames) && safeOutputFailures(result.OutputFailures) && safeAppliedStrategies(result.AppliedStrategies) && safeResultContainer(result.Container, result.OutputName, result.OutputNames) && result.SizeBytes >= 0 && !result.RetainUntil.IsZero() {
-			container := result.Container
-			if container == "" {
-				container = inferredOutputContainer(result.OutputName, result.OutputNames)
+			if result.Container == "" {
+				result.Container = inferredOutputContainer(result.OutputName, result.OutputNames)
 			}
-			job.Result = &JobResult{Container: container, OutputName: result.OutputName, OutputNames: result.OutputNames, OutputFailures: result.OutputFailures, AppliedStrategies: result.AppliedStrategies, SizeBytes: result.SizeBytes, RetainUntil: result.RetainUntil, DestinationID: result.DestinationID, DestinationKind: result.DestinationKind}
+			job.Result = &result.JobResult
 			job.AppliedStrategy = result.AppliedStrategy
 			job.Verified = result.Verified
 			for _, warning := range result.Warnings {

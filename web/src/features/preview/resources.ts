@@ -3,7 +3,7 @@ import * as Schema from "effect/Schema";
 import * as Atom from "effect/reactivity/Atom";
 import * as AsyncResult from "effect/reactivity/AsyncResult";
 import type { NativeMediaApiClient } from "../../api";
-import type { ServerState } from "../app/server";
+import type { ServerState } from "../../app/server";
 import type { Media } from "../../generated/effect-api";
 import { Waveform as WaveformSchema } from "../../generated/effect-api";
 import {

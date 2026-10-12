@@ -6,7 +6,7 @@ import { createComponent, createRoot } from "solid-js";
 import { Cause, Effect, Exit } from "effect";
 import * as AtomRegistry from "effect/reactivity/AtomRegistry";
 import { RegistryContext } from "@effect/atom-solid";
-import { createServerState } from "../src/features/app/server";
+import { createServerState } from "../src/app/server";
 import { createApiClient } from "../src/api";
 import type { StreamingApiClient } from "../src/api";
 import { createExportDownload, downloadExport } from "../src/features/export/download";

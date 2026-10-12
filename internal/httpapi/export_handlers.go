@@ -32,14 +32,7 @@ func (s *Server) downloadOutput(w http.ResponseWriter, r *http.Request, encoded,
 		return
 	}
 	defer closeResponseBody(s.config.Logger, "download_output", file)
-	if !safeOutputName(name) {
-		notFound(w, id)
-		return
-	}
-	w.Header().Set("Content-Type", exportpolicy.MIMEForOutputName(name))
-	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
-	w.WriteHeader(http.StatusOK)
-	_, _ = io.Copy(w, file)
+	writeAttachment(w, id, name, exportpolicy.MIMEForOutputName(name), file)
 }
 
 // downloadBatch streams the authenticated, validated batch archive.
@@ -54,14 +47,18 @@ func (s *Server) downloadBatch(w http.ResponseWriter, r *http.Request, batchID, 
 		return
 	}
 	defer closeResponseBody(s.config.Logger, "download_batch", file)
+	writeAttachment(w, id, name, "application/zip", contextio.NewReader(r.Context(), file))
+}
+
+func writeAttachment(w http.ResponseWriter, id, name, mime string, body io.Reader) {
 	if !safeOutputName(name) {
 		notFound(w, id)
 		return
 	}
-	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Type", mime)
 	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
 	w.WriteHeader(http.StatusOK)
-	_, _ = io.Copy(w, contextio.NewReader(r.Context(), file))
+	_, _ = io.Copy(w, body)
 }
 
 func safeOutputName(name string) bool {

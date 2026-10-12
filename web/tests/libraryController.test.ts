@@ -6,9 +6,9 @@ import * as Atom from "effect/reactivity/Atom";
 import * as AsyncResult from "effect/reactivity/AsyncResult";
 import { describe, expect, it, vi } from "vitest";
 import type { ApiClient, NativeMediaApiClient } from "../src/api";
-import { createServerState, type ServerState } from "../src/features/app/server";
+import { createServerState, type ServerState } from "../src/app/server";
 import { createLibraryController } from "../src/features/media/controller";
-import { createWorkspaceIdentity } from "../src/features/app/workspaceIdentity";
+import { createWorkspaceIdentity } from "../src/app/workspaceIdentity";
 
 type LibrarySurface = {
   media: Accessor<EffectApiTypes.Media[]>;

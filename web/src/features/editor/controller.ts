@@ -1,7 +1,7 @@
 import { useAtomValue } from "@effect/atom-solid";
 import * as Atom from "effect/reactivity/Atom";
-import type { ServerState } from "../app/server";
-import { syncCommand } from "../app/syncCommand";
+import type { ServerState } from "../../app/server";
+import { syncCommand } from "../../app/syncCommand";
 import type * as EffectApiTypes from "../../generated/effect-api";
 import { type Accessor, type Setter } from "solid-js";
 import { frameDuration } from "./frame";
@@ -558,10 +558,10 @@ export function createEditorController(deps: {
       setActiveIndex();
     }
   };
-  const undo = () => {
+  const applyHistoryTransition = (transition: (history: TimelineHistory) => TimelineHistory) => {
     const current = timeline();
     const selectedID = activeSegment()?.id;
-    const next = undoTimeline(current);
+    const next = transition(current);
     if (next === current) return;
     writeTimeline(next);
     clearInputDrafts();
@@ -569,17 +569,8 @@ export function createEditorController(deps: {
     deps.setPreviewCenterMs(next.present.playheadMs);
     deps.markDirty();
   };
-  const redo = () => {
-    const current = timeline();
-    const selectedID = activeSegment()?.id;
-    const next = redoTimeline(current);
-    if (next === current) return;
-    writeTimeline(next);
-    clearInputDrafts();
-    syncHistorySelection(current, next, selectedID);
-    deps.setPreviewCenterMs(next.present.playheadMs);
-    deps.markDirty();
-  };
+  const undo = () => applyHistoryTransition(undoTimeline);
+  const redo = () => applyHistoryTransition(redoTimeline);
 
   const dispatchShortcut = (event: {
     key: string;

@@ -233,8 +233,8 @@ async function openTask(page: Page, name: "Cuts" | "Project" | "Export" | "Detec
 
 async function newProject(page: Page) {
   await openProjectControls(page);
-  await page.locator(".project-menu > summary").click();
-  await page.getByRole("button", { name: "New project" }).click();
+  await page.getByRole("button", { name: "Project menu", exact: true }).click();
+  await page.getByRole("menuitem", { name: "New project" }).click();
 }
 
 async function startNewSegment(page: Page) {
@@ -255,8 +255,8 @@ async function loadProject(page: Page, id: string) {
     void dialog.accept(dialog.type() === "prompt" ? id : undefined);
   page.on("dialog", accept);
   try {
-    await page.locator(".project-menu > summary").click();
-    await page.getByRole("button", { name: "Load project" }).click();
+    await page.getByRole("button", { name: "Project menu", exact: true }).click();
+    await page.getByRole("menuitem", { name: "Load project" }).click();
     await page.waitForTimeout(0);
   } finally {
     page.off("dialog", accept);
@@ -1325,7 +1325,7 @@ test("child retry exposes pending state, rejects visibly, and ignores duplicate 
   );
   expect(retryCalls).toBe(1);
   releaseRetry();
-  await expect(page.locator(".export-status")).toContainText(
+  await expect(page.getByRole("status", { name: "Export status", exact: true })).toContainText(
     /failed|could not|try again|transport error/i,
   );
   await expect(retry).toBeEnabled();
@@ -3810,8 +3810,8 @@ test("new projects reset the editor and dirty changes need confirmation", async 
   };
   page.on("dialog", handleLoadDialog);
   await openTask(page, "Project");
-  await page.locator(".project-menu > summary").click();
-  await page.getByRole("button", { name: "Load project" }).click();
+  await page.getByRole("button", { name: "Project menu", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Load project" }).click();
   await discardConfirmed;
   page.off("dialog", handleLoadDialog);
   expect(projectLoads).toBe(0);

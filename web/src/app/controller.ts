@@ -1,18 +1,22 @@
-import type * as EffectApiTypes from "../../generated/effect-api";
+import type * as EffectApiTypes from "../generated/effect-api";
 import { RegistryContext, useAtomValue } from "@effect/atom-solid";
 import * as AsyncResult from "effect/reactivity/AsyncResult";
 import * as Atom from "effect/reactivity/Atom";
 import { createEffect, onCleanup, useContext } from "solid-js";
-import { createApiClient, resolveBrowserConfiguration } from "../../api";
-import { createPreviewController } from "../preview/controller";
-import { createProjectItem, moveProjectItem, type EditableProjectItem } from "../projects/model";
-import { createDetectionController } from "../detection/controller";
-import { createSettingsController } from "../settings/controller";
-import { createLibraryController } from "../media/controller";
-import { createProjectsController } from "../projects/controller";
-import { createExportController } from "../export/controller";
-import { createEditorController } from "../editor/controller";
-import { createTimelineHistory, type TimelineHistory } from "../editor/timeline";
+import { createApiClient, resolveBrowserConfiguration } from "../api";
+import { createPreviewController } from "../features/preview/controller";
+import {
+  createProjectItem,
+  moveProjectItem,
+  type EditableProjectItem,
+} from "../features/projects/model";
+import { createDetectionController } from "../features/detection/controller";
+import { createSettingsController } from "../features/settings/controller";
+import { createLibraryController } from "../features/media/controller";
+import { createProjectsController } from "../features/projects/controller";
+import { createExportController } from "../features/export/controller";
+import { createEditorController } from "../features/editor/controller";
+import { createTimelineHistory, type TimelineHistory } from "../features/editor/timeline";
 import { createServerState, useServerAtom } from "./server";
 import { createWorkspaceIdentity } from "./workspaceIdentity";
 type Media = EffectApiTypes.Media;

@@ -1,7 +1,7 @@
 import type * as EffectApiTypes from "../../generated/effect-api";
 import { For, Show } from "solid-js";
 import { CircleAlert, LoaderCircle, RefreshCw } from "lucide-solid";
-import { useWorkspace } from "../app/WorkspaceContext";
+import { useWorkspace } from "../../app/WorkspaceContext";
 import { ExportJobCard, jobOutputNames } from "../export/ExportJobCard";
 import { BatchDownload } from "../export/BatchDownload";
 import { isBatchActive } from "../export/queueResponse";
@@ -164,7 +164,10 @@ export function QueueView() {
       </header>
       <Show when={workspace.export.batchesError()}>
         {(message) => (
-          <div class="alert alert-error alert-soft" role="alert">
+          <div
+            class="alert alert-error alert-soft flex flex-wrap items-center justify-between gap-2 [&>span]:min-w-0 [&>span]:wrap-anywhere"
+            role="alert"
+          >
             <CircleAlert size={16} aria-hidden="true" />
             <span>{message()}</span>
             <button

@@ -3,7 +3,7 @@ import { Effect } from "effect";
 import * as AsyncResult from "effect/reactivity/AsyncResult";
 import * as AtomRegistry from "effect/reactivity/AtomRegistry";
 import { createApiClient } from "../src/api";
-import { createServerState } from "../src/features/app/server";
+import { createServerState } from "../src/app/server";
 import { createProjectBrowser } from "../src/features/projects/browser";
 
 const item = (id: string) => ({ id, name: id, revision: 1, updatedAt: "2026-01-01T00:00:00Z" });

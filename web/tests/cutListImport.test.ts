@@ -3,7 +3,7 @@ import { Effect } from "effect";
 import * as Atom from "effect/reactivity/Atom";
 import * as AtomRegistry from "effect/reactivity/AtomRegistry";
 import { createApiClient } from "../src/api";
-import { createServerState } from "../src/features/app/server";
+import { createServerState } from "../src/app/server";
 import { createProjectToolsSession } from "../src/features/projects/import";
 import type { Project } from "../src/generated/effect-api";
 

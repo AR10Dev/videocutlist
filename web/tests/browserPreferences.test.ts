@@ -2,7 +2,7 @@ import { Effect } from "effect";
 import * as AtomRegistry from "effect/reactivity/AtomRegistry";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApiClient } from "../src/api";
-import { createServerState } from "../src/features/app/server";
+import { createServerState } from "../src/app/server";
 import { browserPreferencesKey, defaultBrowserPreferences } from "../src/features/settings/model";
 import { memoryStorage } from "./memoryStorage";
 

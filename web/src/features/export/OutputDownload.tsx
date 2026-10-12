@@ -1,6 +1,6 @@
 import { Show } from "solid-js";
 import { createApiClient, resolveBrowserConfiguration } from "../../api";
-import { useWorkspace } from "../app/WorkspaceContext";
+import { useWorkspace } from "../../app/WorkspaceContext";
 import { createExportDownload, downloadExport } from "./download";
 
 /** Stream a protected output without making its API URL a navigable link. */

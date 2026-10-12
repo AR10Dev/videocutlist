@@ -20,7 +20,7 @@ import {
   createDetectionController,
   type DetectionController,
 } from "../src/features/detection/controller";
-import { createServerState } from "../src/features/app/server";
+import { createServerState } from "../src/app/server";
 import { createProjectsController } from "../src/features/projects/controller";
 import type { EditableProjectItem } from "../src/features/projects/model";
 import { defaultSettings } from "../src/features/settings/model";

@@ -2,8 +2,8 @@ import { Cause, Effect } from "effect";
 import * as Atom from "effect/reactivity/Atom";
 import * as Schema from "effect/Schema";
 import { Project, ProjectInput } from "../../generated/effect-api";
-import type { WorkspaceController } from "../app/controller";
-import { runServerMutation } from "../app/server";
+import type { WorkspaceController } from "../../app/controller";
+import { runServerMutation } from "../../app/server";
 import { validateSegments } from "../preview/model";
 import {
   downloadInterchangeAttachment,

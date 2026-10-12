@@ -4,7 +4,7 @@ import * as Atom from "effect/reactivity/Atom";
 import * as AtomRegistry from "effect/reactivity/AtomRegistry";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApiClient, MAX_INTERCHANGE_FILE_BYTES } from "../src/api";
-import { createServerState } from "../src/features/app/server";
+import { createServerState } from "../src/app/server";
 import {
   MAX_INTERCHANGE_ATTACHMENT_BYTES,
   readInterchangeAttachment,

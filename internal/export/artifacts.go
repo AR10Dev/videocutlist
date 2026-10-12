@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"videocutlist/internal/contextio"
 	"videocutlist/internal/exportpolicy"
 	jobs "videocutlist/internal/jobs"
 	jobqueue "videocutlist/internal/jobs/model"
@@ -593,7 +594,7 @@ func validateManifestArchive(ctx context.Context, path string) error {
 			return ErrOutputUnavailable
 		}
 		limit := int64(entry.UncompressedSize64) + 1
-		copied, copyErr := io.Copy(io.Discard, io.LimitReader(manifestContextReader{ctx: ctx, reader: reader}, limit))
+		copied, copyErr := io.Copy(io.Discard, io.LimitReader(contextio.NewReader(ctx, reader), limit))
 		closeErr := reader.Close()
 		if copyErr != nil {
 			return copyErr
@@ -604,20 +605,6 @@ func validateManifestArchive(ctx context.Context, path string) error {
 		total += copied
 	}
 	return nil
-}
-
-type manifestContextReader struct {
-	ctx    context.Context
-	reader io.Reader
-}
-
-func (r manifestContextReader) Read(p []byte) (int, error) {
-	select {
-	case <-r.ctx.Done():
-		return 0, r.ctx.Err()
-	default:
-		return r.reader.Read(p)
-	}
 }
 
 // adoptManifestOutputs registers valid outputs of an already-successful owner

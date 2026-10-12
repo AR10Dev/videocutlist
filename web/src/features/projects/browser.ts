@@ -1,7 +1,7 @@
 import { Effect } from "effect";
 import * as Atom from "effect/reactivity/Atom";
 import type { ProjectPage } from "../../generated/effect-api";
-import { readServerAtom, type ServerState } from "../app/server";
+import { readServerAtom, type ServerState } from "../../app/server";
 
 /** Accumulated pages belong to one open browser session, not the HTTP cache. */
 export function createProjectBrowser(server: ServerState) {

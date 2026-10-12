@@ -17,6 +17,7 @@ const media: Media = {
 };
 
 const setup = () => {
+  const previewCenters: number[] = [];
   const { value, dispose } = createControllerTestRoot(({ registry, server }) => {
     const [selected, setSelected] = createSignal<Media | undefined>(media);
     const [, setStatus] = createSignal("");
@@ -35,7 +36,7 @@ const setup = () => {
         markDirty: () => {
           dirty += 1;
         },
-        setPreviewCenterMs: () => undefined,
+        setPreviewCenterMs: (ms) => previewCenters.push(ms),
         watchedPosition: () => 0,
         togglePlayback: () => undefined,
         playActiveSegment: () => undefined,
@@ -56,6 +57,7 @@ const setup = () => {
       editorRootDisposed: () => editorRootDisposed,
       dirty: () => dirty,
       committed: () => committed,
+      previewCenters,
       setSelected,
       shortcutHelpOpen,
       registry,
@@ -152,26 +154,63 @@ describe("automatic segment editing", () => {
   });
 
   it("restores the preceding draft and identity through undo and redo", () => {
-    const { controller, dispose } = setup();
-    controller.setMarker("inMs", 100);
-    controller.setMarker("outMs", 300);
-    const firstId = controller.present().segments[0].id;
-    controller.newSegment();
-    controller.setMarker("inMs", 500);
-    controller.setMarker("outMs", 700);
-    const second = controller.present().segments[1];
+    const { controller, dirty, previewCenters, dispose } = setup();
+    try {
+      controller.setMarker("inMs", 100);
+      const noHistory = controller.timeline();
+      controller.undo();
+      controller.redo();
+      expect(controller.timeline()).toBe(noHistory);
+      expect(dirty()).toBe(0);
+      expect(previewCenters).toEqual([]);
 
-    controller.undo();
-    expect(controller.present().segments).toHaveLength(1);
-    expect(controller.present().inMs).toBe(500);
-    expect(controller.present().outMs).toBeUndefined();
-    expect(controller.activeSegmentIndex()).toBeUndefined();
+      controller.setMarker("outMs", 300);
+      const firstId = controller.present().segments[0].id!;
+      controller.updateTimeline({ playheadMs: 425 });
+      controller.newSegment();
+      controller.setMarker("inMs", 500);
+      controller.setMarker("outMs", 700);
+      const second = controller.present().segments[1];
+      const secondId = second.id!;
+      controller.editLabelDraft(secondId, "x".repeat(201));
+      controller.setBoundaryDraft(secondId, "start", "invalid");
+      controller.confirmBoundary(secondId, "start");
+      previewCenters.length = 0;
+      const dirtyBeforeHistory = dirty();
 
-    controller.redo();
-    expect(controller.present().segments[0].id).toBe(firstId);
-    expect(controller.present().segments[1]).toEqual(second);
-    expect(controller.activeSegmentIndex()).toBe(1);
-    dispose();
+      expect(
+        controller.dispatchShortcut({ key: "z", ctrlKey: true, metaKey: false, shiftKey: false }),
+      ).toBe(true);
+      expect(controller.present().segments).toHaveLength(1);
+      expect(controller.present().inMs).toBe(500);
+      expect(controller.present().outMs).toBeUndefined();
+      expect(controller.activeSegmentIndex()).toBeUndefined();
+      expect(controller.boundaryDrafts()).toEqual({});
+      expect(controller.boundaryErrors()).toEqual({});
+      expect(controller.labelDrafts()).toEqual({});
+      expect(controller.labelErrors()).toEqual({});
+      expect(previewCenters).toEqual([425]);
+      expect(dirty()).toBe(dirtyBeforeHistory + 1);
+
+      controller.editLabelDraft(firstId, "x".repeat(201));
+      controller.setBoundaryDraft(firstId, "start", "invalid");
+      controller.confirmBoundary(firstId, "start");
+      expect(
+        controller.dispatchShortcut({ key: "y", ctrlKey: true, metaKey: false, shiftKey: false }),
+      ).toBe(true);
+      expect(controller.present().segments[0].id).toBe(firstId);
+      expect(controller.present().segments[1]).toEqual(second);
+      expect(controller.activeSegment()?.id).toBe(secondId);
+      expect(controller.activeSegmentIndex()).toBe(1);
+      expect(controller.boundaryDrafts()).toEqual({});
+      expect(controller.boundaryErrors()).toEqual({});
+      expect(controller.labelDrafts()).toEqual({});
+      expect(controller.labelErrors()).toEqual({});
+      expect(previewCenters).toEqual([425, 425]);
+      expect(dirty()).toBe(dirtyBeforeHistory + 2);
+    } finally {
+      dispose();
+    }
   });
 
   it("does not mark an unchanged cut list dirty or lose redo history", () => {

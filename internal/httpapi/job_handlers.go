@@ -10,7 +10,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"videocutlist/internal/jobs/view"
 
 	jobqueue "videocutlist/internal/jobs/model"
 	"videocutlist/internal/projects"
@@ -87,10 +86,10 @@ func (s *Server) streamJob(writer http.ResponseWriter, request *http.Request, jo
 	writer.Header().Set("X-Accel-Buffering", "no")
 	flush := stream.flush
 	if resync {
-		if !writeJobEvent(writer, flush, "resync", job) {
+		if !writeSnapshotEvent(writer, flush, "resync", job.SnapshotCursor(), job) {
 			return
 		}
-	} else if !writeJobEvent(writer, flush, "snapshot", job) {
+	} else if !writeSnapshotEvent(writer, flush, "snapshot", job.SnapshotCursor(), job) {
 		return
 	}
 	if terminalJob(job.State) {
@@ -120,7 +119,7 @@ func (s *Server) streamJob(writer http.ResponseWriter, request *http.Request, jo
 				return
 			}
 			if current.SnapshotCursor() != job.SnapshotCursor() {
-				if !writeJobEvent(writer, flush, "snapshot", current) {
+				if !writeSnapshotEvent(writer, flush, "snapshot", current.SnapshotCursor(), current) {
 					return
 				}
 				job = current
@@ -195,7 +194,7 @@ func (s *Server) streamBatch(writer http.ResponseWriter, request *http.Request, 
 	if resync {
 		event = "resync"
 	}
-	if !writeBatchEvent(writer, flush, event, cursor, batch) || terminalBatch(batch.State) {
+	if !writeSnapshotEvent(writer, flush, event, cursor, batch) || terminalJob(batch.State) {
 		return
 	}
 
@@ -218,11 +217,11 @@ func (s *Server) streamBatch(writer http.ResponseWriter, request *http.Request, 
 			current, currentCursor, err := snapshotReader.Snapshot(streamContext, batchID)
 			if err == nil && current.BatchID == batchID && currentCursor != "" && len(currentCursor) <= 256 {
 				if currentCursor != cursor {
-					if !writeBatchEvent(writer, flush, "snapshot", currentCursor, current) {
+					if !writeSnapshotEvent(writer, flush, "snapshot", currentCursor, current) {
 						return
 					}
 					cursor, batch = currentCursor, current
-					if terminalBatch(batch.State) {
+					if terminalJob(batch.State) {
 						return
 					}
 				}
@@ -235,8 +234,8 @@ func (s *Server) streamBatch(writer http.ResponseWriter, request *http.Request, 
 	}
 }
 
-func writeBatchEvent(writer http.ResponseWriter, flush func() error, event, cursor string, batch projects.Batch) bool {
-	data, err := json.Marshal(batch)
+func writeSnapshotEvent(writer http.ResponseWriter, flush func() error, event, cursor string, snapshot any) bool {
+	data, err := json.Marshal(snapshot)
 	if err != nil {
 		return false
 	}
@@ -244,10 +243,6 @@ func writeBatchEvent(writer http.ResponseWriter, flush func() error, event, curs
 		return false
 	}
 	return flush() == nil
-}
-
-func terminalBatch(state string) bool {
-	return state == "succeeded" || state == "failed" || state == "cancelled"
 }
 
 func parseJobCursor(cursor, jobID string) (string, bool) {
@@ -263,17 +258,6 @@ func parseJobCursor(cursor, jobID string) (string, bool) {
 		return "", false
 	}
 	return cursor, true
-}
-
-func writeJobEvent(writer http.ResponseWriter, flush func() error, event string, job view.Job) bool {
-	data, err := json.Marshal(job)
-	if err != nil {
-		return false
-	}
-	if _, err := fmt.Fprintf(writer, "id: %s\nevent: %s\ndata: %s\n\n", job.SnapshotCursor(), event, data); err != nil {
-		return false
-	}
-	return flush() == nil
 }
 
 func terminalJob(state string) bool {

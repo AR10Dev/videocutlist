@@ -14,7 +14,7 @@ import {
 } from "lucide-solid";
 import { canStreamPreview, formatTime } from "../preview/model";
 import { candidatePointMs, candidateRange, type Candidate, type DetectionKind } from "./model";
-import { useWorkspace } from "../app/WorkspaceContext";
+import { useWorkspace } from "../../app/WorkspaceContext";
 
 const kindLabel: Record<DetectionKind, string> = {
   silence: "Pauses",
@@ -226,7 +226,10 @@ export function DetectionView() {
 
         <Show when={workspace.detection.detectionQueryError()}>
           {(message) => (
-            <div class="alert alert-error alert-soft" role="alert">
+            <div
+              class="alert alert-error alert-soft flex flex-wrap items-center justify-between gap-2 [&>span]:min-w-0 [&>span]:wrap-anywhere"
+              role="alert"
+            >
               <CircleAlert size={16} aria-hidden="true" />
               <span>{message()}</span>
             </div>
@@ -283,7 +286,11 @@ export function DetectionView() {
             starting()
           }
         >
-          <div class="detection-job-state" aria-busy="true" role="status">
+          <div
+            class="alert alert-info alert-soft flex flex-wrap items-center justify-between gap-2 rounded-md border-info/40 px-2.5 py-[9px] text-[0.78rem] text-base-content"
+            aria-busy="true"
+            role="status"
+          >
             <div class="detection-job-state-main">
               <LoaderCircle class="spin" size={18} aria-hidden="true" />
               <div>
@@ -317,7 +324,12 @@ export function DetectionView() {
 
         <Show when={jobIsTerminal()}>
           <div
-            class={`detection-job-state detection-job-state-${jobState()}`}
+            class="alert alert-soft flex flex-wrap items-center justify-between gap-2 rounded-md px-2.5 py-[9px] text-[0.78rem] text-base-content"
+            classList={{
+              "alert-success border-success/45 [&_svg]:text-success": jobState() === "succeeded",
+              "alert-error border-error/45 [&_svg]:text-error": jobState() === "failed",
+              "alert-warning border-warning/45 [&_svg]:text-warning": jobState() === "cancelled",
+            }}
             role={jobState() === "failed" ? "alert" : "status"}
           >
             <div class="detection-job-state-main">
@@ -362,7 +374,7 @@ export function DetectionView() {
             <label>
               Silence threshold (dB)
               <input
-                class="input input-bordered input-sm"
+                class="input input-sm"
                 type="number"
                 min="-100"
                 max="0"
@@ -376,7 +388,7 @@ export function DetectionView() {
             <label>
               Minimum duration (ms)
               <input
-                class="input input-bordered input-sm"
+                class="input input-sm"
                 type="number"
                 min="0"
                 max="86400000"
@@ -392,7 +404,7 @@ export function DetectionView() {
             <label>
               Scene threshold
               <input
-                class="input input-bordered input-sm"
+                class="input input-sm"
                 type="number"
                 min="0"
                 max="1"

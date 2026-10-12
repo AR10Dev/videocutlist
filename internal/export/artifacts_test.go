@@ -345,6 +345,11 @@ func TestArtifactReconcileAdoptsBatchArchiveManifestForCleanup(t *testing.T) {
 	if err := archiveFile.Close(); err != nil {
 		t.Fatal(err)
 	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := validateManifestArchive(ctx, archive); !errors.Is(err, context.Canceled) {
+		t.Fatalf("validate cancelled archive = %v", err)
+	}
 	manifest, err := WriteManifest(dir, job.BatchID, KindDownload, []string{"videocutlist-clips-batch.zip"}, time.Now().Add(time.Hour))
 	if err != nil {
 		t.Fatal(err)

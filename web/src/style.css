@@ -113,10 +113,6 @@
     min-width: 0;
     min-height: 0;
   }
-  .panel-menu-title {
-    color: var(--text-muted);
-    font-size: 0.7rem;
-  }
   .left-sidebar,
   .task-panel {
     background: var(--surface-raised);
@@ -207,25 +203,6 @@
     align-items: center;
     gap: 2px;
   }
-  .project-header-actions .btn {
-    min-height: 32px;
-    min-width: 32px;
-  }
-  .project-menu {
-    margin: 0;
-    border: 0;
-    padding: 0;
-  }
-  .project-menu > summary {
-    list-style: none;
-  }
-  .project-menu > summary::-webkit-details-marker {
-    display: none;
-  }
-  .project-menu .dropdown-content {
-    max-height: min(70dvh, 540px);
-    overflow-y: auto;
-  }
   .workspace-notices {
     position: fixed;
     z-index: 60;
@@ -240,10 +217,6 @@
   .workspace-notices > * {
     pointer-events: auto;
     box-shadow: 0 8px 24px color-mix(in srgb, #000 20%, transparent);
-  }
-  .project-tools-dialog .modal-box {
-    max-height: min(90dvh, 760px);
-    overflow-y: auto;
   }
   .spin {
     animation: spin 900ms linear infinite;
@@ -479,15 +452,6 @@
     font-family: ui-monospace, monospace;
     font-variant-numeric: tabular-nums;
   }
-  .tooltip-content {
-    z-index: 50;
-    padding: 5px 8px;
-    color: var(--color-neutral-content);
-    background: var(--color-neutral);
-    border: 1px solid var(--panel-border);
-    border-radius: 4px;
-    font-size: 0.75rem;
-  }
   .control-help,
   #timeline-description,
   .shortcut-help,
@@ -497,17 +461,6 @@
   }
   .asset-capability {
     margin: 8px 0 0;
-  }
-  .alert {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-  }
-  .alert > span {
-    min-width: 0;
-    overflow-wrap: anywhere;
   }
 
   .timeline-scroll {
@@ -727,24 +680,6 @@
     right: 0;
   }
 
-  .task-tabs {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    gap: 2px;
-    margin-bottom: 16px;
-  }
-  .task-tabs button {
-    min-width: 0;
-    min-height: 44px;
-    padding-inline: 4px;
-    font-size: 0.8rem;
-  }
-  .task-tabs button[aria-selected="true"] {
-    background: var(--color-primary);
-    color: var(--color-primary-content);
-    border-radius: 6px;
-    font-weight: 700;
-  }
   .task-panel section {
     min-width: 0;
   }
@@ -814,11 +749,6 @@
     display: grid;
     gap: 6px;
   }
-  .export-findings .alert {
-    min-height: 0;
-    padding: 8px 10px;
-    font-size: 0.8rem;
-  }
   .queue-heading-row {
     align-items: center;
   }
@@ -835,13 +765,6 @@
   .settings-view label {
     display: grid;
     gap: 6px;
-    min-width: 0;
-  }
-  .project-panel input:not([type="checkbox"]),
-  .export-panel input:not([type="checkbox"]),
-  .settings-view input:not([type="checkbox"]),
-  .settings-view select {
-    width: 100%;
     min-width: 0;
   }
   .export-panel label:has(input[type="checkbox"]),
@@ -1374,32 +1297,6 @@
     font-size: 0.73rem;
     line-height: 1.4;
   }
-  .detection-workflow-grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 7px;
-  }
-  .detection-workflow-card {
-    display: grid;
-    align-content: start;
-    gap: 6px;
-    min-width: 0;
-    padding: 9px;
-    border: 1px solid var(--panel-border);
-    border-radius: 6px;
-    background: var(--surface);
-  }
-  .detection-workflow-card .btn {
-    justify-content: flex-start;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .detection-workflow-card p {
-    margin: 0;
-    font-size: 0.7rem;
-    line-height: 1.35;
-  }
   .detection-methods {
     gap: 0;
     overflow: hidden;
@@ -1427,22 +1324,6 @@
     font-size: 0.7rem;
     line-height: 1.3;
   }
-  .detection-job-state,
-  .export-status,
-  .export-loading {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    min-width: 0;
-    padding: 9px 10px;
-    border: 1px solid color-mix(in srgb, var(--color-info) 40%, var(--panel-border));
-    border-radius: 6px;
-    background: color-mix(in srgb, var(--color-info) 10%, var(--surface));
-    font-size: 0.78rem;
-  }
-  .detection-job-state {
-    justify-content: space-between;
-  }
   .detection-job-state-main {
     display: flex;
     align-items: flex-start;
@@ -1462,27 +1343,6 @@
     color: var(--text-muted);
     font-size: 0.7rem;
     overflow-wrap: anywhere;
-  }
-  .detection-job-state-succeeded {
-    border-color: color-mix(in srgb, var(--color-success) 45%, var(--panel-border));
-    background: color-mix(in srgb, var(--color-success) 10%, var(--surface));
-  }
-  .detection-job-state-succeeded svg {
-    color: var(--color-success);
-  }
-  .detection-job-state-failed {
-    border-color: color-mix(in srgb, var(--color-error) 45%, var(--panel-border));
-    background: color-mix(in srgb, var(--color-error) 10%, var(--surface));
-  }
-  .detection-job-state-failed svg {
-    color: var(--color-error);
-  }
-  .detection-job-state-cancelled {
-    border-color: color-mix(in srgb, var(--color-warning) 45%, var(--panel-border));
-    background: color-mix(in srgb, var(--color-warning) 10%, var(--surface));
-  }
-  .detection-job-state-cancelled svg {
-    color: var(--color-warning);
   }
   .detection-options,
   .export-options,
@@ -1687,27 +1547,6 @@
   .export-finding small {
     color: var(--text-muted);
     font-size: 0.65rem;
-  }
-  .export-finding-allowed {
-    border-color: color-mix(in srgb, var(--color-success) 45%, var(--panel-border));
-    background: color-mix(in srgb, var(--color-success) 9%, var(--surface));
-  }
-  .export-finding-allowed > svg {
-    color: var(--color-success);
-  }
-  .export-finding-warn {
-    border-color: color-mix(in srgb, var(--color-warning) 45%, var(--panel-border));
-    background: color-mix(in srgb, var(--color-warning) 9%, var(--surface));
-  }
-  .export-finding-warn > svg {
-    color: var(--color-warning);
-  }
-  .export-finding-blocked {
-    border-color: color-mix(in srgb, var(--color-error) 45%, var(--panel-border));
-    background: color-mix(in srgb, var(--color-error) 9%, var(--surface));
-  }
-  .export-finding-blocked > svg {
-    color: var(--color-error);
   }
   .export-items {
     display: grid;
@@ -2002,9 +1841,6 @@
     padding: 0 8px 8px;
   }
   @media (max-width: 380px) {
-    .detection-workflow-grid {
-      grid-template-columns: 1fr;
-    }
     .detection-method-row {
       grid-template-columns: 1fr;
     }

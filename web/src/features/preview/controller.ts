@@ -3,7 +3,7 @@ import { type Accessor } from "solid-js";
 import { Effect } from "effect";
 import { useAtomValue } from "@effect/atom-solid";
 import * as Atom from "effect/reactivity/Atom";
-import type { ServerState } from "../app/server";
+import type { ServerState } from "../../app/server";
 import { createPreviewAssets } from "./resources";
 import { type NativeMediaApiClient } from "../../api";
 

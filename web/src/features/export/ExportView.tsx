@@ -11,7 +11,7 @@ import {
 } from "lucide-solid";
 import { formatTime, hybridSmartCutKnownIneligible } from "../preview/model";
 import { maxFilenameTemplateLength } from "../settings/model";
-import { useWorkspace } from "../app/WorkspaceContext";
+import { useWorkspace } from "../../app/WorkspaceContext";
 import { summarizeExports } from "./summary";
 import { QueueView } from "../queue/QueueView";
 import { ExportJobCard } from "./ExportJobCard";
@@ -219,8 +219,9 @@ export function ExportView(props: ExportViewProps = {}) {
 
       <Show when={exportStatus()}>
         <div
-          class={`export-status ${exportActive() ? "is-active" : ""}`}
+          class="alert alert-info alert-soft flex flex-wrap items-center gap-2 rounded-md border-info/40 px-2.5 py-[9px] text-[0.78rem] text-base-content"
           role="status"
+          aria-label="Export status"
           aria-live="polite"
           aria-busy={exportPending() || exportActive()}
         >
@@ -285,7 +286,10 @@ export function ExportView(props: ExportViewProps = {}) {
 
         <Show when={destinationsError()}>
           {(message) => (
-            <div class="alert alert-error alert-soft" role="alert">
+            <div
+              class="alert alert-error alert-soft flex flex-wrap items-center justify-between gap-2 [&>span]:min-w-0 [&>span]:wrap-anywhere"
+              role="alert"
+            >
               <CircleAlert size={16} aria-hidden="true" />
               <span>{message()}</span>
               <button class="btn btn-ghost btn-xs" type="button" onClick={retryDestinations}>
@@ -295,13 +299,20 @@ export function ExportView(props: ExportViewProps = {}) {
           )}
         </Show>
         <Show when={destinationsLoading() && !destinations().length}>
-          <div class="export-loading" role="status" aria-busy="true">
+          <div
+            class="alert alert-info alert-soft flex items-center gap-2 rounded-md border-info/40 px-2.5 py-[9px] text-[0.78rem] text-base-content"
+            role="status"
+            aria-busy="true"
+          >
             <LoaderCircle class="spin" size={16} aria-hidden="true" /> Loading destinations…
           </div>
         </Show>
         <Show when={preflightError()}>
           {(message) => (
-            <div class="alert alert-error alert-soft" role="alert">
+            <div
+              class="alert alert-error alert-soft flex flex-wrap items-center justify-between gap-2 [&>span]:min-w-0 [&>span]:wrap-anywhere"
+              role="alert"
+            >
               <CircleAlert size={16} aria-hidden="true" /> <span>{message()}</span>
               <button class="btn btn-ghost btn-xs" type="button" onClick={retryPreflight}>
                 <RefreshCw size={14} aria-hidden="true" /> Retry export checks
@@ -310,7 +321,11 @@ export function ExportView(props: ExportViewProps = {}) {
           )}
         </Show>
         <Show when={preflightPending()}>
-          <div class="export-loading" role="status" aria-busy="true">
+          <div
+            class="alert alert-info alert-soft flex items-center gap-2 rounded-md border-info/40 px-2.5 py-[9px] text-[0.78rem] text-base-content"
+            role="status"
+            aria-busy="true"
+          >
             <LoaderCircle class="spin" size={16} aria-hidden="true" /> Checking export requirements…
           </div>
         </Show>
@@ -333,7 +348,15 @@ export function ExportView(props: ExportViewProps = {}) {
                   {(finding) => (
                     <div
                       role={finding.severity === "blocked" ? "alert" : "status"}
-                      class={`alert alert-soft export-finding export-finding-${finding.severity}`}
+                      class="alert alert-soft export-finding text-base-content"
+                      classList={{
+                        "alert-success border-success/45 [&>svg]:text-success":
+                          finding.severity === "allowed",
+                        "alert-warning border-warning/45 [&>svg]:text-warning":
+                          finding.severity === "warn",
+                        "alert-error border-error/45 [&>svg]:text-error":
+                          finding.severity === "blocked",
+                      }}
                     >
                       <FindingIcon severity={finding.severity} />
                       <div>
@@ -419,7 +442,7 @@ export function ExportView(props: ExportViewProps = {}) {
                       <label class="export-item-destination">
                         <span>Destination</span>
                         <select
-                          class="select select-sm"
+                          class="select select-sm w-full min-w-0"
                           aria-label={`Destination for ${item.media.name} clip ${index() + 1}`}
                           value={itemDestinationId(item.id)}
                           onChange={(event) =>
@@ -465,7 +488,7 @@ export function ExportView(props: ExportViewProps = {}) {
             <label>
               Output arrangement
               <select
-                class="select select-bordered select-sm"
+                class="select select-sm w-full min-w-0"
                 aria-label="Output arrangement"
                 value={exportMode()}
                 onChange={(event) =>
@@ -479,7 +502,7 @@ export function ExportView(props: ExportViewProps = {}) {
             <label>
               Output container
               <select
-                class="select select-bordered select-sm"
+                class="select select-sm w-full min-w-0"
                 aria-label="Output container"
                 value={exportContainer()}
                 onChange={(event) =>
@@ -501,7 +524,7 @@ export function ExportView(props: ExportViewProps = {}) {
             <label>
               What to export
               <select
-                class="select select-bordered select-sm"
+                class="select select-sm w-full min-w-0"
                 aria-label="What to export"
                 value={exportSelection()}
                 onChange={(event) =>
@@ -569,7 +592,10 @@ export function ExportView(props: ExportViewProps = {}) {
                 </div>
               </Show>
               <Show when={hiddenStreamIndexes().length > 0}>
-                <div class="alert alert-warning alert-soft" role="alert">
+                <div
+                  class="alert alert-warning alert-soft flex flex-wrap items-center justify-between gap-2 [&>span]:min-w-0 [&>span]:wrap-anywhere"
+                  role="alert"
+                >
                   <CircleAlert size={15} aria-hidden="true" />
                   <span>
                     Saved stream selection includes unavailable stream
@@ -587,7 +613,7 @@ export function ExportView(props: ExportViewProps = {}) {
             <label>
               Processing
               <select
-                class="select select-bordered select-sm"
+                class="select select-sm w-full min-w-0"
                 aria-label="Processing"
                 value={cutStrategy()}
                 onChange={(event) =>
@@ -624,7 +650,7 @@ export function ExportView(props: ExportViewProps = {}) {
                   : "Destination"}
                 <Show when={!destinationsLoading() && availableDestinations().length > 0}>
                   <select
-                    class="select select-bordered select-sm"
+                    class="select select-sm w-full min-w-0"
                     aria-label="Destination"
                     value={destinationId()}
                     onChange={(event) => exportFeature.setDestination(event.currentTarget.value)}
@@ -650,7 +676,7 @@ export function ExportView(props: ExportViewProps = {}) {
               <label>
                 Filename template
                 <input
-                  class="input input-bordered input-sm"
+                  class="input input-sm w-full min-w-0"
                   maxLength={maxFilenameTemplateLength}
                   value={filenameTemplate()}
                   onInput={(event) => {
@@ -714,7 +740,10 @@ export function ExportView(props: ExportViewProps = {}) {
             </div>
             <Show when={batchError()}>
               {(message) => (
-                <div class="alert alert-error alert-soft" role="alert">
+                <div
+                  class="alert alert-error alert-soft flex flex-wrap items-center justify-between gap-2 [&>span]:min-w-0 [&>span]:wrap-anywhere"
+                  role="alert"
+                >
                   <CircleAlert size={16} aria-hidden="true" />
                   <span>{message()}</span>
                 </div>

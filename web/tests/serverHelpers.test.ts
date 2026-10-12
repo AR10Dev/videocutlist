@@ -3,11 +3,7 @@ import * as AsyncResult from "effect/reactivity/AsyncResult";
 import * as AtomRegistry from "effect/reactivity/AtomRegistry";
 import { describe, expect, it, vi } from "vitest";
 import { createApiClient } from "../src/api";
-import {
-  createServerState,
-  runGeneratedRequest,
-  serverResultError,
-} from "../src/features/app/server";
+import { createServerState, runGeneratedRequest, serverResultError } from "../src/app/server";
 
 const deferred = <A>() => {
   let resolve!: (value: A) => void;

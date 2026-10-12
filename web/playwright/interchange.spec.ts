@@ -15,8 +15,8 @@ const media = {
 async function openProjectTools(page: import("@playwright/test").Page) {
   const mediaToggle = page.getByRole("button", { name: /media library/ }).first();
   if ((await mediaToggle.getAttribute("aria-expanded")) === "false") await mediaToggle.click();
-  await page.locator(".project-menu > summary").click();
-  await page.getByRole("button", { name: "Project tools", exact: true }).click();
+  await page.getByRole("button", { name: "Project menu", exact: true }).click();
+  await page.getByRole("menuitem", { name: "Project tools", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Project tools", exact: true })).toBeVisible();
 }
 
@@ -220,14 +220,13 @@ test("export cancellation remains effective when the active project item changes
   await expect(page.getByRole("button", { name: "Cancel export" })).not.toBeVisible();
 });
 
-test("project tools is a native modal and returns focus on Escape", async ({ page }) => {
+test("project tools is an accessible modal and returns focus on Escape", async ({ page }) => {
   await page.goto("/");
-  const trigger = page.locator(".project-menu > summary");
+  const trigger = page.getByRole("button", { name: "Project menu", exact: true });
   await openProjectTools(page);
   const dialog = page.getByRole("dialog", { name: "Project tools" });
   await expect(dialog).toBeVisible();
-  await expect(dialog).toHaveJSProperty("open", true);
-  expect(await dialog.evaluate((element) => element.matches(":modal"))).toBe(true);
+  await expect(dialog).toHaveAttribute("aria-modal", "true");
   await page.keyboard.press("Escape");
   await expect(dialog).toHaveCount(0);
   await expect(trigger).toBeFocused();

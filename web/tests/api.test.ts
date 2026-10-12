@@ -14,7 +14,7 @@ import {
   uncertainCommandFailure,
   validInterchangeFileSize,
 } from "../src/api";
-import { createServerState, readServerAtom } from "../src/features/app/server";
+import { createServerState, readServerAtom } from "../src/app/server";
 
 describe("client API boundary", () => {
   it("extracts nested error codes and validates public error envelopes", () => {

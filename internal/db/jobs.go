@@ -75,30 +75,12 @@ func (s *JobStorage) RecoverRunningJobs(ctx context.Context) (int64, error) {
 	return result.RowsAffected()
 }
 
-func (s *JobStorage) ListJobsByBatch(ctx context.Context, batchID string) (result []model.Job, err error) {
+func (s *JobStorage) ListJobsByBatch(ctx context.Context, batchID string) ([]model.Job, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT `+jobRecordColumns+` FROM jobs WHERE batch_id=? ORDER BY created_at,id`, batchID)
 	if err != nil {
 		return nil, err
 	}
-	defer func() {
-		if closeErr := rows.Close(); closeErr != nil {
-			err = errors.Join(err, fmt.Errorf("close batch job rows: %w", closeErr))
-		}
-	}()
-	for rows.Next() {
-		job, scanErr := scanJob(rows)
-		if scanErr != nil {
-			return nil, scanErr
-		}
-		result = append(result, job)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	if len(result) == 0 {
-		return nil, model.ErrJobNotFound
-	}
-	return result, nil
+	return scanJobRows(rows, "close batch job rows")
 }
 
 func (s *JobStorage) BatchCursorSnapshot(ctx context.Context, batchID string) (result []model.BatchCursorEntry, err error) {
@@ -128,14 +110,18 @@ func (s *JobStorage) ListJobsByProposal(ctx context.Context, proposalID string) 
 	return listJobsByProposal(ctx, s.db, proposalID)
 }
 
-func listJobsByProposal(ctx context.Context, queryer jobQueryer, proposalID string) (result []model.Job, err error) {
+func listJobsByProposal(ctx context.Context, queryer jobQueryer, proposalID string) ([]model.Job, error) {
 	rows, err := queryer.QueryContext(ctx, `SELECT `+jobRecordColumns+` FROM jobs WHERE proposal_id=? ORDER BY created_at,id`, proposalID)
 	if err != nil {
 		return nil, err
 	}
+	return scanJobRows(rows, "close proposal job rows")
+}
+
+func scanJobRows(rows *sql.Rows, closeOperation string) (result []model.Job, err error) {
 	defer func() {
 		if closeErr := rows.Close(); closeErr != nil {
-			err = errors.Join(err, fmt.Errorf("close proposal job rows: %w", closeErr))
+			err = errors.Join(err, fmt.Errorf("%s: %w", closeOperation, closeErr))
 		}
 	}()
 	for rows.Next() {

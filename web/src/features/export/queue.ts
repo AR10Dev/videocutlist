@@ -9,7 +9,7 @@ import { Batch as BatchSchema } from "../../generated/effect-api";
 import type { Batch as ObservedBatch } from "../../generated/effect-api";
 import { uncertainCommandFailure } from "../../api";
 import { requestErrorMessage, resourceErrorMessage } from "./errors";
-import { runGeneratedRequest, useServerAtom, type ServerState } from "../app/server";
+import { runGeneratedRequest, useServerAtom, type ServerState } from "../../app/server";
 import { isActiveState, isTerminalState } from "../queue/jobState";
 import { exportFailureMessage } from "../queue/jobUi";
 import {
