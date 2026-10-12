@@ -16,7 +16,7 @@ import (
 )
 
 func TestBatchEventStreamSendsCurrentSnapshotAndResynchronizesCursor(t *testing.T) {
-	authenticator, err := NewAuthenticator(AuthConfig{Mode: "bearer", BearerToken: "stream-secret"})
+	authenticator, err := NewAuthenticator(AuthConfig{Mode: "bearer", BearerToken: "stream-secret-0123456789abcdef01234567"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +42,7 @@ func TestBatchEventStreamSendsCurrentSnapshotAndResynchronizesCursor(t *testing.
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			request := httptest.NewRequest(http.MethodGet, "http://api.test/api/v2/batches/b_aaaaaaaaaaaa/events", nil)
-			request.Header.Set("Authorization", "Bearer stream-secret")
+			request.Header.Set("Authorization", "Bearer stream-secret-0123456789abcdef01234567")
 			if test.cursor != "" {
 				request.Header.Set("Last-Event-ID", test.cursor)
 			}
@@ -125,7 +125,7 @@ func TestBatchEventStreamReturnsNotFoundForMissingBatch(t *testing.T) {
 }
 
 func TestJobEventStreamSendsTerminalSnapshotAndResynchronizesInvalidCursor(t *testing.T) {
-	authenticator, err := NewAuthenticator(AuthConfig{Mode: "bearer", BearerToken: "stream-secret"})
+	authenticator, err := NewAuthenticator(AuthConfig{Mode: "bearer", BearerToken: "stream-secret-0123456789abcdef01234567"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +160,7 @@ func TestJobEventStreamSendsTerminalSnapshotAndResynchronizesInvalidCursor(t *te
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			request := httptest.NewRequest(http.MethodGet, "http://api.test/api/v2/jobs/"+job.ID+"/events", nil)
-			request.Header.Set("Authorization", "Bearer stream-secret")
+			request.Header.Set("Authorization", "Bearer stream-secret-0123456789abcdef01234567")
 			if test.sendCursor {
 				request.Header.Set("Last-Event-ID", test.cursor)
 			}

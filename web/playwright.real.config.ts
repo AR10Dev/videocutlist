@@ -15,7 +15,7 @@ export default defineConfig({
   use: { baseURL, trace: "retain-on-failure" },
   reporter: [["./playwright-real/cleanup-reporter.ts", { directory: realUiDir }]],
   webServer: {
-    command: `mkdir -p "$REAL_UI_DIR/cache" "$REAL_UI_DIR/exports" "$REAL_UI_DIR/media" && cp test/fixtures/real-media/sintel-trailer.mp4 "$REAL_UI_DIR/media/" && ffmpeg -v error -i test/fixtures/real-media/sintel-trailer.mp4 -map 0 -c copy "$REAL_UI_DIR/media/sintel-trailer.mkv" && VIDEOCUTLIST_DATABASE_PATH="$REAL_UI_DIR/videocutlist.db" VIDEOCUTLIST_CACHE_DIR="$REAL_UI_DIR/cache" VIDEOCUTLIST_EXPORT_DIR="$REAL_UI_DIR/exports" VIDEOCUTLIST_MEDIA_ROOTS_JSON="{\\"fixture\\":\\"$REAL_UI_DIR/media\\"}" VIDEOCUTLIST_LISTEN_ADDRESS=127.0.0.1 VIDEOCUTLIST_PORT=${port} VIDEOCUTLIST_AUTH_MODE=bearer VIDEOCUTLIST_BEARER_TOKEN=real-media-test-token go run ./cmd/videocutlist`,
+    command: `mkdir -p "$REAL_UI_DIR/cache" "$REAL_UI_DIR/exports" "$REAL_UI_DIR/media" && cp test/fixtures/real-media/sintel-trailer.mp4 "$REAL_UI_DIR/media/" && ffmpeg -v error -i test/fixtures/real-media/sintel-trailer.mp4 -map 0 -c copy "$REAL_UI_DIR/media/sintel-trailer.mkv" && VIDEOCUTLIST_DATABASE_PATH="$REAL_UI_DIR/videocutlist.db" VIDEOCUTLIST_CACHE_DIR="$REAL_UI_DIR/cache" VIDEOCUTLIST_EXPORT_DIR="$REAL_UI_DIR/exports" VIDEOCUTLIST_MEDIA_ROOTS_JSON="{\\"fixture\\":\\"$REAL_UI_DIR/media\\"}" VIDEOCUTLIST_LISTEN_ADDRESS=127.0.0.1 VIDEOCUTLIST_PORT=${port} VIDEOCUTLIST_AUTH_MODE=bearer VIDEOCUTLIST_BEARER_TOKEN=real-media-test-token-0123456789abcdef go run ./cmd/videocutlist`,
     cwd: "..",
     env: { REAL_UI_DIR: realUiDir },
     url: `${baseURL}/ready`, // Operational readiness is root-scoped, not part of /api/v2.

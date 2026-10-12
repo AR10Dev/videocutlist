@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import { promisify } from "node:util";
 import { expect, test, type Locator, type Page, type TestInfo } from "@playwright/test";
 
-const token = "real-media-test-token";
+const token = "real-media-test-token-0123456789abcdef";
 const serverBaseUrl = "http://127.0.0.1:18787";
 const run = promisify(execFile);
 

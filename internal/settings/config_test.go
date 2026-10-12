@@ -55,7 +55,7 @@ func TestLoadListenerConfiguration(t *testing.T) {
 		{name: "default", listenAddr: "127.0.0.1:8787"},
 		{name: "loopback port", changes: map[string]string{"VIDEOCUTLIST_LISTEN_ADDRESS": "127.0.0.1", "VIDEOCUTLIST_PORT": "1"}, listenAddr: "127.0.0.1:1"},
 		{name: "IPv6", changes: map[string]string{"VIDEOCUTLIST_LISTEN_ADDRESS": "::1", "VIDEOCUTLIST_PORT": "4000"}, listenAddr: "[::1]:4000"},
-		{name: "bearer LAN", changes: map[string]string{"VIDEOCUTLIST_AUTH_MODE": "bearer", "VIDEOCUTLIST_BEARER_TOKEN": "secret", "VIDEOCUTLIST_LISTEN_ADDRESS": "0.0.0.0", "VIDEOCUTLIST_PORT": "4000"}, listenAddr: "0.0.0.0:4000"},
+		{name: "bearer LAN", changes: map[string]string{"VIDEOCUTLIST_AUTH_MODE": "bearer", "VIDEOCUTLIST_BEARER_TOKEN": strings.Repeat("x", 32), "VIDEOCUTLIST_LISTEN_ADDRESS": "0.0.0.0", "VIDEOCUTLIST_PORT": "4000"}, listenAddr: "0.0.0.0:4000"},
 		{name: "invalid IP", changes: map[string]string{"VIDEOCUTLIST_LISTEN_ADDRESS": "localhost"}, wantErr: true},
 		{name: "host port is not an IP", changes: map[string]string{"VIDEOCUTLIST_LISTEN_ADDRESS": "127.0.0.1:9000"}, wantErr: true},
 		{name: "ephemeral port", changes: map[string]string{"VIDEOCUTLIST_PORT": "0"}, listenAddr: "127.0.0.1:0"},
@@ -163,6 +163,40 @@ func TestLoadTimeouts(t *testing.T) {
 			}
 			if c.ReadTimeout != test.read || c.WriteTimeout != test.write || c.IdleTimeout != test.idle {
 				t.Fatalf("timeouts = (%s, %s, %s), want (%s, %s, %s)", c.ReadTimeout, c.WriteTimeout, c.IdleTimeout, test.read, test.write, test.idle)
+			}
+		})
+	}
+}
+
+func TestLoadBearerTokenStrength(t *testing.T) {
+	minimumToken := strings.Repeat("x", 32)
+	for _, test := range []struct {
+		name    string
+		token   string
+		wantErr bool
+	}{
+		{name: "empty", token: "", wantErr: true},
+		{name: "below minimum", token: minimumToken[:31], wantErr: true},
+		{name: "minimum length", token: minimumToken},
+		{name: "above minimum", token: minimumToken + "x"},
+		{name: "control character", token: minimumToken[:31] + "\n", wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := load(env(mergeEnv(baseEnv(), map[string]string{
+				"VIDEOCUTLIST_AUTH_MODE":    "bearer",
+				"VIDEOCUTLIST_BEARER_TOKEN": test.token,
+			})))
+			if test.wantErr {
+				if err == nil {
+					t.Fatal("Load unexpectedly accepted an invalid bearer token")
+				}
+				if test.token != "" && strings.Contains(err.Error(), test.token) {
+					t.Fatal("Load error exposed the bearer token")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
 			}
 		})
 	}

@@ -37,7 +37,7 @@ func TestMCPAdministrationRequiresDeploymentAuthAndRevealsSecretOnce(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	authenticator, err := NewAuthenticator(AuthConfig{Mode: "bearer", BearerToken: "deployment-admin"})
+	authenticator, err := NewAuthenticator(AuthConfig{Mode: "bearer", BearerToken: "deployment-admin-0123456789abcdef01234567"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,13 +52,13 @@ func TestMCPAdministrationRequiresDeploymentAuthAndRevealsSecretOnce(t *testing.
 
 	expires := time.Now().UTC().Add(time.Hour).Format(time.RFC3339Nano)
 	invalidRoot := `{"name":"assistant","permissions":["media:read"],"mediaScope":{"kind":"roots","rootIds":["unknown-root"]},"projectScope":{"kind":"all"},"expiresAt":"` + expires + `"}`
-	invalidRootResponse := mcpAdminRequest(server, http.MethodPost, "/api/v2/settings/mcp/credentials", invalidRoot, "deployment-admin")
+	invalidRootResponse := mcpAdminRequest(server, http.MethodPost, "/api/v2/settings/mcp/credentials", invalidRoot, "deployment-admin-0123456789abcdef01234567")
 	if invalidRootResponse.Code != http.StatusBadRequest {
 		t.Fatalf("unknown root status=%d body=%s", invalidRootResponse.Code, invalidRootResponse.Body.String())
 	}
 
 	body := `{"name":"assistant","permissions":["media:read","exports:run"],"mediaScope":{"kind":"all"},"projectScope":{"kind":"all"},"expiresAt":"` + expires + `","unattendedExports":true}`
-	createdResponse := mcpAdminRequest(server, http.MethodPost, "/api/v2/settings/mcp/credentials", body, "deployment-admin")
+	createdResponse := mcpAdminRequest(server, http.MethodPost, "/api/v2/settings/mcp/credentials", body, "deployment-admin-0123456789abcdef01234567")
 	if createdResponse.Code != http.StatusCreated {
 		t.Fatalf("create status=%d body=%s", createdResponse.Code, createdResponse.Body.String())
 	}
@@ -79,7 +79,7 @@ func TestMCPAdministrationRequiresDeploymentAuthAndRevealsSecretOnce(t *testing.
 		})
 	}
 
-	listResponse := mcpAdminRequest(server, http.MethodGet, "/api/v2/settings/mcp", "", "deployment-admin")
+	listResponse := mcpAdminRequest(server, http.MethodGet, "/api/v2/settings/mcp", "", "deployment-admin-0123456789abcdef01234567")
 	if listResponse.Code != http.StatusOK {
 		t.Fatalf("list status=%d body=%s", listResponse.Code, listResponse.Body.String())
 	}
@@ -96,11 +96,11 @@ func TestMCPAdministrationRequiresDeploymentAuthAndRevealsSecretOnce(t *testing.
 	if strings.Contains(listed, `"nextCursor"`) {
 		t.Fatalf("final page must omit nextCursor: %s", listed)
 	}
-	second := mcpAdminRequest(server, http.MethodPost, "/api/v2/settings/mcp/credentials", body, "deployment-admin")
+	second := mcpAdminRequest(server, http.MethodPost, "/api/v2/settings/mcp/credentials", body, "deployment-admin-0123456789abcdef01234567")
 	if second.Code != http.StatusCreated {
 		t.Fatalf("second create status=%d", second.Code)
 	}
-	firstPage := mcpAdminRequest(server, http.MethodGet, "/api/v2/settings/mcp?limit=1", "", "deployment-admin")
+	firstPage := mcpAdminRequest(server, http.MethodGet, "/api/v2/settings/mcp?limit=1", "", "deployment-admin-0123456789abcdef01234567")
 	var page struct {
 		Credentials []mcpCredentialView `json:"credentials"`
 		NextCursor  string              `json:"nextCursor"`
@@ -111,12 +111,12 @@ func TestMCPAdministrationRequiresDeploymentAuthAndRevealsSecretOnce(t *testing.
 	if firstPage.Code != http.StatusOK || len(page.Credentials) != 1 || page.NextCursor == "" {
 		t.Fatalf("first page=%s", firstPage.Body.String())
 	}
-	lastPage := mcpAdminRequest(server, http.MethodGet, "/api/v2/settings/mcp?limit=1&cursor="+page.NextCursor, "", "deployment-admin")
+	lastPage := mcpAdminRequest(server, http.MethodGet, "/api/v2/settings/mcp?limit=1&cursor="+page.NextCursor, "", "deployment-admin-0123456789abcdef01234567")
 	if lastPage.Code != http.StatusOK || strings.Contains(lastPage.Body.String(), `"nextCursor"`) || strings.Contains(lastPage.Body.String(), page.Credentials[0].ID) {
 		t.Fatalf("last page=%s", lastPage.Body.String())
 	}
 
-	revokeResponse := mcpAdminRequest(server, http.MethodDelete, "/api/v2/settings/mcp/credentials/"+created.ID, "", "deployment-admin")
+	revokeResponse := mcpAdminRequest(server, http.MethodDelete, "/api/v2/settings/mcp/credentials/"+created.ID, "", "deployment-admin-0123456789abcdef01234567")
 	if revokeResponse.Code != http.StatusOK || !strings.Contains(revokeResponse.Body.String(), `"status":"revoked"`) {
 		t.Fatalf("revoke status=%d body=%s", revokeResponse.Code, revokeResponse.Body.String())
 	}
