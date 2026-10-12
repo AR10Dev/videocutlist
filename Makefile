@@ -48,12 +48,12 @@ format:
 	$(PNPM) --dir web run format
 
 lint:
-	node --test scripts/check-layout.test.mjs scripts/clean.test.mjs
+	node --test scripts/check-layout.test.mjs scripts/clean.test.mjs scripts/check-shellcheck.test.mjs
 	node scripts/check-layout.mjs
 	test -z "$$($(GOFMT) -l $$(find cmd internal test -type f -name '*.go'))"
 	$(GOLANGCI_LINT) run ./...
 	$(GO) vet $(GO_TEST_PACKAGES)
-	for file in $(SHELL_FILES); do shellcheck "$$file"; done
+	status=0; for file in $(SHELL_FILES); do shellcheck "$$file" || status=1; done; test "$$status" -eq 0
 	test -z "$$(shfmt -d $(SHELL_FILES))"
 	$(PNPM) --dir web run lint
 	$(PNPM) --dir web run format:check
