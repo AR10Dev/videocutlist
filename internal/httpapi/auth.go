@@ -66,5 +66,5 @@ func (a *authenticator) Authenticate(r *http.Request) error {
 	}
 	return nil
 }
-func validToken(value string) bool      { return value != "" && !containsControl(value) }
+func validToken(value string) bool      { return len(value) >= 32 && !containsControl(value) }
 func containsControl(value string) bool { return strings.IndexFunc(value, unicode.IsControl) >= 0 }
