@@ -450,4 +450,65 @@ describe("download service worker origin confinement", () => {
     await event.waitUntil.mock.calls[0]?.[0];
     expect(event.port.close).toHaveBeenCalledOnce();
   });
+
+  it("does not time out a stream after response headers arrive", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const worker = actualDownloadWorker(script);
+      const event = message(validPath);
+      worker.listeners.get("message")!(event);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(event.port.postMessage).toHaveBeenCalledWith({ type: "ready" });
+      const respondWith = vi.fn();
+      worker.listeners.get("fetch")!({
+        request: new Request(`https://app.example/deploy/download-stream/${event.data.id}`),
+        respondWith,
+      });
+      const response = respondWith.mock.calls[0]?.[0] as Response;
+      const signal = worker.fetch.mock.calls[0]?.[1]?.signal;
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(signal?.aborted).toBe(false);
+      await response.body!.cancel();
+      await event.waitUntil.mock.calls[0]?.[0];
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("aborts an upstream fetch that never returns response headers", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const worker = actualDownloadWorker(script);
+      worker.fetch.mockImplementationOnce(
+        (_input, init) =>
+          new Promise((_resolve, reject) => {
+            init?.signal?.addEventListener(
+              "abort",
+              () => reject(new DOMException("Aborted", "AbortError")),
+              { once: true },
+            );
+          }),
+      );
+      const event = message(validPath);
+      worker.listeners.get("message")!(event);
+      expect(worker.fetch).toHaveBeenCalledOnce();
+      const signal = worker.fetch.mock.calls[0]?.[1]?.signal;
+      expect(signal?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(119_999);
+      expect(signal?.aborted).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(signal?.aborted).toBe(true);
+      await event.waitUntil.mock.calls[0]?.[0];
+      expect(event.port.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "error",
+          message: "Download response timed out. Try again.",
+        }),
+      );
+      expect(event.port.close).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
