@@ -3,8 +3,10 @@ package store_test
 import (
 	"context"
 	"database/sql"
+	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"videocutlist/internal/db"
@@ -336,6 +338,63 @@ func TestMediaBrowseReconcilesFoldersOnSyncAndRootRemoval(t *testing.T) {
 	_, items, _, err = media.Browse(ctx, index.FolderID("root-a", "nested/deep"), "", 10)
 	if err != nil || len(items) != 1 || items[0].ID != keep.ID {
 		t.Fatalf("restored folder items: %#v, %v", items, err)
+	}
+}
+
+func TestOpenDatabaseConfiguresReplacementConnections(t *testing.T) {
+	database, err := store.OpenDatabase(t.Context(), filepath.Join(t.TempDir(), "settings.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	database.SetMaxIdleConns(0)
+
+	for range 2 {
+		connection, err := database.Conn(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		var foreignKeys, busyTimeout int
+		var journalMode string
+		if err := connection.QueryRowContext(t.Context(), `PRAGMA foreign_keys`).Scan(&foreignKeys); err != nil {
+			t.Fatal(err)
+		}
+		if err := connection.QueryRowContext(t.Context(), `PRAGMA busy_timeout`).Scan(&busyTimeout); err != nil {
+			t.Fatal(err)
+		}
+		if err := connection.QueryRowContext(t.Context(), `PRAGMA journal_mode`).Scan(&journalMode); err != nil {
+			t.Fatal(err)
+		}
+		if foreignKeys != 1 || busyTimeout != 5000 || journalMode != "wal" {
+			t.Fatalf("connection settings: foreign_keys=%d busy_timeout=%d journal_mode=%q", foreignKeys, busyTimeout, journalMode)
+		}
+		if _, err := connection.ExecContext(t.Context(), `INSERT INTO mcp_audit_entries
+(credential_id, operation, outcome, resource_ids_json, occurred_at)
+VALUES ('missing', 'test', 'success', '[]', '2026-01-01T00:00:00Z')`); err == nil || !strings.Contains(err.Error(), "FOREIGN KEY constraint failed") {
+			t.Fatalf("foreign-key violation error = %v", err)
+		}
+		if err := connection.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if got := database.Stats().OpenConnections; got != 0 {
+			t.Fatalf("connection remained open after release: %d", got)
+		}
+	}
+}
+
+func TestOpenDatabasePreservesFilePaths(t *testing.T) {
+	t.Chdir(t.TempDir())
+	for _, path := range []string{"relative & %?#.db", filepath.Join(t.TempDir(), "absolute & %?#.db")} {
+		database, err := store.OpenDatabase(t.Context(), path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := database.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Stat(path); err != nil {
+			t.Fatalf("database was not created at requested path %q: %v", path, err)
+		}
 	}
 }
 
