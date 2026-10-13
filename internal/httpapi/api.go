@@ -11,8 +11,11 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"os"
+	"reflect"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 	"videocutlist/internal/detection"
 	"videocutlist/internal/jobs/view"
@@ -27,6 +30,8 @@ import (
 	"videocutlist/internal/projects/model"
 	settings "videocutlist/internal/settings"
 	settingsmodel "videocutlist/internal/settings/model"
+
+	"modernc.org/sqlite"
 )
 
 const (
@@ -203,8 +208,19 @@ func (s *Server) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	elapsed := time.Since(started)
 	s.metrics.HTTP(route, request.Method, strconv.Itoa(status.status/100)+"xx", elapsed.Seconds())
 	if s.config.Logger != nil {
-		data, _ := json.Marshal(map[string]any{"request_id": id, "method": request.Method, "route": route, "status": status.status, "duration_ms": float64(elapsed) / float64(time.Millisecond), "error_category": status.errorCode})
-		s.config.Logger.Print(string(data))
+		entry := map[string]any{"request_id": id, "method": request.Method, "route": route, "status": status.status, "duration_ms": float64(elapsed) / float64(time.Millisecond), "error_category": status.errorCode}
+		if status.causeCategory != "" {
+			entry["error_cause"] = status.causeCategory
+			if status.causeType != "" {
+				entry["error_type"] = status.causeType
+			}
+			if status.causeCode != nil {
+				entry["error_cause_code"] = *status.causeCode
+			}
+		}
+		if data, err := json.Marshal(entry); err == nil {
+			s.config.Logger.Print(string(data))
+		}
 	}
 }
 
@@ -220,11 +236,13 @@ func (s *Server) dispatch(writer http.ResponseWriter, request *http.Request, id 
 		if observed, ok := writer.(*statusWriter); ok {
 			observed.route = "/ready"
 		}
-		if s.config.Ready != nil && s.config.Ready(request.Context()) != nil {
-			Error(writer, http.StatusServiceUnavailable, "not_ready", "Service is not ready.", id)
-		} else {
-			writer.WriteHeader(http.StatusOK)
+		if s.config.Ready != nil {
+			if err := s.config.Ready(request.Context()); err != nil {
+				internalServerError(writer, http.StatusServiceUnavailable, "not_ready", "Service is not ready.", id, err)
+				return
+			}
 		}
+		writer.WriteHeader(http.StatusOK)
 		return
 	}
 	if err := s.config.Authenticator.Authenticate(request); err != nil {
@@ -234,6 +252,7 @@ func (s *Server) dispatch(writer http.ResponseWriter, request *http.Request, id 
 	if request.URL.Path == "/metrics" && request.Method == http.MethodGet {
 		writer.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 		if err := s.metrics.WritePrometheus(writer); err != nil {
+			markInternalFailure(writer, err)
 			if observed, ok := writer.(*statusWriter); ok {
 				observed.errorCode = "metrics_write"
 			}
@@ -336,8 +355,48 @@ func validExport(input ExportInput) bool {
 func notFound(writer http.ResponseWriter, id string) {
 	httpx.Error(writer, 404, "not_found", "Resource not found.", id)
 }
-func internalError(writer http.ResponseWriter, id string) {
+func internalError(writer http.ResponseWriter, id string, cause error) {
+	markInternalFailure(writer, cause)
 	httpx.Error(writer, 500, "internal_error", "Request could not be completed.", id)
+}
+
+func internalServerError(writer http.ResponseWriter, status int, code, message, id string, cause error) {
+	markInternalFailure(writer, cause)
+	httpx.Error(writer, status, code, message, id)
+}
+
+func markInternalFailure(writer http.ResponseWriter, cause error) {
+	observed, ok := writer.(*statusWriter)
+	if !ok {
+		return
+	}
+	observed.causeCategory, observed.causeType, observed.causeCode = classifyInternalCause(cause)
+}
+
+// classifyInternalCause omits arbitrary error text so internal messages cannot leak secrets.
+func classifyInternalCause(cause error) (category, typeName string, code *int) {
+	if cause == nil {
+		return "internal_failure", "", nil
+	}
+	if errors.Is(cause, context.Canceled) {
+		return "context_canceled", "", nil
+	}
+	if errors.Is(cause, context.DeadlineExceeded) {
+		return "context_deadline_exceeded", "", nil
+	}
+	if sqliteError, ok := errors.AsType[*sqlite.Error](cause); ok {
+		return "sqlite", "", new(sqliteError.Code())
+	}
+	if _, ok := errors.AsType[*os.PathError](cause); ok {
+		if errno, ok := errors.AsType[syscall.Errno](cause); ok {
+			return "filesystem", "", new(int(errno))
+		}
+		return "filesystem", "", nil
+	}
+	if errno, ok := errors.AsType[syscall.Errno](cause); ok {
+		return "os", "", new(int(errno))
+	}
+	return "unknown", reflect.TypeOf(cause).String(), nil
 }
 func routeFor(path string) string {
 	switch {
@@ -354,10 +413,13 @@ func routeFor(path string) string {
 
 type statusWriter struct {
 	http.ResponseWriter
-	status    int
-	wrote     bool
-	errorCode string
-	route     string
+	status        int
+	wrote         bool
+	errorCode     string
+	route         string
+	causeCategory string
+	causeType     string
+	causeCode     *int
 }
 
 func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }

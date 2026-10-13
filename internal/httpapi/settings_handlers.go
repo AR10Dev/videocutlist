@@ -41,7 +41,7 @@ func (s *Server) getSettings(w http.ResponseWriter, r *http.Request, id string) 
 	}
 	record, err := s.config.Settings.Get(r.Context())
 	if err != nil {
-		httpx.Error(w, http.StatusInternalServerError, "settings_unavailable", "Settings are temporarily unavailable.", id)
+		internalServerError(w, http.StatusInternalServerError, "settings_unavailable", "Settings are temporarily unavailable.", id, err)
 		return
 	}
 	roots := make(map[string]any, len(record.Settings.MediaRoots))
@@ -107,7 +107,7 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, id string) 
 		case errors.Is(err, settings.ErrInvalidSettings):
 			httpx.Error(w, http.StatusBadRequest, "invalid_settings", "Settings could not be applied safely.", id)
 		default:
-			httpx.Error(w, http.StatusInternalServerError, "settings_unavailable", "Settings are temporarily unavailable.", id)
+			internalServerError(w, http.StatusInternalServerError, "settings_unavailable", "Settings are temporarily unavailable.", id, err)
 		}
 		return
 	}
