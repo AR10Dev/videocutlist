@@ -122,6 +122,17 @@ func TestMetricsDatabasePoolTracksControlledWait(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := connection.Close(); err != nil {
+		t.Fatal(err)
+	}
+	connectionClosed = true
+	if err := <-queryDone; err != nil {
+		t.Fatal(err)
+	}
+	stats := database.Stats()
+	if stats.WaitDuration <= 0 {
+		t.Fatalf("controlled database wait duration = %v, want positive", stats.WaitDuration)
+	}
 	response := httptest.NewRecorder()
 	server.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "database_pool_wait_duration_seconds") {
@@ -133,20 +144,13 @@ func TestMetricsDatabasePoolTracksControlledWait(t *testing.T) {
 	}
 	for name, want := range map[string]float64{
 		"database_pool_wait_count":            1,
-		"database_pool_wait_duration_seconds": database.Stats().WaitDuration.Seconds(),
-		"database_pool_in_use_connections":    1,
+		"database_pool_wait_duration_seconds": stats.WaitDuration.Seconds(),
+		"database_pool_in_use_connections":    0,
 		"database_pool_open_connections":      1,
 	} {
 		if got := metricValue(families, name, nil); got != want {
 			t.Errorf("%s = %v, want %v", name, got, want)
 		}
-	}
-	if err := connection.Close(); err != nil {
-		t.Fatal(err)
-	}
-	connectionClosed = true
-	if err := <-queryDone; err != nil {
-		t.Fatal(err)
 	}
 }
 

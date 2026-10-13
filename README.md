@@ -4,9 +4,12 @@ VideoCutList is a self-hosted web application for organizing video media, review
 
 ## Quick start (local source)
 
-Requirements: Go 1.26 or newer, FFmpeg, and FFprobe. From the repository root:
+Requirements: Go 1.26 or newer, Node.js 26.7.0, pnpm 10.34.5, FFmpeg, and FFprobe. From the repository root, install and build the frontend before starting the server:
 
 ```sh
+pnpm --dir web install --frozen-lockfile
+pnpm --dir web run build
+
 work=$(mktemp -d)
 port=8787
 mkdir -p "$work"/{media,cache,exports}

@@ -19,7 +19,15 @@ Set `VIDEOCUTLIST_BEARER_TOKEN` in `videocutlist.env` to the generated secret. K
 docker compose up -d
 ```
 
-The image defaults to `ghcr.io/ar10dev/videocutlist:latest`. To build locally, run `docker compose build` (or build the Dockerfile from the repository root) and configure Compose to use that image. The Dockerfile uses pinned Node, Go, and Debian images; build support with local Podman has not been validated and is a known limitation. The checked-in container does run as a non-root user. Do not assume additional runtime restrictions such as a read-only root filesystem are enabled.
+The image defaults to `ghcr.io/ar10dev/videocutlist:latest`. To build locally, run this from the repository root, then select the resulting image when starting Compose:
+
+```sh
+docker build -f deployments/containers/Dockerfile -t videocutlist:local .
+cd deployments/containers
+VIDEOCUTLIST_IMAGE=videocutlist:local docker compose up -d
+```
+
+The Dockerfile uses pinned Node, Go, and Debian images; build support with local Podman has not been validated and is a known limitation. The checked-in container does run as a non-root user. Do not assume additional runtime restrictions such as a read-only root filesystem are enabled.
 
 Check readiness at `http://127.0.0.1:8787/ready` and health at `/health`. To use another host port, set `VIDEOCUTLIST_HOST_PORT`; to publish beyond loopback, explicitly set `VIDEOCUTLIST_BIND_ADDRESS`. Network publication beyond loopback requires deliberate firewall/access control and a protected authentication configuration. Do not select authentication mode `none` for a network-reachable deployment.
 
