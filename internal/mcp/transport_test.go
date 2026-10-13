@@ -241,7 +241,15 @@ func TestTransportHidesDeniedToolsAndBindsSessionsToCredentials(t *testing.T) {
 func TestTransportRechecksRevocationAndExpiryForSessions(t *testing.T) {
 	t.Run("revoked", func(t *testing.T) {
 		credentials, secret, _ := transportCredentials(t, time.Hour)
-		handler := newTransport(t, mcp.TransportConfig{Enabled: true, Credentials: credentials})
+		toolCalled := false
+		handler := newTransport(t, mcp.TransportConfig{Enabled: true, Credentials: credentials, Tools: []mcp.Tool{{
+			Name: "read_media", Permission: mcp.PermissionMediaRead, InputSchema: map[string]any{"type": "object"},
+			Resource: func(mcp.Context, json.RawMessage) (mcp.Resource, error) { return mcp.Resource{MediaID: "m_clip"}, nil },
+			Call: func(mcp.Context, json.RawMessage) (mcp.ToolResult, error) {
+				toolCalled = true
+				return mcp.ToolResult{}, nil
+			},
+		}}})
 		session := initialize(t, handler, secret)
 		credential, err := credentials.Authenticate(t.Context(), secret)
 		if err != nil {
@@ -254,18 +262,85 @@ func TestTransportRechecksRevocationAndExpiryForSessions(t *testing.T) {
 		if response.Code != http.StatusUnauthorized {
 			t.Fatalf("revoked status=%d body=%s", response.Code, response.Body.String())
 		}
+		response = serve(handler, sessionRequest(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"read_media","arguments":{}}}`, secret, session))
+		if response.Code != http.StatusUnauthorized || toolCalled {
+			t.Fatalf("revoked tool call status=%d called=%v body=%s", response.Code, toolCalled, response.Body.String())
+		}
 	})
 
 	t.Run("expired", func(t *testing.T) {
 		credentials, secret, clock := transportCredentials(t, time.Minute)
-		handler := newTransport(t, mcp.TransportConfig{Enabled: true, Credentials: credentials, Now: func() time.Time { return *clock }})
+		toolCalled := false
+		handler := newTransport(t, mcp.TransportConfig{Enabled: true, Credentials: credentials, Now: func() time.Time { return *clock }, Tools: []mcp.Tool{{
+			Name: "read_media", Permission: mcp.PermissionMediaRead, InputSchema: map[string]any{"type": "object"},
+			Resource: func(mcp.Context, json.RawMessage) (mcp.Resource, error) { return mcp.Resource{MediaID: "m_clip"}, nil },
+			Call: func(mcp.Context, json.RawMessage) (mcp.ToolResult, error) {
+				toolCalled = true
+				return mcp.ToolResult{}, nil
+			},
+		}}})
 		session := initialize(t, handler, secret)
 		*clock = clock.Add(2 * time.Minute)
 		response := serve(handler, sessionRequest(`{"jsonrpc":"2.0","id":2,"method":"ping"}`, secret, session))
 		if response.Code != http.StatusUnauthorized {
 			t.Fatalf("expired status=%d body=%s", response.Code, response.Body.String())
 		}
+		response = serve(handler, sessionRequest(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"read_media","arguments":{}}}`, secret, session))
+		if response.Code != http.StatusUnauthorized || toolCalled {
+			t.Fatalf("expired tool call status=%d called=%v body=%s", response.Code, toolCalled, response.Body.String())
+		}
 	})
+}
+
+func TestTransportToolAuthorizationDoesNotPassConcurrentRevocation(t *testing.T) {
+	database, err := store.OpenDatabase(t.Context(), t.TempDir()+"/mcp-tool-revocation-race.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	now := time.Now().UTC()
+	expires := now.Add(time.Hour)
+	repository := &blockingCredentialRepository{CredentialRepository: newMCPRepository(t, database)}
+	credentials, err := mcp.NewCredentialStoreWithClock(repository, func() time.Time { return now })
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := credentials.Create(t.Context(), mcp.CredentialInput{
+		Name: "tool revocation race", Permissions: []mcp.Permission{mcp.PermissionMediaRead},
+		MediaScope: mcp.MediaScope{Kind: mcp.MediaScopeAll}, ProjectScope: mcp.ProjectScope{Kind: mcp.ProjectScopeAll}, ExpiresAt: &expires,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	toolCalled := false
+	handler := newTransport(t, mcp.TransportConfig{Enabled: true, Credentials: credentials, Tools: []mcp.Tool{{
+		Name: "read_media", Permission: mcp.PermissionMediaRead, InputSchema: map[string]any{"type": "object"},
+		Resource: func(mcp.Context, json.RawMessage) (mcp.Resource, error) { return mcp.Resource{MediaID: "m_clip"}, nil },
+		Call: func(mcp.Context, json.RawMessage) (mcp.ToolResult, error) {
+			toolCalled = true
+			return mcp.ToolResult{}, nil
+		},
+	}}})
+	sessionID := initialize(t, handler, created.Secret)
+	repository.pauseTouchAfter(3)
+	responseDone := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		responseDone <- serve(handler, sessionRequest(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"read_media","arguments":{}}}`, created.Secret, sessionID))
+	}()
+	defer repository.resumeTouch()
+	select {
+	case <-repository.touchStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("tool authorization did not reach its conditional last-used update")
+	}
+	if _, err := credentials.Revoke(t.Context(), created.ID); err != nil {
+		t.Fatal(err)
+	}
+	repository.resumeTouch()
+	response := <-responseDone
+	if response.Code != http.StatusOK || toolCalled {
+		t.Fatalf("tool passed concurrent revocation: status=%d called=%v body=%s", response.Code, toolCalled, response.Body.String())
+	}
 }
 
 func TestTransportRecordsAuditAndStableToolErrorCodes(t *testing.T) {

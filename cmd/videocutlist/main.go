@@ -238,6 +238,7 @@ func runWithCleanupExit(ctx context.Context, cleanupExited chan struct{}) (runEr
 	mcpTools = append(mcpTools, mcp.PreviewDetectionTools(mediaService, previewService, detectionService, projectService)...)
 	mcpTransportConfig := mcp.TransportConfig{
 		Enabled: cfg.MCPEnabled, EnabledFunc: func() bool { return runtimeState.Snapshot().MCPEnabled }, Credentials: mcpCredentials, Tools: mcpTools, AllowedOrigins: cfg.AllowedOrigins,
+		// MCP and preview workloads intentionally share the configured concurrency cap.
 		MaxConcurrentRequests: cfg.PreviewGlobalLimit,
 		Logger:                logger,
 		PublicBaseURL:         cfg.PublicBaseURL,
