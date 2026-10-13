@@ -14,7 +14,7 @@ func resourceError(w http.ResponseWriter, id string, err error) {
 	case errors.Is(err, store.ErrProjectNotFound), errors.Is(err, store.ErrMediaNotFound), errors.Is(err, jobs.ErrJobNotFound):
 		notFound(w, id)
 	default:
-		internalError(w, id)
+		internalError(w, id, err)
 	}
 }
 

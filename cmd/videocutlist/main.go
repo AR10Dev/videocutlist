@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -48,7 +49,14 @@ func main() {
 	}
 }
 
-func run(ctx context.Context) (runErr error) {
+func run(ctx context.Context) error {
+	return runWithCleanupExit(ctx, nil)
+}
+
+func runWithCleanupExit(ctx context.Context, cleanupExited chan struct{}) (runErr error) {
+	cleanupCtx, cancelCleanup := context.WithCancel(ctx)
+	defer cancelCleanup()
+
 	cfg, err := config.Load()
 	if err != nil {
 		return err
@@ -150,12 +158,17 @@ func run(ctx context.Context) (runErr error) {
 	}
 	artifacts.Cleanup(time.Now().UTC())
 	go func() {
+		defer func() {
+			if cleanupExited != nil {
+				close(cleanupExited)
+			}
+		}()
 		ticks := time.Tick(15 * time.Minute)
 		for {
 			select {
 			case now := <-ticks:
 				artifacts.Cleanup(now.UTC())
-			case <-ctx.Done():
+			case <-cleanupCtx.Done():
 				return
 			}
 		}
@@ -169,7 +182,11 @@ func run(ctx context.Context) (runErr error) {
 	queuedExports := exporter.QueuedExecutor{Jobs: unifiedJobs, Media: mediaCatalog, RunSnapshot: exportExecutor.RunSnapshot, RemoveArtifacts: artifacts.Remove}
 	queuedJobs := runtime.QueuedJobs{Exports: queuedExports, Scans: librarymedia.ScanExecutor{Jobs: unifiedJobs, Media: mediaService, Catalog: mediaCatalog}, Detection: detection.QueuedExecutor{Jobs: unifiedJobs, Catalog: mediaCatalog, Detector: detector}}
 	batchDownloads := exporter.BatchArchiveService{Jobs: unifiedJobs, Service: exportExecutor.Service, Downloads: exportExecutor}
-	scheduler, err := jobqueue.NewScheduler(unifiedJobs, jobqueue.SchedulerConfig{QueueCapacity: cfg.ExportLimit * 4, WorkerLimit: cfg.ExportLimit, Logger: logger}, queuedJobs.Run)
+	metrics := httpapi.NewMetrics()
+	scheduler, err := jobqueue.NewScheduler(unifiedJobs, jobqueue.SchedulerConfig{
+		QueueCapacity: cfg.ExportLimit * 4, WorkerLimit: cfg.ExportLimit, Logger: logger,
+		TerminalFinalization: metrics.TerminalFinalization,
+	}, queuedJobs.Run)
 	if err != nil {
 		return err
 	}
@@ -213,7 +230,7 @@ func run(ctx context.Context) (runErr error) {
 		Projects: projectService, BatchExports: batchExports, Preflight: projects.ExportPreflightUseCase{Export: exportExecutor}, Jobs: jobService, Detection: detectionService, Download: exportExecutor, BatchDownload: batchDownloads, MediaImport: mediaImportService,
 		Settings: config.NewRuntimeService(runtimeSettingsStore, runtimeState, settingsApplier.Apply), RuntimeSettings: runtimeState, MCPCredentials: mcpCredentials, ExportProposals: proposalService,
 		Destinations: destinationMetadata(cfg.Destinations),
-		Ready:        db.PingContext, Logger: logger, Metrics: httpapi.NewMetrics(),
+		Ready:        db.PingContext, Logger: logger, Metrics: metrics, DatabaseStats: db.Stats,
 		BeforeMS: int64(cfg.PreviewBeforeMS), AfterMS: int64(cfg.PreviewAfterMS),
 		MaxPreviewMS: int64(cfg.PreviewMaxMS), GridMS: int64(cfg.PreviewGridMS), ListenerAddress: cfg.ListenAddress, AllowedOrigins: cfg.AllowedOrigins, RequireAutomationAuth: cfg.AuthMode != "none",
 	})
@@ -226,6 +243,7 @@ func run(ctx context.Context) (runErr error) {
 	mcpTools = append(mcpTools, mcp.PreviewDetectionTools(mediaService, previewService, detectionService, projectService)...)
 	mcpTransportConfig := mcp.TransportConfig{
 		Enabled: cfg.MCPEnabled, EnabledFunc: func() bool { return runtimeState.Snapshot().MCPEnabled }, Credentials: mcpCredentials, Tools: mcpTools, AllowedOrigins: cfg.AllowedOrigins,
+		// MCP and preview workloads intentionally share the configured concurrency cap.
 		MaxConcurrentRequests: cfg.PreviewGlobalLimit,
 		Logger:                logger,
 		PublicBaseURL:         cfg.PublicBaseURL,
@@ -270,7 +288,7 @@ func run(ctx context.Context) (runErr error) {
 	server.Addr = listener.Addr().String()
 	failed := make(chan error, 1)
 	go func() {
-		logger.Printf(`{"event":"server_started","listen_addr":%q}`, server.Addr)
+		logServerStarted(logger, server.Addr)
 		failed <- server.Serve(listener)
 	}()
 	select {
@@ -317,6 +335,11 @@ func destinationMetadata(values []exporter.Destination) []httpapi.DestinationMet
 		result = append(result, httpapi.DestinationMetadata{ID: public.ID, Label: public.Label, Description: public.Description, Kind: public.Kind, Retention: public.Retention})
 	}
 	return result
+}
+
+func logServerStarted(logger *log.Logger, address string) {
+	data, _ := json.Marshal(map[string]string{"event": "server_started", "listen_addr": address})
+	logger.Print(string(data))
 }
 
 func newHTTPServer(cfg config.Config, handler http.Handler) *http.Server {

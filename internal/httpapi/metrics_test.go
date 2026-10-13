@@ -8,8 +8,10 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	io_prometheus_client "github.com/prometheus/client_model/go"
+	store "videocutlist/internal/db"
 )
 
 var errMetricsWriter = errors.New("metrics writer failed")
@@ -61,10 +63,118 @@ func metricValue(families []*io_prometheus_client.MetricFamily, name string, lab
 				if metric.Summary != nil {
 					return metric.GetSummary().GetSampleSum()
 				}
+				if metric.Gauge != nil {
+					return metric.GetGauge().GetValue()
+				}
+				if metric.Histogram != nil {
+					return metric.GetHistogram().GetSampleSum()
+				}
 			}
 		}
 	}
 	return 0
+}
+
+func TestMetricsDatabasePoolTracksControlledWait(t *testing.T) {
+	database, err := store.OpenDatabase(t.Context(), t.TempDir()+"/metrics.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := database.Close(); err != nil {
+			t.Errorf("close database: %v", err)
+		}
+	}()
+	connection, err := database.Conn(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	connectionClosed := false
+	defer func() {
+		if !connectionClosed {
+			if err := connection.Close(); err != nil {
+				t.Errorf("close connection: %v", err)
+			}
+		}
+	}()
+	queryDone := make(chan error, 1)
+	go func() {
+		var result int
+		queryDone <- database.QueryRowContext(t.Context(), "SELECT 1").Scan(&result)
+	}()
+	deadline := time.Now().Add(time.Second)
+	for database.Stats().WaitCount == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if got := database.Stats().WaitCount; got == 0 {
+		t.Fatal("database pool did not record a controlled wait")
+	}
+	metrics := NewMetrics()
+	authenticator, err := NewAuthenticator(AuthConfig{Mode: "none"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := New(Config{
+		Authenticator: authenticator, Metrics: metrics, DatabaseStats: database.Stats,
+		Media: &routeTestMedia{}, Preview: routeTestPreview{}, Projects: routeTestProjects{},
+		BatchExports: &routeTestBatchExports{}, Jobs: &routeTestJobs{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := connection.Close(); err != nil {
+		t.Fatal(err)
+	}
+	connectionClosed = true
+	if err := <-queryDone; err != nil {
+		t.Fatal(err)
+	}
+	stats := database.Stats()
+	if stats.WaitDuration <= 0 {
+		t.Fatalf("controlled database wait duration = %v, want positive", stats.WaitDuration)
+	}
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "database_pool_wait_duration_seconds") {
+		t.Fatalf("metrics scrape status=%d body=%q", response.Code, response.Body.String())
+	}
+	families, err := metrics.registry.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]float64{
+		"database_pool_wait_count":            1,
+		"database_pool_wait_duration_seconds": stats.WaitDuration.Seconds(),
+		"database_pool_in_use_connections":    0,
+		"database_pool_open_connections":      1,
+	} {
+		if got := metricValue(families, name, nil); got != want {
+			t.Errorf("%s = %v, want %v", name, got, want)
+		}
+	}
+}
+
+func TestMetricsTerminalFinalizationTracksFailuresAndLatency(t *testing.T) {
+	metrics := NewMetrics()
+	metrics.TerminalFinalization(250*time.Millisecond, true)
+	metrics.TerminalFinalization(500*time.Millisecond, false)
+	families, err := metrics.registry.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := metricValue(families, "job_terminal_finalization_failures_total", nil); got != 1 {
+		t.Fatalf("terminal failures = %v, want 1", got)
+	}
+	if got := metricValue(families, "job_terminal_finalization_duration_seconds", nil); got != .75 {
+		t.Fatalf("terminal finalization duration = %v, want .75 seconds", got)
+	}
+	for _, family := range families {
+		if family.GetName() == "job_terminal_finalization_duration_seconds" {
+			if got := family.GetMetric()[0].GetHistogram().GetSampleCount(); got != 2 {
+				t.Fatalf("terminal finalization observations = %d, want 2", got)
+			}
+		}
+	}
 }
 
 func TestMetricsRegistriesAreIsolated(t *testing.T) {

@@ -28,7 +28,7 @@ func (s *Server) browseMedia(writer http.ResponseWriter, request *http.Request, 
 	}
 	page, err := s.config.Media.Browse(request.Context(), folderID, cursor, limit)
 	if err != nil {
-		internalError(writer, id)
+		internalError(writer, id, err)
 		return
 	}
 	httpx.WriteJSON(writer, 200, page)
@@ -51,7 +51,7 @@ func (s *Server) listMedia(writer http.ResponseWriter, request *http.Request, id
 	}
 	page, err := s.config.Media.List(request.Context(), cursor, limit)
 	if err != nil {
-		internalError(writer, id)
+		internalError(writer, id, err)
 		return
 	}
 	httpx.WriteJSON(writer, 200, page)
@@ -85,7 +85,7 @@ func writeMediaScanError(writer http.ResponseWriter, err error, id string) {
 	case errors.Is(err, jobqueue.ErrQueueFull):
 		httpx.Error(writer, http.StatusTooManyRequests, "library_busy", "Library scan capacity is full.", id)
 	default:
-		internalError(writer, id)
+		internalError(writer, id, err)
 	}
 }
 func (s *Server) getMedia(writer http.ResponseWriter, request *http.Request, media string, id string) {

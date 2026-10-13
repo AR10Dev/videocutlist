@@ -15,7 +15,7 @@ import (
 func (s *Server) listProjects(writer http.ResponseWriter, request *http.Request, id string) {
 	service, ok := s.config.Projects.(projects.ProjectListService)
 	if !ok {
-		internalError(writer, id)
+		internalError(writer, id, nil)
 		return
 	}
 	query := request.URL.Query()
@@ -30,7 +30,7 @@ func (s *Server) listProjects(writer http.ResponseWriter, request *http.Request,
 	}
 	page, err := service.List(request.Context(), query.Get("cursor"), limit)
 	if err != nil {
-		internalError(writer, id)
+		internalError(writer, id, err)
 		return
 	}
 	httpx.WriteJSON(writer, http.StatusOK, page)
@@ -59,7 +59,7 @@ func (s *Server) putProject(writer http.ResponseWriter, request *http.Request, p
 }
 func (s *Server) listBatches(writer http.ResponseWriter, request *http.Request, id string) {
 	if s.config.BatchExports == nil {
-		internalError(writer, id)
+		internalError(writer, id, nil)
 		return
 	}
 	if !queryKeys(request, "cursor", "limit") {
@@ -79,7 +79,7 @@ func (s *Server) listBatches(writer http.ResponseWriter, request *http.Request, 
 		return
 	}
 	if err != nil {
-		internalError(writer, id)
+		internalError(writer, id, err)
 		return
 	}
 	httpx.WriteJSON(writer, http.StatusOK, page)
@@ -87,7 +87,7 @@ func (s *Server) listBatches(writer http.ResponseWriter, request *http.Request, 
 
 func (s *Server) getBatch(writer http.ResponseWriter, request *http.Request, batchID string, id string) {
 	if s.config.BatchExports == nil {
-		internalError(writer, id)
+		internalError(writer, id, nil)
 		return
 	}
 	batch, err := s.config.BatchExports.Get(request.Context(), batchID)
@@ -100,7 +100,7 @@ func (s *Server) getBatch(writer http.ResponseWriter, request *http.Request, bat
 
 func (s *Server) retryJob(writer http.ResponseWriter, request *http.Request, jobID string, id string) {
 	if s.config.BatchExports == nil {
-		internalError(writer, id)
+		internalError(writer, id, nil)
 		return
 	}
 	key := request.Header.Get("Idempotency-Key")
@@ -125,7 +125,7 @@ func (s *Server) retryJob(writer http.ResponseWriter, request *http.Request, job
 
 func (s *Server) cancelBatch(writer http.ResponseWriter, request *http.Request, batchID string, id string) {
 	if s.config.BatchExports == nil {
-		internalError(writer, id)
+		internalError(writer, id, nil)
 		return
 	}
 	if err := s.config.BatchExports.Cancel(request.Context(), batchID); err != nil {
@@ -137,7 +137,7 @@ func (s *Server) cancelBatch(writer http.ResponseWriter, request *http.Request, 
 
 func (s *Server) preflightExport(writer http.ResponseWriter, request *http.Request, project string, id string) {
 	if s.config.Preflight == nil {
-		internalError(writer, id)
+		internalError(writer, id, nil)
 		return
 	}
 	owned, err := s.config.Projects.Get(request.Context(), project)
@@ -159,7 +159,7 @@ func (s *Server) preflightExport(writer http.ResponseWriter, request *http.Reque
 }
 func (s *Server) createExport(writer http.ResponseWriter, request *http.Request, project string, id string) {
 	if s.config.BatchExports == nil {
-		internalError(writer, id)
+		internalError(writer, id, nil)
 		return
 	}
 	key := request.Header.Get("Idempotency-Key")
@@ -193,7 +193,7 @@ func (s *Server) createExport(writer http.ResponseWriter, request *http.Request,
 }
 func (s *Server) createDetection(writer http.ResponseWriter, request *http.Request, project string, id string) {
 	if s.config.Detection == nil {
-		internalError(writer, id)
+		internalError(writer, id, nil)
 		return
 	}
 	key := request.Header.Get("Idempotency-Key")

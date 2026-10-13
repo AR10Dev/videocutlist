@@ -755,6 +755,60 @@ func TestSchedulerPersistsTerminalStateAfterSoleConnectionContention(t *testing.
 	}
 }
 
+func TestSchedulerRecordsInitialReadExhaustion(t *testing.T) {
+	database := openSchedulerTestDatabase(t)
+	jobs, err := newTestJobsStore(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	observed := make(chan struct {
+		duration time.Duration
+		failed   bool
+	}, 1)
+	scheduler, err := NewScheduler(jobs, SchedulerConfig{
+		QueueCapacity: 1,
+		WorkerLimit:   1,
+		TerminalFinalization: func(duration time.Duration, failed bool) {
+			observed <- struct {
+				duration time.Duration
+				failed   bool
+			}{duration, failed}
+		},
+	}, func(context.Context, model.Job) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	scheduler.finalize(model.Job{ID: "j_missing"}, errors.New("runner failed"), nil)
+	got := <-observed
+	if !got.failed {
+		t.Fatal("initial terminal state read exhaustion was not reported as a failure")
+	}
+	if got.duration < 2*terminalTransitionBackoff {
+		t.Fatalf("finalization duration = %s, want to include initial-read retries", got.duration)
+	}
+}
+
+func TestSchedulerTerminalFailureLogIsValidJSON(t *testing.T) {
+	var logs bytes.Buffer
+	scheduler := &Scheduler{logger: log.New(&logs, "", 0)}
+	id := "quote\" control\n\x00 Unicode \u2028🙂"
+	scheduler.logTerminalFailure(id, model.JobFailed, "terminal_transition")
+	var entry struct {
+		JobID       string `json:"job_id"`
+		TargetState string `json:"target_state"`
+		Category    string `json:"error_category"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(logs.Bytes()), &entry); err != nil {
+		t.Fatalf("decode log: %v; record=%q", err, logs.String())
+	}
+	if entry.JobID != id || entry.TargetState != string(model.JobFailed) || entry.Category != "terminal_transition" {
+		t.Fatalf("unexpected terminal failure log: %q (%#v)", logs.String(), entry)
+	}
+}
+
 func TestSchedulerRetriesTerminalTransitionPreservingRunnerResult(t *testing.T) {
 	database := openSchedulerTestDatabase(t)
 	t.Cleanup(func() {
