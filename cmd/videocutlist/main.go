@@ -83,7 +83,10 @@ func run(ctx context.Context) (runErr error) {
 		return fmt.Errorf("load runtime settings: %w", err)
 	}
 	runtimeState := settingsmodel.NewRuntimeSettingsState(effectiveSettings.Settings)
-	projectStore, _ := store.NewProjectStore(db)
+	projectStore, err := store.NewProjectStore(db)
+	if err != nil {
+		return fmt.Errorf("create project store: %w", err)
+	}
 	jobStorage, err := store.NewJobStorage(db)
 	if err != nil {
 		return err
@@ -92,7 +95,10 @@ func run(ctx context.Context) (runErr error) {
 	if err != nil {
 		return err
 	}
-	mediaStore, _ := store.NewMediaStore(db)
+	mediaStore, err := store.NewMediaStore(db)
+	if err != nil {
+		return fmt.Errorf("create media store: %w", err)
+	}
 	if err := mediaStore.ReconcileRoots(ctx, cfg.MediaRoots); err != nil {
 		return fmt.Errorf("reconcile configured media roots: %w", err)
 	}

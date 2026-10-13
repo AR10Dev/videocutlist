@@ -15,6 +15,19 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+func TestStoreConstructorsRejectNilDatabase(t *testing.T) {
+	t.Run("project", func(t *testing.T) {
+		if projectStore, err := store.NewProjectStore(nil); err == nil || projectStore != nil {
+			t.Fatalf("NewProjectStore(nil) = %v, %v; want nil store and error", projectStore, err)
+		}
+	})
+	t.Run("media", func(t *testing.T) {
+		if mediaStore, err := store.NewMediaStore(nil); err == nil || mediaStore != nil {
+			t.Fatalf("NewMediaStore(nil) = %v, %v; want nil store and error", mediaStore, err)
+		}
+	})
+}
+
 func TestMediaSyncRollbackPreservesPreviousCatalog(t *testing.T) {
 	db, err := store.OpenDatabase(context.Background(), t.TempDir()+"/media.db")
 	if err != nil {
