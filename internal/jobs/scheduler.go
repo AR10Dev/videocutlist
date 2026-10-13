@@ -9,6 +9,8 @@ import (
 	"sync"
 	"time"
 
+	"modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 	"videocutlist/internal/jobs/model"
 	settingsmodel "videocutlist/internal/settings/model"
 )
@@ -19,9 +21,9 @@ var (
 )
 
 const (
-	terminalTransitionAttempts = 3
-	terminalTransitionTimeout  = 100 * time.Millisecond
-	terminalTransitionBackoff  = 10 * time.Millisecond
+	terminalFinalizationTimeout = 5 * time.Second
+	terminalOperationTimeout    = 100 * time.Millisecond
+	terminalTransitionBackoff   = 10 * time.Millisecond
 )
 
 // ResultPersistenceError reports that a runner produced a durable result but
@@ -322,6 +324,8 @@ func (s *Scheduler) worker() {
 
 func (s *Scheduler) finalize(job model.Job, runnerErr, cancellation error) {
 	started := time.Now()
+	ctx, cancel := context.WithDeadline(context.Background(), started.Add(terminalFinalizationTimeout))
+	defer cancel()
 	failed := false
 	defer func() {
 		if s.config.TerminalFinalization != nil {
@@ -329,7 +333,7 @@ func (s *Scheduler) finalize(job model.Job, runnerErr, cancellation error) {
 		}
 	}()
 	target, result, code := terminalTarget(runnerErr, cancellation)
-	current, err := s.readTerminalState(job.ID)
+	current, err := s.readTerminalState(ctx, job.ID)
 	if err != nil {
 		failed = true
 		s.logTerminalFailure(job.ID, target, "terminal_state_read")
@@ -338,10 +342,10 @@ func (s *Scheduler) finalize(job model.Job, runnerErr, cancellation error) {
 	if current.State != model.JobRunning {
 		return
 	}
-	if _, err := s.persistTerminal(job.ID, target, result, code); err == nil {
+	if _, err := s.persistTerminal(ctx, job.ID, target, result, code); err == nil {
 		return
 	}
-	current, readErr := s.readTerminalState(job.ID)
+	current, readErr := s.readTerminalState(ctx, job.ID)
 	if readErr == nil && current.State != model.JobRunning {
 		return
 	}
@@ -371,44 +375,61 @@ func terminalTarget(runnerErr, cancellation error) (model.JobState, string, stri
 	return model.JobFailed, "", code
 }
 
-func (s *Scheduler) readTerminalState(id string) (model.Job, error) {
-	var lastErr error
-	for attempt := range terminalTransitionAttempts {
-		ctx, cancel := context.WithTimeout(context.Background(), terminalTransitionTimeout)
-		job, err := s.jobs.Get(ctx, id)
+func (s *Scheduler) readTerminalState(ctx context.Context, id string) (model.Job, error) {
+	for ctx.Err() == nil {
+		operationCtx, cancel := context.WithTimeout(ctx, terminalOperationTimeout)
+		job, err := s.jobs.Get(operationCtx, id)
 		cancel()
 		if err == nil {
 			return job, nil
 		}
-		lastErr = err
-		if errors.Is(err, model.ErrJobNotFound) {
-			break
-		}
-		if attempt+1 < terminalTransitionAttempts {
-			time.Sleep(terminalTransitionBackoff)
+		if errors.Is(err, model.ErrJobNotFound) || !isTransientTerminalError(err) || !waitForTerminalRetry(ctx) {
+			return model.Job{}, err
 		}
 	}
-	return model.Job{}, lastErr
+	return model.Job{}, ctx.Err()
 }
 
-func (s *Scheduler) persistTerminal(id string, target model.JobState, result, code string) (model.Job, error) {
-	var lastErr error
-	for attempt := range terminalTransitionAttempts {
-		ctx, cancel := context.WithTimeout(context.Background(), terminalTransitionTimeout)
-		job, err := s.applyTerminal(ctx, id, target, result, code)
+func (s *Scheduler) persistTerminal(ctx context.Context, id string, target model.JobState, result, code string) (model.Job, error) {
+	for ctx.Err() == nil {
+		operationCtx, cancel := context.WithTimeout(ctx, terminalOperationTimeout)
+		job, err := s.applyTerminal(operationCtx, id, target, result, code)
 		cancel()
 		if err == nil {
 			return job, nil
 		}
-		lastErr = err
-		if errors.Is(err, model.ErrJobState) || errors.Is(err, model.ErrJobNotFound) {
-			break
-		}
-		if attempt+1 < terminalTransitionAttempts {
-			time.Sleep(terminalTransitionBackoff)
+		if errors.Is(err, model.ErrJobState) || errors.Is(err, model.ErrJobNotFound) || !isTransientTerminalError(err) || !waitForTerminalRetry(ctx) {
+			return model.Job{}, err
 		}
 	}
-	return model.Job{}, lastErr
+	return model.Job{}, ctx.Err()
+}
+
+func isTransientTerminalError(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	sqliteErr, ok := errors.AsType[*sqlite.Error](err)
+	if !ok {
+		return false
+	}
+	switch sqliteErr.Code() & 0xff {
+	case sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED:
+		return true
+	default:
+		return false
+	}
+}
+
+func waitForTerminalRetry(ctx context.Context) bool {
+	timer := time.NewTimer(terminalTransitionBackoff)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return ctx.Err() == nil
+	}
 }
 
 func (s *Scheduler) applyTerminal(ctx context.Context, id string, target model.JobState, result, code string) (model.Job, error) {
