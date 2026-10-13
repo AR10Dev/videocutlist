@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRenderTemplateUsesUTF8ByteLimit(t *testing.T) {
@@ -121,13 +122,17 @@ func TestPreparedDestinationPublishesWithoutOverwrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer prepared.remove(temporaryName)
-	if err := os.WriteFile(filepath.Join(directory, "existing.mkv"), []byte("old"), 0o600); err != nil {
+	outputName, err := prepared.outputFileName(Request{Container: "mkv", FilenameTemplate: "clip.{ext}"}, "clip.mkv", 0, time.Time{})
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := prepared.publish(temporaryName, "existing.mkv"); !errors.Is(err, fs.ErrExist) {
+	if err := os.WriteFile(filepath.Join(directory, outputName), []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := prepared.publish(temporaryName, outputName); !errors.Is(err, fs.ErrExist) {
 		t.Fatalf("publish collision error = %v", err)
 	}
-	contents, err := os.ReadFile(filepath.Join(directory, "existing.mkv"))
+	contents, err := os.ReadFile(filepath.Join(directory, outputName))
 	if err != nil || string(contents) != "old" {
 		t.Fatalf("existing output = %q, err=%v", contents, err)
 	}
