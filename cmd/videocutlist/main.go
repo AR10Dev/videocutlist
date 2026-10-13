@@ -226,7 +226,7 @@ func runWithCleanupExit(ctx context.Context, cleanupExited chan struct{}) (runEr
 		Projects: projectService, BatchExports: batchExports, Preflight: projects.ExportPreflightUseCase{Export: exportExecutor}, Jobs: jobService, Detection: detectionService, Download: exportExecutor, BatchDownload: batchDownloads, MediaImport: mediaImportService,
 		Settings: config.NewRuntimeService(runtimeSettingsStore, runtimeState, settingsApplier.Apply), RuntimeSettings: runtimeState, MCPCredentials: mcpCredentials, ExportProposals: proposalService,
 		Destinations: destinationMetadata(cfg.Destinations),
-		Ready:        db.PingContext, Logger: logger, Metrics: httpapi.NewMetrics(),
+		Ready:        db.PingContext, Logger: logger, Metrics: httpapi.NewMetrics(), DatabaseStats: db.Stats,
 		BeforeMS: int64(cfg.PreviewBeforeMS), AfterMS: int64(cfg.PreviewAfterMS),
 		MaxPreviewMS: int64(cfg.PreviewMaxMS), GridMS: int64(cfg.PreviewGridMS), ListenerAddress: cfg.ListenAddress, AllowedOrigins: cfg.AllowedOrigins, RequireAutomationAuth: cfg.AuthMode != "none",
 	})

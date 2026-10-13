@@ -4,6 +4,7 @@ package httpapi
 import (
 	"context"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -140,6 +141,7 @@ type Config struct {
 	Ready             func(context.Context) error
 	Logger            *log.Logger
 	Metrics           *Metrics
+	DatabaseStats     func() sql.DBStats
 	BeforeMS          int64
 	AfterMS           int64
 	MaxPreviewMS      int64
@@ -250,6 +252,9 @@ func (s *Server) dispatch(writer http.ResponseWriter, request *http.Request, id 
 		return
 	}
 	if request.URL.Path == "/metrics" && request.Method == http.MethodGet {
+		if s.config.DatabaseStats != nil {
+			s.metrics.DatabasePool(s.config.DatabaseStats())
+		}
 		writer.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 		if err := s.metrics.WritePrometheus(writer); err != nil {
 			markInternalFailure(writer, err)

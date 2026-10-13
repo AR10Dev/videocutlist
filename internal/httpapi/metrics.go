@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"database/sql"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,6 +17,7 @@ type Metrics struct {
 	durations *prometheus.SummaryVec
 	preview   *prometheus.CounterVec
 	counters  map[string]prometheus.Counter
+	pool      [4]prometheus.Gauge
 }
 
 func NewMetrics() *Metrics {
@@ -33,12 +35,29 @@ func NewMetrics() *Metrics {
 		counters: make(map[string]prometheus.Counter),
 	}
 	m.registry.MustRegister(m.http, m.durations, m.preview)
+	for i, metric := range []struct{ name, help string }{
+		{"database_pool_wait_count", "Cumulative database pool wait count."},
+		{"database_pool_wait_duration_seconds", "Cumulative database pool wait duration in seconds."},
+		{"database_pool_in_use_connections", "Database connections currently in use."},
+		{"database_pool_open_connections", "Database connections currently open."},
+	} {
+		m.pool[i] = prometheus.NewGauge(prometheus.GaugeOpts{Name: metric.name, Help: metric.help})
+		m.registry.MustRegister(m.pool[i])
+	}
 	for _, name := range []string{"preview_cache_hits_total", "preview_cache_misses_total", "ffmpeg_failures_total", "export_jobs_total"} {
 		counter := prometheus.NewCounter(prometheus.CounterOpts{Name: name, Help: name})
 		m.registry.MustRegister(counter)
 		m.counters[name] = counter
 	}
 	return m
+}
+
+// DatabasePool records database/sql pool statistics; wait duration is seconds.
+func (m *Metrics) DatabasePool(stats sql.DBStats) {
+	m.pool[0].Set(float64(stats.WaitCount))
+	m.pool[1].Set(stats.WaitDuration.Seconds())
+	m.pool[2].Set(float64(stats.InUse))
+	m.pool[3].Set(float64(stats.OpenConnections))
 }
 
 func (m *Metrics) HTTP(route, method, statusClass string, seconds float64) {
