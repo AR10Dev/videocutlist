@@ -182,6 +182,37 @@ func TestRouteDispatchRejectsMalformedAndNoncanonicalPaths(t *testing.T) {
 	}
 }
 
+func TestProductionRouterRejectsMalformedDownloadPositions(t *testing.T) {
+	download := &routeTestDownload{}
+	server := &Server{config: Config{Download: download}}
+	mux := newRouteMux(server)
+	job := "j_" + strings.Repeat("a", 12)
+	for _, path := range []string{
+		"/media/v2/jobs/" + job + "/outputs/not-a-position",
+		"/media/v2/jobs/" + job + "/outputs/-1",
+		"/media/v2/jobs/" + job + "/outputs/1:2",
+		"/media/v2/jobs/" + job + "/outputs/1%3A2",
+	} {
+		t.Run(path, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			mux.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "http://api.test"+path, nil))
+			if response.Code != http.StatusNotFound {
+				t.Fatalf("status=%d, want 404: %s", response.Code, response.Body.String())
+			}
+		})
+	}
+	if download.calls != 0 {
+		t.Fatal("malformed download position reached the download service")
+	}
+}
+
+type routeTestDownload struct{ calls int }
+
+func (d *routeTestDownload) Download(context.Context, string, int) (io.ReadCloser, string, error) {
+	d.calls++
+	return io.NopCloser(strings.NewReader("unexpected")), "output.mkv", nil
+}
+
 func TestProductionRouterRejectsMalformedPathsAndMethods(t *testing.T) {
 	authenticator, err := NewAuthenticator(AuthConfig{Mode: "none"})
 	if err != nil {
