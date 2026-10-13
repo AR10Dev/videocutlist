@@ -1,4 +1,4 @@
-// Package httpx contains bounded HTTP boundary helpers.
+// Package httpapi contains bounded HTTP boundary helpers.
 package httpapi
 
 import (
