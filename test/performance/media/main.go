@@ -45,11 +45,12 @@ type series struct {
 	errors             int
 }
 type bench struct {
-	opt    options
-	client *http.Client
-	rows   []*series
-	media  media
-	nonce  string
+	opt             options
+	client          *http.Client
+	rows            []*series
+	media           media
+	nonce           string
+	commandSequence uint64
 }
 type media struct {
 	ID         string                     `json:"id"`
@@ -397,12 +398,19 @@ func (b *bench) importFirst() error {
 	}
 	return b.scan("scan.rescan_unchanged")
 }
+func (b *bench) scanIdempotencyKey(scenario string) string {
+	b.commandSequence++
+	return fmt.Sprintf("bench-%s-%d-%s", b.nonce, b.commandSequence, strings.ReplaceAll(scenario, ".", "-"))
+}
+
 func (b *bench) scan(scenario string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), b.opt.timeout)
 	defer cancel()
 	start := time.Now()
 	var started job
-	resp, err := b.expect(ctx, "POST", "/api/v2/media/refresh", nil, nil, http.StatusAccepted, &started)
+	headers := make(http.Header)
+	headers.Set("Idempotency-Key", b.scanIdempotencyKey(scenario))
+	resp, err := b.expect(ctx, "POST", "/api/v2/media/refresh", nil, headers, http.StatusAccepted, &started)
 	if err != nil {
 		return err
 	}
@@ -682,7 +690,7 @@ func (b *bench) exports() error {
 				return fmt.Errorf("preflight rejected %s: %+v", strategy, checked)
 			}
 			mixed := strategy == "precise_reencode"
-			if err = b.exportOnce(ctx, id, itemID, strategy, mixed); err != nil {
+			if err = b.exportOnce(ctx, id, itemID, strategy, mixed, revision); err != nil {
 				cancel()
 				return err
 			}
@@ -691,7 +699,7 @@ func (b *bench) exports() error {
 	}
 	return nil
 }
-func (b *bench) exportOnce(ctx context.Context, projectID, itemID, strategy string, mixed bool) error {
+func (b *bench) exportOnce(ctx context.Context, projectID, itemID, strategy string, mixed bool, projectRevision int64) error {
 	scenario := "export." + strategy
 	if mixed {
 		scenario = "export.mixed." + strategy
@@ -703,7 +711,9 @@ func (b *bench) exportOnce(ctx context.Context, projectID, itemID, strategy stri
 		} `json:"jobs"`
 		BatchID string `json:"batchId"`
 	}
-	resp, err := b.expect(ctx, "POST", "/api/v2/projects/"+projectID+"/exports", map[string]any{"itemIds": []string{itemID}}, nil, 202, &submitted)
+	headers := make(http.Header)
+	headers.Set("Idempotency-Key", b.scanIdempotencyKey(scenario))
+	resp, err := b.expect(ctx, "POST", "/api/v2/projects/"+projectID+"/exports", map[string]any{"itemIds": []string{itemID}, "projectRevision": projectRevision}, headers, 202, &submitted)
 	if err != nil {
 		return err
 	}
