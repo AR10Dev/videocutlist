@@ -2,9 +2,11 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -19,6 +21,22 @@ import (
 	jobqueue "videocutlist/internal/jobs/model"
 	"videocutlist/internal/library/media/index"
 )
+
+func TestServerStartedLogIsValidJSON(t *testing.T) {
+	var logs bytes.Buffer
+	address := "quote\" control\n\x00 Unicode \u2028🙂"
+	logServerStarted(log.New(&logs, "", 0), address)
+	var entry struct {
+		Event string `json:"event"`
+		Addr  string `json:"listen_addr"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(logs.Bytes()), &entry); err != nil {
+		t.Fatalf("decode log: %v; record=%q", err, logs.String())
+	}
+	if entry.Event != "server_started" || entry.Addr != address {
+		t.Fatalf("unexpected server log: %q (%#v)", logs.String(), entry)
+	}
+}
 
 func TestRunRecoversUnifiedJobsOnStartup(t *testing.T) {
 	directory := t.TempDir()

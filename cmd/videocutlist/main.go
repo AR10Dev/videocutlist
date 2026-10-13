@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -283,7 +284,7 @@ func runWithCleanupExit(ctx context.Context, cleanupExited chan struct{}) (runEr
 	server.Addr = listener.Addr().String()
 	failed := make(chan error, 1)
 	go func() {
-		logger.Printf(`{"event":"server_started","listen_addr":%q}`, server.Addr)
+		logServerStarted(logger, server.Addr)
 		failed <- server.Serve(listener)
 	}()
 	select {
@@ -330,6 +331,11 @@ func destinationMetadata(values []exporter.Destination) []httpapi.DestinationMet
 		result = append(result, httpapi.DestinationMetadata{ID: public.ID, Label: public.Label, Description: public.Description, Kind: public.Kind, Retention: public.Retention})
 	}
 	return result
+}
+
+func logServerStarted(logger *log.Logger, address string) {
+	data, _ := json.Marshal(map[string]string{"event": "server_started", "listen_addr": address})
+	logger.Print(string(data))
 }
 
 func newHTTPServer(cfg config.Config, handler http.Handler) *http.Server {

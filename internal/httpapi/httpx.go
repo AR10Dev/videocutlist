@@ -25,7 +25,8 @@ type boundary struct{}
 // committed; changing the response at that point would produce a misleading status.
 func closeResponseBody(logger *log.Logger, resource string, closer io.Closer) {
 	if err := closer.Close(); err != nil && logger != nil {
-		logger.Printf(`{"error_category":"response_cleanup","resource":%q}`, resource)
+		data, _ := json.Marshal(map[string]string{"error_category": "response_cleanup", "resource": resource})
+		logger.Print(string(data))
 	}
 }
 
