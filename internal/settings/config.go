@@ -33,6 +33,8 @@ const (
 	defaultPreviewGridMS   = 500
 )
 
+const minimumBearerTokenBytes = 32
+
 // Config contains process settings only; filesystem access and service setup
 // belong to their respective packages.
 type Config struct {
@@ -72,13 +74,14 @@ func Load() (Config, error) {
 }
 
 func load(lookup func(string) (string, bool)) (Config, error) {
+	bearerToken, _ := lookup("VIDEOCUTLIST_BEARER_TOKEN")
 	c := Config{
 		DatabasePath: required(lookup, "VIDEOCUTLIST_DATABASE_PATH"),
 		CacheDir:     required(lookup, "VIDEOCUTLIST_CACHE_DIR"),
 		ExportDir:    required(lookup, "VIDEOCUTLIST_EXPORT_DIR"),
 		MediaRoots:   make(map[string]string),
 		AuthMode:     value(lookup, "VIDEOCUTLIST_AUTH_MODE", "none"),
-		BearerToken:  value(lookup, "VIDEOCUTLIST_BEARER_TOKEN", ""),
+		BearerToken:  bearerToken,
 		FFmpegPath:   value(lookup, "VIDEOCUTLIST_FFMPEG_PATH", defaultFFmpegPath),
 		FFprobePath:  value(lookup, "VIDEOCUTLIST_FFPROBE_PATH", defaultFFprobePath),
 	}
@@ -144,21 +147,29 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 		return Config{}, fmt.Errorf("VIDEOCUTLIST_AUTH_MODE=none requires a loopback listen address")
 	}
 	if c.AuthMode == "bearer" {
-		if c.BearerToken == "" || containsControl(c.BearerToken) {
-			return Config{}, fmt.Errorf("VIDEOCUTLIST_BEARER_TOKEN must be non-empty and control-free in bearer mode")
+		if len(c.BearerToken) < minimumBearerTokenBytes || containsControl(c.BearerToken) {
+			return Config{}, fmt.Errorf("VIDEOCUTLIST_BEARER_TOKEN must be at least %d bytes and control-free in bearer mode", minimumBearerTokenBytes)
 		}
 	}
 	if c.MCPEnabled, err = boolean(lookup, "VIDEOCUTLIST_MCP_ENABLED", false); err != nil {
 		return Config{}, err
 	}
+	_, trustedProxiesExplicit := lookup("VIDEOCUTLIST_TRUSTED_PROXY_CIDRS")
+	if c.AuthMode == "trusted_proxy" && !trustedProxiesExplicit {
+		return Config{}, fmt.Errorf("VIDEOCUTLIST_TRUSTED_PROXY_CIDRS is required when VIDEOCUTLIST_AUTH_MODE=trusted_proxy")
+	}
 	trusted := value(lookup, "VIDEOCUTLIST_TRUSTED_PROXY_CIDRS", defaultTrustedProxies)
-	for _, cidr := range strings.Split(trusted, ",") {
+	for cidr := range strings.SplitSeq(trusted, ",") {
 		cidr = strings.TrimSpace(cidr)
 		if cidr == "" {
 			return Config{}, fmt.Errorf("VIDEOCUTLIST_TRUSTED_PROXY_CIDRS contains an empty CIDR")
 		}
-		if _, _, err := net.ParseCIDR(cidr); err != nil {
+		_, network, err := net.ParseCIDR(cidr)
+		if err != nil {
 			return Config{}, fmt.Errorf("VIDEOCUTLIST_TRUSTED_PROXY_CIDRS: %w", err)
+		}
+		if prefix, _ := network.Mask.Size(); prefix == 0 {
+			return Config{}, fmt.Errorf("VIDEOCUTLIST_TRUSTED_PROXY_CIDRS cannot contain a universal /0 CIDR")
 		}
 		c.TrustedProxyCIDRs = append(c.TrustedProxyCIDRs, cidr)
 	}

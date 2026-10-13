@@ -194,7 +194,7 @@ func noneAuth(t *testing.T) api.Authenticator {
 }
 
 func TestUntrustedForwardedUserIsRejectedBeforeMedia(t *testing.T) {
-	authenticator, err := api.NewAuthenticator(api.AuthConfig{Mode: "trusted_proxy"})
+	authenticator, err := api.NewAuthenticator(api.AuthConfig{Mode: "trusted_proxy", TrustedProxyCIDRs: []string{"127.0.0.0/8"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,12 +222,12 @@ func TestAPIAuthenticationModesRejectBeforeServices(t *testing.T) {
 		wantStatus int
 	}{
 		{name: "none ignores bearer", config: api.AuthConfig{Mode: "none"}, authorize: "Bearer ignored", wantStatus: http.StatusOK},
-		{name: "correct bearer with internal space", config: api.AuthConfig{Mode: "bearer", BearerToken: "alpha beta"}, authorize: "Bearer alpha beta", wantStatus: http.StatusOK},
-		{name: "missing bearer", config: api.AuthConfig{Mode: "bearer", BearerToken: "alpha beta"}, wantStatus: http.StatusUnauthorized},
-		{name: "missing bearer suffix", config: api.AuthConfig{Mode: "bearer", BearerToken: "alpha beta"}, authorize: "Bearer", wantStatus: http.StatusUnauthorized},
-		{name: "wrong bearer", config: api.AuthConfig{Mode: "bearer", BearerToken: "alpha beta"}, authorize: "Bearer alpha gamma", wantStatus: http.StatusUnauthorized},
-		{name: "malformed scheme", config: api.AuthConfig{Mode: "bearer", BearerToken: "alpha beta"}, authorize: "Basic alpha beta", wantStatus: http.StatusUnauthorized},
-		{name: "multiple bearer", config: api.AuthConfig{Mode: "bearer", BearerToken: "alpha beta"}, wantStatus: http.StatusUnauthorized},
+		{name: "correct bearer with internal space", config: api.AuthConfig{Mode: "bearer", BearerToken: "alpha beta deployment test token 0123456789"}, authorize: "Bearer alpha beta deployment test token 0123456789", wantStatus: http.StatusOK},
+		{name: "missing bearer", config: api.AuthConfig{Mode: "bearer", BearerToken: "alpha beta deployment test token 0123456789"}, wantStatus: http.StatusUnauthorized},
+		{name: "missing bearer suffix", config: api.AuthConfig{Mode: "bearer", BearerToken: "alpha beta deployment test token 0123456789"}, authorize: "Bearer", wantStatus: http.StatusUnauthorized},
+		{name: "wrong bearer", config: api.AuthConfig{Mode: "bearer", BearerToken: "alpha beta deployment test token 0123456789"}, authorize: "Bearer alpha gamma deployment test token 0123456789", wantStatus: http.StatusUnauthorized},
+		{name: "malformed scheme", config: api.AuthConfig{Mode: "bearer", BearerToken: "alpha beta deployment test token 0123456789"}, authorize: "Basic alpha beta deployment test token 0123456789", wantStatus: http.StatusUnauthorized},
+		{name: "multiple bearer", config: api.AuthConfig{Mode: "bearer", BearerToken: "alpha beta deployment test token 0123456789"}, wantStatus: http.StatusUnauthorized},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			authenticator, err := api.NewAuthenticator(test.config)
@@ -253,7 +253,7 @@ func TestAPIAuthenticationModesRejectBeforeServices(t *testing.T) {
 }
 
 func TestTrustedProxyAccessGateReachesPreview(t *testing.T) {
-	authenticator, err := api.NewAuthenticator(api.AuthConfig{Mode: "trusted_proxy"})
+	authenticator, err := api.NewAuthenticator(api.AuthConfig{Mode: "trusted_proxy", TrustedProxyCIDRs: []string{"127.0.0.0/8"}})
 	if err != nil {
 		t.Fatal(err)
 	}

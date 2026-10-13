@@ -80,6 +80,62 @@ printf fixture > "$output"
 	return service, source, document, request, outputDir
 }
 
+func TestExportRejectsExpandedFilenameOver255Bytes(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		sourceName string
+	}{
+		{name: "ASCII", sourceName: strings.Repeat("x", 240) + ".mkv"},
+		{name: "multibyte", sourceName: strings.Repeat("é", 117) + ".mkv"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			service, source, document, request, outputDir := separateExportFixture(t, "")
+			request.Mode = "merge"
+			request.FilenameTemplate = "{source}.{ext}"
+			request.SourceName = test.sourceName
+
+			result, err := service.Run(t.Context(), source, document, request)
+			if !errors.Is(err, ErrInvalidRequest) || !strings.Contains(err.Error(), "255 bytes") {
+				t.Fatalf("export error = %v, want explicit invalid request for a filename over 255 bytes", err)
+			}
+			if result.OutputName != "" || len(result.OutputNames) != 0 {
+				t.Fatalf("rejected export returned output names: %+v", result)
+			}
+			entries, err := os.ReadDir(outputDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(entries) != 0 {
+				t.Fatalf("rejected export created destination files: %v", entries)
+			}
+		})
+	}
+}
+
+func TestExportKeeps255ByteMultibyteFilenameAndExtension(t *testing.T) {
+	service, source, document, request, outputDir := separateExportFixture(t, "")
+	request.Mode = "merge"
+	request.FilenameTemplate = "{source}.{ext}"
+	stem := strings.Repeat("é", 116)
+	request.SourceName = stem + ".mkv"
+	document.Items[0].Segments = []model.Segment{{StartMS: 0, EndMS: 2000}}
+
+	result, err := service.Run(t.Context(), source, document, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.OutputName) != 255 || !strings.HasPrefix(result.OutputName, stem+"-") || filepath.Ext(result.OutputName) != ".mkv" {
+		t.Fatalf("output name = %q (%d bytes), want the full source stem, suffix, and .mkv at 255 bytes", result.OutputName, len(result.OutputName))
+	}
+	info, err := os.Stat(filepath.Join(outputDir, result.OutputName))
+	if err != nil {
+		t.Fatalf("allocated output was not published: %v", err)
+	}
+	if !info.Mode().IsRegular() {
+		t.Fatalf("published output mode = %s, want regular file", info.Mode())
+	}
+}
+
 type rejectingLimiter struct{}
 
 func (rejectingLimiter) AcquireProcess() (func(), error) {

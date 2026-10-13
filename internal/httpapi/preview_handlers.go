@@ -116,7 +116,7 @@ func (s *Server) assetSpec(request *http.Request, item librarymedia.Media, wavef
 
 func (s *Server) thumbnails(w http.ResponseWriter, r *http.Request, media, id string) {
 	if s.config.Assets == nil {
-		internalError(w, id)
+		internalError(w, id, nil)
 		return
 	}
 	item, err := s.config.Media.Get(r.Context(), media)
@@ -149,7 +149,7 @@ func (s *Server) thumbnails(w http.ResponseWriter, r *http.Request, media, id st
 
 func (s *Server) waveform(w http.ResponseWriter, r *http.Request, media, id string) {
 	if s.config.Assets == nil {
-		internalError(w, id)
+		internalError(w, id, nil)
 		return
 	}
 	item, err := s.config.Media.Get(r.Context(), media)
@@ -190,7 +190,7 @@ func previewError(w http.ResponseWriter, id string, err error) {
 	case errors.Is(err, context.Canceled):
 		return
 	case errors.Is(err, context.DeadlineExceeded):
-		httpx.Error(w, http.StatusGatewayTimeout, "preview_timeout", "Preview timed out.", id)
+		internalServerError(w, http.StatusGatewayTimeout, "preview_timeout", "Preview timed out.", id, err)
 	case errors.Is(err, index.ErrNotFound), errors.Is(err, os.ErrNotExist):
 		notFound(w, id)
 	case errors.Is(err, index.ErrSourceChanged):
@@ -199,7 +199,7 @@ func previewError(w http.ResponseWriter, id string, err error) {
 		w.Header().Set("Retry-After", "1")
 		httpx.Error(w, http.StatusTooManyRequests, "preview_busy", "Preview capacity is full; retry later.", id)
 	default:
-		internalError(w, id)
+		internalError(w, id, err)
 	}
 }
 
@@ -208,13 +208,13 @@ func assetError(w http.ResponseWriter, id string, err error) {
 	case errors.Is(err, context.Canceled):
 		return
 	case errors.Is(err, context.DeadlineExceeded):
-		httpx.Error(w, http.StatusGatewayTimeout, "asset_timeout", "Asset generation timed out.", id)
+		internalServerError(w, http.StatusGatewayTimeout, "asset_timeout", "Asset generation timed out.", id, err)
 	case errors.Is(err, index.ErrNotFound), errors.Is(err, os.ErrNotExist):
 		notFound(w, id)
 	case errors.Is(err, index.ErrSourceChanged):
 		httpx.Error(w, http.StatusConflict, "source_changed", "Media changed; refresh the library and try again.", id)
 	default:
-		internalError(w, id)
+		internalError(w, id, err)
 	}
 }
 

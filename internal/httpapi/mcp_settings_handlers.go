@@ -61,7 +61,7 @@ func (s *Server) getMCPSettings(w http.ResponseWriter, r *http.Request, id strin
 	}
 	settings, err := s.config.Settings.Get(r.Context())
 	if err != nil {
-		httpx.Error(w, http.StatusInternalServerError, "mcp_settings_unavailable", "MCP settings are temporarily unavailable.", id)
+		internalServerError(w, http.StatusInternalServerError, "mcp_settings_unavailable", "MCP settings are temporarily unavailable.", id, err)
 		return
 	}
 	credentials, next, err := s.config.MCPCredentials.List(r.Context(), query.Get("cursor"), limit)
@@ -69,7 +69,7 @@ func (s *Server) getMCPSettings(w http.ResponseWriter, r *http.Request, id strin
 		if errors.Is(err, mcp.ErrCredentialNotFound) {
 			httpx.Error(w, http.StatusBadRequest, "invalid_query", "Query parameters are invalid.", id)
 		} else {
-			httpx.Error(w, http.StatusInternalServerError, "mcp_settings_unavailable", "MCP settings are temporarily unavailable.", id)
+			internalServerError(w, http.StatusInternalServerError, "mcp_settings_unavailable", "MCP settings are temporarily unavailable.", id, err)
 		}
 		return
 	}
@@ -81,7 +81,7 @@ func (s *Server) getMCPSettings(w http.ResponseWriter, r *http.Request, id strin
 			if errors.Is(err, mcp.ErrInvalidProposalCursor) {
 				httpx.Error(w, http.StatusBadRequest, "invalid_query", "Query parameters are invalid.", id)
 			} else {
-				httpx.Error(w, http.StatusInternalServerError, "export_proposals_unavailable", "Export proposals are temporarily unavailable.", id)
+				internalServerError(w, http.StatusInternalServerError, "export_proposals_unavailable", "Export proposals are temporarily unavailable.", id, err)
 			}
 			return
 		}
@@ -135,7 +135,7 @@ func (s *Server) createMCPCredential(w http.ResponseWriter, r *http.Request, id 
 	if input.MediaScope.Kind == mcp.MediaScopeRoots {
 		settings, err := s.config.Settings.Get(r.Context())
 		if err != nil {
-			httpx.Error(w, http.StatusInternalServerError, "mcp_settings_unavailable", "Credential settings are temporarily unavailable.", id)
+			internalServerError(w, http.StatusInternalServerError, "mcp_settings_unavailable", "Credential settings are temporarily unavailable.", id, err)
 			return
 		}
 		for _, rootID := range input.MediaScope.RootIDs {
@@ -155,7 +155,7 @@ func (s *Server) createMCPCredential(w http.ResponseWriter, r *http.Request, id 
 			httpx.Error(w, http.StatusBadRequest, "invalid_mcp_credential", "Credential settings are invalid.", id)
 			return
 		}
-		httpx.Error(w, http.StatusInternalServerError, "mcp_settings_unavailable", "Credential could not be created.", id)
+		internalServerError(w, http.StatusInternalServerError, "mcp_settings_unavailable", "Credential could not be created.", id, err)
 		return
 	}
 	httpx.WriteJSON(w, http.StatusCreated, created)
@@ -172,7 +172,7 @@ func (s *Server) revokeMCPCredential(w http.ResponseWriter, r *http.Request, cre
 		return
 	}
 	if err != nil {
-		httpx.Error(w, http.StatusInternalServerError, "mcp_settings_unavailable", "Credential could not be revoked.", id)
+		internalServerError(w, http.StatusInternalServerError, "mcp_settings_unavailable", "Credential could not be revoked.", id, err)
 		return
 	}
 	httpx.WriteJSON(w, http.StatusOK, mcpCredentialView{Credential: credential, Status: "revoked"})

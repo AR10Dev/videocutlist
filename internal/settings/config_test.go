@@ -55,7 +55,7 @@ func TestLoadListenerConfiguration(t *testing.T) {
 		{name: "default", listenAddr: "127.0.0.1:8787"},
 		{name: "loopback port", changes: map[string]string{"VIDEOCUTLIST_LISTEN_ADDRESS": "127.0.0.1", "VIDEOCUTLIST_PORT": "1"}, listenAddr: "127.0.0.1:1"},
 		{name: "IPv6", changes: map[string]string{"VIDEOCUTLIST_LISTEN_ADDRESS": "::1", "VIDEOCUTLIST_PORT": "4000"}, listenAddr: "[::1]:4000"},
-		{name: "bearer LAN", changes: map[string]string{"VIDEOCUTLIST_AUTH_MODE": "bearer", "VIDEOCUTLIST_BEARER_TOKEN": "secret", "VIDEOCUTLIST_LISTEN_ADDRESS": "0.0.0.0", "VIDEOCUTLIST_PORT": "4000"}, listenAddr: "0.0.0.0:4000"},
+		{name: "bearer LAN", changes: map[string]string{"VIDEOCUTLIST_AUTH_MODE": "bearer", "VIDEOCUTLIST_BEARER_TOKEN": strings.Repeat("x", 32), "VIDEOCUTLIST_LISTEN_ADDRESS": "0.0.0.0", "VIDEOCUTLIST_PORT": "4000"}, listenAddr: "0.0.0.0:4000"},
 		{name: "invalid IP", changes: map[string]string{"VIDEOCUTLIST_LISTEN_ADDRESS": "localhost"}, wantErr: true},
 		{name: "host port is not an IP", changes: map[string]string{"VIDEOCUTLIST_LISTEN_ADDRESS": "127.0.0.1:9000"}, wantErr: true},
 		{name: "ephemeral port", changes: map[string]string{"VIDEOCUTLIST_PORT": "0"}, listenAddr: "127.0.0.1:0"},
@@ -113,6 +113,36 @@ func TestLoadParsesNetworkSettings(t *testing.T) {
 	}
 }
 
+func TestLoadTrustedProxyRequiresExplicitNonUniversalCIDRs(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		cidrs   string
+		wantErr bool
+	}{
+		{name: "missing", wantErr: true},
+		{name: "IPv4 universal", cidrs: "0.0.0.0/0", wantErr: true},
+		{name: "IPv6 universal", cidrs: "::/0", wantErr: true},
+		{name: "explicit proxy", cidrs: "192.0.2.10/32"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			changes := map[string]string{"VIDEOCUTLIST_AUTH_MODE": "trusted_proxy"}
+			if test.cidrs != "" {
+				changes["VIDEOCUTLIST_TRUSTED_PROXY_CIDRS"] = test.cidrs
+			}
+			config, err := load(env(mergeEnv(baseEnv(), changes)))
+			if (err != nil) != test.wantErr {
+				t.Fatalf("Load error = %v, want error %t", err, test.wantErr)
+			}
+			if test.wantErr && !strings.Contains(err.Error(), "VIDEOCUTLIST_TRUSTED_PROXY_CIDRS") {
+				t.Fatalf("error = %v, want trusted-proxy setting named", err)
+			}
+			if err == nil && strings.Join(config.TrustedProxyCIDRs, ",") != test.cidrs {
+				t.Fatalf("TrustedProxyCIDRs = %v, want %q", config.TrustedProxyCIDRs, test.cidrs)
+			}
+		})
+	}
+}
+
 func TestLoadStoresValidatedNetworkSettings(t *testing.T) {
 	c, err := load(env(mergeEnv(baseEnv(), map[string]string{
 		"VIDEOCUTLIST_PUBLIC_BASE_URL":     "https://edit.example.test/app",
@@ -163,6 +193,40 @@ func TestLoadTimeouts(t *testing.T) {
 			}
 			if c.ReadTimeout != test.read || c.WriteTimeout != test.write || c.IdleTimeout != test.idle {
 				t.Fatalf("timeouts = (%s, %s, %s), want (%s, %s, %s)", c.ReadTimeout, c.WriteTimeout, c.IdleTimeout, test.read, test.write, test.idle)
+			}
+		})
+	}
+}
+
+func TestLoadBearerTokenStrength(t *testing.T) {
+	minimumToken := strings.Repeat("x", 32)
+	for _, test := range []struct {
+		name    string
+		token   string
+		wantErr bool
+	}{
+		{name: "empty", token: "", wantErr: true},
+		{name: "below minimum", token: minimumToken[:31], wantErr: true},
+		{name: "minimum length", token: minimumToken},
+		{name: "above minimum", token: minimumToken + "x"},
+		{name: "control character", token: minimumToken[:31] + "\n", wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := load(env(mergeEnv(baseEnv(), map[string]string{
+				"VIDEOCUTLIST_AUTH_MODE":    "bearer",
+				"VIDEOCUTLIST_BEARER_TOKEN": test.token,
+			})))
+			if test.wantErr {
+				if err == nil {
+					t.Fatal("Load unexpectedly accepted an invalid bearer token")
+				}
+				if test.token != "" && strings.Contains(err.Error(), test.token) {
+					t.Fatal("Load error exposed the bearer token")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
 			}
 		})
 	}

@@ -1,0 +1,55 @@
+name: Real-media validation and backend benchmarks
+
+on:
+    workflow_dispatch:
+    schedule:
+        - cron: "17 3 * * 1"
+
+permissions:
+    contents: read
+
+jobs:
+    real-media:
+        runs-on: ubuntu-24.04
+        timeout-minutes: 30
+        steps:
+            # v7.0.1
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+            # actions/setup-go v7.0.0
+            - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+              with:
+                  go-version: "1.26.9"
+            # pnpm/action-setup v6.0.10
+            - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
+              with:
+                  version: 10.34.5
+            # actions/setup-node v7.0.0
+            - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+              with:
+                  node-version: "26.7.0"
+            - run: pnpm --dir web install --frozen-lockfile
+            - name: Install media and browser tools
+              run: |
+                  sudo apt-get update
+                  sudo apt-get install -y ffmpeg
+                  pnpm --dir web exec playwright install --with-deps chromium
+            - name: Run real-media suite
+              run: |
+                  set -o pipefail
+                  make test-real-media 2>&1 | tee real-media.log
+            - name: Run backend performance harness
+              run: make benchmark-backend > backend-benchmark.csv
+            - name: Upload real-media and benchmark evidence
+              if: always()
+              # actions/upload-artifact v7.0.0
+              uses: >-
+                  actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+              with:
+                  name: real-media-and-backend-performance-${{ github.run_id }}
+                  path: |
+                      test/fixtures/real-media/sintel-trailer.mp4
+                      backend-benchmark.csv
+                      real-media.log
+                      web/test-results/
+                  retention-days: 14
+                  if-no-files-found: warn

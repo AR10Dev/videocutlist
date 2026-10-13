@@ -3,6 +3,7 @@ package httpapi
 import (
 	"crypto/subtle"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"strings"
@@ -18,6 +19,7 @@ type Authenticator interface {
 type AuthConfig struct {
 	Mode, BearerToken string
 	ListenAddress     string
+	TrustedProxyCIDRs []string
 }
 type authenticator struct {
 	mode  string
@@ -40,6 +42,14 @@ func NewAuthenticator(config AuthConfig) (Authenticator, error) {
 	}
 	if mode == "bearer" && !validToken(config.BearerToken) {
 		return nil, errors.New("invalid bearer configuration")
+	}
+	if mode == "trusted_proxy" {
+		if len(config.TrustedProxyCIDRs) == 0 {
+			return nil, errors.New("trusted-proxy authentication requires explicit trusted CIDRs")
+		}
+		if _, err := parseTrustedCIDRs(config.TrustedProxyCIDRs); err != nil {
+			return nil, fmt.Errorf("invalid trusted-proxy CIDRs: %w", err)
+		}
 	}
 	return &authenticator{mode: mode, token: []byte(config.BearerToken)}, nil
 }
@@ -66,5 +76,5 @@ func (a *authenticator) Authenticate(r *http.Request) error {
 	}
 	return nil
 }
-func validToken(value string) bool      { return value != "" && !containsControl(value) }
+func validToken(value string) bool      { return len(value) >= 32 && !containsControl(value) }
 func containsControl(value string) bool { return strings.IndexFunc(value, unicode.IsControl) >= 0 }

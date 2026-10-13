@@ -26,7 +26,7 @@ import (
 
 const (
 	fixturePath = "test/fixtures/real-media/sintel-trailer.mp4"
-	bearerToken = "real-media-test-token"
+	bearerToken = "real-media-test-token-0123456789abcdef"
 	startupWait = 20 * time.Second
 )
 

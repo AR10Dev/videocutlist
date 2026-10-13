@@ -17,7 +17,7 @@ import (
 
 func (s *Server) getJob(writer http.ResponseWriter, request *http.Request, job string, id string) {
 	if s.config.Jobs == nil {
-		internalError(writer, id)
+		internalError(writer, id, nil)
 		return
 	}
 	value, err := s.config.Jobs.Get(request.Context(), job)
@@ -25,7 +25,7 @@ func (s *Server) getJob(writer http.ResponseWriter, request *http.Request, job s
 		if errors.Is(err, jobqueue.ErrJobNotFound) {
 			notFound(writer, id)
 		} else {
-			internalError(writer, id)
+			internalError(writer, id, err)
 		}
 		return
 	}
@@ -39,7 +39,7 @@ const (
 
 func (s *Server) streamJob(writer http.ResponseWriter, request *http.Request, jobID, requestID string) {
 	if s.config.Jobs == nil {
-		internalError(writer, requestID)
+		internalError(writer, requestID, nil)
 		return
 	}
 	if !s.admitObservation(writer, requestID) {
@@ -55,12 +55,12 @@ func (s *Server) streamJob(writer http.ResponseWriter, request *http.Request, jo
 		if errors.Is(err, jobqueue.ErrJobNotFound) {
 			notFound(writer, requestID)
 		} else {
-			internalError(writer, requestID)
+			internalError(writer, requestID, err)
 		}
 		return
 	}
 	if job.ID != jobID {
-		internalError(writer, requestID)
+		internalError(writer, requestID, nil)
 		return
 	}
 
@@ -77,7 +77,7 @@ func (s *Server) streamJob(writer http.ResponseWriter, request *http.Request, jo
 
 	stream, err := newSSEWriter(writer)
 	if err != nil {
-		internalError(writer, requestID)
+		internalError(writer, requestID, err)
 		return
 	}
 	writer = stream
@@ -149,12 +149,12 @@ func (s *Server) releaseObservation() { <-s.observationSlots }
 
 func (s *Server) streamBatch(writer http.ResponseWriter, request *http.Request, batchID, requestID string) {
 	if s.config.BatchExports == nil {
-		internalError(writer, requestID)
+		internalError(writer, requestID, nil)
 		return
 	}
 	snapshotReader, ok := s.config.BatchExports.(batchSnapshotReader)
 	if !ok {
-		internalError(writer, requestID)
+		internalError(writer, requestID, nil)
 		return
 	}
 	if !s.admitObservation(writer, requestID) {
@@ -171,7 +171,7 @@ func (s *Server) streamBatch(writer http.ResponseWriter, request *http.Request, 
 		return
 	}
 	if batch.BatchID != batchID || cursor == "" || len(cursor) > 256 {
-		internalError(writer, requestID)
+		internalError(writer, requestID, nil)
 		return
 	}
 	resync := false
@@ -182,7 +182,7 @@ func (s *Server) streamBatch(writer http.ResponseWriter, request *http.Request, 
 
 	stream, err := newSSEWriter(writer)
 	if err != nil {
-		internalError(writer, requestID)
+		internalError(writer, requestID, err)
 		return
 	}
 	writer = stream
@@ -266,14 +266,14 @@ func terminalJob(state string) bool {
 
 func (s *Server) cancelJob(writer http.ResponseWriter, request *http.Request, job string, id string) {
 	if s.config.Jobs == nil {
-		internalError(writer, id)
+		internalError(writer, id, nil)
 		return
 	}
 	if err := s.config.Jobs.Cancel(request.Context(), job); err != nil {
 		if errors.Is(err, jobqueue.ErrJobNotFound) {
 			notFound(writer, id)
 		} else {
-			internalError(writer, id)
+			internalError(writer, id, err)
 		}
 		return
 	}

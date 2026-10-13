@@ -3,6 +3,7 @@ package httpapi
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -20,11 +21,11 @@ func TestAuthenticatorModes(t *testing.T) {
 	if err := none.Authenticate(httptest.NewRequest(http.MethodGet, "http://api.test", nil)); err != nil {
 		t.Fatal(err)
 	}
-	bearer, err := NewAuthenticator(AuthConfig{Mode: "bearer", BearerToken: "alpha beta"})
+	bearer, err := NewAuthenticator(AuthConfig{Mode: "bearer", BearerToken: "alpha beta deployment test token 0123456789"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for name, authorization := range map[string][]string{"correct": {"Bearer alpha beta"}, "missing": nil, "wrong": {"Bearer alpha gamma"}, "bad scheme": {"Basic alpha beta"}, "multiple": {"Bearer alpha beta", "Bearer alpha beta"}} {
+	for name, authorization := range map[string][]string{"correct": {"Bearer alpha beta deployment test token 0123456789"}, "missing": nil, "wrong": {"Bearer alpha gamma deployment test token 0123456789"}, "bad scheme": {"Basic alpha beta deployment test token 0123456789"}, "multiple": {"Bearer alpha beta deployment test token 0123456789", "Bearer alpha beta deployment test token 0123456789"}} {
 		t.Run(name, func(t *testing.T) {
 			r := httptest.NewRequest(http.MethodGet, "http://api.test", nil)
 			r.Header["Authorization"] = authorization
@@ -39,8 +40,51 @@ func TestAuthenticatorModes(t *testing.T) {
 	}
 }
 
-func TestTrustedProxyAuthenticatorUsesOnlyContext(t *testing.T) {
+func TestAuthenticatorRejectsWeakBearerTokens(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		token   string
+		wantErr bool
+	}{
+		{"empty", "", true},
+		{"short", strings.Repeat("x", 31), true},
+		{"boundary", strings.Repeat("x", 32), false},
+		{"long", strings.Repeat("x", 33), false},
+		{"control", strings.Repeat("x", 32) + "\n", true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := NewAuthenticator(AuthConfig{Mode: "bearer", BearerToken: test.token})
+			if (err != nil) != test.wantErr {
+				t.Fatalf("configuration error = %v, want error %v", err, test.wantErr)
+			}
+			if err != nil && test.token != "" && strings.Contains(err.Error(), test.token) {
+				t.Fatal("configuration error exposes token")
+			}
+		})
+	}
+}
+
+func TestTrustedProxyAuthenticatorRequiresExplicitCIDRs(t *testing.T) {
 	authenticator, err := NewAuthenticator(AuthConfig{Mode: "trusted_proxy"})
+	if err == nil || authenticator != nil {
+		t.Fatal("trusted-proxy authentication accepted an implicit trust boundary")
+	}
+}
+
+func TestTrustedProxyAuthenticatorRejectsUniversalCIDRs(t *testing.T) {
+	for _, cidr := range []string{"0.0.0.0/0", "::/0"} {
+		t.Run(cidr, func(t *testing.T) {
+			authenticator, err := NewAuthenticator(AuthConfig{Mode: "trusted_proxy", TrustedProxyCIDRs: []string{cidr}})
+			if err == nil || authenticator != nil {
+				t.Fatalf("trusted-proxy authentication accepted universal CIDR %q", cidr)
+			}
+		})
+	}
+}
+
+func TestTrustedProxyAuthenticatorUsesOnlyContext(t *testing.T) {
+	trustedCIDRs := []string{"127.0.0.0/8"}
+	authenticator, err := NewAuthenticator(AuthConfig{Mode: "trusted_proxy", TrustedProxyCIDRs: trustedCIDRs})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +95,7 @@ func TestTrustedProxyAuthenticatorUsesOnlyContext(t *testing.T) {
 	}
 	var authErr error
 	called := false
-	handler, err := TrustedProxy([]string{"127.0.0.0/8"}, http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
+	handler, err := TrustedProxy(trustedCIDRs, http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
 		called = true
 		authErr = authenticator.Authenticate(request)
 	}))

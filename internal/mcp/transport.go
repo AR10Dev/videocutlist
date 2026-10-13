@@ -24,13 +24,14 @@ import (
 )
 
 const (
-	ProtocolVersion              = "2025-06-18"
-	maxRequestBytes              = 1 << 20
-	maxResultBytes               = 1 << 20
-	maxToolPage                  = 100
-	maxControlConcurrentRequests = 1
-	auditWriteTimeout            = 2 * time.Second
-	associationHeader            = "X-Videocutlist-MCP-Association"
+	ProtocolVersion                      = "2025-06-18"
+	maxRequestBytes                      = 1 << 20
+	maxPreAuthenticationRateLimitEntries = 1024
+	maxResultBytes                       = 1 << 20
+	maxToolPage                          = 100
+	maxControlConcurrentRequests         = 1
+	auditWriteTimeout                    = 2 * time.Second
+	associationHeader                    = "X-Videocutlist-MCP-Association"
 )
 
 type RequestInfo struct {
@@ -77,20 +78,22 @@ type TransportConfig struct {
 
 // Transport owns MCP admission, application cancellation, and session shutdown.
 type Transport struct {
-	config          TransportConfig
-	allowed         map[string]struct{}
-	publicAuthority string
-	handler         http.Handler
-	mu              sync.Mutex
-	sessions        map[string]*session
-	rates           map[string]rate
-	workRequests    map[string]int
-	controlRequests map[string]int
-	numericIDs      map[string]map[string]string
-	associations    map[string]*requestAssociation
-	activeCalls     map[*requestAssociation]struct{}
-	workChanged     chan struct{}
-	shuttingDown    bool
+	config               TransportConfig
+	allowed              map[string]struct{}
+	publicAuthority      string
+	handler              http.Handler
+	mu                   sync.Mutex
+	sessions             map[string]*session
+	rates                map[string]rate
+	preAuthRates         map[string]rate
+	nextPreAuthRatePrune time.Time
+	workRequests         map[string]int
+	controlRequests      map[string]int
+	numericIDs           map[string]map[string]string
+	associations         map[string]*requestAssociation
+	activeCalls          map[*requestAssociation]struct{}
+	workChanged          chan struct{}
+	shuttingDown         bool
 }
 
 type requestAssociation struct {
@@ -150,7 +153,7 @@ func NewTransport(config TransportConfig) (*Transport, error) {
 	}
 	t := &Transport{
 		config: config, allowed: make(map[string]struct{}), sessions: make(map[string]*session),
-		rates: make(map[string]rate), workRequests: make(map[string]int), controlRequests: make(map[string]int), numericIDs: make(map[string]map[string]string),
+		rates: make(map[string]rate), preAuthRates: make(map[string]rate), workRequests: make(map[string]int), controlRequests: make(map[string]int), numericIDs: make(map[string]map[string]string),
 		associations: make(map[string]*requestAssociation), activeCalls: make(map[*requestAssociation]struct{}),
 		workChanged: make(chan struct{}, 1),
 	}
@@ -322,8 +325,14 @@ func (t *Transport) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if !t.validTransport(r, t.requestInfo(r)) {
+	info := t.requestInfo(r)
+	if !t.validTransport(r, info) {
 		http.Error(w, "forbidden", http.StatusForbidden)
+		return
+	}
+	if !t.allowPreAuthenticationRequest(info.ClientIP) {
+		w.Header().Set("Retry-After", "60")
+		http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
 		return
 	}
 	token, ok := bearerToken(r.Header.Values("Authorization"))
@@ -977,6 +986,51 @@ func (t *Transport) releaseControl(credentialID string) {
 	t.mu.Unlock()
 	t.notifyWorkChanged()
 }
+func (t *Transport) allowPreAuthenticationRequest(clientIP net.IP) bool {
+	if clientIP == nil {
+		return false
+	}
+	key := clientIP.String()
+	now := t.config.Now().UTC()
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.prunePreAuthenticationRates(now)
+	entry, exists := t.preAuthRates[key]
+	if !exists {
+		if len(t.preAuthRates) >= maxPreAuthenticationRateLimitEntries {
+			return false
+		}
+		entry = rate{window: now}
+		expiresAt := now.Add(time.Minute)
+		if t.nextPreAuthRatePrune.IsZero() || expiresAt.Before(t.nextPreAuthRatePrune) {
+			t.nextPreAuthRatePrune = expiresAt
+		}
+	}
+	if entry.count >= t.config.RequestsPerMinute {
+		return false
+	}
+	entry.count++
+	t.preAuthRates[key] = entry
+	return true
+}
+
+func (t *Transport) prunePreAuthenticationRates(now time.Time) {
+	if t.nextPreAuthRatePrune.IsZero() || now.Before(t.nextPreAuthRatePrune) {
+		return
+	}
+	t.nextPreAuthRatePrune = time.Time{}
+	for ip, existing := range t.preAuthRates {
+		expiresAt := existing.window.Add(time.Minute)
+		if !now.Before(expiresAt) {
+			delete(t.preAuthRates, ip)
+			continue
+		}
+		if t.nextPreAuthRatePrune.IsZero() || expiresAt.Before(t.nextPreAuthRatePrune) {
+			t.nextPreAuthRatePrune = expiresAt
+		}
+	}
+}
+
 func (t *Transport) allowRequest(credentialID string) bool {
 	now := t.config.Now().UTC()
 	t.mu.Lock()
