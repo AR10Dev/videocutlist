@@ -681,6 +681,80 @@ func TestSchedulerAdmissionReturnsCommittedJobsAfterContextCancellation(t *testi
 	}
 }
 
+func TestSchedulerPersistsTerminalStateAfterSoleConnectionContention(t *testing.T) {
+	for _, stage := range []string{"initial_read", "terminal_write"} {
+		t.Run(stage, func(t *testing.T) {
+			database := openSchedulerTestDatabase(t)
+			t.Cleanup(func() {
+				if err := database.Close(); err != nil {
+					t.Error(err)
+				}
+			})
+			jobs, err := newTestJobsStore(database)
+			if err != nil {
+				t.Fatal(err)
+			}
+			runnerReady := make(chan struct{})
+			runnerRelease := make(chan struct{})
+			transitionReady := make(chan struct{})
+			transitionRelease := make(chan struct{})
+			scheduler, err := NewScheduler(jobs, SchedulerConfig{QueueCapacity: 1, WorkerLimit: 1}, func(context.Context, model.Job) error {
+				close(runnerReady)
+				<-runnerRelease
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stage == "terminal_write" {
+				var first atomic.Bool
+				scheduler.terminalTransition = func(ctx context.Context, id string, target model.JobState, result, _ string) (model.Job, error) {
+					if first.CompareAndSwap(false, true) {
+						close(transitionReady)
+						<-transitionRelease
+					}
+					return jobs.Succeed(ctx, id, result)
+				}
+			}
+			scheduler.Start()
+			job := model.Job{ID: "j_000000000201", BatchID: "b_000000000201", Kind: model.JobScan, RequestJSON: `{}`}
+			if _, err := scheduler.Submit(t.Context(), []model.Job{job}); err != nil {
+				t.Fatal(err)
+			}
+			<-runnerReady
+			if stage == "terminal_write" {
+				close(runnerRelease)
+				<-transitionReady
+			}
+			connection, err := database.Conn(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stage == "initial_read" {
+				close(runnerRelease)
+			} else {
+				close(transitionRelease)
+			}
+			time.Sleep(350 * time.Millisecond)
+			if err := connection.Close(); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			defer cancel()
+			if err := scheduler.Shutdown(ctx); err != nil {
+				t.Fatal(err)
+			}
+			stored, err := jobs.Get(t.Context(), job.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stored.State != model.JobSucceeded {
+				t.Fatalf("job state after transient %s contention = %s, want succeeded", stage, stored.State)
+			}
+		})
+	}
+}
+
 func TestSchedulerRetriesTerminalTransitionPreservingRunnerResult(t *testing.T) {
 	database := openSchedulerTestDatabase(t)
 	t.Cleanup(func() {
