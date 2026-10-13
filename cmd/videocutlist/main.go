@@ -182,7 +182,11 @@ func runWithCleanupExit(ctx context.Context, cleanupExited chan struct{}) (runEr
 	queuedExports := exporter.QueuedExecutor{Jobs: unifiedJobs, Media: mediaCatalog, RunSnapshot: exportExecutor.RunSnapshot, RemoveArtifacts: artifacts.Remove}
 	queuedJobs := runtime.QueuedJobs{Exports: queuedExports, Scans: librarymedia.ScanExecutor{Jobs: unifiedJobs, Media: mediaService, Catalog: mediaCatalog}, Detection: detection.QueuedExecutor{Jobs: unifiedJobs, Catalog: mediaCatalog, Detector: detector}}
 	batchDownloads := exporter.BatchArchiveService{Jobs: unifiedJobs, Service: exportExecutor.Service, Downloads: exportExecutor}
-	scheduler, err := jobqueue.NewScheduler(unifiedJobs, jobqueue.SchedulerConfig{QueueCapacity: cfg.ExportLimit * 4, WorkerLimit: cfg.ExportLimit, Logger: logger}, queuedJobs.Run)
+	metrics := httpapi.NewMetrics()
+	scheduler, err := jobqueue.NewScheduler(unifiedJobs, jobqueue.SchedulerConfig{
+		QueueCapacity: cfg.ExportLimit * 4, WorkerLimit: cfg.ExportLimit, Logger: logger,
+		TerminalFinalization: metrics.TerminalFinalization,
+	}, queuedJobs.Run)
 	if err != nil {
 		return err
 	}
@@ -226,7 +230,7 @@ func runWithCleanupExit(ctx context.Context, cleanupExited chan struct{}) (runEr
 		Projects: projectService, BatchExports: batchExports, Preflight: projects.ExportPreflightUseCase{Export: exportExecutor}, Jobs: jobService, Detection: detectionService, Download: exportExecutor, BatchDownload: batchDownloads, MediaImport: mediaImportService,
 		Settings: config.NewRuntimeService(runtimeSettingsStore, runtimeState, settingsApplier.Apply), RuntimeSettings: runtimeState, MCPCredentials: mcpCredentials, ExportProposals: proposalService,
 		Destinations: destinationMetadata(cfg.Destinations),
-		Ready:        db.PingContext, Logger: logger, Metrics: httpapi.NewMetrics(), DatabaseStats: db.Stats,
+		Ready:        db.PingContext, Logger: logger, Metrics: metrics, DatabaseStats: db.Stats,
 		BeforeMS: int64(cfg.PreviewBeforeMS), AfterMS: int64(cfg.PreviewAfterMS),
 		MaxPreviewMS: int64(cfg.PreviewMaxMS), GridMS: int64(cfg.PreviewGridMS), ListenerAddress: cfg.ListenAddress, AllowedOrigins: cfg.AllowedOrigins, RequireAutomationAuth: cfg.AuthMode != "none",
 	})

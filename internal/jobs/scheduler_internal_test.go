@@ -681,6 +681,42 @@ func TestSchedulerAdmissionReturnsCommittedJobsAfterContextCancellation(t *testi
 	}
 }
 
+func TestSchedulerRecordsInitialReadExhaustion(t *testing.T) {
+	database := openSchedulerTestDatabase(t)
+	jobs, err := newTestJobsStore(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.Close(); err != nil {
+		t.Fatal(err)
+	}
+	observed := make(chan struct {
+		duration time.Duration
+		failed   bool
+	}, 1)
+	scheduler, err := NewScheduler(jobs, SchedulerConfig{
+		QueueCapacity: 1,
+		WorkerLimit:   1,
+		TerminalFinalization: func(duration time.Duration, failed bool) {
+			observed <- struct {
+				duration time.Duration
+				failed   bool
+			}{duration, failed}
+		},
+	}, func(context.Context, model.Job) error { return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	scheduler.finalize(model.Job{ID: "j_missing"}, errors.New("runner failed"), nil)
+	got := <-observed
+	if !got.failed {
+		t.Fatal("initial terminal state read exhaustion was not reported as a failure")
+	}
+	if got.duration < 2*terminalTransitionBackoff {
+		t.Fatalf("finalization duration = %s, want to include initial-read retries", got.duration)
+	}
+}
+
 func TestSchedulerTerminalFailureLogIsValidJSON(t *testing.T) {
 	var logs bytes.Buffer
 	scheduler := &Scheduler{logger: log.New(&logs, "", 0)}

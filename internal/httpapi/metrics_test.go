@@ -66,6 +66,9 @@ func metricValue(families []*io_prometheus_client.MetricFamily, name string, lab
 				if metric.Gauge != nil {
 					return metric.GetGauge().GetValue()
 				}
+				if metric.Histogram != nil {
+					return metric.GetHistogram().GetSampleSum()
+				}
 			}
 		}
 	}
@@ -144,6 +147,29 @@ func TestMetricsDatabasePoolTracksControlledWait(t *testing.T) {
 	connectionClosed = true
 	if err := <-queryDone; err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestMetricsTerminalFinalizationTracksFailuresAndLatency(t *testing.T) {
+	metrics := NewMetrics()
+	metrics.TerminalFinalization(250*time.Millisecond, true)
+	metrics.TerminalFinalization(500*time.Millisecond, false)
+	families, err := metrics.registry.Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := metricValue(families, "job_terminal_finalization_failures_total", nil); got != 1 {
+		t.Fatalf("terminal failures = %v, want 1", got)
+	}
+	if got := metricValue(families, "job_terminal_finalization_duration_seconds", nil); got != .75 {
+		t.Fatalf("terminal finalization duration = %v, want .75 seconds", got)
+	}
+	for _, family := range families {
+		if family.GetName() == "job_terminal_finalization_duration_seconds" {
+			if got := family.GetMetric()[0].GetHistogram().GetSampleCount(); got != 2 {
+				t.Fatalf("terminal finalization observations = %d, want 2", got)
+			}
+		}
 	}
 }
 

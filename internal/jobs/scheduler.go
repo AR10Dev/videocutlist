@@ -42,9 +42,10 @@ func (e *ResultPersistenceError) Unwrap() error {
 
 // SchedulerConfig keeps durable backlog admission independent of active workers.
 type SchedulerConfig struct {
-	QueueCapacity int
-	WorkerLimit   int
-	Logger        *log.Logger
+	QueueCapacity        int
+	WorkerLimit          int
+	Logger               *log.Logger
+	TerminalFinalization func(time.Duration, bool)
 }
 
 func (c SchedulerConfig) validate() error {
@@ -320,9 +321,17 @@ func (s *Scheduler) worker() {
 }
 
 func (s *Scheduler) finalize(job model.Job, runnerErr, cancellation error) {
+	started := time.Now()
+	failed := false
+	defer func() {
+		if s.config.TerminalFinalization != nil {
+			s.config.TerminalFinalization(time.Since(started), failed)
+		}
+	}()
 	target, result, code := terminalTarget(runnerErr, cancellation)
 	current, err := s.readTerminalState(job.ID)
 	if err != nil {
+		failed = true
 		s.logTerminalFailure(job.ID, target, "terminal_state_read")
 		return
 	}
@@ -336,6 +345,7 @@ func (s *Scheduler) finalize(job model.Job, runnerErr, cancellation error) {
 	if readErr == nil && current.State != model.JobRunning {
 		return
 	}
+	failed = true
 	s.logTerminalFailure(job.ID, target, "terminal_transition")
 }
 
