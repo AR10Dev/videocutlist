@@ -48,7 +48,14 @@ func main() {
 	}
 }
 
-func run(ctx context.Context) (runErr error) {
+func run(ctx context.Context) error {
+	return runWithCleanupExit(ctx, nil)
+}
+
+func runWithCleanupExit(ctx context.Context, cleanupExited chan struct{}) (runErr error) {
+	cleanupCtx, cancelCleanup := context.WithCancel(ctx)
+	defer cancelCleanup()
+
 	cfg, err := config.Load()
 	if err != nil {
 		return err
@@ -150,12 +157,17 @@ func run(ctx context.Context) (runErr error) {
 	}
 	artifacts.Cleanup(time.Now().UTC())
 	go func() {
+		defer func() {
+			if cleanupExited != nil {
+				close(cleanupExited)
+			}
+		}()
 		ticks := time.Tick(15 * time.Minute)
 		for {
 			select {
 			case now := <-ticks:
 				artifacts.Cleanup(now.UTC())
-			case <-ctx.Done():
+			case <-cleanupCtx.Done():
 				return
 			}
 		}
