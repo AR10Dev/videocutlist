@@ -64,8 +64,27 @@ func TestAuthenticatorRejectsWeakBearerTokens(t *testing.T) {
 	}
 }
 
-func TestTrustedProxyAuthenticatorUsesOnlyContext(t *testing.T) {
+func TestTrustedProxyAuthenticatorRequiresExplicitCIDRs(t *testing.T) {
 	authenticator, err := NewAuthenticator(AuthConfig{Mode: "trusted_proxy"})
+	if err == nil || authenticator != nil {
+		t.Fatal("trusted-proxy authentication accepted an implicit trust boundary")
+	}
+}
+
+func TestTrustedProxyAuthenticatorRejectsUniversalCIDRs(t *testing.T) {
+	for _, cidr := range []string{"0.0.0.0/0", "::/0"} {
+		t.Run(cidr, func(t *testing.T) {
+			authenticator, err := NewAuthenticator(AuthConfig{Mode: "trusted_proxy", TrustedProxyCIDRs: []string{cidr}})
+			if err == nil || authenticator != nil {
+				t.Fatalf("trusted-proxy authentication accepted universal CIDR %q", cidr)
+			}
+		})
+	}
+}
+
+func TestTrustedProxyAuthenticatorUsesOnlyContext(t *testing.T) {
+	trustedCIDRs := []string{"127.0.0.0/8"}
+	authenticator, err := NewAuthenticator(AuthConfig{Mode: "trusted_proxy", TrustedProxyCIDRs: trustedCIDRs})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +95,7 @@ func TestTrustedProxyAuthenticatorUsesOnlyContext(t *testing.T) {
 	}
 	var authErr error
 	called := false
-	handler, err := TrustedProxy([]string{"127.0.0.0/8"}, http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
+	handler, err := TrustedProxy(trustedCIDRs, http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
 		called = true
 		authErr = authenticator.Authenticate(request)
 	}))

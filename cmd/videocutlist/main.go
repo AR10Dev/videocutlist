@@ -192,7 +192,7 @@ func run(ctx context.Context) (runErr error) {
 	}
 	jobService := view.JobUseCase{Jobs: unifiedJobs}
 	authenticator, err := httpapi.NewAuthenticator(httpapi.AuthConfig{
-		Mode: cfg.AuthMode, BearerToken: cfg.BearerToken, ListenAddress: cfg.ListenAddress,
+		Mode: cfg.AuthMode, BearerToken: cfg.BearerToken, ListenAddress: cfg.ListenAddress, TrustedProxyCIDRs: cfg.TrustedProxyCIDRs,
 	})
 	if err != nil {
 		return err
