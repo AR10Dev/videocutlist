@@ -127,27 +127,24 @@ interaction and reactivity. Tailwind CSS and daisyUI own presentation.
 
 ### Issue tracker
 
-Issues and specs are local Markdown files under `.scratch/<feature-slug>/`:
+Beads (`bd`) is the authoritative task tracker, stored in this repository's
+`.beads/` Dolt workspace and managed through `bd` (not Markdown tickets).
+Before planning, fetching,
+publishing, implementing, triaging, or handing off tracked work, read
+`docs/agents/issue-tracker.md` and load the shared `beads` skill when available.
+Run `bd prime --no-memories` at session start and after compaction.
 
-- Store the specification in `spec.md` and tickets in `issues/<NN>-<slug>.md`.
-  Number tickets in dependency order, starting at `01`.
-- Read the referenced file when fetching an issue; create its directory when publishing.
-- Give each ticket a `# <NN>: <Title>` heading, a `What to build` behavioral outcome,
-  `Blocked by` ticket numbers or `None`, `Category` (`bug` or `enhancement`), and
-  `Status`, followed by testable acceptance checkboxes.
-- Describe stable behavior and contracts rather than file paths or line numbers.
-  Append discussion and completion evidence under `## Comments`.
+Specifications live in `docs/specs/<feature>/spec.md`; status, blocking edges,
+claims, discussion, and completion evidence live in Beads. The old
+`.scratch/claude-audit/` tracker and workflow scripts are historical snapshots,
+not a queue to resume or update. Legacy IDs map to Beads in
+`docs/specs/claude-audit/migration.md`.
 
 ### Triage labels
 
-Use these exact local statuses when skills refer to canonical triage roles:
-
-- `needs-triage`: awaiting maintainer evaluation.
-- `needs-info`: awaiting more information.
-- `ready-for-agent`: fully specified and ready for an agent.
-- `ready-for-human`: requires human implementation.
-- `wontfix`: will not be actioned; retained completed tickets also use this status
-  and record completion evidence in comments.
+Triage roles are Beads labels, separate from native lifecycle status.
+See `docs/agents/issue-tracker.md` for the mapping. `wontfix` means declined;
+completed work closes with an explicit successful/no-change outcome.
 
 ### Domain docs
 

@@ -3,6 +3,11 @@
 .scratch/
 .cache/
 
+# Beads workspace gate and credential/runtime storage
+/.beads.gate.lock
+/.beads-credential-key
+/.dolt/
+
 # Build output and dependency caches (including nested frontend assets)
 dist/
 /web/.vitest/
