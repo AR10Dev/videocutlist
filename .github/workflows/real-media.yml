@@ -1,0 +1,45 @@
+name: Real-media validation and backend benchmarks
+
+on:
+    workflow_dispatch:
+    schedule:
+        - cron: "17 3 * * 1"
+
+permissions:
+    contents: read
+
+jobs:
+    real-media:
+        runs-on: ubuntu-24.04
+        timeout-minutes: 30
+        steps:
+            - uses: actions/checkout@v7.0.1
+            - uses: actions/setup-go@v7.0.0
+              with:
+                  go-version: "1.26.9"
+            - uses: pnpm/action-setup@v6.0.10
+              with:
+                  version: 10.34.5
+            - uses: actions/setup-node@v7.0.0
+              with:
+                  node-version: "26.7.0"
+            - run: pnpm --dir web install --frozen-lockfile
+            - name: Install media and browser tools
+              run: |
+                  sudo apt-get update
+                  sudo apt-get install -y ffmpeg
+                  pnpm --dir web exec playwright install --with-deps chromium
+            - name: Run real-media suite
+              run: make test-real-media
+            - name: Run backend performance harness
+              run: make benchmark-backend > backend-benchmark.csv
+            - name: Upload real-media and benchmark evidence
+              if: always()
+              uses: actions/upload-artifact@v7.0.0
+              with:
+                  name: real-media-and-backend-performance-${{ github.run_id }}
+                  path: |
+                      test/fixtures/real-media/sintel-trailer.mp4
+                      backend-benchmark.csv
+                  retention-days: 14
+                  if-no-files-found: warn
