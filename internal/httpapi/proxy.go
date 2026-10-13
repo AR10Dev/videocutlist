@@ -98,6 +98,9 @@ func parseTrustedCIDRs(values []string) ([]*net.IPNet, error) {
 		if err != nil {
 			return nil, err
 		}
+		if prefix, _ := network.Mask.Size(); prefix == 0 {
+			return nil, errors.New("universal trusted-proxy CIDRs are not allowed")
+		}
 		trusted = append(trusted, network)
 	}
 	return trusted, nil

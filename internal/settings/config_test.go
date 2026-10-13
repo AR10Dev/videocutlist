@@ -113,6 +113,36 @@ func TestLoadParsesNetworkSettings(t *testing.T) {
 	}
 }
 
+func TestLoadTrustedProxyRequiresExplicitNonUniversalCIDRs(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		cidrs   string
+		wantErr bool
+	}{
+		{name: "missing", wantErr: true},
+		{name: "IPv4 universal", cidrs: "0.0.0.0/0", wantErr: true},
+		{name: "IPv6 universal", cidrs: "::/0", wantErr: true},
+		{name: "explicit proxy", cidrs: "192.0.2.10/32"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			changes := map[string]string{"VIDEOCUTLIST_AUTH_MODE": "trusted_proxy"}
+			if test.cidrs != "" {
+				changes["VIDEOCUTLIST_TRUSTED_PROXY_CIDRS"] = test.cidrs
+			}
+			config, err := load(env(mergeEnv(baseEnv(), changes)))
+			if (err != nil) != test.wantErr {
+				t.Fatalf("Load error = %v, want error %t", err, test.wantErr)
+			}
+			if test.wantErr && !strings.Contains(err.Error(), "VIDEOCUTLIST_TRUSTED_PROXY_CIDRS") {
+				t.Fatalf("error = %v, want trusted-proxy setting named", err)
+			}
+			if err == nil && strings.Join(config.TrustedProxyCIDRs, ",") != test.cidrs {
+				t.Fatalf("TrustedProxyCIDRs = %v, want %q", config.TrustedProxyCIDRs, test.cidrs)
+			}
+		})
+	}
+}
+
 func TestLoadStoresValidatedNetworkSettings(t *testing.T) {
 	c, err := load(env(mergeEnv(baseEnv(), map[string]string{
 		"VIDEOCUTLIST_PUBLIC_BASE_URL":     "https://edit.example.test/app",

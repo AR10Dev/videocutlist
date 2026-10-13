@@ -115,6 +115,17 @@ func TestTrustedProxyRejectsMalformedTrustedValues(t *testing.T) {
 	}
 }
 
+func TestTrustedProxyRejectsUniversalCIDRs(t *testing.T) {
+	for _, cidr := range []string{"0.0.0.0/0", "::/0"} {
+		t.Run(cidr, func(t *testing.T) {
+			handler, err := TrustedProxy([]string{cidr}, http.NotFoundHandler())
+			if err == nil || handler != nil {
+				t.Fatalf("TrustedProxy accepted universal CIDR %q", cidr)
+			}
+		})
+	}
+}
+
 func TestTrustedProxyRejectsInvalidCIDR(t *testing.T) {
 	if _, err := TrustedProxy([]string{"not-a-cidr"}, http.NotFoundHandler()); err == nil {
 		t.Fatal("TrustedProxy accepted invalid CIDR")

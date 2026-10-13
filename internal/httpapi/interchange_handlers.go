@@ -110,7 +110,7 @@ func (s *Server) automation(w http.ResponseWriter, r *http.Request, id string) {
 			data, err = interchange.ExportChapters(item.Segments)
 		}
 		if err != nil {
-			internalError(w, id)
+			internalError(w, id, err)
 			return
 		}
 		httpx.WriteJSON(w, http.StatusOK, map[string]string{"filename": "cutlist." + command.Format, "content": string(data)})
@@ -212,7 +212,7 @@ func (s *Server) exportInterchange(w http.ResponseWriter, r *http.Request, route
 		data, err = interchange.ExportChapters(item.Segments)
 	}
 	if err != nil {
-		internalError(w, id)
+		internalError(w, id, err)
 		return
 	}
 	if parts[1] == "csv" {

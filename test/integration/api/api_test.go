@@ -194,7 +194,7 @@ func noneAuth(t *testing.T) api.Authenticator {
 }
 
 func TestUntrustedForwardedUserIsRejectedBeforeMedia(t *testing.T) {
-	authenticator, err := api.NewAuthenticator(api.AuthConfig{Mode: "trusted_proxy"})
+	authenticator, err := api.NewAuthenticator(api.AuthConfig{Mode: "trusted_proxy", TrustedProxyCIDRs: []string{"127.0.0.0/8"}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,7 +253,7 @@ func TestAPIAuthenticationModesRejectBeforeServices(t *testing.T) {
 }
 
 func TestTrustedProxyAccessGateReachesPreview(t *testing.T) {
-	authenticator, err := api.NewAuthenticator(api.AuthConfig{Mode: "trusted_proxy"})
+	authenticator, err := api.NewAuthenticator(api.AuthConfig{Mode: "trusted_proxy", TrustedProxyCIDRs: []string{"127.0.0.0/8"}})
 	if err != nil {
 		t.Fatal(err)
 	}

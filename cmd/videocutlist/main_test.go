@@ -2,13 +2,17 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log"
+	"net"
 	"net/http"
 	"os"
 	"strconv"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 	testsupport "videocutlist/internal/testsupport"
@@ -17,6 +21,22 @@ import (
 	jobqueue "videocutlist/internal/jobs/model"
 	"videocutlist/internal/library/media/index"
 )
+
+func TestServerStartedLogIsValidJSON(t *testing.T) {
+	var logs bytes.Buffer
+	address := "quote\" control\n\x00 Unicode \u2028🙂"
+	logServerStarted(log.New(&logs, "", 0), address)
+	var entry struct {
+		Event string `json:"event"`
+		Addr  string `json:"listen_addr"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(logs.Bytes()), &entry); err != nil {
+		t.Fatalf("decode log: %v; record=%q", err, logs.String())
+	}
+	if entry.Event != "server_started" || entry.Addr != address {
+		t.Fatalf("unexpected server log: %q (%#v)", logs.String(), entry)
+	}
+}
 
 func TestRunRecoversUnifiedJobsOnStartup(t *testing.T) {
 	directory := t.TempDir()
@@ -78,7 +98,7 @@ func TestRunRecoversUnifiedJobsOnStartup(t *testing.T) {
 
 var runStdoutCapture sync.Mutex
 
-func startRunCapturingAddress(t *testing.T, ctx context.Context, cancel context.CancelFunc) (string, <-chan error, func()) {
+func startRunCapturingAddress(t *testing.T, ctx context.Context, cancel context.CancelFunc) (string, <-chan error, <-chan struct{}, func()) {
 	t.Helper()
 	runStdoutCapture.Lock()
 	originalStdout := os.Stdout
@@ -89,9 +109,10 @@ func startRunCapturingAddress(t *testing.T, ctx context.Context, cancel context.
 	}
 	os.Stdout = writer
 	runDone := make(chan error, 1)
+	cleanupExited := make(chan struct{})
 	finished := make(chan struct{})
 	go func() {
-		runDone <- run(ctx)
+		runDone <- runWithCleanupExit(ctx, cleanupExited)
 		close(finished)
 	}()
 	address := make(chan string, 1)
@@ -129,7 +150,7 @@ func startRunCapturingAddress(t *testing.T, ctx context.Context, cancel context.
 	t.Cleanup(stop)
 	select {
 	case listenAddr := <-address:
-		return listenAddr, runDone, stop
+		return listenAddr, runDone, cleanupExited, stop
 	case err := <-runDone:
 		stop()
 		t.Fatalf("server stopped before reporting its listening address: %v", err)
@@ -137,7 +158,59 @@ func startRunCapturingAddress(t *testing.T, ctx context.Context, cancel context.
 		stop()
 		t.Fatal("server did not report its listening address")
 	}
-	return "", runDone, stop
+	return "", runDone, cleanupExited, stop
+}
+
+func TestRunCleanupExitsAfterListenFailureWithLiveCallerContext(t *testing.T) {
+	occupied, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := occupied.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	host, port, err := net.SplitHostPort(occupied.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := t.TempDir()
+	t.Setenv("VIDEOCUTLIST_DATABASE_PATH", directory+"/videocutlist.db")
+	t.Setenv("VIDEOCUTLIST_CACHE_DIR", directory+"/cache")
+	t.Setenv("VIDEOCUTLIST_EXPORT_DIR", directory+"/exports")
+	t.Setenv("VIDEOCUTLIST_MEDIA_ROOTS_JSON", "{}")
+	t.Setenv("VIDEOCUTLIST_LISTEN_ADDRESS", host)
+	t.Setenv("VIDEOCUTLIST_PORT", port)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cleanupExited := make(chan struct{})
+	defer func() {
+		cancel()
+		select {
+		case <-cleanupExited:
+		case <-time.After(time.Second):
+			t.Error("cleanup goroutine did not exit after caller cancellation")
+		}
+	}()
+	runDone := make(chan error, 1)
+	go func() { runDone <- runWithCleanupExit(ctx, cleanupExited) }()
+	select {
+	case err := <-runDone:
+		if !errors.Is(err, syscall.EADDRINUSE) {
+			t.Fatalf("run error = %v, want address-in-use listen failure", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("run did not return after listen failure")
+	}
+	if ctx.Err() != nil {
+		t.Fatalf("caller context was canceled: %v", ctx.Err())
+	}
+	select {
+	case <-cleanupExited:
+	case <-time.After(200 * time.Millisecond):
+		t.Error("cleanup goroutine outlived run while caller context remained live")
+	}
 }
 
 func TestRunWithNoMediaRootsHidesRemovedRootAndServesAPI(t *testing.T) {
@@ -166,7 +239,7 @@ func TestRunWithNoMediaRootsHidesRemovedRootAndServesAPI(t *testing.T) {
 	t.Setenv("VIDEOCUTLIST_LISTEN_ADDRESS", "127.0.0.1")
 	t.Setenv("VIDEOCUTLIST_PORT", port)
 	ctx, cancel := context.WithCancel(t.Context())
-	listenAddress, done, stop := startRunCapturingAddress(t, ctx, cancel)
+	listenAddress, done, cleanupExited, stop := startRunCapturingAddress(t, ctx, cancel)
 	defer stop()
 	base := "http://" + listenAddress
 	deadline := time.Now().Add(5 * time.Second)
@@ -232,5 +305,10 @@ func TestRunWithNoMediaRootsHidesRemovedRootAndServesAPI(t *testing.T) {
 	stop()
 	if err := <-done; err != nil {
 		t.Fatalf("shutdown unconfigured server: %v", err)
+	}
+	select {
+	case <-cleanupExited:
+	case <-time.After(time.Second):
+		t.Fatal("cleanup goroutine did not exit after normal cancellation")
 	}
 }

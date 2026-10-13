@@ -2,6 +2,8 @@ package mcp_test
 
 import (
 	"encoding/json"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -99,7 +101,9 @@ func TestTransportRateLimitIsPerCredential(t *testing.T) {
 	if limited.Code != http.StatusTooManyRequests {
 		t.Fatalf("credential A rate limit status=%d body=%s", limited.Code, limited.Body.String())
 	}
-	independent := serve(handler, request(initializeRequestBody(), other.Secret))
+	otherClient := request(initializeRequestBody(), other.Secret)
+	otherClient.RemoteAddr = "127.0.0.2:1234"
+	independent := serve(handler, otherClient)
 	if independent.Code != http.StatusOK {
 		t.Fatalf("credential B did not receive independent rate budget: status=%d body=%s", independent.Code, independent.Body.String())
 	}
@@ -108,6 +112,137 @@ func TestTransportRateLimitIsPerCredential(t *testing.T) {
 	afterWindow := serve(handler, sessionRequest(`{"jsonrpc":"2.0","id":2,"method":"ping"}`, secret, first.Header().Get("Mcp-Session-Id")))
 	if afterWindow.Code != http.StatusOK {
 		t.Fatalf("expired rate window did not release budget: status=%d body=%s", afterWindow.Code, afterWindow.Body.String())
+	}
+}
+
+func TestTransportPreAuthenticationLimitUsesClientIPAndExpires(t *testing.T) {
+	credentials, secret, clock := transportCredentials(t, time.Hour)
+	handler := newTransport(t, mcp.TransportConfig{
+		Enabled: true, Credentials: credentials, RequestsPerMinute: 1,
+		Now: func() time.Time { return *clock },
+	})
+	_, encodedSecret, ok := strings.Cut(secret, ".")
+	if !ok {
+		t.Fatal("valid credential token has no secret separator")
+	}
+	unknownToken := "vcl_t_" + strings.Repeat("A", 16) + "." + encodedSecret
+	serveFrom := func(address string) *httptest.ResponseRecorder {
+		r := request(`{}`, unknownToken)
+		r.RemoteAddr = address + ":1234"
+		return serve(handler, r)
+	}
+
+	first := serveFrom("127.0.0.1")
+	if first.Code != http.StatusUnauthorized {
+		t.Fatalf("first unknown-token request status=%d body=%s", first.Code, first.Body.String())
+	}
+	limited := serveFrom("127.0.0.1")
+	if limited.Code != http.StatusTooManyRequests || limited.Header().Get("Retry-After") != "60" {
+		t.Fatalf("same-IP pre-auth limit status=%d retry-after=%q body=%s", limited.Code, limited.Header().Get("Retry-After"), limited.Body.String())
+	}
+	independent := serveFrom("127.0.0.2")
+	if independent.Code != http.StatusUnauthorized {
+		t.Fatalf("different client IP shared the first IP's budget: status=%d body=%s", independent.Code, independent.Body.String())
+	}
+
+	*clock = clock.Add(time.Minute)
+	afterWindow := serveFrom("127.0.0.1")
+	if afterWindow.Code != http.StatusUnauthorized {
+		t.Fatalf("expired IP budget was not released: status=%d body=%s", afterWindow.Code, afterWindow.Body.String())
+	}
+}
+
+func TestTransportPreAuthenticationLimiterUsesRequestInfoClientIP(t *testing.T) {
+	credentials, secret, _ := transportCredentials(t, time.Hour)
+	trustedIP := net.ParseIP("203.0.113.7")
+	handler := newTransport(t, mcp.TransportConfig{
+		Enabled: true, Credentials: credentials, RequestsPerMinute: 1,
+		RequestInfo: func(*http.Request) mcp.RequestInfo {
+			return mcp.RequestInfo{ClientIP: trustedIP, Host: "mcp.test", Proto: "https"}
+		},
+	})
+	_, encodedSecret, ok := strings.Cut(secret, ".")
+	if !ok {
+		t.Fatal("valid credential token has no secret separator")
+	}
+	unknownToken := "vcl_t_" + strings.Repeat("A", 16) + "." + encodedSecret
+	serveFrom := func(remoteAddress string) *httptest.ResponseRecorder {
+		r := request(`{}`, unknownToken)
+		r.RemoteAddr = remoteAddress
+		return serve(handler, r)
+	}
+
+	first := serveFrom("127.0.0.1:1234")
+	if first.Code != http.StatusUnauthorized {
+		t.Fatalf("trusted client first request status=%d body=%s", first.Code, first.Body.String())
+	}
+	spoofedPeer := serveFrom("192.0.2.55:4321")
+	if spoofedPeer.Code != http.StatusTooManyRequests {
+		t.Fatalf("peer address overrode trusted RequestInfo client IP: status=%d body=%s", spoofedPeer.Code, spoofedPeer.Body.String())
+	}
+	trustedIP = net.ParseIP("203.0.113.8")
+	trustedOther := serveFrom("192.0.2.55:4321")
+	if trustedOther.Code != http.StatusUnauthorized {
+		t.Fatalf("second trusted IP shared first IP's rate budget: status=%d body=%s", trustedOther.Code, trustedOther.Body.String())
+	}
+}
+
+func TestTransportPreAuthenticationLimitDoesNotRefreshBlockedCredential(t *testing.T) {
+	credentials, secret, clock := transportCredentials(t, time.Hour)
+	handler := newTransport(t, mcp.TransportConfig{
+		Enabled: true, Credentials: credentials, RequestsPerMinute: 1,
+		Now: func() time.Time { return *clock },
+	})
+	sessionID := initialize(t, handler, secret)
+	credential, err := credentials.Authenticate(t.Context(), secret)
+	if err != nil || credential.LastUsedAt == nil {
+		t.Fatalf("authenticate fixture credential = %#v, %v", credential, err)
+	}
+	lastUsedAt := *credential.LastUsedAt
+	*clock = clock.Add(10 * time.Second)
+
+	limited := serve(handler, sessionRequest(`{"jsonrpc":"2.0","id":2,"method":"ping"}`, secret, sessionID))
+	if limited.Code != http.StatusTooManyRequests {
+		t.Fatalf("same-IP request status=%d body=%s", limited.Code, limited.Body.String())
+	}
+	after, err := credentials.Get(t.Context(), credential.ID)
+	if err != nil || after.LastUsedAt == nil || !after.LastUsedAt.Equal(lastUsedAt) {
+		t.Fatalf("blocked request refreshed credential last-used time: before=%v after=%#v err=%v", lastUsedAt, after.LastUsedAt, err)
+	}
+}
+
+func TestTransportPreAuthenticationLimiterBoundsClientIPMemory(t *testing.T) {
+	credentials, secret, clock := transportCredentials(t, time.Hour)
+	handler := newTransport(t, mcp.TransportConfig{
+		Enabled: true, Credentials: credentials, RequestsPerMinute: 1,
+		Now: func() time.Time { return *clock },
+	})
+	_, encodedSecret, ok := strings.Cut(secret, ".")
+	if !ok {
+		t.Fatal("valid credential token has no secret separator")
+	}
+	unknownToken := "vcl_t_" + strings.Repeat("A", 16) + "." + encodedSecret
+	serveFrom := func(index int) *httptest.ResponseRecorder {
+		r := request(`{}`, unknownToken)
+		r.RemoteAddr = fmt.Sprintf("127.%d.%d.%d:1234", index>>16, index>>8&0xff, index&0xff)
+		return serve(handler, r)
+	}
+
+	for index := range 1024 {
+		response := serveFrom(index + 1)
+		if response.Code != http.StatusUnauthorized {
+			t.Fatalf("client IP %d exhausted admission early: status=%d body=%s", index, response.Code, response.Body.String())
+		}
+	}
+	atCapacity := serveFrom(1025)
+	if atCapacity.Code != http.StatusTooManyRequests {
+		t.Fatalf("new client IP exceeded bounded limiter capacity: status=%d body=%s", atCapacity.Code, atCapacity.Body.String())
+	}
+
+	*clock = clock.Add(time.Minute)
+	afterExpiry := serveFrom(1025)
+	if afterExpiry.Code != http.StatusUnauthorized {
+		t.Fatalf("expired limiter entries were not reclaimed: status=%d body=%s", afterExpiry.Code, afterExpiry.Body.String())
 	}
 }
 

@@ -24,7 +24,10 @@ import (
 	"videocutlist/internal/projects/model"
 )
 
-const maxStderrBytes = 64 << 10
+const (
+	maxStderrBytes            = 64 << 10
+	maxAllocatedFilenameBytes = 255
+)
 
 // MaxExportOutputs is the shared separate-export artifact bound.
 const MaxExportOutputs = exportpolicy.MaxOutputs
@@ -310,6 +313,11 @@ func (s Service) Run(ctx context.Context, source *os.File, document model.Docume
 			for suffix := 1; reservedNames[separateNames[i]]; suffix++ {
 				extension := filepath.Ext(base)
 				separateNames[i] = fmt.Sprintf("%s-%d%s", strings.TrimSuffix(base, extension), suffix, extension)
+			}
+			if err := validateAllocatedFilename(separateNames[i]); err != nil {
+				result.OutputFailures = append(result.OutputFailures, OutputFailure{Segment: i + 1, Code: "output_name_failed", Message: safeFailureMessage(err)})
+				separateNames[i] = ""
+				continue
 			}
 			reservedNames[separateNames[i]] = true
 			info, statErr := workRoot.Stat(segmentFiles[i])
@@ -913,6 +921,13 @@ func destinationRetention(d Destination, s Service) time.Duration {
 	return retention(s)
 }
 
+func validateAllocatedFilename(name string) error {
+	if len(name) > maxAllocatedFilenameBytes {
+		return fmt.Errorf("final allocated export filename exceeds %d bytes", maxAllocatedFilenameBytes)
+	}
+	return nil
+}
+
 func (p preparedDestination) outputFileName(request Request, source string, segment int, at time.Time) (string, error) {
 	policy, ok := exportpolicy.For(request.Container)
 	if !ok {
@@ -929,6 +944,9 @@ func (p preparedDestination) outputFileName(request Request, source string, segm
 			candidateName = "cut-" + uniqueSuffix()
 		}
 		candidateName = strings.TrimSuffix(candidateName, "."+policy.Extension) + "-" + uniqueSuffix() + "." + policy.Extension
+		if err := validateAllocatedFilename(candidateName); err != nil {
+			return "", fmt.Errorf("%w: %v", ErrInvalidRequest, err)
+		}
 		_, statErr := p.root.Lstat(candidateName)
 		if errors.Is(statErr, os.ErrNotExist) {
 			return candidateName, nil

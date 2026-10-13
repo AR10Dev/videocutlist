@@ -1,11 +1,14 @@
 package mcp_test
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -211,6 +214,74 @@ func TestCredentialExpiryAndRevocationInvalidateSessions(t *testing.T) {
 	if _, err := credentials.Revoke(ctx, created.ID); err != nil {
 		t.Fatalf("idempotent revoke error = %v", err)
 	}
+}
+
+func TestCredentialAuthenticationDoesNotPassConcurrentRevocation(t *testing.T) {
+	database, err := store.OpenDatabase(t.Context(), t.TempDir()+"/credential-revocation-race.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	clock := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
+	repository := &blockingCredentialRepository{CredentialRepository: newMCPRepository(t, database)}
+	credentials, err := mcp.NewCredentialStoreWithClock(repository, func() time.Time { return clock })
+	if err != nil {
+		t.Fatal(err)
+	}
+	expires := clock.Add(time.Hour)
+	created, err := credentials.Create(t.Context(), mcp.CredentialInput{
+		Name: "revocation race", Permissions: []mcp.Permission{mcp.PermissionMediaRead},
+		MediaScope: mcp.MediaScope{Kind: mcp.MediaScopeAll}, ProjectScope: mcp.ProjectScope{Kind: mcp.ProjectScopeAll}, ExpiresAt: &expires,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository.pauseTouchAfter(1)
+	result := make(chan error, 1)
+	go func() {
+		_, err := credentials.Authenticate(t.Context(), created.Secret)
+		result <- err
+	}()
+	defer repository.resumeTouch()
+	select {
+	case <-repository.touchStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("authentication did not reach its conditional last-used update")
+	}
+	if _, err := credentials.Revoke(t.Context(), created.ID); err != nil {
+		t.Fatal(err)
+	}
+	repository.resumeTouch()
+	if err := <-result; !errors.Is(err, mcp.ErrCredentialUnauthorized) || !errors.Is(err, mcp.ErrCredentialRevoked) {
+		t.Fatalf("authentication passed concurrent revocation: %v", err)
+	}
+}
+
+type blockingCredentialRepository struct {
+	mcp.CredentialRepository
+	pauseAfter    atomic.Int64
+	touchStarted  chan struct{}
+	continueTouch chan struct{}
+	resumeOnce    sync.Once
+}
+
+func (r *blockingCredentialRepository) pauseTouchAfter(calls int64) {
+	r.touchStarted = make(chan struct{})
+	r.continueTouch = make(chan struct{})
+	r.resumeOnce = sync.Once{}
+	r.pauseAfter.Store(calls)
+}
+
+func (r *blockingCredentialRepository) resumeTouch() {
+	r.resumeOnce.Do(func() { close(r.continueTouch) })
+}
+
+func (r *blockingCredentialRepository) TouchCredential(ctx context.Context, id, now string) (store.MCPCredentialRecord, bool, error) {
+	if r.pauseAfter.Load() > 0 && r.pauseAfter.Add(-1) == 0 {
+		close(r.touchStarted)
+		<-r.continueTouch
+	}
+	return r.CredentialRepository.TouchCredential(ctx, id, now)
 }
 
 func TestAuditIsSafeAndBoundedPerCredential(t *testing.T) {

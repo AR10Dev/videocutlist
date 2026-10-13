@@ -154,14 +154,22 @@ func load(lookup func(string) (string, bool)) (Config, error) {
 	if c.MCPEnabled, err = boolean(lookup, "VIDEOCUTLIST_MCP_ENABLED", false); err != nil {
 		return Config{}, err
 	}
+	_, trustedProxiesExplicit := lookup("VIDEOCUTLIST_TRUSTED_PROXY_CIDRS")
+	if c.AuthMode == "trusted_proxy" && !trustedProxiesExplicit {
+		return Config{}, fmt.Errorf("VIDEOCUTLIST_TRUSTED_PROXY_CIDRS is required when VIDEOCUTLIST_AUTH_MODE=trusted_proxy")
+	}
 	trusted := value(lookup, "VIDEOCUTLIST_TRUSTED_PROXY_CIDRS", defaultTrustedProxies)
-	for _, cidr := range strings.Split(trusted, ",") {
+	for cidr := range strings.SplitSeq(trusted, ",") {
 		cidr = strings.TrimSpace(cidr)
 		if cidr == "" {
 			return Config{}, fmt.Errorf("VIDEOCUTLIST_TRUSTED_PROXY_CIDRS contains an empty CIDR")
 		}
-		if _, _, err := net.ParseCIDR(cidr); err != nil {
+		_, network, err := net.ParseCIDR(cidr)
+		if err != nil {
 			return Config{}, fmt.Errorf("VIDEOCUTLIST_TRUSTED_PROXY_CIDRS: %w", err)
+		}
+		if prefix, _ := network.Mask.Size(); prefix == 0 {
+			return Config{}, fmt.Errorf("VIDEOCUTLIST_TRUSTED_PROXY_CIDRS cannot contain a universal /0 CIDR")
 		}
 		c.TrustedProxyCIDRs = append(c.TrustedProxyCIDRs, cidr)
 	}
