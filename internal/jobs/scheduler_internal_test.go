@@ -781,22 +781,41 @@ func TestSchedulerPersistsTerminalStateAfterSoleConnectionContention(t *testing.
 	}
 }
 
+type countingGetJobPersistence struct {
+	Persistence
+	calls atomic.Int32
+}
+
+func (p *countingGetJobPersistence) GetJob(context.Context, string) (model.Job, error) {
+	p.calls.Add(1)
+	return model.Job{}, errors.New("permanent initial read failure")
+}
+
 func TestSchedulerRecordsPermanentInitialReadFailureWithoutRetrying(t *testing.T) {
 	database := openSchedulerTestDatabase(t)
-	jobs, err := newTestJobsStore(database)
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	baseJobs, err := newTestJobsStore(database)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := database.Close(); err != nil {
+	storage := &countingGetJobPersistence{Persistence: baseJobs.storage}
+	jobs, err := NewJobsStore(storage)
+	if err != nil {
 		t.Fatal(err)
 	}
 	observed := make(chan struct {
 		duration time.Duration
 		failed   bool
 	}, 1)
+	var logs bytes.Buffer
 	scheduler, err := NewScheduler(jobs, SchedulerConfig{
 		QueueCapacity: 1,
 		WorkerLimit:   1,
+		Logger:        log.New(&logs, "", 0),
 		TerminalFinalization: func(duration time.Duration, failed bool) {
 			observed <- struct {
 				duration time.Duration
@@ -812,8 +831,14 @@ func TestSchedulerRecordsPermanentInitialReadFailureWithoutRetrying(t *testing.T
 	if !got.failed {
 		t.Fatal("permanent initial terminal state read failure was not reported")
 	}
+	if calls := storage.calls.Load(); calls != 1 {
+		t.Fatalf("permanent initial terminal state read calls = %d, want 1", calls)
+	}
 	if got.duration >= time.Second {
 		t.Fatalf("permanent initial read error spent %s retrying", got.duration)
+	}
+	if count := bytes.Count(logs.Bytes(), []byte(`"event":"job_terminal_failure"`)); count != 1 || !bytes.Contains(logs.Bytes(), []byte(`"error_category":"terminal_state_read"`)) {
+		t.Fatalf("permanent initial read failure logs = %q, want one terminal_state_read event", logs.String())
 	}
 }
 
