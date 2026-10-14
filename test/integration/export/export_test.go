@@ -190,28 +190,7 @@ func TestMP4MOVContainerPolicyProducesVerifiedArtifacts(t *testing.T) {
 }
 
 func TestHybridSmartCutMKVFixtureAndFallback(t *testing.T) {
-	ffmpeg, err := exec.LookPath("ffmpeg")
-	if err != nil {
-		t.Skip("ffmpeg is required")
-	}
-	if _, err := exec.LookPath("ffprobe"); err != nil {
-		t.Skip("ffprobe is required")
-	}
-	directory := t.TempDir()
-	sourcePath := filepath.Join(directory, "fixture.mkv")
-	fixture := exec.Command(ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=30", "-f", "lavfi", "-i", "sine=frequency=880:sample_rate=48000", "-t", "2", "-map", "0:v:0", "-map", "1:a:0", "-c:v", "libx264", "-g", "15", "-pix_fmt", "yuv420p", "-c:a", "libopus", sourcePath)
-	if output, err := fixture.CombinedOutput(); err != nil {
-		t.Skipf("cannot generate fixture: %v: %s", err, output)
-	}
-	source, err := os.Open(sourcePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := source.Close(); err != nil {
-			t.Error(err)
-		}
-	})
+	ffmpeg, directory, _, source := generateKeyframeFixture(t)
 	service := export.Service{FFmpegPath: ffmpeg, OutputDir: filepath.Join(directory, "exports")}
 	document := projectDocument(model.Segment{StartMS: 100, EndMS: 900})
 	result, err := service.Run(context.Background(), source, document, export.Request{Mode: "merge", CutStrategy: "hybrid_smart_cut", Container: "mkv"})
@@ -227,28 +206,7 @@ func TestHybridSmartCutMKVFixtureAndFallback(t *testing.T) {
 }
 
 func TestExportStrategiesReportTruthfulBoundaryWarnings(t *testing.T) {
-	ffmpeg, err := exec.LookPath("ffmpeg")
-	if err != nil {
-		t.Skip("ffmpeg is required")
-	}
-	if _, err := exec.LookPath("ffprobe"); err != nil {
-		t.Skip("ffprobe is required")
-	}
-	directory := t.TempDir()
-	sourcePath := filepath.Join(directory, "keyframe-layout.mkv")
-	fixture := exec.Command(ffmpeg, "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=30", "-f", "lavfi", "-i", "sine=frequency=880:sample_rate=48000", "-t", "2", "-map", "0:v:0", "-map", "1:a:0", "-c:v", "libx264", "-g", "15", "-pix_fmt", "yuv420p", "-c:a", "libopus", sourcePath)
-	if output, err := fixture.CombinedOutput(); err != nil {
-		t.Skipf("cannot generate fixture: %v: %s", err, output)
-	}
-	source, err := os.Open(sourcePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := source.Close(); err != nil {
-			t.Error(err)
-		}
-	})
+	ffmpeg, directory, sourcePath, source := generateKeyframeFixture(t)
 	service := export.Service{FFmpegPath: ffmpeg, OutputDir: filepath.Join(directory, "exports")}
 	keyframes, err := (probe.Client{}).Keyframes(context.Background(), source)
 	if err != nil || !containsKeyframes(keyframes, 0, 500, 1000) {
@@ -302,6 +260,23 @@ func TestExportStrategiesReportTruthfulBoundaryWarnings(t *testing.T) {
 }
 
 func TestSeparateHybridExportReportsEachSegmentStrategy(t *testing.T) {
+	ffmpeg, directory, sourcePath, source := generateKeyframeFixture(t)
+
+	result, err := (export.Service{FFmpegPath: ffmpeg, OutputDir: filepath.Join(directory, "exports")}).Run(context.Background(), source, projectDocument(model.Segment{StartMS: 0, EndMS: 1000}, model.Segment{StartMS: 100, EndMS: 400}), export.Request{Mode: "separate", CutStrategy: "hybrid_smart_cut", Container: "mkv"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.AppliedStrategy != "" || len(result.AppliedStrategies) != 2 || result.AppliedStrategies[0].Segment != 1 || result.AppliedStrategies[0].Strategy != "hybrid_smart_cut" || result.AppliedStrategies[0].OutputName != result.OutputNames[0] || result.AppliedStrategies[1].Segment != 2 || result.AppliedStrategies[1].Strategy != "stream_copy" || result.AppliedStrategies[1].OutputName != result.OutputNames[1] {
+		t.Fatalf("result = %#v", result)
+	}
+	if len(result.Warnings) != 2 || result.Warnings[1].Code != "hybrid_smart_cut_stream_copy_fallback" || !strings.Contains(result.Warnings[1].Message, "Segment 2") {
+		t.Fatalf("warnings = %#v", result.Warnings)
+	}
+	assertPublicOutputNames(t, result, sourcePath)
+}
+
+func generateKeyframeFixture(t *testing.T) (string, string, string, *os.File) {
+	t.Helper()
 	ffmpeg, err := exec.LookPath("ffmpeg")
 	if err != nil {
 		t.Skip("ffmpeg is required")
@@ -324,18 +299,7 @@ func TestSeparateHybridExportReportsEachSegmentStrategy(t *testing.T) {
 			t.Error(err)
 		}
 	})
-
-	result, err := (export.Service{FFmpegPath: ffmpeg, OutputDir: filepath.Join(directory, "exports")}).Run(context.Background(), source, projectDocument(model.Segment{StartMS: 0, EndMS: 1000}, model.Segment{StartMS: 100, EndMS: 400}), export.Request{Mode: "separate", CutStrategy: "hybrid_smart_cut", Container: "mkv"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.AppliedStrategy != "" || len(result.AppliedStrategies) != 2 || result.AppliedStrategies[0].Segment != 1 || result.AppliedStrategies[0].Strategy != "hybrid_smart_cut" || result.AppliedStrategies[0].OutputName != result.OutputNames[0] || result.AppliedStrategies[1].Segment != 2 || result.AppliedStrategies[1].Strategy != "stream_copy" || result.AppliedStrategies[1].OutputName != result.OutputNames[1] {
-		t.Fatalf("result = %#v", result)
-	}
-	if len(result.Warnings) != 2 || result.Warnings[1].Code != "hybrid_smart_cut_stream_copy_fallback" || !strings.Contains(result.Warnings[1].Message, "Segment 2") {
-		t.Fatalf("warnings = %#v", result.Warnings)
-	}
-	assertPublicOutputNames(t, result, sourcePath)
+	return ffmpeg, directory, sourcePath, source
 }
 
 func containsKeyframes(keyframes []int64, wanted ...int64) bool {
