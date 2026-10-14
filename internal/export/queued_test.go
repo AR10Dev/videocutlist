@@ -10,12 +10,31 @@ import (
 	testsupport "videocutlist/internal/testsupport"
 
 	store "videocutlist/internal/db"
+	jobs "videocutlist/internal/jobs"
 	jobservice "videocutlist/internal/jobs"
 	jobqueue "videocutlist/internal/jobs/model"
 	librarymedia "videocutlist/internal/library/media"
 	"videocutlist/internal/preview"
 	"videocutlist/internal/projects/model"
 )
+
+func newQueuedJobsStore(t *testing.T) *jobs.JobsStore {
+	t.Helper()
+	database, err := store.OpenDatabase(t.Context(), filepath.Join(t.TempDir(), "jobs.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := database.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	jobs, err := testsupport.NewJobsStore(database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return jobs
+}
 
 type queuedMediaCatalog struct {
 	media librarymedia.Media
@@ -43,19 +62,7 @@ func TestQueuedExecutorValidatesSnapshotAndPersistsResult(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	database, err := store.OpenDatabase(t.Context(), filepath.Join(t.TempDir(), "jobs.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := database.Close(); err != nil {
-			t.Error(err)
-		}
-	})
-	jobs, err := testsupport.NewJobsStore(database)
-	if err != nil {
-		t.Fatal(err)
-	}
+	jobs := newQueuedJobsStore(t)
 	job := jobqueue.Job{ID: "j_queuedexport01", BatchID: "b_queuedexport01", Kind: jobqueue.JobExport, ProjectID: "p_queuedexport01", ProjectItemID: "i_aaaaaaaaaaaaaaaaaaaaaaaa", RequestJSON: string(payload)}
 	if _, err := jobs.Create(t.Context(), job); err != nil {
 		t.Fatal(err)
@@ -127,19 +134,7 @@ func TestQueuedExecutorPersistsChangedSourceFailureThroughScheduler(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	database, err := store.OpenDatabase(t.Context(), filepath.Join(t.TempDir(), "jobs.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := database.Close(); err != nil {
-			t.Error(err)
-		}
-	})
-	jobs, err := testsupport.NewJobsStore(database)
-	if err != nil {
-		t.Fatal(err)
-	}
+	jobs := newQueuedJobsStore(t)
 	called := false
 	queued := QueuedExecutor{Jobs: jobs, Media: queuedMediaCatalog{media: media}, RunSnapshot: func(context.Context, string, ExportSnapshot) (string, error) {
 		called = true
@@ -180,19 +175,7 @@ func TestQueuedExecutorPropagatesRunningCancellation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	database, err := store.OpenDatabase(t.Context(), filepath.Join(t.TempDir(), "jobs.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := database.Close(); err != nil {
-			t.Error(err)
-		}
-	})
-	jobs, err := testsupport.NewJobsStore(database)
-	if err != nil {
-		t.Fatal(err)
-	}
+	jobs := newQueuedJobsStore(t)
 	started := make(chan struct{})
 	cancelObserved := make(chan struct{})
 	queued := QueuedExecutor{Jobs: jobs, Media: queuedMediaCatalog{media: media}, RunSnapshot: func(ctx context.Context, _ string, _ ExportSnapshot) (string, error) {

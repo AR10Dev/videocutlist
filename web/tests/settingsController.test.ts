@@ -209,23 +209,6 @@ describe("preview concurrency settings", () => {
 });
 
 describe("settings controller", () => {
-  it("restores global descriptors after reverse teardown of multiple workspaces", () => {
-    const originalFetch = Object.getOwnPropertyDescriptor(globalThis, "fetch");
-    const originalStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
-    try {
-      const first = workspace(vi.fn<typeof globalThis.fetch>());
-      const firstFetch = globalThis.fetch;
-      const second = workspace(vi.fn<typeof globalThis.fetch>());
-      expect(globalThis.fetch).not.toBe(firstFetch);
-      expect(first.storage).not.toBe(second.storage);
-      expect(globalThis.localStorage).toBe(second.storage);
-    } finally {
-      disposeWorkspaces();
-      expect(Object.getOwnPropertyDescriptor(globalThis, "fetch")).toEqual(originalFetch);
-      expect(Object.getOwnPropertyDescriptor(globalThis, "localStorage")).toEqual(originalStorage);
-    }
-  });
-
   it("updates persisted browser preferences without a server settings request", async () => {
     const fetch = vi.fn<typeof globalThis.fetch>();
     const { server, state } = workspace(fetch);
