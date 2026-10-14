@@ -2919,6 +2919,77 @@ test("failed export cancellation restores the active job for retry", async ({ pa
   expect(cancelled).toBe(true);
 });
 
+test("Cancel export keeps a completion-winning batch canonical", async ({ page }) => {
+  const batchId = "b_cancel-ui";
+  let cancelRequested = false;
+  let streamReads = 0;
+  const queuedJob = exportJobSnapshot({
+    id: "j_cancel-ui",
+    batchId,
+    projectItemId: itemId,
+    mediaLabel: "camera.mp4",
+    state: "queued" as const,
+  });
+  const succeededJob = exportJobSnapshot({
+    ...queuedJob,
+    state: "succeeded" as const,
+    revision: 2,
+    progress: 1,
+    result: {
+      outputName: "camera-success.mkv",
+      sizeBytes: 42,
+      retainUntil: "2026-08-20T12:00:00Z",
+      destinationKind: "download" as const,
+    },
+    verified: true,
+  });
+  const queuedBatch = exportBatchSnapshot({
+    batchId,
+    state: "queued",
+    progress: 0,
+    jobs: [queuedJob],
+  });
+  const succeededBatch = exportBatchSnapshot({
+    ...queuedBatch,
+    state: "succeeded",
+    progress: 1,
+    jobs: [succeededJob],
+  });
+  await page.route(`${apiOrigin}/api/v2/projects/*/exports`, (route) => {
+    validateExportRequest(route.request());
+    return route.fulfill({ status: 202, json: exportSubmission(batchId, [queuedJob]) });
+  });
+  await page.route(`${apiOrigin}/api/v2/batches/${batchId}/events`, async (route) => {
+    await route.fulfill(batchEvent(cancelRequested ? succeededBatch : queuedBatch));
+    streamReads += 1;
+  });
+  await page.route(`${apiOrigin}/api/v2/batches/${batchId}`, (route) => {
+    if (route.request().method() === "DELETE") {
+      cancelRequested = true;
+      return route.fulfill({ status: 204 });
+    }
+    return route.fulfill({ status: 404 });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: /camera.mp4/ }).click();
+  await setRange(page, 100, 700);
+  await expect(page.locator(".cut-row[data-segment-id]")).toHaveCount(1);
+  await saveProject(page);
+  await openTask(page, "Export");
+  const cancelButton = page.getByRole("button", { name: "Cancel export" });
+  await page.getByRole("button", { name: "Create clips" }).click();
+  await expect(cancelButton).toBeVisible();
+  await expect.poll(() => streamReads).toBeGreaterThan(0);
+  await cancelButton.click();
+  await expect.poll(() => cancelRequested).toBe(true);
+  await expect(page.getByText("Export complete.")).toBeVisible();
+  const currentBatch = page.getByRole("region", { name: "Current batch" });
+  await expect(currentBatch.locator(".export-job-card")).toContainText("succeeded");
+  await expect(currentBatch.locator(".export-job-result")).toContainText("camera-success.mkv");
+  await expect(cancelButton).not.toBeVisible();
+});
+
 test("QueueView cancellation keeps a completion-winning batch canonical", async ({ page }) => {
   let completed = false;
   const otherJob = exportJobSnapshot({
