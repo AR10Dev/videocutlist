@@ -1,9 +1,15 @@
 /.claude/
+
+# Local agent and review worktrees
 .worktrees/
+/pi-worktree-*/
+/review-*/
+
 .scratch/
 .cache/
 
-# Beads workspace gate and credential/runtime storage
+# Local Beads ticketing system and credential/runtime storage
+/.beads/
 /.beads.gate.lock
 /.beads-credential-key
 /.dolt/
