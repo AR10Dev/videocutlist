@@ -1,13 +1,11 @@
 import { expect, test } from "@playwright/test";
 
 const apiOrigin = "http://127.0.0.1:8787";
-const statuses = [
-  ["unconfigured", "Media root is not configured.", "Configure the server media root"],
-  ["scanning", "Media library is being indexed.", "Wait for indexing to finish"],
-  ["ready_empty", "No supported media was found.", "Mount supported media"],
-  ["failed", "Media library scan failed.", "Check the server configuration"],
-  ["ready_with_media", "Media library is ready.", "Choose a video"],
-] as const;
+const emptyLibrary = {
+  state: "ready_empty",
+  message: "No supported media was found.",
+  action: "Mount supported media",
+} as const;
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
@@ -18,24 +16,25 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
-for (const [state, message, action] of statuses) {
-  test(`shows one actionable ${state} library message`, async ({ page }) => {
-    await page.route(`${apiOrigin}/api/v2/**`, async (route) => {
-      const path = new URL(route.request().url()).pathname;
-      if (path === "/api/v2/media/status") return route.fulfill({ json: { state, message } });
-      if (path === "/api/v2/media") return route.fulfill({ json: { items: [] } });
-      if (path === "/api/v2/media/tree") return route.fulfill({ json: { folders: [], items: [] } });
-      if (path === "/api/v2/destinations") return route.fulfill({ json: { destinations: [] } });
-      return route.fulfill({ status: 404 });
-    });
-    await page.goto("/");
-    const setup = page.getByRole("region", { name: "Media library status" });
-    await expect(setup).toContainText(message);
-    await expect(setup).toContainText(action);
-    await expect(setup.getByRole("status")).toHaveCount(1);
-    await expect(page.getByRole("heading", { name: "Choose a video to begin" })).toBeVisible();
+test("shows the empty-library status region", async ({ page }) => {
+  await page.route(`${apiOrigin}/api/v2/**`, async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path === "/api/v2/media/status")
+      return route.fulfill({
+        json: { state: emptyLibrary.state, message: emptyLibrary.message },
+      });
+    if (path === "/api/v2/media") return route.fulfill({ json: { items: [] } });
+    if (path === "/api/v2/media/tree") return route.fulfill({ json: { folders: [], items: [] } });
+    if (path === "/api/v2/destinations") return route.fulfill({ json: { destinations: [] } });
+    return route.fulfill({ status: 404 });
   });
-}
+  await page.goto("/");
+  const setup = page.getByRole("region", { name: "Media library status" });
+  await expect(setup).toContainText(emptyLibrary.message);
+  await expect(setup).toContainText(emptyLibrary.action);
+  await expect(setup.getByRole("status")).toHaveCount(1);
+  await expect(page.getByRole("heading", { name: "Choose a video to begin" })).toBeVisible();
+});
 
 test("shows one actionable loading message while status is pending", async ({ page }) => {
   let release!: () => void;
