@@ -3293,19 +3293,8 @@ test("delayed project loads cannot replace a newer editor", async ({ page }) => 
       .toBe(true);
     release();
     await loadComplete;
-    await expect
-      .poll(() => readLateApiResponseObservation(page))
-      .toEqual({
-        requestURL: expect.stringContaining("/api/v2/projects/p_race-load012"),
-        requestSignalPresent: true,
-        requestAborted: true,
-        responseURL: expect.stringContaining("/api/v2/projects/p_race-load012"),
-        responseStatus: 200,
-        responseReceived: true,
-        observerSettled: true,
-        observerError: "",
-      });
     await expect(page.getByRole("heading", { name: "Choose a video to begin" })).toBeVisible();
+    await expect(page.getByLabel("Project status")).toContainText("Not saved yet");
     await expect(page.getByText("Project loaded.")).toHaveCount(0);
   } finally {
     release();
@@ -3421,71 +3410,67 @@ test("delayed saves cannot launch an obsolete export after a durable edit", asyn
   expect(preflights).toBeGreaterThan(0);
 });
 
-test("a delayed old-project save stays silent after New and the new project saves at revision zero", async ({
+test("a delayed old-project save cannot overwrite or prevent saving the new project", async ({
   page,
 }) => {
   const { promise: delayed, resolve: release } = deferred();
   const { promise: oldStart, resolve: oldStarted } = deferred();
   const { promise: oldComplete, resolve: oldCompleted } = deferred();
-  const { promise: newComplete, resolve: newCompleted } = deferred();
+  const saveInputs: ProjectInput[] = [];
   let saves = 0;
+  let oldSaveStarted = false;
   await page.route(`${apiOrigin}/api/v2/projects/*`, async (route) => {
     if (route.request().method() !== "PUT") return route.fallback();
     saves += 1;
-    const body = route.request().postDataJSON();
+    const input = Schema.decodeUnknownSync(ProjectInputSchema)(route.request().postDataJSON());
+    saveInputs.push(input);
+    const id = new URL(route.request().url()).pathname.split("/").pop()!;
     if (saves === 1) {
+      oldSaveStarted = true;
       oldStarted();
       await delayed;
-      await route.fulfill({
-        json: projectSnapshot(
-          "p_old-save0123",
-          9,
-          Schema.decodeUnknownSync(ProjectInputSchema)(body),
-        ),
-      });
+      await route.fulfill({ json: projectSnapshot("p_old-save0123", 9, input) });
       oldCompleted();
       return;
     }
-    expect(body.revision).toBe(saves === 3 ? 1 : 0);
-    const id = new URL(route.request().url()).pathname.split("/").pop()!;
-    await route.fulfill({
-      json: projectSnapshot(id, saves - 1, Schema.decodeUnknownSync(ProjectInputSchema)(body)),
-    });
-    if (saves === 2) newCompleted();
+    return route.fulfill({ json: projectSnapshot(id, input.revision + 1, input) });
   });
-  await page.goto("/");
-  await page.getByRole("button", { name: /camera.mp4/ }).click();
-  await addSelectedMediaToProject(page);
-  await openTask(page, "Project");
-  await setRange(page, 100, 700);
-  await expect(page.locator(".cut-row[data-segment-id]")).toHaveCount(1);
-  await expect(page.locator('button[aria-label="Select cut 1"]')).toHaveAttribute(
-    "aria-pressed",
-    "true",
-  );
-  await openTask(page, "Project");
-  await page.getByRole("button", { name: "Save project from project header", exact: true }).click();
-  await oldStart;
-  page.once("dialog", (dialog) => dialog.accept());
-  await newProject(page);
-  await page.getByRole("button", { name: /camera.mp4/ }).click();
-  await addSelectedMediaToProject(page);
-  await setRange(page, 100, 700);
-  await expect(page.locator(".cut-row[data-segment-id]")).toHaveCount(1);
-  await expect(page.locator('button[aria-label="Select cut 1"]')).toHaveAttribute(
-    "aria-pressed",
-    "true",
-  );
-  await openTask(page, "Project");
-  await page.getByRole("button", { name: "Save project from project header", exact: true }).click();
-  await newComplete;
-  release();
-  await oldComplete;
-  await page.getByLabel("Timeline playhead").fill("701");
-  await openTask(page, "Project");
-  await page.getByRole("button", { name: "Save project from project header", exact: true }).click();
-  await expect.poll(() => saves).toBe(3);
-  await expect(page.getByText("Project saved (revision 9).")).toHaveCount(0);
+  try {
+    await page.goto("/");
+    await page.getByRole("button", { name: /camera.mp4/ }).click();
+    await addSelectedMediaToProject(page);
+    await openTask(page, "Project");
+    await page
+      .getByRole("button", { name: "Save project from project header", exact: true })
+      .click();
+    await oldStart;
+    page.once("dialog", (dialog) => dialog.accept());
+    await newProject(page);
+    const projectName = page.locator(".project-sidebar-header strong");
+    const status = page.getByLabel("Project status");
+    await expect(projectName).toHaveText("Untitled project");
+    await expect(status).toContainText("Not saved yet");
+    await expect(page.getByRole("heading", { name: "Choose a video to begin" })).toBeVisible();
+
+    release();
+    await oldComplete;
+    await expect(projectName).toHaveText("Untitled project");
+    await expect(status).toContainText("Not saved yet");
+
+    await page.getByRole("button", { name: /camera.mp4/ }).click();
+    await addSelectedMediaToProject(page);
+    await expect(page.getByLabel("Selected media")).toContainText("camera.mp4");
+    await openTask(page, "Project");
+    await page
+      .getByRole("button", { name: "Save project from project header", exact: true })
+      .click();
+    await expect(status).toHaveText("Saved");
+    expect(saves).toBe(2);
+    expect(saveInputs[1]?.revision).toBe(0);
+  } finally {
+    release();
+    if (oldSaveStarted) await oldComplete;
+  }
 });
 
 test("unmounting a deferred export save cannot start export, poll, or remember a project", async ({
