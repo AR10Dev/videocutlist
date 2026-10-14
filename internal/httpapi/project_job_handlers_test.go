@@ -10,11 +10,14 @@ import (
 	"strings"
 	"testing"
 	"videocutlist/internal/detection"
+	"videocutlist/internal/httpapi/transport"
 	"videocutlist/internal/jobs/view"
+	librarymedia "videocutlist/internal/library/media"
 
 	store "videocutlist/internal/db"
 	jobqueue "videocutlist/internal/jobs/model"
 	"videocutlist/internal/projects"
+	"videocutlist/internal/projects/model"
 )
 
 type contractBatchService struct {
@@ -23,21 +26,27 @@ type contractBatchService struct {
 	retries              int
 	request              projects.BatchExportRequest
 	retryJobID, retryKey string
+	submitted            []view.Job
+	batch                projects.Batch
+	page                 projects.BatchPage
 }
 
 func (s *contractBatchService) Submit(_ context.Context, request projects.BatchExportRequest) (string, []view.Job, error) {
 	s.submits++
 	s.request = request
+	if s.submitted != nil {
+		return "b_contract1234", s.submitted, s.err
+	}
 	return "b_contract1234", []view.Job{{ID: "j_contract1234", State: string(jobqueue.JobQueued)}}, s.err
 }
 func (*contractBatchService) Progress(context.Context, string) (jobqueue.JobState, float64, error) {
 	return jobqueue.JobQueued, 0, nil
 }
-func (*contractBatchService) Get(context.Context, string) (projects.Batch, error) {
-	return projects.Batch{}, nil
+func (s *contractBatchService) Get(context.Context, string) (projects.Batch, error) {
+	return s.batch, nil
 }
-func (*contractBatchService) List(context.Context, string, int) (projects.BatchPage, error) {
-	return projects.BatchPage{}, nil
+func (s *contractBatchService) List(context.Context, string, int) (projects.BatchPage, error) {
+	return s.page, nil
 }
 func (s *contractBatchService) Retry(_ context.Context, jobID, key string) (projects.Batch, error) {
 	s.retries++
@@ -49,20 +58,25 @@ func (*contractBatchService) Cancel(context.Context, string) error { return nil 
 type contractDetectionService struct {
 	err     error
 	creates int
+	job     detection.Job
 }
 
 func (s *contractDetectionService) Submit(context.Context, string, string, detection.Request) (detection.Job, error) {
 	s.creates++
+	if s.job.ID != "" {
+		return s.job, s.err
+	}
 	return detection.Job{ID: "j_detection1234", State: "queued"}, s.err
 }
 
 type contractJobService struct {
 	getErr    error
 	cancelErr error
+	job       view.Job
 }
 
 func (s *contractJobService) Get(context.Context, string) (view.Job, error) {
-	return view.Job{}, s.getErr
+	return s.job, s.getErr
 }
 func (s *contractJobService) Cancel(context.Context, string) error { return s.cancelErr }
 
@@ -214,5 +228,150 @@ func TestJobHandlersExposeOnlyNotFoundAs404(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func jobWithUnrepresentedFields() view.Job {
+	pointMS := int64(42)
+	return view.Job{
+		ID: "j_extra_fields", Type: "detection", State: "succeeded",
+		RootResults: map[string]librarymedia.RootLibraryStatus{
+			"root_contract": {State: librarymedia.LibraryReadyEmpty},
+		},
+		Candidates: []model.Candidate{{
+			ID: "c_contract", MediaID: "m_contract", ProjectID: "p_contract1234",
+			ProjectRevision: 7, PointMS: &pointMS, Source: model.DetectScene,
+		}},
+	}
+}
+
+func assertUnrepresentedJobFields(t *testing.T, response *httptest.ResponseRecorder) {
+	t.Helper()
+	for _, field := range []string{`"rootResults":{"root_contract":{"state":"ready_empty"}}`, `"pointMs":42`} {
+		if !strings.Contains(response.Body.String(), field) {
+			t.Fatalf("response lost %s: %s", field, response.Body.String())
+		}
+	}
+}
+
+func TestGetJobMapsGeneratedJobAndPreservesInt64Precision(t *testing.T) {
+	const sizeBytes int64 = 9_007_199_254_740_993
+	job := view.Job{
+		ID: "j_contract1234", Type: "export", State: "succeeded", Revision: 5, Progress: 1,
+		Verified: false, Warnings: []string{}, SelectedStreams: []int{},
+		Result: &view.JobResult{SizeBytes: sizeBytes, OutputNames: []string{}, OutputFailures: []view.OutputFailure{}},
+	}
+	server := &Server{config: Config{Jobs: &contractJobService{job: job}}, metrics: NewMetrics()}
+	response := httptest.NewRecorder()
+	server.getJob(response, httptest.NewRequest(http.MethodGet, "/", nil), job.ID, "request")
+	if response.Code != http.StatusOK {
+		t.Fatalf("job response = %d %s", response.Code, response.Body.String())
+	}
+	var mapped transport.Job
+	if err := json.Unmarshal(response.Body.Bytes(), &mapped); err != nil {
+		t.Fatalf("decode generated job response: %v; body=%s", err, response.Body.String())
+	}
+	if mapped.Result == nil || mapped.Result.SizeBytes != sizeBytes || mapped.Progress == nil || *mapped.Progress != 1 {
+		t.Fatalf("mapped job lost exact values: %#v", mapped)
+	}
+	for _, omitted := range []string{`"verified"`, `"warnings"`, `"selectedStreams"`, `"outputNames"`, `"outputFailures"`} {
+		if strings.Contains(response.Body.String(), omitted) {
+			t.Fatalf("empty optional field %s was emitted: %s", omitted, response.Body.String())
+		}
+	}
+}
+
+func TestBatchHandlersPreserveUnrepresentedJobFields(t *testing.T) {
+	batch := projects.Batch{BatchID: "b_contract1234", State: "queued", Progress: 0.5, Jobs: []view.Job{jobWithUnrepresentedFields()}}
+	for _, test := range []struct {
+		name string
+		run  func(*Server, *httptest.ResponseRecorder, *http.Request)
+	}{
+		{name: "get", run: func(server *Server, response *httptest.ResponseRecorder, request *http.Request) {
+			server.getBatch(response, request, batch.BatchID, "request")
+		}},
+		{name: "list", run: func(server *Server, response *httptest.ResponseRecorder, request *http.Request) {
+			server.listBatches(response, request, "request")
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			service := &contractBatchService{batch: batch, page: projects.BatchPage{Items: []projects.Batch{batch}}}
+			server := &Server{config: Config{BatchExports: service}, metrics: NewMetrics()}
+			response := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodGet, "/api/v2/batches", nil)
+			test.run(server, response, request)
+			if response.Code != http.StatusOK {
+				t.Fatalf("batch response = %d %s", response.Code, response.Body.String())
+			}
+			assertUnrepresentedJobFields(t, response)
+		})
+	}
+}
+
+func TestCreateExportAdmissionPreservesUnrepresentedJobFields(t *testing.T) {
+	batch := &contractBatchService{submitted: []view.Job{jobWithUnrepresentedFields()}}
+	server := &Server{config: Config{BatchExports: batch}, metrics: NewMetrics()}
+	request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"projectRevision":7,"itemIds":["i_contract"]}`))
+	request.Header.Set("Idempotency-Key", "admission-contract-key")
+	response := httptest.NewRecorder()
+	server.createExport(response, request, "p_contract1234", "request")
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("admission response = %d %s", response.Code, response.Body.String())
+	}
+	assertUnrepresentedJobFields(t, response)
+}
+
+func TestAutomationJobStatusPreservesUnrepresentedJobFields(t *testing.T) {
+	job := jobWithUnrepresentedFields()
+	job.ID = "j_contract1234"
+	server := &Server{config: Config{
+		Jobs: &contractJobService{job: job}, ListenerAddress: "127.0.0.1", RequireAutomationAuth: true,
+	}}
+	request := httptest.NewRequest(http.MethodPost, "/api/v2/automation", strings.NewReader(`{"action":"job.status","jobId":"j_contract1234"}`))
+	response := httptest.NewRecorder()
+	server.automation(response, request, "request")
+	if response.Code != http.StatusOK {
+		t.Fatalf("automation response = %d %s", response.Code, response.Body.String())
+	}
+	assertUnrepresentedJobFields(t, response)
+}
+
+func TestCreateDetectionMapsCandidateUnionVariants(t *testing.T) {
+	pointMS := int64(31)
+	service := &contractDetectionService{job: detection.Job{
+		ID: "j_detection1234", Type: "detection", State: "succeeded", MediaID: "m_contract",
+		ProjectID: "p_contract1234", ProjectRevision: 7, Kind: model.DetectScene,
+		Candidates: []model.Candidate{
+			{ID: "c_point", MediaID: "m_contract", ProjectID: "p_contract1234", ProjectRevision: 7, PointMS: &pointMS, Source: model.DetectScene},
+			{ID: "c_range", MediaID: "m_contract", ProjectID: "p_contract1234", ProjectRevision: 7, StartMS: 40, EndMS: 60, Source: model.DetectSilence},
+			{ID: "c_legacy_point", MediaID: "m_contract", ProjectID: "p_contract1234", ProjectRevision: 7, StartMS: 70, EndMS: 71, Source: model.DetectScene},
+		},
+	}}
+	server := &Server{config: Config{Detection: service}, metrics: NewMetrics()}
+	request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"mediaId":"m_contract","projectItemId":"i_contract123456789012345678","projectRevision":7,"kind":"scene"}`))
+	request.Header.Set("Idempotency-Key", "detection-contract-key")
+	response := httptest.NewRecorder()
+	server.createDetection(response, request, "p_contract1234", "request")
+	if response.Code != http.StatusAccepted {
+		t.Fatalf("detection response = %d %s", response.Code, response.Body.String())
+	}
+	var mapped transport.DetectionJob
+	if err := json.Unmarshal(response.Body.Bytes(), &mapped); err != nil {
+		t.Fatalf("decode detection response: %v; body=%s", err, response.Body.String())
+	}
+	if mapped.Candidates == nil || len(*mapped.Candidates) != 3 {
+		t.Fatalf("detection candidates = %#v, want all three variants", mapped.Candidates)
+	}
+	point, err := (*mapped.Candidates)[0].AsDetectionPointCandidate()
+	if err != nil || point.PointMs != int(pointMS) || point.Source != transport.DetectionPointCandidateSourceScene {
+		t.Fatalf("point candidate = %#v, %v", point, err)
+	}
+	rangeCandidate, err := (*mapped.Candidates)[1].AsDetectionRangeCandidate()
+	if err != nil || rangeCandidate.StartMs != 40 || rangeCandidate.EndMs != 60 || rangeCandidate.Source != transport.DetectionRangeCandidateSourceSilence {
+		t.Fatalf("range candidate = %#v, %v", rangeCandidate, err)
+	}
+	legacyPoint, err := (*mapped.Candidates)[2].AsDetectionPointCandidate()
+	if err != nil || legacyPoint.PointMs != 70 {
+		t.Fatalf("legacy one-millisecond scene candidate = %#v, %v", legacyPoint, err)
 	}
 }

@@ -233,6 +233,48 @@ export const Media = Schema.StructWithRest(
   }),
   [Schema.Record(Schema.String, Schema.Json.annotate({ expected: "JSON value" }))],
 ).annotate({ identifier: "Media" });
+export type ExportCapabilities = {
+  readonly strategies: ReadonlyArray<
+    {
+      readonly strategy: "stream_copy_preferred" | "precise_reencode" | "hybrid_smart_cut";
+      readonly supported: boolean;
+      readonly reasons: ReadonlyArray<
+        | "unsupported_container"
+        | "unsupported_filename_extension"
+        | "unsupported_video_codec"
+        | "non_constant_frame_rate"
+        | "non_constant_frame_timestamps"
+      >;
+    } & { readonly [x: string]: Schema.Json }
+  >;
+} & { readonly [x: string]: Schema.Json };
+export const ExportCapabilities = Schema.StructWithRest(
+  Schema.Struct({
+    strategies: Schema.Array(
+      Schema.StructWithRest(
+        Schema.Struct({
+          strategy: Schema.Literals([
+            "stream_copy_preferred",
+            "precise_reencode",
+            "hybrid_smart_cut",
+          ]),
+          supported: Schema.Boolean,
+          reasons: Schema.Array(
+            Schema.Literals([
+              "unsupported_container",
+              "unsupported_filename_extension",
+              "unsupported_video_codec",
+              "non_constant_frame_rate",
+              "non_constant_frame_timestamps",
+            ]),
+          ),
+        }),
+        [Schema.Record(Schema.String, Schema.Json.annotate({ expected: "JSON value" }))],
+      ),
+    ),
+  }),
+  [Schema.Record(Schema.String, Schema.Json.annotate({ expected: "JSON value" }))],
+).annotate({ identifier: "ExportCapabilities" });
 export type ProjectPage = {
   readonly items: ReadonlyArray<
     {
@@ -265,6 +307,160 @@ export const ProjectPage = Schema.StructWithRest(
   }),
   [Schema.Record(Schema.String, Schema.Json.annotate({ expected: "JSON value" }))],
 ).annotate({ identifier: "ProjectPage" });
+export type ProjectImportInput = { readonly content: string };
+export const ProjectImportInput = Schema.Struct({
+  content: Schema.String.annotate({
+    description: "UTF-8 project-file content limited to 1 MiB in bytes.",
+  }),
+}).annotate({ identifier: "ProjectImportInput" });
+export type ProjectImportResult = {
+  readonly sourceFormat: "legacy" | "v2";
+  readonly mediaId?: string;
+  readonly document: {
+    readonly revision: number;
+    readonly schemaVersion: 2;
+    readonly name: string;
+    readonly items: ReadonlyArray<{
+      readonly id: string;
+      readonly mediaId: string;
+      readonly segments: ReadonlyArray<{
+        readonly id?: string;
+        readonly startMs: number;
+        readonly endMs: number;
+        readonly label?: string;
+        readonly included?: boolean;
+      }>;
+      readonly editorState?: {
+        readonly playheadMs: number;
+        readonly zoom: number;
+        readonly muted: boolean;
+      } & { readonly [x: string]: Schema.Json };
+      readonly exportOptions: {
+        readonly mode?: "merge" | "separate";
+        readonly selection?: "segments" | "gaps";
+        readonly streamIndexes?: ReadonlyArray<number>;
+        readonly cutStrategy?: "stream_copy_preferred" | "precise_reencode" | "hybrid_smart_cut";
+        readonly container?: "mkv" | "mp4" | "mov";
+        readonly destinationId?: string;
+        readonly filenameTemplate?: string;
+      };
+    }>;
+  };
+};
+export const ProjectImportResult = Schema.Struct({
+  sourceFormat: Schema.Literals(["legacy", "v2"]),
+  mediaId: Schema.optionalKey(
+    Schema.String.annotate({ description: "Present only when the source format is legacy." }).check(
+      Schema.isPattern(new RegExp("^m_[A-Za-z0-9_-]{43}$", "u")).annotate({
+        expected: "a string matching the RegExp ^m_[A-Za-z0-9_-]{43}$",
+      }),
+    ),
+  ),
+  document: Schema.Struct({
+    revision: Schema.Number.check(Schema.isInt().annotate({ expected: "an integer" })).check(
+      Schema.isGreaterThanOrEqualTo(0).annotate({ expected: "a value greater than or equal to 0" }),
+    ),
+    schemaVersion: Schema.Literal(2),
+    name: Schema.String.check(
+      Schema.isMinLength(1).annotate({ expected: "a value with a length of at least 1" }),
+    ).check(
+      Schema.isMaxCodePoints(120).annotate({ expected: "a string with at most 120 code points" }),
+    ),
+    items: Schema.Array(
+      Schema.Struct({
+        id: Schema.String.check(
+          Schema.isPattern(new RegExp("^i_[A-Za-z0-9_-]{24}$", "u")).annotate({
+            expected: "a string matching the RegExp ^i_[A-Za-z0-9_-]{24}$",
+          }),
+        ),
+        mediaId: Schema.String.check(
+          Schema.isPattern(new RegExp("^m_[A-Za-z0-9_-]{43}$", "u")).annotate({
+            expected: "a string matching the RegExp ^m_[A-Za-z0-9_-]{43}$",
+          }),
+        ),
+        segments: Schema.Array(
+          Schema.Struct({
+            id: Schema.optionalKey(
+              Schema.String.check(
+                Schema.isMinLength(1).annotate({ expected: "a value with a length of at least 1" }),
+              ).check(
+                Schema.isMaxCodePoints(128).annotate({
+                  expected: "a string with at most 128 code points",
+                }),
+              ),
+            ),
+            startMs: Schema.Number.check(Schema.isInt().annotate({ expected: "an integer" })).check(
+              Schema.isGreaterThanOrEqualTo(0).annotate({
+                expected: "a value greater than or equal to 0",
+              }),
+            ),
+            endMs: Schema.Number.check(Schema.isInt().annotate({ expected: "an integer" })).check(
+              Schema.isGreaterThanOrEqualTo(1).annotate({
+                expected: "a value greater than or equal to 1",
+              }),
+            ),
+            label: Schema.optionalKey(
+              Schema.String.check(
+                Schema.isMaxCodePoints(200).annotate({
+                  expected: "a string with at most 200 code points",
+                }),
+              ),
+            ),
+            included: Schema.optionalKey(Schema.Boolean.annotate({ default: true })),
+          }),
+        ),
+        editorState: Schema.optionalKey(
+          Schema.StructWithRest(
+            Schema.Struct({
+              playheadMs: Schema.Number.check(
+                Schema.isInt().annotate({ expected: "an integer" }),
+              ).check(
+                Schema.isGreaterThanOrEqualTo(0).annotate({
+                  expected: "a value greater than or equal to 0",
+                }),
+              ),
+              zoom: Schema.Number.check(
+                Schema.isFinite().annotate({ expected: "a finite number" }),
+              ).check(Schema.isGreaterThan(0).annotate({ expected: "a value greater than 0" })),
+              muted: Schema.Boolean,
+            }),
+            [Schema.Record(Schema.String, Schema.Json.annotate({ expected: "JSON value" }))],
+          ),
+        ),
+        exportOptions: Schema.Struct({
+          mode: Schema.optionalKey(Schema.Literals(["merge", "separate"])),
+          selection: Schema.optionalKey(Schema.Literals(["segments", "gaps"])),
+          streamIndexes: Schema.optionalKey(
+            Schema.Array(
+              Schema.Number.check(Schema.isInt().annotate({ expected: "an integer" })).check(
+                Schema.isGreaterThanOrEqualTo(0).annotate({
+                  expected: "a value greater than or equal to 0",
+                }),
+              ),
+            ).check(Schema.isUnique().annotate({ expected: "an array with unique items" })),
+          ),
+          cutStrategy: Schema.optionalKey(
+            Schema.Literals(["stream_copy_preferred", "precise_reencode", "hybrid_smart_cut"]),
+          ),
+          container: Schema.optionalKey(Schema.Literals(["mkv", "mp4", "mov"])),
+          destinationId: Schema.optionalKey(
+            Schema.String.check(
+              Schema.isMaxCodePoints(64).annotate({
+                expected: "a string with at most 64 code points",
+              }),
+            ),
+          ),
+          filenameTemplate: Schema.optionalKey(
+            Schema.String.annotate({
+              description:
+                "At most 160 UTF-8 bytes. Standard maxLength counts Unicode characters rather than bytes, so the server enforces this bound.",
+            }),
+          ),
+        }),
+      }),
+    ).check(Schema.isMinLength(1).annotate({ expected: "a value with a length of at least 1" })),
+  }),
+}).annotate({ identifier: "ProjectImportResult" });
 export type Project = {
   readonly id: string;
   readonly updatedAt: string;
@@ -1549,35 +1745,46 @@ export const ExportPreflight = Schema.StructWithRest(
   }),
   [Schema.Record(Schema.String, Schema.Json.annotate({ expected: "JSON value" }))],
 ).annotate({ identifier: "ExportPreflight" });
-export type Destination = {
-  readonly id: string;
-  readonly label: string;
-  readonly description?: string;
-  readonly kind: "download" | "archive" | "source_adjacent";
-  readonly retention?: string;
+export type DestinationsResponse = {
+  readonly destinations: ReadonlyArray<
+    {
+      readonly id: string;
+      readonly label: string;
+      readonly description?: string;
+      readonly kind: "download" | "archive" | "source_adjacent";
+      readonly retention?: string;
+    } & { readonly [x: string]: Schema.Json }
+  >;
+  readonly capabilities: { readonly saveBesideSource: boolean } & {
+    readonly [x: string]: Schema.Json;
+  };
 } & { readonly [x: string]: Schema.Json };
-export const Destination = Schema.StructWithRest(
+export const DestinationsResponse = Schema.StructWithRest(
   Schema.Struct({
-    id: Schema.String,
-    label: Schema.String,
-    description: Schema.optionalKey(Schema.String),
-    kind: Schema.Literals(["download", "archive", "source_adjacent"]),
-    retention: Schema.optionalKey(Schema.String),
+    destinations: Schema.Array(
+      Schema.StructWithRest(
+        Schema.Struct({
+          id: Schema.String,
+          label: Schema.String,
+          description: Schema.optionalKey(Schema.String),
+          kind: Schema.Literals(["download", "archive", "source_adjacent"]),
+          retention: Schema.optionalKey(Schema.String),
+        }),
+        [Schema.Record(Schema.String, Schema.Json.annotate({ expected: "JSON value" }))],
+      ),
+    ),
+    capabilities: Schema.StructWithRest(
+      Schema.Struct({
+        saveBesideSource: Schema.Boolean.annotate({
+          description:
+            "True only when deployment configuration explicitly includes a source_adjacent destination. No filesystem path is exposed.",
+        }),
+      }),
+      [Schema.Record(Schema.String, Schema.Json.annotate({ expected: "JSON value" }))],
+    ),
   }),
   [Schema.Record(Schema.String, Schema.Json.annotate({ expected: "JSON value" }))],
-).annotate({ identifier: "Destination" });
-export type DestinationCapabilities = { readonly saveBesideSource: boolean } & {
-  readonly [x: string]: Schema.Json;
-};
-export const DestinationCapabilities = Schema.StructWithRest(
-  Schema.Struct({
-    saveBesideSource: Schema.Boolean.annotate({
-      description:
-        "True only when deployment configuration explicitly includes a source_adjacent destination. No filesystem path is exposed.",
-    }),
-  }),
-  [Schema.Record(Schema.String, Schema.Json.annotate({ expected: "JSON value" }))],
-).annotate({ identifier: "DestinationCapabilities" });
+).annotate({ identifier: "DestinationsResponse" });
 export type Job = {
   readonly id: string;
   readonly batchId?: string;
@@ -1824,6 +2031,7 @@ export type SettingsResponse = {
     readonly [x: string]: {
       readonly state?: "ready" | "unavailable";
       readonly message?: string;
+      readonly reasonCode?: string;
     } & { readonly [x: string]: Schema.Json };
   };
 } & { readonly [x: string]: Schema.Json };
@@ -1898,6 +2106,12 @@ export const SettingsResponse = Schema.StructWithRest(
         Schema.Struct({
           state: Schema.optionalKey(Schema.Literals(["ready", "unavailable"])),
           message: Schema.optionalKey(Schema.String),
+          reasonCode: Schema.optionalKey(
+            Schema.String.annotate({
+              description:
+                "Stable open-ended status code; clients must tolerate unknown or omitted values.",
+            }),
+          ),
         }),
         [Schema.Record(Schema.String, Schema.Json.annotate({ expected: "JSON value" }))],
       ),
@@ -2901,6 +3115,24 @@ export type GetMedia404 = Error;
 export const GetMedia404 = Error;
 export type GetMedia500 = Error;
 export const GetMedia500 = Error;
+export type GetExportCapabilitiesPathParams = { readonly mediaId: string };
+export const GetExportCapabilitiesPathParams = Schema.Struct({
+  mediaId: Schema.String.check(
+    Schema.isPattern(new RegExp("^m_[A-Za-z0-9_-]{43}$", "u")).annotate({
+      expected: "a string matching the RegExp ^m_[A-Za-z0-9_-]{43}$",
+    }),
+  ),
+});
+export type GetExportCapabilities200 = ExportCapabilities;
+export const GetExportCapabilities200 = ExportCapabilities;
+export type GetExportCapabilities401 = Error;
+export const GetExportCapabilities401 = Error;
+export type GetExportCapabilities403 = Error;
+export const GetExportCapabilities403 = Error;
+export type GetExportCapabilities404 = Error;
+export const GetExportCapabilities404 = Error;
+export type GetExportCapabilities500 = Error;
+export const GetExportCapabilities500 = Error;
 export type ListProjectsParams = { readonly limit?: number; readonly cursor?: string };
 export const ListProjectsParams = Schema.Struct({
   limit: Schema.optionalKey(
@@ -2943,6 +3175,20 @@ export type ListProjects403 = Error;
 export const ListProjects403 = Error;
 export type ListProjects500 = Error;
 export const ListProjects500 = Error;
+export type ImportProjectFileRequestJson = ProjectImportInput;
+export const ImportProjectFileRequestJson = ProjectImportInput;
+export type ImportProjectFile200 = ProjectImportResult;
+export const ImportProjectFile200 = ProjectImportResult;
+export type ImportProjectFile400 = Error;
+export const ImportProjectFile400 = Error;
+export type ImportProjectFile401 = Error;
+export const ImportProjectFile401 = Error;
+export type ImportProjectFile403 = Error;
+export const ImportProjectFile403 = Error;
+export type ImportProjectFile413 = Error;
+export const ImportProjectFile413 = Error;
+export type ImportProjectFile500 = Error;
+export const ImportProjectFile500 = Error;
 export type GetProjectPathParams = { readonly projectId: string };
 export const GetProjectPathParams = Schema.Struct({
   projectId: Schema.String.check(
@@ -3185,14 +3431,8 @@ export type PreflightExport403 = Error;
 export const PreflightExport403 = Error;
 export type PreflightExport500 = Error;
 export const PreflightExport500 = Error;
-export type ListDestinations200 = {
-  readonly destinations: ReadonlyArray<Destination>;
-  readonly capabilities: DestinationCapabilities;
-} & { readonly [x: string]: Schema.Json };
-export const ListDestinations200 = Schema.StructWithRest(
-  Schema.Struct({ destinations: Schema.Array(Destination), capabilities: DestinationCapabilities }),
-  [Schema.Record(Schema.String, Schema.Json.annotate({ expected: "JSON value" }))],
-);
+export type ListDestinations200 = DestinationsResponse;
+export const ListDestinations200 = DestinationsResponse;
 export type ListDestinations401 = Error;
 export const ListDestinations401 = Error;
 export type ListDestinations403 = Error;
@@ -3738,6 +3978,18 @@ class DefaultGroup extends HttpApiGroup.make("default", { topLevel: true }).add(
   })
     .annotate(OpenApi.Identifier, "getMedia")
     .annotate(OpenApi.Summary, "Read media metadata"),
+  HttpApiEndpoint.get("getExportCapabilities", "/export-capabilities/media/:mediaId", {
+    params: GetExportCapabilitiesPathParams,
+    success: GetExportCapabilities200,
+    error: [
+      GetExportCapabilities401.pipe(HttpApiSchema.status(401)),
+      GetExportCapabilities403.pipe(HttpApiSchema.status(403)),
+      GetExportCapabilities404.pipe(HttpApiSchema.status(404)),
+      GetExportCapabilities500,
+    ],
+  })
+    .annotate(OpenApi.Identifier, "getExportCapabilities")
+    .annotate(OpenApi.Summary, "Get current export strategy capabilities for one media item"),
   HttpApiEndpoint.get("listProjects", "/projects", {
     query: ListProjectsQuery,
     success: ListProjects200,
@@ -3750,6 +4002,23 @@ class DefaultGroup extends HttpApiGroup.make("default", { topLevel: true }).add(
   })
     .annotate(OpenApi.Identifier, "listProjects")
     .annotate(OpenApi.Summary, "List saved projects"),
+  HttpApiEndpoint.post("importProjectFile", "/projects/import", {
+    payload: ImportProjectFileRequestJson,
+    success: ImportProjectFile200,
+    error: [
+      ImportProjectFile400.pipe(HttpApiSchema.status(400)),
+      ImportProjectFile401.pipe(HttpApiSchema.status(401)),
+      ImportProjectFile403.pipe(HttpApiSchema.status(403)),
+      ImportProjectFile413.pipe(HttpApiSchema.status(413)),
+      ImportProjectFile500,
+    ],
+  })
+    .annotate(OpenApi.Identifier, "importProjectFile")
+    .annotate(OpenApi.Summary, "Validate and convert a project file without saving it")
+    .annotate(
+      OpenApi.Description,
+      "Accepts UTF-8 legacy or v2 project JSON, validates every referenced media item, returning a canonical revision-0 document. This operation never persists a project. The content is limited to 1 MiB of UTF-8 bytes; the escaped JSON request envelope is limited to 6 MiB + 256 bytes.",
+    ),
   HttpApiEndpoint.get("getProject", "/projects/:projectId", {
     params: GetProjectPathParams,
     success: GetProject200,

@@ -27,6 +27,7 @@ import {
   type LibraryStatus as GeneratedLibraryStatus,
   type Project,
   type ProjectPage,
+  type ExportCapabilities,
 } from "../generated/effect-api";
 import { observeSnapshots } from "../features/queue/jobStream";
 import {
@@ -61,6 +62,10 @@ export interface ServerState {
     id: string,
     revision?: number,
   ) => Atom.Atom<AsyncResult.AsyncResult<Media, Error>>;
+  readonly exportCapabilities: (
+    id: string,
+    revision: number,
+  ) => Atom.Atom<AsyncResult.AsyncResult<ExportCapabilities, unknown>>;
   readonly mediaTree: (
     folderId: string | undefined,
     cursor: string | undefined,
@@ -293,6 +298,15 @@ export function createServerState(
         Atom.swr({ staleTime: 0, revalidateOnMount: true, revalidateOnFocus: true }),
       );
   });
+  const capabilities = Atom.family((key: string) => {
+    const [id, revision] = JSON.parse(key) as [string, number];
+    return generatedApi.query("default", "getExportCapabilities", {
+      params: { mediaId: id },
+      reactivityKeys: [`export-capabilities:${revision}`],
+    }) as Atom.Atom<AsyncResult.AsyncResult<ExportCapabilities, unknown>>;
+  });
+  const exportCapabilities = (id: string, revision: number) =>
+    capabilities(JSON.stringify([id, revision]));
   const media = (id: string, revision = registry.get(mediaRevision)) =>
     metadata(JSON.stringify([id, revision]));
   const libraryTree = (
@@ -310,6 +324,7 @@ export function createServerState(
     workspacePanelState,
     generatedApi,
     media,
+    exportCapabilities,
     mediaTree: libraryTree,
     mediaLibraryStatus,
     project,

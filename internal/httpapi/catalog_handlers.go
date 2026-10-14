@@ -14,10 +14,11 @@ func (s *Server) listDestinations(w http.ResponseWriter, _ *http.Request, id str
 			break
 		}
 	}
-	WriteJSON(w, http.StatusOK, map[string]any{"destinations": s.config.Destinations, "capabilities": capabilities})
+	httpx.WriteJSON(w, http.StatusOK, destinationsToTransport(s.config.Destinations, capabilities))
 }
 
 func (s *Server) mediaStatus(w http.ResponseWriter, _ *http.Request, _ string) {
+	// The current response includes root diagnostics absent from generated LibraryStatus.
 	WriteJSON(w, http.StatusOK, s.config.Media.Status())
 }
 
@@ -36,7 +37,7 @@ func (s *Server) startImport(w http.ResponseWriter, r *http.Request, id string) 
 		writeMediaScanError(w, err, id)
 		return
 	}
-	WriteJSON(w, http.StatusAccepted, job)
+	writeImportJobJSON(w, http.StatusAccepted, job)
 }
 
 func (s *Server) getImport(w http.ResponseWriter, r *http.Request, jobID, id string) {
@@ -49,7 +50,7 @@ func (s *Server) getImport(w http.ResponseWriter, r *http.Request, jobID, id str
 		resourceError(w, id, err)
 		return
 	}
-	WriteJSON(w, http.StatusOK, job)
+	writeImportJobJSON(w, http.StatusOK, job)
 }
 
 func (s *Server) cancelImport(w http.ResponseWriter, r *http.Request, jobID, id string) {

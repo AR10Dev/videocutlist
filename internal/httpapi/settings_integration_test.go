@@ -6,10 +6,13 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"videocutlist/internal/db"
+	"videocutlist/internal/httpapi/transport"
 	settingsdomain "videocutlist/internal/settings"
 	settingsmodel "videocutlist/internal/settings/model"
 )
@@ -163,7 +166,17 @@ func TestGetSettingsReturnsCompleteMutableDocument(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := settings.Seed(ctx, testRuntimeSettings()); err != nil {
+	runtimeSettings := testRuntimeSettings()
+	availableRoot := t.TempDir()
+	unavailableRoot := filepath.Join(t.TempDir(), "deployment-missing-root")
+	fileRoot := filepath.Join(t.TempDir(), "deployment-file-root")
+	if err := os.WriteFile(fileRoot, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runtimeSettings.MediaRoots = map[string]string{
+		"camera": availableRoot, "missing": unavailableRoot, "not_directory": fileRoot,
+	}
+	if _, err := settings.Seed(ctx, runtimeSettings); err != nil {
 		t.Fatal(err)
 	}
 	authenticator, err := NewAuthenticator(AuthConfig{Mode: "none"})
@@ -189,6 +202,38 @@ func TestGetSettingsReturnsCompleteMutableDocument(t *testing.T) {
 	}
 	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
 		t.Fatal(err)
+	}
+	var mapped transport.SettingsResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &mapped); err != nil {
+		t.Fatal(err)
+	}
+	available := mapped.Roots["camera"]
+	if available.State == nil || *available.State != transport.Ready || available.ReasonCode == nil || *available.ReasonCode != "media_root_available" {
+		t.Fatalf("available root status=%#v", available)
+	}
+	if available.Message == nil || *available.Message != "Media root is available to the server." {
+		t.Fatalf("available root message=%v", available.Message)
+	}
+	unavailable := mapped.Roots["missing"]
+	if unavailable.State == nil || *unavailable.State != transport.Unavailable || unavailable.ReasonCode == nil || *unavailable.ReasonCode != "media_root_unavailable" {
+		t.Fatalf("unavailable root status=%#v", unavailable)
+	}
+	fallbackMessage := "Media root is not available to the server. Check the deployment mount or directory permissions."
+	if unavailable.Message == nil || *unavailable.Message != fallbackMessage {
+		t.Fatalf("unavailable root fallback message=%v", unavailable.Message)
+	}
+	notDirectory := mapped.Roots["not_directory"]
+	if notDirectory.State == nil || *notDirectory.State != transport.Unavailable || notDirectory.ReasonCode == nil || *notDirectory.ReasonCode != "media_root_unavailable" {
+		t.Fatalf("non-directory root status=%#v", notDirectory)
+	}
+	body := response.Body.String()
+	for _, privateValue := range []string{availableRoot, unavailableRoot, fileRoot, "no such file", "/exports", `"mediaRoots"`} {
+		if strings.Contains(body, privateValue) {
+			t.Fatalf("GET settings leaked deployment data or filesystem errors: %s", body)
+		}
+	}
+	if mapped.Settings.Destinations == nil || len(*mapped.Settings.Destinations) != 1 || (*mapped.Settings.Destinations)[0].Label != "Downloads" {
+		t.Fatalf("GET settings did not preserve safe destination metadata: %#v", mapped.Settings.Destinations)
 	}
 	for _, field := range []string{
 		"destinations", "exportLimit", "cacheMaxBytes", "previewGlobalLimit", "previewBeforeMs",

@@ -84,6 +84,16 @@ type OutputFailure struct {
 	Message string `json:"message"`
 }
 
+type StrategyCapability struct {
+	Strategy  string   `json:"strategy"`
+	Supported bool     `json:"supported"`
+	Reasons   []string `json:"reasons"`
+}
+
+type Capabilities struct {
+	Strategies []StrategyCapability `json:"strategies"`
+}
+
 // Result deliberately contains only an output name, never a filesystem path.
 type Result struct {
 	Container         string            `json:"container"`
@@ -179,21 +189,32 @@ func (s Service) Run(ctx context.Context, source *os.File, document model.Docume
 			return Result{}, fmt.Errorf("%w: invalid segment bounds", ErrInvalidRequest)
 		}
 	}
+	if request.CutStrategy == "hybrid_smart_cut" {
+		if reasons := hybridMetadataCapabilityReasons(metadata, sourceName); len(reasons) > 0 {
+			return Result{}, fmt.Errorf("%w: %w: hybrid smart cut unsupported: %s", ErrInvalidRequest, ErrHybridSmartCutUnsupportedMedia, strings.Join(reasons, ","))
+		}
+	}
 	var keyframes []int64
 	hybridInterior := false
 	if request.CutStrategy != "precise_reencode" {
 		var err error
 		keyframes, err = (probe.Client{Path: s.FFprobePath}).Keyframes(ctx, source)
 		if err != nil {
+			if ctx.Err() != nil {
+				return Result{}, fmt.Errorf("%w: %v", ErrCancelled, ctx.Err())
+			}
 			return Result{}, fmt.Errorf("probe export keyframes: %w", err)
 		}
 		if request.CutStrategy == "hybrid_smart_cut" {
-			if !hybridSupported(metadata) || strings.ToLower(filepath.Ext(sourceName)) != ".mkv" {
-				return Result{}, fmt.Errorf("%w: %w: hybrid smart cut requires H.264 CFR MKV", ErrInvalidRequest, ErrHybridSmartCutUnsupportedMedia)
-			}
 			frameTimes, err := (probe.Client{Path: s.FFprobePath}).FrameTimes(ctx, source)
-			if err != nil || !constantFrameTimes(frameTimes) {
-				return Result{}, fmt.Errorf("%w: %w: hybrid smart cut requires finite CFR timestamps", ErrInvalidRequest, ErrHybridSmartCutUnsupportedMedia)
+			if err != nil {
+				if ctx.Err() != nil {
+					return Result{}, fmt.Errorf("%w: %v", ErrCancelled, ctx.Err())
+				}
+				return Result{}, fmt.Errorf("%w: %w: hybrid smart cut requires finite CFR timestamps: %w", ErrInvalidRequest, ErrHybridSmartCutUnsupportedMedia, err)
+			}
+			if reasons := hybridCapabilityReasons(metadata, sourceName, frameTimes); len(reasons) > 0 {
+				return Result{}, fmt.Errorf("%w: %w: hybrid smart cut unsupported: %s", ErrInvalidRequest, ErrHybridSmartCutUnsupportedMedia, strings.Join(reasons, ","))
 			}
 			for _, segment := range segments {
 				if hasInteriorKeyframe(segment, keyframes) {
@@ -555,8 +576,28 @@ func (s Service) copySegment(ctx context.Context, source *os.File, segment model
 	return s.runWithOutput(ctx, source, output, workDirectory, args, policy)
 }
 
-func hybridSupported(metadata probe.Metadata) bool {
-	return metadata.Container == "matroska,webm" && metadata.Video != nil && metadata.Video.Codec == "h264" && validCFR(metadata.Video.AvgFrameRate, metadata.Video.FrameRate)
+func hybridMetadataCapabilityReasons(metadata probe.Metadata, sourceName string) []string {
+	var reasons []string
+	if metadata.Container != "matroska,webm" {
+		reasons = append(reasons, "unsupported_container")
+	}
+	if strings.ToLower(filepath.Ext(sourceName)) != ".mkv" {
+		reasons = append(reasons, "unsupported_filename_extension")
+	}
+	if metadata.Video == nil || !strings.EqualFold(metadata.Video.Codec, "h264") {
+		reasons = append(reasons, "unsupported_video_codec")
+	} else if !validCFR(metadata.Video.AvgFrameRate, metadata.Video.FrameRate) {
+		reasons = append(reasons, "non_constant_frame_rate")
+	}
+	return reasons
+}
+
+func hybridCapabilityReasons(metadata probe.Metadata, sourceName string, frameTimes []int64) []string {
+	reasons := hybridMetadataCapabilityReasons(metadata, sourceName)
+	if !constantFrameTimes(frameTimes) {
+		reasons = append(reasons, "non_constant_frame_timestamps")
+	}
+	return reasons
 }
 
 func validCFR(avg, rate string) bool {

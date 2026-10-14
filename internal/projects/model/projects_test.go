@@ -50,6 +50,29 @@ func TestValidateProjectItemRejectsOverlappingAndOutOfRangeSegments(t *testing.T
 	}
 }
 
+func TestSegmentWithIncludedPreservesExplicitChoice(t *testing.T) {
+	for _, included := range []bool{false, true} {
+		segment := (Segment{StartMS: 100, EndMS: 300}).WithIncluded(included)
+		if segment.IsIncluded() != included {
+			t.Fatalf("included=%t produced %#v", included, segment)
+		}
+		encoded, err := json.Marshal(segment)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var roundTrip Segment
+		if err := json.Unmarshal(encoded, &roundTrip); err != nil {
+			t.Fatal(err)
+		}
+		if roundTrip.IsIncluded() != included {
+			t.Fatalf("included=%t round trip produced %#v", included, roundTrip)
+		}
+	}
+	if !(Segment{}).IsIncluded() {
+		t.Fatal("zero-value segment no longer defaults to included")
+	}
+}
+
 func TestSegmentMetadataDefaultsAndRoundTrips(t *testing.T) {
 	var legacy Segment
 	if err := json.Unmarshal([]byte(`{"startMs":100,"endMs":300}`), &legacy); err != nil {

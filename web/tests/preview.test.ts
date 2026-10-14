@@ -11,7 +11,6 @@ import { defaultBrowserPreferences } from "../src/features/settings/model";
 import {
   canStreamPreview,
   formatTime,
-  hybridSmartCutKnownIneligible,
   previewMime,
   previewRange,
   streamPreview as streamPreviewEffect,
@@ -27,47 +26,6 @@ const streamPreview = (...args: Parameters<typeof streamPreviewEffect>) => {
 };
 
 afterEach(() => vi.unstubAllGlobals());
-
-describe("hybrid Smart Cut eligibility", () => {
-  const media = (
-    video: { codec?: string; avgFrameRate?: string; frameRate?: string },
-    overrides: Partial<EffectApiTypes.Media> = {},
-  ): EffectApiTypes.Media => ({
-    id: "m1",
-    name: "clip.mkv",
-    durationMs: 1000,
-    sizeBytes: 1,
-    container: "matroska,webm",
-    streams: { video },
-    etag: "e1",
-    ...overrides,
-  });
-
-  it("rejects known non-H.264, non-MKV, and VFR metadata", () => {
-    expect(
-      hybridSmartCutKnownIneligible(
-        media({ codec: "hevc", avgFrameRate: "25/1", frameRate: "25/1" }),
-      ),
-    ).toBe(true);
-    expect(
-      hybridSmartCutKnownIneligible(
-        media({ codec: "h264", avgFrameRate: "25/1", frameRate: "25/1" }, { name: "clip.webm" }),
-      ),
-    ).toBe(true);
-    expect(
-      hybridSmartCutKnownIneligible(
-        media({ codec: "h264", avgFrameRate: "25/1", frameRate: "30/1" }),
-      ),
-    ).toBe(true);
-  });
-
-  it("does not disable when metadata is incomplete", () => {
-    expect(hybridSmartCutKnownIneligible(undefined)).toBe(false);
-    expect(hybridSmartCutKnownIneligible(media({ codec: "h264", avgFrameRate: "25/1" }))).toBe(
-      false,
-    );
-  });
-});
 
 describe("segment validation", () => {
   it("accepts ordered, non-overlapping integer millisecond segments", () => {

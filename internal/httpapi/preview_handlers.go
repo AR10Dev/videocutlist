@@ -182,7 +182,12 @@ func (s *Server) waveform(w http.ResponseWriter, r *http.Request, media, id stri
 		assetError(w, id, err)
 		return
 	}
-	httpx.WriteJSON(w, 200, map[string]any{"startMs": result.StartMS, "durationMs": result.DurationMS, "peaks": result.Peaks})
+	mapped, err := waveformToTransport(result)
+	if err != nil {
+		internalError(w, id, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, mapped)
 }
 
 func previewError(w http.ResponseWriter, id string, err error) {

@@ -9,6 +9,7 @@ import (
 	"time"
 	store "videocutlist/internal/db"
 	exporter "videocutlist/internal/export"
+	"videocutlist/internal/httpapi/transport"
 	jobservice "videocutlist/internal/jobs"
 	jobqueue "videocutlist/internal/jobs/model"
 	librarymedia "videocutlist/internal/library/media"
@@ -102,30 +103,35 @@ func TestExportProposalHTTPApprovalAndSettingsListDetails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	proposalResponse := mcpAdminRequest(server, http.MethodGet, "/api/v2/export-proposals/"+proposal.ID, "", "")
+	var mappedProposal transport.ExportProposal
+	if err := json.Unmarshal(proposalResponse.Body.Bytes(), &mappedProposal); err != nil {
+		t.Fatal(err)
+	}
+	if proposalResponse.Code != http.StatusOK || mappedProposal.Id != proposal.ID || len(mappedProposal.Snapshots) != 1 || mappedProposal.Snapshots[0].Item.MediaId != mediaID || mappedProposal.Snapshots[0].Source.RootId == nil || *mappedProposal.Snapshots[0].Source.RootId != "root_a" {
+		t.Fatalf("typed proposal response status=%d body=%s", proposalResponse.Code, proposalResponse.Body.String())
+	}
+	if strings.Contains(proposalResponse.Body.String(), "/root_a") || !strings.Contains(proposalResponse.Body.String(), "clip.mp4") {
+		t.Fatalf("proposal response leaked a source path or omitted its media label: %s", proposalResponse.Body.String())
+	}
 	settings := mcpAdminRequest(server, http.MethodGet, "/api/v2/settings/mcp", "", "")
 	if settings.Code != http.StatusOK || !strings.Contains(settings.Body.String(), proposal.ID) || !strings.Contains(settings.Body.String(), "clip.mp4") {
 		t.Fatalf("settings status=%d body=%s", settings.Code, settings.Body.String())
 	}
 	firstPage := mcpAdminRequest(server, http.MethodGet, "/api/v2/settings/mcp?proposalLimit=2", "", "")
-	var page struct {
-		Proposals          []mcp.ExportProposal `json:"proposals"`
-		ProposalNextCursor string               `json:"proposalNextCursor"`
-	}
+	var page transport.MCPSettingsResponse
 	if err := json.Unmarshal(firstPage.Body.Bytes(), &page); err != nil {
 		t.Fatal(err)
 	}
-	if firstPage.Code != http.StatusOK || len(page.Proposals) != 2 || page.ProposalNextCursor == "" {
+	if firstPage.Code != http.StatusOK || len(page.Proposals) != 2 || page.ProposalNextCursor == nil || *page.ProposalNextCursor == "" {
 		t.Fatalf("first proposal page=%s", firstPage.Body.String())
 	}
-	secondPage := mcpAdminRequest(server, http.MethodGet, "/api/v2/settings/mcp?proposalLimit=2&proposalCursor="+page.ProposalNextCursor, "", "")
-	var rest struct {
-		Proposals          []mcp.ExportProposal `json:"proposals"`
-		ProposalNextCursor string               `json:"proposalNextCursor"`
-	}
+	secondPage := mcpAdminRequest(server, http.MethodGet, "/api/v2/settings/mcp?proposalLimit=2&proposalCursor="+*page.ProposalNextCursor, "", "")
+	var rest transport.MCPSettingsResponse
 	if err := json.Unmarshal(secondPage.Body.Bytes(), &rest); err != nil {
 		t.Fatal(err)
 	}
-	if secondPage.Code != http.StatusOK || len(rest.Proposals) != 1 || rest.ProposalNextCursor != "" || rest.Proposals[0].ID == page.Proposals[0].ID {
+	if secondPage.Code != http.StatusOK || len(rest.Proposals) != 1 || rest.ProposalNextCursor != nil || rest.Proposals[0].Id == page.Proposals[0].Id {
 		t.Fatalf("second proposal page=%s", secondPage.Body.String())
 	}
 	invalidCursor := mcpAdminRequest(server, http.MethodGet, "/api/v2/settings/mcp?proposalCursor=invalid", "", "")

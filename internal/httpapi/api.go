@@ -23,6 +23,7 @@ import (
 
 	exporter "videocutlist/internal/export"
 	"videocutlist/internal/exportpolicy"
+	"videocutlist/internal/httpapi/transport"
 	librarymedia "videocutlist/internal/library/media"
 	"videocutlist/internal/mcp"
 	"videocutlist/internal/preview"
@@ -42,12 +43,7 @@ const (
 
 type Segment = model.Segment
 type UIState = model.UIState
-type ProjectInput struct {
-	Revision      int64               `json:"revision"`
-	SchemaVersion int                 `json:"schemaVersion"`
-	Name          string              `json:"name"`
-	Items         []model.ProjectItem `json:"items"`
-}
+type ProjectInput struct{ transport.ProjectInput }
 
 func (p *ProjectInput) UnmarshalJSON(data []byte) error {
 	var fields map[string]json.RawMessage
@@ -62,27 +58,83 @@ func (p *ProjectInput) UnmarshalJSON(data []byte) error {
 	if len(fields) != 4 {
 		return errors.New("unknown project field")
 	}
-	type input ProjectInput
-	var decoded input
+	var decoded transport.ProjectInput
 	decoder := json.NewDecoder(strings.NewReader(string(data)))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&decoded); err != nil {
 		return err
 	}
-	*p = ProjectInput(decoded)
+	*p = ProjectInput{ProjectInput: decoded}
 	return nil
 }
 
 func (p ProjectInput) input() projects.ProjectInput {
-	return projects.ProjectInput{Revision: p.Revision, Document: model.Document{SchemaVersion: p.SchemaVersion, Name: p.Name, Items: p.Items}}
+	items := mapProjectItemsFromTransport(p.Items)
+	return projects.ProjectInput{
+		Revision: int64(p.Revision),
+		Document: model.Document{SchemaVersion: int(p.SchemaVersion), Name: p.Name, Items: items},
+	}
+}
+
+func mapProjectItemsFromTransport(items []transport.ProjectItem) []model.ProjectItem {
+	if items == nil {
+		return nil
+	}
+	mapped := make([]model.ProjectItem, len(items))
+	for i, item := range items {
+		mapped[i] = model.ProjectItem{ID: item.Id, MediaID: item.MediaId, Segments: mapProjectSegmentsFromTransport(item.Segments)}
+		if item.EditorState != nil {
+			mapped[i].EditorState = &model.UIState{PlayheadMS: int64(item.EditorState.PlayheadMs), Zoom: item.EditorState.Zoom, Muted: item.EditorState.Muted}
+		}
+		options := item.ExportOptions
+		if options.Mode != nil {
+			mapped[i].ExportOptions.Mode = string(*options.Mode)
+		}
+		if options.Selection != nil {
+			mapped[i].ExportOptions.Selection = string(*options.Selection)
+		}
+		if options.StreamIndexes != nil {
+			mapped[i].ExportOptions.StreamIndexes = *options.StreamIndexes
+		}
+		if options.CutStrategy != nil {
+			mapped[i].ExportOptions.CutStrategy = string(*options.CutStrategy)
+		}
+		if options.Container != nil {
+			mapped[i].ExportOptions.Container = string(*options.Container)
+		}
+		if options.DestinationId != nil {
+			mapped[i].ExportOptions.DestinationID = *options.DestinationId
+		}
+		if options.FilenameTemplate != nil {
+			mapped[i].ExportOptions.FilenameTemplate = *options.FilenameTemplate
+		}
+	}
+	return mapped
+}
+
+func mapProjectSegmentsFromTransport(segments []transport.Segment) []model.Segment {
+	if segments == nil {
+		return nil
+	}
+	mapped := make([]model.Segment, len(segments))
+	for i, segment := range segments {
+		mapped[i] = model.Segment{StartMS: int64(segment.StartMs), EndMS: int64(segment.EndMs), Included: true}
+		if segment.Id != nil {
+			mapped[i].ID = *segment.Id
+		}
+		if segment.Label != nil {
+			mapped[i].Label = *segment.Label
+		}
+		if segment.Included != nil {
+			mapped[i] = mapped[i].WithIncluded(*segment.Included)
+		}
+	}
+	return mapped
 }
 
 type Project = projects.Project
 type ExportInput = projects.ExportInput
-type ExportSubmissionInput struct {
-	ProjectRevision int64    `json:"projectRevision"`
-	ItemIDs         []string `json:"itemIds,omitempty"`
-}
+type ExportSubmissionInput = transport.ExportSubmissionInput
 
 type PreviewSpec = preview.PreviewSpec
 type PreviewResult = preview.PreviewResult
@@ -94,6 +146,9 @@ type AssetResult = preview.AssetResult
 type PreviewService = preview.PreviewService
 type AssetService = preview.AssetService
 type ProjectService = projects.ProjectService
+type ProjectImportService interface {
+	Import(context.Context, []byte) (projects.ProjectImportResult, error)
+}
 type DetectionService interface {
 	Submit(context.Context, string, string, detection.Request) (detection.Job, error)
 }
@@ -119,33 +174,39 @@ type BatchDownloadService interface {
 	DownloadBatch(context.Context, string) (io.ReadCloser, string, error)
 }
 
+type ExportCapabilitiesService interface {
+	Capabilities(context.Context, string) (exporter.Capabilities, error)
+}
+
 type Config struct {
-	Authenticator     Authenticator
-	Media             librarymedia.MediaService
-	MediaImport       librarymedia.MediaImportService
-	Preview           PreviewService
-	Assets            AssetService
-	Projects          ProjectService
-	BatchExports      BatchExportService
-	Preflight         projects.ExportPreflightService
-	Jobs              view.JobService
-	Detection         DetectionService
-	Download          exporter.ExportDownloadService
-	BatchDownload     BatchDownloadService
-	Settings          *settings.RuntimeService
-	RuntimeSettings   *settingsmodel.RuntimeSettingsState
-	MCPCredentials    *mcp.CredentialStore
-	ExportProposals   *mcp.ProposalService
-	SettingsAllowlist []string
-	Destinations      []DestinationMetadata
-	Ready             func(context.Context) error
-	Logger            *log.Logger
-	Metrics           *Metrics
-	DatabaseStats     func() sql.DBStats
-	BeforeMS          int64
-	AfterMS           int64
-	MaxPreviewMS      int64
-	GridMS            int64
+	Authenticator      Authenticator
+	Media              librarymedia.MediaService
+	MediaImport        librarymedia.MediaImportService
+	Preview            PreviewService
+	Assets             AssetService
+	Projects           ProjectService
+	ProjectImports     ProjectImportService
+	BatchExports       BatchExportService
+	Preflight          projects.ExportPreflightService
+	ExportCapabilities ExportCapabilitiesService
+	Jobs               view.JobService
+	Detection          DetectionService
+	Download           exporter.ExportDownloadService
+	BatchDownload      BatchDownloadService
+	Settings           *settings.RuntimeService
+	RuntimeSettings    *settingsmodel.RuntimeSettingsState
+	MCPCredentials     *mcp.CredentialStore
+	ExportProposals    *mcp.ProposalService
+	SettingsAllowlist  []string
+	Destinations       []DestinationMetadata
+	Ready              func(context.Context) error
+	Logger             *log.Logger
+	Metrics            *Metrics
+	DatabaseStats      func() sql.DBStats
+	BeforeMS           int64
+	AfterMS            int64
+	MaxPreviewMS       int64
+	GridMS             int64
 	// ListenerAddress gates the local-only automation command surface.
 	ListenerAddress       string
 	AllowedOrigins        []string

@@ -29,6 +29,7 @@ const (
 	routeGetMediaImport
 	routeCancelMediaImport
 	routeGetMedia
+	routeExportCapabilities
 	routePreview
 	routeThumbnails
 	routeWaveform
@@ -60,6 +61,7 @@ const (
 	routeCreateMCPCredential
 	routeRevokeMCPCredential
 	routeStreamBatch
+	routeImportProjectFile
 )
 
 type route struct {
@@ -71,12 +73,12 @@ type route struct {
 func RouteCoverageKinds() []string {
 	return []string{
 		"list_media", "browse_media", "media_status", "refresh_media", "start_media_import",
-		"get_media_import", "cancel_media_import", "get_media", "preview", "thumbnails", "waveform",
+		"get_media_import", "cancel_media_import", "get_media", "export_capabilities", "preview", "thumbnails", "waveform",
 		"list_projects", "get_project", "put_project", "create_export", "preflight_export",
 		"import_interchange", "export_interchange", "create_detection", "get_job", "stream_job", "cancel_job",
 		"automation", "list_destinations", "get_settings", "put_settings", "refresh_settings",
 		"download_output", "download_batch", "list_batches", "get_batch", "cancel_batch", "retry_job",
-		"get_export_proposal", "approve_export_proposal", "get_mcp_settings", "create_mcp_credential", "revoke_mcp_credential", "stream_batch",
+		"get_export_proposal", "approve_export_proposal", "get_mcp_settings", "create_mcp_credential", "revoke_mcp_credential", "stream_batch", "import_project_file",
 	}
 }
 func RouteCoverageKind(method, path string) string {

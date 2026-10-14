@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 
+	"videocutlist/internal/httpapi/transport"
 	"videocutlist/internal/projects"
 	"videocutlist/internal/projects/interchange"
 	"videocutlist/internal/projects/model"
@@ -21,6 +22,26 @@ type automationCommand struct {
 	JobID         string `json:"jobId,omitempty"`
 	Format        string `json:"format,omitempty"`
 	Input         string `json:"input,omitempty"`
+}
+
+func automationCommandFromTransport(input transport.AutomationCommand) automationCommand {
+	command := automationCommand{Action: string(input.Action)}
+	if input.ProjectId != nil {
+		command.ProjectID = *input.ProjectId
+	}
+	if input.ProjectItemId != nil {
+		command.ProjectItemID = *input.ProjectItemId
+	}
+	if input.JobId != nil {
+		command.JobID = *input.JobId
+	}
+	if input.Format != nil {
+		command.Format = string(*input.Format)
+	}
+	if input.Input != nil {
+		command.Input = *input.Input
+	}
+	return command
 }
 
 func (s *Server) automation(w http.ResponseWriter, r *http.Request, id string) {
@@ -37,10 +58,10 @@ func (s *Server) automation(w http.ResponseWriter, r *http.Request, id string) {
 		httpx.Error(w, http.StatusRequestEntityTooLarge, "body_too_large", "Request body is too large.", id)
 		return
 	}
-	var command automationCommand
+	var requestBody transport.AutomationCommand
 	decoder := json.NewDecoder(strings.NewReader(string(body)))
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&command); err != nil || command.Action == "" {
+	if err := decoder.Decode(&requestBody); err != nil || requestBody.Action == "" {
 		httpx.Error(w, http.StatusBadRequest, "invalid_command", "Command is invalid.", id)
 		return
 	}
@@ -49,6 +70,7 @@ func (s *Server) automation(w http.ResponseWriter, r *http.Request, id string) {
 		httpx.Error(w, http.StatusBadRequest, "invalid_command", "Command is invalid.", id)
 		return
 	}
+	command := automationCommandFromTransport(requestBody)
 	switch command.Action {
 	case "project.import":
 		if !validProjectID(command.ProjectID) || (command.Format != "csv" && command.Format != "chapters") || command.Input == "" {
@@ -87,7 +109,12 @@ func (s *Server) automation(w http.ResponseWriter, r *http.Request, id string) {
 			projectError(w, id, err)
 			return
 		}
-		httpx.WriteJSON(w, http.StatusOK, map[string]string{"projectId": saved.ID})
+		var response transport.Automation200JSONResponseBody
+		if err := response.FromAutomation200JSONResponseBody0(transport.Automation200JSONResponseBody0{ProjectId: saved.ID}); err != nil {
+			internalError(w, id, err)
+			return
+		}
+		httpx.WriteJSON(w, http.StatusOK, response)
 	case "project.export":
 		if !validProjectID(command.ProjectID) || (command.Format != "csv" && command.Format != "chapters") {
 			httpx.Error(w, http.StatusBadRequest, "invalid_command", "Command is invalid.", id)
@@ -113,7 +140,12 @@ func (s *Server) automation(w http.ResponseWriter, r *http.Request, id string) {
 			internalError(w, id, err)
 			return
 		}
-		httpx.WriteJSON(w, http.StatusOK, map[string]string{"filename": "cutlist." + command.Format, "content": string(data)})
+		var response transport.Automation200JSONResponseBody
+		if err := response.FromAutomation200JSONResponseBody1(transport.Automation200JSONResponseBody1{Filename: "cutlist." + command.Format, Content: string(data)}); err != nil {
+			internalError(w, id, err)
+			return
+		}
+		httpx.WriteJSON(w, http.StatusOK, response)
 	case "job.status":
 		if !validJobID(command.JobID) {
 			httpx.Error(w, http.StatusBadRequest, "invalid_command", "Command is invalid.", id)
@@ -124,7 +156,21 @@ func (s *Server) automation(w http.ResponseWriter, r *http.Request, id string) {
 			resourceError(w, id, err)
 			return
 		}
-		httpx.WriteJSON(w, http.StatusOK, job)
+		mapped, ok, err := jobTransport(job)
+		if err != nil {
+			internalError(w, id, err)
+			return
+		}
+		if !ok {
+			writeDomainJobResponse(w, http.StatusOK, job)
+			return
+		}
+		var response transport.Automation200JSONResponseBody
+		if err := response.FromJob(mapped); err != nil {
+			internalError(w, id, err)
+			return
+		}
+		httpx.WriteJSON(w, http.StatusOK, response)
 	default:
 		httpx.Error(w, http.StatusBadRequest, "unsupported_command", "Command is not supported.", id)
 	}
@@ -188,7 +234,7 @@ func (s *Server) importInterchange(w http.ResponseWriter, r *http.Request, route
 		projectError(w, id, err)
 		return
 	}
-	httpx.WriteJSON(w, 200, saved)
+	writeProjectJSON(w, http.StatusOK, id, saved)
 }
 func (s *Server) exportInterchange(w http.ResponseWriter, r *http.Request, routeID, id string) {
 	parts := strings.SplitN(routeID, ":", 2)

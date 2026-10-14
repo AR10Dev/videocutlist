@@ -236,6 +236,17 @@ export function createExportController(deps: {
     argument: Arg,
   ): Effect.Effect<A, E> => runServerMutation(registry, atom, argument);
   const generatedApi = deps.server.generatedApi;
+  const hybridCapabilityAtom = Atom.make((get) => {
+    const mediaId = get(deps.optionsContext).selectedMediaId;
+    if (!mediaId) return undefined;
+    const revision = get(deps.server.mediaRevision);
+    const result = get(deps.server.exportCapabilities(mediaId, revision));
+    if (result.waiting || !AsyncResult.isSuccess(result)) return undefined;
+    return result.value.strategies.find(({ strategy }) => strategy === "hybrid_smart_cut")
+      ?.supported;
+  });
+  const observedHybridCapability = useAtomValue(() => hybridCapabilityAtom);
+  const hybridSmartCutSupported = () => observedHybridCapability();
   const preflightMutation = generatedApi.mutation("default", "preflightExport");
   const preflightRequest = (request: { projectId: string; input: EffectApiTypes.ExportInput }) =>
     generatedMutation(preflightMutation, {
@@ -733,6 +744,7 @@ export function createExportController(deps: {
     setExportSelection,
     cutStrategy,
     setCutStrategy,
+    hybridSmartCutSupported,
     exportContainer,
     setExportContainer,
     streamIndexes,

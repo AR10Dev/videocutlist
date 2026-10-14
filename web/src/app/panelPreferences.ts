@@ -18,12 +18,7 @@ export const PANEL_DEFAULT_SEGMENTS_WIDTH = 300;
 export const CENTER_MIN_WIDTH = 400;
 export const WORKSPACE_EDGE_SPACE = 48;
 
-export type PanelPreferences = {
-  mediaWidth: number;
-  segmentsWidth: number;
-  mediaCollapsed: boolean;
-  segmentsCollapsed: boolean;
-};
+export type PanelPreferences = Schema.Schema.Type<typeof panelPreferencesSchema>;
 
 export const defaultPanelPreferences = (): PanelPreferences => ({
   mediaWidth: PANEL_DEFAULT_MEDIA_WIDTH,
@@ -31,42 +26,6 @@ export const defaultPanelPreferences = (): PanelPreferences => ({
   mediaCollapsed: false,
   segmentsCollapsed: false,
 });
-
-const decodeOrDefault = <S extends Schema.ConstraintDecoder<unknown>>(
-  schema: S,
-  value: unknown,
-  fallback: S["Type"],
-): S["Type"] => {
-  try {
-    return Schema.decodeUnknownSync(schema)(value);
-  } catch {
-    return fallback;
-  }
-};
-
-export function parsePanelPreferences(value: string | null): PanelPreferences {
-  const defaults = defaultPanelPreferences();
-  if (!value) return defaults;
-  try {
-    const parsed = JSON.parse(value) as Record<string, unknown>;
-    return {
-      mediaWidth: decodeOrDefault(finiteNumber, parsed.mediaWidth, defaults.mediaWidth),
-      segmentsWidth: decodeOrDefault(finiteNumber, parsed.segmentsWidth, defaults.segmentsWidth),
-      mediaCollapsed: decodeOrDefault(
-        Schema.Boolean,
-        parsed.mediaCollapsed,
-        defaults.mediaCollapsed,
-      ),
-      segmentsCollapsed: decodeOrDefault(
-        Schema.Boolean,
-        parsed.segmentsCollapsed,
-        defaults.segmentsCollapsed,
-      ),
-    };
-  } catch {
-    return defaults;
-  }
-}
 
 export function clampPanelPreferences(
   preferences: PanelPreferences,
@@ -90,8 +49,4 @@ export function clampPanelPreferences(
     Math.max(PANEL_MIN_WIDTH, Math.round(preferences.segmentsWidth)),
   );
   return { ...preferences, mediaWidth, segmentsWidth };
-}
-
-export function serializePanelPreferences(preferences: PanelPreferences): string {
-  return JSON.stringify(preferences);
 }

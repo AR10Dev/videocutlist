@@ -7,50 +7,39 @@ import {
   PANEL_MIN_WIDTH,
   clampPanelPreferences,
   defaultPanelPreferences,
-  parsePanelPreferences,
   panelPreferencesSchema,
-  serializePanelPreferences,
 } from "../src/app/panelPreferences";
 
 describe("workspace panel preferences", () => {
-  it("falls back safely and round-trips valid preferences", () => {
-    const defaults = defaultPanelPreferences();
-    expect(parsePanelPreferences(null)).toEqual(defaults);
-    expect(parsePanelPreferences("not json")).toEqual(defaults);
-
+  it("round-trips valid preferences and strips unknown stored properties", () => {
     const preferences = {
-      ...defaults,
+      ...defaultPanelPreferences(),
       mediaWidth: 280,
       segmentsWidth: 340,
       mediaCollapsed: true,
     };
-    expect(parsePanelPreferences(serializePanelPreferences(preferences))).toEqual(preferences);
-  });
-
-  it("defaults invalid fields independently and strips unknown stored properties", () => {
+    const encoded = Schema.encodeSync(panelPreferencesSchema)(preferences);
     expect(
-      parsePanelPreferences(
-        JSON.stringify({
-          mediaWidth: Number.POSITIVE_INFINITY,
-          segmentsWidth: 315,
-          mediaCollapsed: "true",
-          segmentsCollapsed: true,
-          secret: "not a preference",
-        }),
-      ),
-    ).toEqual({
-      ...defaultPanelPreferences(),
-      segmentsWidth: 315,
-      segmentsCollapsed: true,
-    });
+      Schema.decodeUnknownSync(panelPreferencesSchema)({
+        ...JSON.parse(JSON.stringify(encoded)),
+        secret: "not a preference",
+      }),
+    ).toEqual(preferences);
   });
 
   it("decodes the complete persisted Effect schema and rejects malformed records", () => {
     const preferences = { ...defaultPanelPreferences(), mediaWidth: 280, segmentsWidth: 340 };
     expect(Schema.decodeUnknownSync(panelPreferencesSchema)(preferences)).toEqual(preferences);
-    expect(() =>
-      Schema.decodeUnknownSync(panelPreferencesSchema)({ ...preferences, mediaWidth: "wide" }),
-    ).toThrow();
+    for (const invalid of [
+      null,
+      "not a record",
+      { ...preferences, mediaWidth: "wide" },
+      { ...preferences, mediaWidth: Number.POSITIVE_INFINITY },
+      { ...preferences, segmentsWidth: Number.NaN },
+      { ...preferences, mediaCollapsed: "true" },
+    ]) {
+      expect(() => Schema.decodeUnknownSync(panelPreferencesSchema)(invalid)).toThrow();
+    }
   });
 
   it("clamps restored widths while preserving the center minimum", () => {

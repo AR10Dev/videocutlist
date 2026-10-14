@@ -1,0 +1,11 @@
+---
+package: transport
+output: internal/httpapi/transport/openapi.gen.go
+generate:
+  models: true
+output-options:
+  nullable-type: true
+  type-mapping:
+    number:
+      default:
+        type: float64

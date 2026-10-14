@@ -117,6 +117,10 @@ func (c Client) frameTimestamps(ctx context.Context, source *os.File, keyframes 
 	result := make([]int64, 0)
 	var parseErr error
 	for scanner.Scan() {
+		// FFprobe 5.x emits empty separator lines after H.264 side data.
+		if scanner.Text() == "" {
+			continue
+		}
 		// FFprobe appends side-data descriptions (such as H.264 SEI) as
 		// additional CSV fields even when only the timestamp was requested.
 		timestamp, _, _ := strings.Cut(scanner.Text(), ",")

@@ -3,11 +3,8 @@ import * as Schema from "effect/Schema";
 import {
   confirmDiscard,
   newProjectId,
-  parseProjectJson,
-  parseProjectRecovery,
-  projectJson,
-  recentProjects,
   recentProjectsSchema,
+  recoverySchema,
 } from "../src/features/projects/lifecycle";
 
 describe("project lifecycle helpers", () => {
@@ -15,19 +12,21 @@ describe("project lifecycle helpers", () => {
     expect(newProjectId()).toMatch(/^p_[A-Za-z0-9_-]{12,64}$/);
   });
 
-  it("ignores corrupt recent-project storage", () => {
-    expect(recentProjects("bad")).toEqual([]);
-    expect(recentProjects([{ id: "p_bad", label: "x", lastOpened: 1 }])).toEqual([]);
-  });
-
-  it("filters invalid and duplicate recent projects and strips unknown fields", () => {
+  it("rejects corrupt, duplicate and oversized recent-project storage", () => {
     const project = { id: `p_${"a".repeat(12)}`, label: "Project", lastOpened: 1 };
+    for (const invalid of [
+      "bad",
+      [{ ...project, id: "p_bad" }],
+      [project, project],
+      Array.from({ length: 21 }, (_, index) => ({
+        ...project,
+        id: `p_${String(index).padStart(12, "0")}`,
+      })),
+    ]) {
+      expect(() => Schema.decodeUnknownSync(recentProjectsSchema)(invalid)).toThrow();
+    }
     expect(
-      recentProjects([
-        { ...project, secret: "not persisted" },
-        project,
-        { ...project, id: "p_invalid" },
-      ]),
+      Schema.decodeUnknownSync(recentProjectsSchema)([{ ...project, secret: "not persisted" }]),
     ).toEqual([project]);
   });
 
@@ -35,24 +34,22 @@ describe("project lifecycle helpers", () => {
     const boundary = { id: `p_${"a".repeat(12)}`, label: "🎬".repeat(120), lastOpened: 1 };
     const tooLong = { ...boundary, label: "🎬".repeat(121) };
     const blank = { ...boundary, label: " \t\n " };
-    expect(recentProjects([boundary])).toEqual([boundary]);
     expect(Schema.decodeUnknownSync(recentProjectsSchema)([boundary])).toEqual([boundary]);
     expect(Schema.encodeSync(recentProjectsSchema)([boundary])).toEqual([boundary]);
     for (const invalid of [tooLong, blank]) {
-      expect(recentProjects([invalid])).toEqual([]);
       expect(() => Schema.decodeUnknownSync(recentProjectsSchema)([invalid])).toThrow();
       expect(() => Schema.encodeSync(recentProjectsSchema)([invalid])).toThrow();
     }
   });
 
-  it("keeps legacy interchange fields and accepts its historical loose shape", () => {
-    const legacy = {
-      mediaId: "legacy-media-id",
-      segments: [null, { startMs: 10, endMs: 5 }],
-      uiState: { zoom: 0, oldPreference: true },
-      customField: "kept",
-    };
-    expect(parseProjectJson(JSON.stringify(legacy))).toEqual(legacy);
+  it("keeps recovery decoding local and does not treat legacy project files as recovery", () => {
+    expect(() =>
+      Schema.decodeUnknownSync(recoverySchema)({
+        mediaId: `m_${"a".repeat(43)}`,
+        segments: [],
+        uiState: {},
+      }),
+    ).toThrow();
   });
 
   it("validates recovery metadata and strips unknown fields", () => {
@@ -72,34 +69,62 @@ describe("project lifecycle helpers", () => {
       ],
       savedAt: 1,
     };
-    expect(parseProjectRecovery(recovery)).toEqual(recovery);
-    expect(parseProjectRecovery({ ...recovery, historicalRootField: "kept" })).toEqual(recovery);
-    expect(parseProjectRecovery({ ...recovery, revision: -1 })).toBeUndefined();
-    expect(parseProjectRecovery({ ...recovery, items: [] })).toBeUndefined();
+    expect(Schema.decodeUnknownSync(recoverySchema)(recovery)).toEqual(recovery);
+    expect(
+      Schema.decodeUnknownSync(recoverySchema)({ ...recovery, historicalRootField: "kept" }),
+    ).toEqual(recovery);
+    expect(Schema.decodeUnknownSync(recoverySchema)(null)).toBeNull();
+    expect(() => Schema.decodeUnknownSync(recoverySchema)({ ...recovery, revision: -1 })).toThrow();
+    expect(() => Schema.decodeUnknownSync(recoverySchema)({ ...recovery, items: [] })).toThrow();
   });
 
-  it("preserves the 1,000,000 UTF-16 code-unit JSON limit, not a UTF-8 byte limit", () => {
-    const project = {
-      mediaId: "legacy-media-id",
-      segments: [],
-      uiState: {},
-      label: "🎬".repeat(262_145),
+  it("bounds local recovery by UTF-16 JSON length rather than UTF-8 bytes", () => {
+    const recovery = {
+      version: 1 as const,
+      projectId: `p_${"a".repeat(12)}`,
+      revision: 0,
+      schemaVersion: 2 as const,
+      name: "Recovered",
+      items: [
+        {
+          id: `i_${"b".repeat(24)}`,
+          mediaId: `m_${"c".repeat(43)}`,
+          segments: Array.from({ length: 1300 }, (_, index) => ({
+            startMs: index * 2,
+            endMs: index * 2 + 1,
+            label: "🎬".repeat(200),
+          })),
+          exportOptions: {},
+        },
+      ],
+      savedAt: 1,
     };
-    const text = JSON.stringify(project);
+    const text = JSON.stringify({
+      schemaVersion: 2,
+      name: recovery.name,
+      items: recovery.items,
+    });
     expect(text.length).toBeLessThan(1_000_000);
     expect(new TextEncoder().encode(text).byteLength).toBeGreaterThan(1 << 20);
-    expect(projectJson(project)).toBe(text);
-    expect(parseProjectJson(text)).toEqual(project);
+    expect(Schema.decodeUnknownSync(recoverySchema)(recovery)).toEqual(recovery);
 
-    const boundary = {
-      ...project,
-      label: "x".repeat(1_000_000 - JSON.stringify({ ...project, label: "" }).length),
+    const oversized = {
+      ...recovery,
+      items: [
+        {
+          ...recovery.items[0],
+          segments: Array.from({ length: 2500 }, (_, index) => ({
+            startMs: index * 2,
+            endMs: index * 2 + 1,
+            label: "🎬".repeat(200),
+          })),
+        },
+      ],
     };
-    expect(projectJson(boundary).length).toBe(1_000_000);
-    expect(parseProjectJson(JSON.stringify(boundary))).toEqual(boundary);
-    const oversized = { ...boundary, label: boundary.label + "x" };
-    expect(() => projectJson(oversized)).toThrow("too large");
-    expect(() => parseProjectJson(JSON.stringify(oversized))).toThrow("too large");
+    expect(
+      JSON.stringify({ schemaVersion: 2, name: oversized.name, items: oversized.items }).length,
+    ).toBeGreaterThan(1_000_000);
+    expect(() => Schema.decodeUnknownSync(recoverySchema)(oversized)).toThrow();
   });
 
   it("strips unknown recovery fields and validates the remaining document size", () => {
@@ -122,7 +147,7 @@ describe("project lifecycle helpers", () => {
       historicalRootField: "x".repeat(1_000_000),
     };
     expect(JSON.stringify(recovery).length).toBeGreaterThan(1_000_000);
-    expect(parseProjectRecovery(recovery)).toEqual({
+    expect(Schema.decodeUnknownSync(recoverySchema)(recovery)).toEqual({
       version: 1,
       projectId: recovery.projectId,
       revision: 0,
@@ -138,7 +163,9 @@ describe("project lifecycle helpers", () => {
         },
       ],
     });
-    expect(parseProjectRecovery({ ...recovery, name: "x".repeat(1_000_000) })).toBeUndefined();
+    expect(() =>
+      Schema.decodeUnknownSync(recoverySchema)({ ...recovery, name: "x".repeat(1_000_000) }),
+    ).toThrow();
   });
 
   it("only confirms dirty changes", () => {

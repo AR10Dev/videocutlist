@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"videocutlist/internal/db"
+	"videocutlist/internal/httpapi/transport"
 	"videocutlist/internal/mcp"
 	settingsdomain "videocutlist/internal/settings"
 	settingsmodel "videocutlist/internal/settings/model"
@@ -62,7 +63,7 @@ func TestMCPAdministrationRequiresDeploymentAuthAndRevealsSecretOnce(t *testing.
 	if createdResponse.Code != http.StatusCreated {
 		t.Fatalf("create status=%d body=%s", createdResponse.Code, createdResponse.Body.String())
 	}
-	var created mcp.CreatedCredential
+	var created transport.MCPCredentialCreated
 	if err := json.Unmarshal(createdResponse.Body.Bytes(), &created); err != nil {
 		t.Fatal(err)
 	}
@@ -92,31 +93,35 @@ func TestMCPAdministrationRequiresDeploymentAuthAndRevealsSecretOnce(t *testing.
 			t.Fatalf("list missing %q: %s", expected, listed)
 		}
 	}
-
-	if strings.Contains(listed, `"nextCursor"`) {
-		t.Fatalf("final page must omit nextCursor: %s", listed)
+	if strings.Contains(listed, "/media") || strings.Contains(listed, `"nextCursor"`) {
+		t.Fatalf("list leaked a deployment path or included a final-page cursor: %s", listed)
 	}
+	var list transport.MCPSettingsResponse
+	if err := json.Unmarshal(listResponse.Body.Bytes(), &list); err != nil {
+		t.Fatal(err)
+	}
+	if list.Enabled || len(list.Credentials) != 1 || list.Credentials[0].Status == nil || *list.Credentials[0].Status != "active" {
+		t.Fatalf("typed MCP settings mapping changed false/default status: %#v", list)
+	}
+
 	second := mcpAdminRequest(server, http.MethodPost, "/api/v2/settings/mcp/credentials", body, "deployment-admin-0123456789abcdef01234567")
 	if second.Code != http.StatusCreated {
 		t.Fatalf("second create status=%d", second.Code)
 	}
 	firstPage := mcpAdminRequest(server, http.MethodGet, "/api/v2/settings/mcp?limit=1", "", "deployment-admin-0123456789abcdef01234567")
-	var page struct {
-		Credentials []mcpCredentialView `json:"credentials"`
-		NextCursor  string              `json:"nextCursor"`
-	}
+	var page transport.MCPSettingsResponse
 	if err := json.Unmarshal(firstPage.Body.Bytes(), &page); err != nil {
 		t.Fatal(err)
 	}
-	if firstPage.Code != http.StatusOK || len(page.Credentials) != 1 || page.NextCursor == "" {
+	if firstPage.Code != http.StatusOK || len(page.Credentials) != 1 || page.NextCursor == nil || *page.NextCursor == "" {
 		t.Fatalf("first page=%s", firstPage.Body.String())
 	}
-	lastPage := mcpAdminRequest(server, http.MethodGet, "/api/v2/settings/mcp?limit=1&cursor="+page.NextCursor, "", "deployment-admin-0123456789abcdef01234567")
-	if lastPage.Code != http.StatusOK || strings.Contains(lastPage.Body.String(), `"nextCursor"`) || strings.Contains(lastPage.Body.String(), page.Credentials[0].ID) {
+	lastPage := mcpAdminRequest(server, http.MethodGet, "/api/v2/settings/mcp?limit=1&cursor="+*page.NextCursor, "", "deployment-admin-0123456789abcdef01234567")
+	if lastPage.Code != http.StatusOK || strings.Contains(lastPage.Body.String(), `"nextCursor"`) || strings.Contains(lastPage.Body.String(), page.Credentials[0].Id) {
 		t.Fatalf("last page=%s", lastPage.Body.String())
 	}
 
-	revokeResponse := mcpAdminRequest(server, http.MethodDelete, "/api/v2/settings/mcp/credentials/"+created.ID, "", "deployment-admin-0123456789abcdef01234567")
+	revokeResponse := mcpAdminRequest(server, http.MethodDelete, "/api/v2/settings/mcp/credentials/"+created.Id, "", "deployment-admin-0123456789abcdef01234567")
 	if revokeResponse.Code != http.StatusOK || !strings.Contains(revokeResponse.Body.String(), `"status":"revoked"`) {
 		t.Fatalf("revoke status=%d body=%s", revokeResponse.Code, revokeResponse.Body.String())
 	}

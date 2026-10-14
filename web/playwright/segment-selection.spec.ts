@@ -383,10 +383,7 @@ test.beforeEach(async ({ page }) => {
             { id: "download", label: "Browser download", kind: "download", retention: "24 hours" },
           ],
           capabilities: { saveBesideSource: false },
-        } satisfies {
-          destinations: EffectApiTypes.Destination[];
-          capabilities: EffectApiTypes.DestinationCapabilities;
-        },
+        } satisfies EffectApiTypes.DestinationsResponse,
       });
     if (url.pathname === "/api/v2/media/refresh" && request.method() === "POST") {
       expect(request.headers()["idempotency-key"]).toMatch(/^[A-Za-z0-9_-]{16,128}$/);

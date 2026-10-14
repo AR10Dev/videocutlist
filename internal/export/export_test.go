@@ -166,17 +166,6 @@ func TestSelectedSegmentsReturnsTimelineGaps(t *testing.T) {
 	}
 }
 
-func TestHybridSupportedOnlyAcceptsH264CFRMatroska(t *testing.T) {
-	metadata := probe.Metadata{Container: "matroska,webm", Video: &probe.Video{Codec: "h264", AvgFrameRate: "30/1", FrameRate: "30/1"}}
-	if !hybridSupported(metadata) {
-		t.Fatal("expected H.264 CFR MKV support")
-	}
-	metadata.Video.Codec = "hevc"
-	if hybridSupported(metadata) {
-		t.Fatal("accepted H.265")
-	}
-}
-
 func TestHybridWarningsIdentifyEachFallbackSegment(t *testing.T) {
 	segments := []model.Segment{{StartMS: 100, EndMS: 400}, {StartMS: 500, EndMS: 900}}
 	warnings := hybridWarnings(segments, []int64{0, 450, 1000}, true)
@@ -191,15 +180,25 @@ func TestHybridWarningsIdentifyEachFallbackSegment(t *testing.T) {
 	}
 }
 
-func TestHybridRejectsWebMCodecAndInvalidRate(t *testing.T) {
-	metadata := probe.Metadata{Container: "matroska,webm", Video: &probe.Video{Codec: "vp9", AvgFrameRate: "30/1", FrameRate: "30/1"}}
-	if hybridSupported(metadata) {
-		t.Fatal("accepted WebM VP9")
+func TestHybridCapabilityReasonsShareExportEligibilityRules(t *testing.T) {
+	metadata := probe.Metadata{Container: "matroska,webm", Video: &probe.Video{Codec: "h264", AvgFrameRate: "30/1", FrameRate: "30/1"}}
+	frameTimes := []int64{0, 33, 66}
+	if reasons := hybridCapabilityReasons(metadata, "clip.mkv", frameTimes); len(reasons) != 0 {
+		t.Fatalf("supported media has reasons: %v", reasons)
+	}
+
+	metadata.Container = "mp4"
+	metadata.Video.Codec = "hevc"
+	metadata.Video.AvgFrameRate = "30/1"
+	metadata.Video.FrameRate = "25/1"
+	got := hybridCapabilityReasons(metadata, "clip.mp4", []int64{0, 33, 70})
+	want := []string{"unsupported_container", "unsupported_filename_extension", "unsupported_video_codec", "non_constant_frame_timestamps"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("reasons = %v, want %v", got, want)
 	}
 	metadata.Video.Codec = "h264"
-	metadata.Video.FrameRate = "0/0"
-	if hybridSupported(metadata) {
-		t.Fatal("accepted invalid frame rate")
+	if got := hybridCapabilityReasons(metadata, "clip.mp4", frameTimes); !reflect.DeepEqual(got, []string{"unsupported_container", "unsupported_filename_extension", "non_constant_frame_rate"}) {
+		t.Fatalf("frame-rate reasons = %v", got)
 	}
 }
 

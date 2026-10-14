@@ -31,7 +31,7 @@ func (s *Server) browseMedia(writer http.ResponseWriter, request *http.Request, 
 		internalError(writer, id, err)
 		return
 	}
-	httpx.WriteJSON(writer, 200, page)
+	writeFolderPageJSON(writer, id, page)
 }
 
 func (s *Server) listMedia(writer http.ResponseWriter, request *http.Request, id string) {
@@ -54,7 +54,7 @@ func (s *Server) listMedia(writer http.ResponseWriter, request *http.Request, id
 		internalError(writer, id, err)
 		return
 	}
-	httpx.WriteJSON(writer, 200, page)
+	writeMediaPageJSON(writer, id, page)
 }
 
 func (s *Server) refreshMedia(writer http.ResponseWriter, request *http.Request, id string) {
@@ -68,7 +68,7 @@ func (s *Server) refreshMedia(writer http.ResponseWriter, request *http.Request,
 		writeMediaScanError(writer, err, id)
 		return
 	}
-	httpx.WriteJSON(writer, http.StatusAccepted, job)
+	writeImportJobJSON(writer, http.StatusAccepted, job)
 }
 
 func (s *Server) startMediaScan(ctx context.Context, key string) (librarymedia.ImportJob, error) {
@@ -94,5 +94,5 @@ func (s *Server) getMedia(writer http.ResponseWriter, request *http.Request, med
 		resourceError(writer, id, err)
 		return
 	}
-	httpx.WriteJSON(writer, 200, result)
+	writeMediaJSON(writer, id, result)
 }

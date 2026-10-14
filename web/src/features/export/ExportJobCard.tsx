@@ -14,7 +14,7 @@ import { BatchDownload } from "./BatchDownload";
 import { OutputDownload } from "./OutputDownload";
 
 type Job = EffectApiTypes.Job;
-type Destination = EffectApiTypes.Destination;
+type Destination = EffectApiTypes.DestinationsResponse["destinations"][number];
 
 export const jobOutputNames = (job: Job): string[] =>
   job.result?.outputNames

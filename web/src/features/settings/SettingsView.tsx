@@ -4,6 +4,7 @@ import { canStreamPreview } from "../preview/model";
 import {
   appearances,
   maxFilenameTemplateLength,
+  mediaRootStatusPresentation,
   validFilenameTemplateLength,
   type AppSettings,
   type Appearance,
@@ -117,16 +118,20 @@ export function SettingsView(props: { onClose?: () => void } = {}) {
         <Show when={libraryRoots().length > 0} fallback={<p>No media roots configured.</p>}>
           <div class="library-roots" aria-label="Media roots">
             <For each={libraryRoots()}>
-              {(root) => (
-                <div class="library-root">
-                  <span>
-                    Alias: <strong>{root.alias}</strong>
-                  </span>
-                  <span role="status">
-                    {root.state === "unavailable" ? root.message : (root.message ?? "Available")}
-                  </span>
-                </div>
-              )}
+              {(root) => {
+                const presentation = mediaRootStatusPresentation(root);
+                return (
+                  <div class="library-root">
+                    <span>
+                      Alias: <strong>{root.alias}</strong>
+                    </span>
+                    <span role="status">{presentation.status}</span>
+                    <Show when={presentation.guidance}>
+                      <span>{presentation.guidance}</span>
+                    </Show>
+                  </div>
+                );
+              }}
             </For>
           </div>
         </Show>

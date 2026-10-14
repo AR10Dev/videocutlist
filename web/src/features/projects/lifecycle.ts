@@ -2,8 +2,6 @@ import * as EffectApiTypes from "../../generated/effect-api";
 import * as Schema from "effect/Schema";
 import { validateSegmentLabel } from "../preview/model";
 
-export type RecentProject = { id: string; label: string; lastOpened: number };
-
 export const recentProjectsKey = "videocutlist.recent-projects.v1";
 const projectId = /^p_[A-Za-z0-9_-]{12,64}$/;
 const recentProjectSchema = Schema.Struct({
@@ -23,32 +21,7 @@ export const newProjectId = () => `p_${crypto.randomUUID()}`;
 export const validProjectId = (value: unknown): value is string =>
   typeof value === "string" && projectId.test(value);
 
-export const recentProjects = (value: unknown): RecentProject[] => {
-  if (!Array.isArray(value)) return [];
-  const ids = new Set<string>();
-  return value
-    .flatMap((entry) => {
-      let parsed: Schema.Schema.Type<typeof recentProjectSchema>;
-      try {
-        parsed = Schema.decodeUnknownSync(recentProjectSchema)(entry);
-      } catch {
-        return [];
-      }
-      if (ids.has(parsed.id)) return [];
-      ids.add(parsed.id);
-      return [parsed];
-    })
-    .slice(0, 20);
-};
-
 export const confirmDiscard = (dirty: boolean, confirm: () => boolean) => !dirty || confirm();
-
-export const projectJson = (project: unknown): string => {
-  if (!project || typeof project !== "object") throw new Error("Project is too large or invalid.");
-  const text = JSON.stringify(project);
-  if (text.length > 1_000_000) throw new Error("Project is too large or invalid.");
-  return text;
-};
 
 const jsonObject = Schema.Record(Schema.String, Schema.Unknown);
 const projectRecord = jsonObject;
@@ -98,16 +71,6 @@ const interchangeEditorState = Schema.Struct({
   zoom: Schema.Number.check(Schema.isGreaterThanOrEqualTo(1)),
   muted: Schema.Boolean,
 });
-const legacyProject = loose({
-  mediaId: Schema.String,
-  segments: Schema.Array(Schema.Unknown),
-  uiState: Schema.Unknown.check(
-    Schema.makeFilter((value) =>
-      value && typeof value === "object" ? undefined : "Invalid legacy editor state",
-    ),
-  ),
-});
-
 export type ProjectRecovery = {
   version: 1;
   projectId: string;
@@ -117,33 +80,28 @@ export type ProjectRecovery = {
   items: EffectApiTypes.Project["items"];
   savedAt: number;
 };
-export const parseProjectJson = (text: string): Record<string, unknown> => {
-  if (text.length > 1_000_000) throw new Error("Project file is too large.");
+const validateRecoveryDocument = (text: string): void => {
+  if (text.length > 1_000_000) throw new Error("Project recovery is too large.");
   let value: unknown;
   try {
     value = JSON.parse(text);
   } catch {
-    throw new Error("Project file is invalid JSON.");
+    throw new Error("Project recovery is invalid JSON.");
   }
-  if (!Schema.is(projectRecord)(value)) throw new Error("Project shape is invalid.");
-  if (value.schemaVersion === 2) {
-    if (!Schema.is(projectHeader)(value)) throw new Error("Project shape is invalid.");
-    const ids = new Set<string>();
-    for (const item of value.items) {
-      if (!Schema.is(projectItemHeader)(item) || ids.has(item.id))
-        throw new Error("Project item is invalid.");
-      ids.add(item.id);
-      if (!Schema.is(interchangeSegments)(item.segments))
-        throw new Error("Project segments are invalid.");
-      if (!Schema.is(interchangeExportOptions)(item.exportOptions))
-        throw new Error("Project export options are invalid.");
-      if (item.editorState && !Schema.is(interchangeEditorState)(item.editorState))
-        throw new Error("Project editor state is invalid.");
-    }
-  } else if (!Schema.is(legacyProject)(value)) {
-    throw new Error("Project shape is invalid.");
+  if (!Schema.is(projectRecord)(value) || !Schema.is(projectHeader)(value))
+    throw new Error("Project recovery shape is invalid.");
+  const ids = new Set<string>();
+  for (const item of value.items) {
+    if (!Schema.is(projectItemHeader)(item) || ids.has(item.id))
+      throw new Error("Project recovery item is invalid.");
+    ids.add(item.id);
+    if (!Schema.is(interchangeSegments)(item.segments))
+      throw new Error("Project recovery segments are invalid.");
+    if (!Schema.is(interchangeExportOptions)(item.exportOptions))
+      throw new Error("Project recovery export options are invalid.");
+    if (item.editorState && !Schema.is(interchangeEditorState)(item.editorState))
+      throw new Error("Project recovery editor state is invalid.");
   }
-  return value;
 };
 
 export const rememberedProjectKey = "videocutlist.active-project.v2";
@@ -168,7 +126,7 @@ export const recoverySchema = Schema.NullOr(
   }).check(
     Schema.makeFilter((value) => {
       try {
-        parseProjectJson(
+        validateRecoveryDocument(
           JSON.stringify({ schemaVersion: 2, name: value.name, items: value.items }),
         );
       } catch {
@@ -177,11 +135,3 @@ export const recoverySchema = Schema.NullOr(
     }),
   ),
 );
-
-export const parseProjectRecovery = (value: unknown): ProjectRecovery | undefined => {
-  try {
-    return Schema.decodeUnknownSync(recoverySchema)(value) ?? undefined;
-  } catch {
-    return;
-  }
-};

@@ -9,7 +9,7 @@ import {
   ShieldCheck,
   SlidersHorizontal,
 } from "lucide-solid";
-import { formatTime, hybridSmartCutKnownIneligible } from "../preview/model";
+import { formatTime } from "../preview/model";
 import { maxFilenameTemplateLength } from "../settings/model";
 import { useWorkspace } from "../../app/WorkspaceContext";
 import { summarizeExports } from "./summary";
@@ -94,6 +94,7 @@ export function ExportView(props: ExportViewProps = {}) {
     exportMode,
     exportSelection,
     cutStrategy,
+    hybridSmartCutSupported,
     exportContainer,
     streamIndexes,
     destinations,
@@ -624,12 +625,9 @@ export function ExportView(props: ExportViewProps = {}) {
               >
                 <option value="stream_copy_preferred">Fast copy</option>
                 <option value="precise_reencode">Precise encode</option>
-                <option
-                  value="hybrid_smart_cut"
-                  disabled={hybridSmartCutKnownIneligible(selected())}
-                >
+                <option value="hybrid_smart_cut" disabled={hybridSmartCutSupported() === false}>
                   Hybrid smart cut
-                  {hybridSmartCutKnownIneligible(selected()) ? " (unavailable)" : ""}
+                  {hybridSmartCutSupported() === false ? " (unavailable)" : ""}
                 </option>
               </select>
             </label>

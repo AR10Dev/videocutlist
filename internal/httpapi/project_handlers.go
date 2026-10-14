@@ -7,6 +7,7 @@ import (
 
 	store "videocutlist/internal/db"
 	"videocutlist/internal/detection"
+	"videocutlist/internal/httpapi/transport"
 	jobs "videocutlist/internal/jobs"
 	jobqueue "videocutlist/internal/jobs/model"
 	"videocutlist/internal/projects"
@@ -33,7 +34,7 @@ func (s *Server) listProjects(writer http.ResponseWriter, request *http.Request,
 		internalError(writer, id, err)
 		return
 	}
-	httpx.WriteJSON(writer, http.StatusOK, page)
+	writeProjectPageJSON(writer, id, page)
 }
 
 func (s *Server) getProject(writer http.ResponseWriter, request *http.Request, project string, id string) {
@@ -42,7 +43,7 @@ func (s *Server) getProject(writer http.ResponseWriter, request *http.Request, p
 		resourceError(writer, id, err)
 		return
 	}
-	httpx.WriteJSON(writer, 200, value)
+	writeProjectJSON(writer, http.StatusOK, id, value)
 }
 func (s *Server) putProject(writer http.ResponseWriter, request *http.Request, project string, id string) {
 	var input ProjectInput
@@ -55,7 +56,7 @@ func (s *Server) putProject(writer http.ResponseWriter, request *http.Request, p
 		projectError(writer, id, err)
 		return
 	}
-	httpx.WriteJSON(writer, 200, saved)
+	writeProjectJSON(writer, http.StatusOK, id, saved)
 }
 func (s *Server) listBatches(writer http.ResponseWriter, request *http.Request, id string) {
 	if s.config.BatchExports == nil {
@@ -82,7 +83,7 @@ func (s *Server) listBatches(writer http.ResponseWriter, request *http.Request, 
 		internalError(writer, id, err)
 		return
 	}
-	httpx.WriteJSON(writer, http.StatusOK, page)
+	writeBatchPageJSON(writer, id, page)
 }
 
 func (s *Server) getBatch(writer http.ResponseWriter, request *http.Request, batchID string, id string) {
@@ -95,7 +96,7 @@ func (s *Server) getBatch(writer http.ResponseWriter, request *http.Request, bat
 		resourceError(writer, id, err)
 		return
 	}
-	httpx.WriteJSON(writer, http.StatusOK, batch)
+	writeBatchJSON(writer, http.StatusOK, id, batch)
 }
 
 func (s *Server) retryJob(writer http.ResponseWriter, request *http.Request, jobID string, id string) {
@@ -120,7 +121,7 @@ func (s *Server) retryJob(writer http.ResponseWriter, request *http.Request, job
 		}
 		return
 	}
-	httpx.WriteJSON(writer, http.StatusAccepted, batch)
+	writeBatchJSON(writer, http.StatusAccepted, id, batch)
 }
 
 func (s *Server) cancelBatch(writer http.ResponseWriter, request *http.Request, batchID string, id string) {
@@ -135,6 +136,19 @@ func (s *Server) cancelBatch(writer http.ResponseWriter, request *http.Request, 
 	writer.WriteHeader(http.StatusNoContent)
 }
 
+func (s *Server) getExportCapabilities(writer http.ResponseWriter, request *http.Request, mediaID string, id string) {
+	if s.config.ExportCapabilities == nil {
+		internalError(writer, id, nil)
+		return
+	}
+	capabilities, err := s.config.ExportCapabilities.Capabilities(request.Context(), mediaID)
+	if err != nil {
+		resourceError(writer, id, err)
+		return
+	}
+	httpx.WriteJSON(writer, http.StatusOK, exportCapabilitiesTransport(capabilities))
+}
+
 func (s *Server) preflightExport(writer http.ResponseWriter, request *http.Request, project string, id string) {
 	if s.config.Preflight == nil {
 		internalError(writer, id, nil)
@@ -145,8 +159,13 @@ func (s *Server) preflightExport(writer http.ResponseWriter, request *http.Reque
 		resourceError(writer, id, err)
 		return
 	}
-	var input ExportInput
-	if httpx.ReadJSON(request, &input) != nil || !validExport(input) {
+	var requestBody transport.ExportInput
+	if httpx.ReadJSON(request, &requestBody) != nil {
+		httpx.Error(writer, 400, "invalid_export", "Export is invalid.", id)
+		return
+	}
+	input := domainExportInput(requestBody)
+	if !validExport(input) {
 		httpx.Error(writer, 400, "invalid_export", "Export is invalid.", id)
 		return
 	}
@@ -155,7 +174,7 @@ func (s *Server) preflightExport(writer http.ResponseWriter, request *http.Reque
 		httpx.Error(writer, 400, "preflight_failed", "Export preflight failed.", id)
 		return
 	}
-	httpx.WriteJSON(writer, 200, result)
+	httpx.WriteJSON(writer, http.StatusOK, exportPreflightTransport(result))
 }
 func (s *Server) createExport(writer http.ResponseWriter, request *http.Request, project string, id string) {
 	if s.config.BatchExports == nil {
@@ -172,7 +191,11 @@ func (s *Server) createExport(writer http.ResponseWriter, request *http.Request,
 		httpx.Error(writer, http.StatusBadRequest, "invalid_export", "Export is invalid.", id)
 		return
 	}
-	batchID, submitted, err := s.config.BatchExports.Submit(request.Context(), projects.BatchExportRequest{ProjectID: project, IdempotencyKey: key, ProjectRevision: input.ProjectRevision, ItemIDs: input.ItemIDs})
+	var itemIDs []string
+	if input.ItemIds != nil {
+		itemIDs = *input.ItemIds
+	}
+	batchID, submitted, err := s.config.BatchExports.Submit(request.Context(), projects.BatchExportRequest{ProjectID: project, IdempotencyKey: key, ProjectRevision: int64(input.ProjectRevision), ItemIDs: itemIDs})
 	if err != nil {
 		switch {
 		case errors.Is(err, jobqueue.ErrQueueFull):
@@ -189,7 +212,7 @@ func (s *Server) createExport(writer http.ResponseWriter, request *http.Request,
 		return
 	}
 	s.metrics.Add("export_jobs_total", uint64(len(submitted)))
-	httpx.WriteJSON(writer, http.StatusAccepted, map[string]any{"batchId": batchID, "jobs": submitted})
+	writeBatchExportSubmissionJSON(writer, id, batchID, submitted)
 }
 func (s *Server) createDetection(writer http.ResponseWriter, request *http.Request, project string, id string) {
 	if s.config.Detection == nil {
@@ -201,8 +224,13 @@ func (s *Server) createDetection(writer http.ResponseWriter, request *http.Reque
 		httpx.Error(writer, http.StatusBadRequest, "invalid_idempotency_key", "A valid Idempotency-Key is required.", id)
 		return
 	}
-	var input detection.Request
-	if httpx.ReadJSON(request, &input) != nil || input.ProjectItemID == "" || detection.ValidateRequest(input) != nil {
+	var requestBody transport.DetectionInput
+	if httpx.ReadJSON(request, &requestBody) != nil {
+		httpx.Error(writer, http.StatusBadRequest, "invalid_detection", "Detection request is invalid.", id)
+		return
+	}
+	input := domainDetectionRequest(requestBody)
+	if input.ProjectItemID == "" || detection.ValidateRequest(input) != nil {
 		httpx.Error(writer, http.StatusBadRequest, "invalid_detection", "Detection request is invalid.", id)
 		return
 	}
@@ -222,5 +250,5 @@ func (s *Server) createDetection(writer http.ResponseWriter, request *http.Reque
 		}
 		return
 	}
-	httpx.WriteJSON(writer, http.StatusAccepted, job)
+	writeDetectionJobJSON(writer, http.StatusAccepted, id, job)
 }

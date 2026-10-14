@@ -104,6 +104,8 @@ async function withExportController(
       updateContext: (context: Partial<PreflightContext>) => void;
       setNotice: (status: string) => void;
       registry: AtomRegistry.AtomRegistry;
+      server: ReturnType<typeof createServerState>;
+      refreshMedia: () => void;
       dispose: () => void;
     },
   ) => Promise<void>,
@@ -118,6 +120,11 @@ async function withExportController(
     saveProject?: () => Effect.Effect<EffectApiTypes.Project | undefined, Error>;
     onCancellation?: (path: string, signal?: AbortSignal) => Promise<Response>;
     onRequest?: (method: string, path: string) => void | Promise<void>;
+    capabilitiesResponse?: Response;
+    onCapabilitiesRequest?: (
+      path: string,
+      signal: AbortSignal | undefined,
+    ) => Response | Promise<Response>;
     preflightFailure?: EffectApiTypes.Error["error"];
     onPreflightRequest?: (request: {
       path: string;
@@ -175,6 +182,13 @@ async function withExportController(
         Promise.resolve(Response.json({ items: [initialBatch], nextCursor: null }))
       );
     }
+    if (requestUrl.pathname.startsWith("/api/v2/export-capabilities/media/") && method === "GET")
+      return options.onCapabilitiesRequest
+        ? options.onCapabilitiesRequest(
+            requestUrl.pathname,
+            init?.signal ?? (input instanceof Request ? input.signal : undefined),
+          )
+        : (options.capabilitiesResponse?.clone() ?? Response.json({ strategies: [] }));
     if (requestUrl.pathname === "/api/v2/destinations") {
       if (options.nextDestinationsResponse && destinationRequestCount++ > 0)
         return options.nextDestinationsResponse();
@@ -273,6 +287,7 @@ async function withExportController(
             status: "",
           }),
         );
+        const server = createServerState(api, registry, configuration);
         controls = {
           items: () => registry.get(itemsAtom),
           replaceItems: (items) => registry.set(itemsAtom, items),
@@ -289,10 +304,12 @@ async function withExportController(
             registry.update(documentContext, (value) => ({ ...value, ...context })),
           setNotice: (status) => registry.update(context, (value) => ({ ...value, status })),
           registry,
+          server,
+          refreshMedia: server.refreshMedia,
           dispose: () => root.dispose(),
         };
         controller = createExportController({
-          server: createServerState(api, registry, configuration),
+          server,
           itemsAtom,
           optionsContext: context,
           preflightContext: documentContext,
@@ -339,6 +356,213 @@ async function waitForStatus(controller: ExportController, expected: string) {
     await new Promise((resolve) => setTimeout(resolve, 1));
   }
 }
+
+describe("export strategy capabilities", () => {
+  it("switches capability identity with the selected media", async () => {
+    const secondMedia = { ...media, id: `m_${"n".repeat(43)}` };
+    const secondItem = { ...exportItem(secondMedia), id: `i_${"n".repeat(24)}` };
+    const requests: string[] = [];
+    await withExportController(
+      batch("succeeded", 1, []),
+      async (controller, controls) => {
+        const releaseFirst = controls.registry.mount(
+          controls.server.exportCapabilities(media.id, 0),
+        );
+        controller.hybridSmartCutSupported();
+        await vi.waitFor(() => expect(controller.hybridSmartCutSupported()).toBe(true));
+        releaseFirst();
+        controls.activate(secondItem.id);
+        const releaseSecond = controls.registry.mount(
+          controls.server.exportCapabilities(secondMedia.id, 0),
+        );
+        expect(controller.hybridSmartCutSupported()).toBeUndefined();
+        await vi.waitFor(() => expect(controller.hybridSmartCutSupported()).toBe(false));
+        releaseSecond();
+        expect(new Set(requests)).toEqual(
+          new Set([
+            `/api/v2/export-capabilities/media/${media.id}`,
+            `/api/v2/export-capabilities/media/${secondMedia.id}`,
+          ]),
+        );
+      },
+      {
+        selected: media,
+        projectItems: [exportItem(media), secondItem],
+        onCapabilitiesRequest: (path) => {
+          requests.push(path);
+          return Response.json({
+            strategies: [
+              {
+                strategy: "hybrid_smart_cut",
+                supported: path.endsWith(secondMedia.id) ? false : true,
+                reasons: path.endsWith(secondMedia.id) ? ["unsupported_video_codec"] : [],
+              },
+            ],
+          });
+        },
+      },
+    );
+  });
+
+  it("invalidates capability when the same media is refreshed", async () => {
+    let resolveRefresh!: (response: Response) => void;
+    let requests = 0;
+    let refreshing = false;
+    await withExportController(
+      batch("succeeded", 1, []),
+      async (controller, controls) => {
+        const releaseInitial = controls.registry.mount(
+          controls.server.exportCapabilities(media.id, 0),
+        );
+        controller.hybridSmartCutSupported();
+        await vi.waitFor(() => expect(controller.hybridSmartCutSupported()).toBe(false));
+        refreshing = true;
+        controls.refreshMedia();
+        releaseInitial();
+        const releaseRefresh = controls.registry.mount(
+          controls.server.exportCapabilities(media.id, 1),
+        );
+        await vi.waitFor(() => expect(requests).toBe(1));
+        expect(controller.hybridSmartCutSupported()).toBeUndefined();
+        resolveRefresh(
+          Response.json({
+            strategies: [{ strategy: "hybrid_smart_cut", supported: true, reasons: [] }],
+          }),
+        );
+        await vi.waitFor(() => expect(controller.hybridSmartCutSupported()).toBe(true));
+        releaseRefresh();
+      },
+      {
+        selected: media,
+        onCapabilitiesRequest: () => {
+          if (!refreshing)
+            return Response.json({
+              strategies: [
+                {
+                  strategy: "hybrid_smart_cut",
+                  supported: false,
+                  reasons: ["unsupported_video_codec"],
+                },
+              ],
+            });
+          requests++;
+          return new Promise((resolve) => {
+            resolveRefresh = resolve;
+          });
+        },
+      },
+    );
+  });
+
+  it("cancels a pending request on selection change and ignores its late response", async () => {
+    const secondMedia = { ...media, id: `m_${"n".repeat(43)}` };
+    const secondItem = { ...exportItem(secondMedia), id: `i_${"n".repeat(24)}` };
+    let resolveOld!: (response: Response) => void;
+    let oldSignal: AbortSignal | undefined;
+    await withExportController(
+      batch("succeeded", 1, []),
+      async (controller, controls) => {
+        controller.hybridSmartCutSupported();
+        await vi.waitFor(() => expect(oldSignal).toBeDefined());
+        controls.activate(secondItem.id);
+        await vi.waitFor(() => expect(controller.hybridSmartCutSupported()).toBe(true));
+        await vi.waitFor(() => expect(oldSignal?.aborted).toBe(true));
+        resolveOld(
+          Response.json({
+            strategies: [
+              {
+                strategy: "hybrid_smart_cut",
+                supported: false,
+                reasons: ["unsupported_video_codec"],
+              },
+            ],
+          }),
+        );
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        expect(controller.hybridSmartCutSupported()).toBe(true);
+      },
+      {
+        selected: media,
+        projectItems: [exportItem(media), secondItem],
+        onCapabilitiesRequest: (path, signal) => {
+          if (path.endsWith(media.id)) {
+            oldSignal = signal;
+            return new Promise((resolve) => {
+              resolveOld = resolve;
+            });
+          }
+          return Response.json({
+            strategies: [{ strategy: "hybrid_smart_cut", supported: true, reasons: [] }],
+          });
+        },
+      },
+    );
+  });
+
+  it("cancels a pending capability request when its workspace is disposed", async () => {
+    let signal: AbortSignal | undefined;
+    await withExportController(
+      batch("succeeded", 1, []),
+      async (controller, controls) => {
+        controller.hybridSmartCutSupported();
+        await vi.waitFor(() => expect(signal).toBeDefined());
+        controls.dispose();
+        await vi.waitFor(() => expect(signal?.aborted).toBe(true));
+      },
+      {
+        selected: media,
+        onCapabilitiesRequest: (_path, requestSignal) => {
+          signal = requestSignal;
+          return new Promise(() => {});
+        },
+      },
+    );
+  });
+
+  it("keeps backend-owned false and exposes settled transport and decode failures as unknown", async () => {
+    await withExportController(
+      batch("succeeded", 1, []),
+      async (controller) => {
+        controller.hybridSmartCutSupported();
+        await vi.waitFor(() => expect(controller.hybridSmartCutSupported()).toBe(false));
+      },
+      {
+        selected: media,
+        capabilitiesResponse: Response.json({
+          strategies: [
+            {
+              strategy: "hybrid_smart_cut",
+              supported: false,
+              reasons: ["unsupported_video_codec"],
+            },
+          ],
+        }),
+      },
+    );
+
+    for (const response of [
+      Response.json({ error: "unavailable" }, { status: 500 }),
+      Response.json({
+        strategies: [{ strategy: "hybrid_smart_cut", supported: "not-a-boolean", reasons: [] }],
+      }),
+    ]) {
+      await withExportController(
+        batch("succeeded", 1, []),
+        async (controller, controls) => {
+          const atom = controls.server.exportCapabilities(media.id, 0);
+          const release = controls.registry.mount(atom);
+          controller.hybridSmartCutSupported();
+          await vi.waitFor(() =>
+            expect(AsyncResult.isFailure(controls.registry.get(atom))).toBe(true),
+          );
+          expect(controller.hybridSmartCutSupported()).toBeUndefined();
+          release();
+        },
+        { selected: media, capabilitiesResponse: response },
+      );
+    }
+  });
+});
 
 describe("export controller aggregate status", () => {
   it("retains the current batch outside the first page and invalidates each terminal job once", async () => {

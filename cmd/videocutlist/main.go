@@ -227,7 +227,7 @@ func runWithCleanupExit(ctx context.Context, cleanupExited chan struct{}) (runEr
 	}
 	apiServer, err := httpapi.New(httpapi.Config{
 		Authenticator: authenticator, Media: mediaService, Preview: previewService, Assets: assetService,
-		Projects: projectService, BatchExports: batchExports, Preflight: projects.ExportPreflightUseCase{Export: exportExecutor}, Jobs: jobService, Detection: detectionService, Download: exportExecutor, BatchDownload: batchDownloads, MediaImport: mediaImportService,
+		Projects: projectService, ProjectImports: projectService, BatchExports: batchExports, Preflight: projects.ExportPreflightUseCase{Export: exportExecutor}, ExportCapabilities: exportExecutor, Jobs: jobService, Detection: detectionService, Download: exportExecutor, BatchDownload: batchDownloads, MediaImport: mediaImportService,
 		Settings: config.NewRuntimeService(runtimeSettingsStore, runtimeState, settingsApplier.Apply), RuntimeSettings: runtimeState, MCPCredentials: mcpCredentials, ExportProposals: proposalService,
 		Destinations: destinationMetadata(cfg.Destinations),
 		Ready:        db.PingContext, Logger: logger, Metrics: metrics, DatabaseStats: db.Stats,

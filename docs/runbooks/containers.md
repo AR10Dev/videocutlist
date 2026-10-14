@@ -27,7 +27,21 @@ cd deployments/containers
 VIDEOCUTLIST_IMAGE=videocutlist:local docker compose up -d
 ```
 
-The Dockerfile uses pinned Node, Go, and Debian images; build support with local Podman has not been validated and is a known limitation. The checked-in container does run as a non-root user. Do not assume additional runtime restrictions such as a read-only root filesystem are enabled.
+The Dockerfile uses pinned Node, Go, and Debian images. The checked-in Compose deployment runs as UID 10001 with a read-only root filesystem, all Linux capabilities dropped, and privilege escalation disabled. `/tmp` is a 64 MiB tmpfs with `noexec`, `nosuid`, and `nodev`; database, preview cache, and export working files use the writable mounts above.
+
+For rootless Podman, use `podman compose` in place of `docker compose`. Prepare the writable directories from `deployments/containers`:
+
+```sh
+podman unshare chown -R 10001:10001 data cache exports
+```
+
+Keep media readable by UID 10001; do not change source-media ownership just to run the container. For a local Podman image build, use Docker image format so Podman retains the Dockerfile's health check:
+
+```sh
+podman build --format docker -f deployments/containers/Dockerfile -t videocutlist:local .
+```
+
+Run that build command from the repository root. Podman and a Compose provider are the runtime requirements; Go, Node, pnpm, FFmpeg, FFprobe, and curl are supplied by the build/runtime images, not required on the deployment host.
 
 Check readiness at `http://127.0.0.1:8787/ready` and health at `/health`. To use another host port, set `VIDEOCUTLIST_HOST_PORT`; to publish beyond loopback, explicitly set `VIDEOCUTLIST_BIND_ADDRESS`. Network publication beyond loopback requires deliberate firewall/access control and a protected authentication configuration. Do not select authentication mode `none` for a network-reachable deployment.
 
@@ -41,4 +55,16 @@ MCP is off by default. If enabled, its `/mcp` endpoint has separately issued sco
 
 Persist `/var/lib/videocutlist/data`, `/var/cache/videocutlist/previews`, and `/var/lib/videocutlist/exports` as shown in Compose. The media mount is read-only. Back up the database and any exports you need before upgrading. Only the latest release is supported, and older database/configuration compatibility is not promised. Use the health/readiness endpoints after an upgrade. Do not remove application data as part of routine image updates.
 
-The checked-in Dockerfile installs FFmpeg and FFprobe, exposes port 8787, and uses a curl-based container health check. The committed image configuration does not declare a read-only root filesystem or drop capabilities/no-new-privileges; do not treat those as tested deployment properties.
+The checked-in Dockerfile installs FFmpeg and FFprobe, exposes port 8787, and retains a curl-based container health check. Hardening flags are applied by Compose and the local deployment script, not by the image itself; a bare `podman run` or `docker run` must specify equivalent restrictions.
+
+## Validate locally with Podman
+
+From the repository root, run:
+
+```sh
+make test-podman
+```
+
+This requires rootless Podman, a working Compose provider, Node.js 22 or newer, and network access for image builds. It builds a disposable image, generates a short audio/video fixture using the image's FFmpeg, and starts the checked-in Compose configuration with isolated data and an unused loopback port. It verifies non-root execution, dropped capabilities, no-new-privileges, read-only root/media mounts, temporary-file access, authenticated media access, preview-cache misses/hits, merged and separate stream-copy/re-encoded exports, health checks, and database/cache/output persistence across restart. It removes its test deployment and data on exit; it does not restart or modify an existing deployment.
+
+To test an already built image instead, set `VIDEOCUTLIST_TEST_IMAGE` to its tag. The smoke test requires no host Go, pnpm, FFmpeg, or FFprobe. This validation covers the included short fixture, not every codec, hardware accelerator, or host security policy.

@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { formatTime, parseTimecode } from "../src/features/preview/model";
-import { parseProjectJson, projectJson } from "../src/features/projects/lifecycle";
-import { createProjectItem, serializeProjectItem } from "../src/features/projects/model";
+import { createProjectItem } from "../src/features/projects/model";
 import { exportRanges, summarizeExports } from "../src/features/export/summary";
 
 const media = {
@@ -24,38 +23,6 @@ describe("polished workspace contracts", () => {
     expect(parseTimecode("1:60:00.000")).toBeUndefined();
     expect(parseTimecode("99:99.000")).toBeUndefined();
     expect(parseTimecode("999999999999999999:00.000")).toBeUndefined();
-  });
-  it("round-trips the multi-item project JSON helper contract", () => {
-    const first = createProjectItem(media);
-    const second = createProjectItem({ ...media, id: `m_${"b".repeat(43)}` });
-    const document = {
-      schemaVersion: 2,
-      name: "Interview",
-      revision: 1,
-      items: [first, second].map(serializeProjectItem),
-    };
-    expect(parseProjectJson(projectJson(document))).toEqual(document);
-    expect(() =>
-      parseProjectJson(projectJson({ ...document, items: [document.items[0], document.items[0]] })),
-    ).toThrow("invalid");
-    expect(() =>
-      parseProjectJson(
-        projectJson({ ...document, items: [{ ...document.items[0], segments: [null] }] }),
-      ),
-    ).toThrow("invalid");
-  });
-  it("rejects paths and malformed imported export settings before requests", () => {
-    const item = serializeProjectItem(createProjectItem(media));
-    const document = { schemaVersion: 2, name: "Imported", items: [item] };
-    for (const invalid of [
-      { ...item, mediaId: "/private/original.mp4" },
-      { ...item, exportOptions: { streamIndexes: "all" } },
-      { ...item, exportOptions: { filenameTemplate: 5 } },
-      { ...item, segments: [{ startMs: 0, endMs: 1000, label: {} }] },
-    ])
-      expect(() => parseProjectJson(JSON.stringify({ ...document, items: [invalid] }))).toThrow(
-        "invalid",
-      );
   });
   it("counts real per-item outputs and merged gap durations", () => {
     const first = createProjectItem(media);

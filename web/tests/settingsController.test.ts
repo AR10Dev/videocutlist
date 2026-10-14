@@ -872,7 +872,10 @@ describe("settings controller", () => {
       Response.json(
         init?.method === "PUT"
           ? { ...document, revision: 7, settings: { ...settings, exportLimit: 5 } }
-          : { ...document, roots: { movies: { state: "ready" } } },
+          : {
+              ...document,
+              roots: { movies: { state: "unavailable", reasonCode: "media_root_unavailable" } },
+            },
       ),
     );
     const { server, state } = workspace(fetch);
@@ -880,7 +883,9 @@ describe("settings controller", () => {
     expect(await save(state, { exportLimit: 3 }, "Saved")).toBe(true);
     expect(state.settingsRevision()).toBe(7);
     expect(state.runtimeSettings()?.exportLimit).toBe(5);
-    expect(state.libraryRoots()).toEqual([{ alias: "movies", state: "ready" }]);
+    expect(state.libraryRoots()).toEqual([
+      { alias: "movies", state: "unavailable", reasonCode: "media_root_unavailable" },
+    ]);
     const unsubscribe = server.registry.subscribe(state.administrator, () => {});
     unsubscribe();
     await new Promise((resolve) => setTimeout(resolve, 0));

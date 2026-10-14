@@ -29,7 +29,7 @@ func (s *Server) getJob(writer http.ResponseWriter, request *http.Request, job s
 		}
 		return
 	}
-	httpx.WriteJSON(writer, 200, value)
+	writeJobJSON(writer, http.StatusOK, id, value)
 }
 
 const (

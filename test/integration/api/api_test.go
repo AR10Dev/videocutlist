@@ -477,8 +477,26 @@ func TestJobResponsesExposeOnlySafeTerminalMetadata(t *testing.T) {
 			t.Fatalf("succeeded response exposed %q: %s", forbidden, response.Body.String())
 		}
 	}
-	if !strings.Contains(response.Body.String(), `"result":{"outputName":"export.mkv","sizeBytes":42,"retainUntil":"2026-08-20T12:00:00Z"}`) {
-		t.Fatalf("missing safe result: %s", response.Body.String())
+	var envelope struct {
+		Result json.RawMessage `json:"result"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	var resultFields map[string]json.RawMessage
+	if err := json.Unmarshal(envelope.Result, &resultFields); err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		OutputName  string `json:"outputName"`
+		SizeBytes   int64  `json:"sizeBytes"`
+		RetainUntil string `json:"retainUntil"`
+	}
+	if err := json.Unmarshal(envelope.Result, &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(resultFields) != 3 || result.OutputName != "export.mkv" || result.SizeBytes != 42 || result.RetainUntil != "2026-08-20T12:00:00Z" {
+		t.Fatalf("missing or unsafe result fields: %s", envelope.Result)
 	}
 
 	jobs.get = func(context.Context, string) (view.Job, error) {

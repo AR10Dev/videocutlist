@@ -14,6 +14,12 @@ import (
 )
 
 func init() {
+	if csv, ok := os.LookupEnv("VIDEOCUTLIST_TEST_FRAME_CSV"); ok {
+		if _, err := fmt.Fprint(os.Stdout, csv); err != nil {
+			os.Exit(2)
+		}
+		os.Exit(0)
+	}
 	if os.Getenv("VIDEOCUTLIST_TEST_FRAMES") == "1" {
 		keyOnly := slices.Contains(os.Args, "-skip_frame")
 		output := bufio.NewWriter(os.Stdout)
@@ -113,6 +119,35 @@ func TestFrameQueriesAcceptLongVideosAndSelectOnlyKeyframes(t *testing.T) {
 	}
 	if len(keyframes) != 2 || keyframes[0] != 0 || keyframes[1] != 1000 {
 		t.Fatalf("keyframe-only query returned %v", keyframes)
+	}
+}
+
+func TestFrameQueriesHandleSideDataSeparators(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		csv  string
+		fail bool
+	}{
+		{"side-data", "0.000000,H.26[45] User Data Unregistered SEI message\n\n0.040000\n", false},
+		{"empty", "\n\n", true},
+		{"unavailable", "0.000000\nN/A\n", true},
+		{"non-finite", "0.000000\nNaN\n", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("VIDEOCUTLIST_TEST_FRAME_CSV", tc.csv)
+			source, err := os.CreateTemp(t.TempDir(), "media-*.mp4")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = source.Close() }()
+			client := Client{Path: os.Args[0]}
+			for _, query := range []func(context.Context, *os.File) ([]int64, error){client.FrameTimes, client.Keyframes} {
+				frames, err := query(t.Context(), source)
+				if (err != nil) != tc.fail || !tc.fail && !slices.Equal(frames, []int64{0, 40}) {
+					t.Fatalf("frames = %v, error = %v, want failure = %v", frames, err, tc.fail)
+				}
+			}
+		})
 	}
 }
 

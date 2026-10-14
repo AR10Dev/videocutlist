@@ -4,6 +4,7 @@ import {
   appearances,
   browserPreferencesSchema,
   defaultBrowserPreferences,
+  mediaRootStatusPresentation,
   resolveAppearance,
   validFilenameTemplateLength,
 } from "../src/features/settings/model";
@@ -56,6 +57,50 @@ describe("browser preference schemas", () => {
     { lastDestinationId: "../private" },
   ])("rejects invalid persisted preference %j", (invalid) => {
     expect(() => decode({ ...defaultBrowserPreferences, ...invalid })).toThrow();
+  });
+});
+
+describe("media root status presentation", () => {
+  it("uses frontend wording for known reasons instead of the server message", () => {
+    expect(
+      mediaRootStatusPresentation({
+        state: "ready",
+        reasonCode: "media_root_available",
+        message: "/private/deployment/root",
+      }),
+    ).toEqual({ status: "Available" });
+    expect(
+      mediaRootStatusPresentation({
+        state: "unavailable",
+        reasonCode: "media_root_unavailable",
+        message: "/private/deployment/root: permission denied",
+      }),
+    ).toEqual({
+      status: "Unavailable",
+      guidance:
+        "Check that the media mount is present and that the server has permission to access the configured directory.",
+    });
+  });
+
+  it.each([
+    {
+      root: {
+        state: "unavailable" as const,
+        reasonCode: "future_reason",
+        message: "/private/root",
+      },
+      status: "Unavailable",
+    },
+    { root: { state: "unavailable" as const, message: "/private/root" }, status: "Unavailable" },
+    {
+      root: { state: "ready" as const, reasonCode: "future_reason", message: "/private/root" },
+      status: "Available",
+    },
+    { root: { message: "/private/root" }, status: "Status unavailable" },
+  ])("safely falls back for unknown or omitted reasons: $root", ({ root, status }) => {
+    const presentation = mediaRootStatusPresentation(root);
+    expect(presentation).toEqual({ status });
+    expect(JSON.stringify(presentation)).not.toContain("/private/root");
   });
 });
 

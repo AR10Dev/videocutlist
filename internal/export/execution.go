@@ -13,6 +13,8 @@ import (
 	jobs "videocutlist/internal/jobs"
 	jobqueue "videocutlist/internal/jobs/model"
 	"videocutlist/internal/library/media/index"
+	"videocutlist/internal/library/media/probe"
+	"videocutlist/internal/preview"
 	"videocutlist/internal/projects/model"
 	settingsmodel "videocutlist/internal/settings/model"
 )
@@ -46,6 +48,44 @@ type Executor struct {
 // ExportDownloadService opens one completed browser-download artifact.
 type ExportDownloadService interface {
 	Download(context.Context, string, int) (io.ReadCloser, string, error)
+}
+
+// Capabilities reports which export strategies support the resolved media source.
+func (e Executor) Capabilities(ctx context.Context, mediaID string) (capabilities Capabilities, err error) {
+	if e.Scanner == nil || e.Media == nil {
+		return Capabilities{}, errors.New("export capability media dependencies are required")
+	}
+	file, media, _, err := e.Scanner.OpenResolved(ctx, e.Media, mediaID)
+	if err != nil {
+		return Capabilities{}, err
+	}
+	defer func() {
+		if closeErr := file.Close(); err == nil && closeErr != nil {
+			err = fmt.Errorf("close export capability source: %w", closeErr)
+		}
+	}()
+	service := e.service()
+	if service.Capacity != nil {
+		release, err := preview.AcquireProcess(ctx, service.Capacity)
+		if err != nil {
+			return Capabilities{}, err
+		}
+		defer release()
+	}
+	metadata, err := (probe.Client{Path: service.FFprobePath}).ProbeFile(ctx, file)
+	if err != nil {
+		return Capabilities{}, fmt.Errorf("probe export capability source: %w", err)
+	}
+	reasons := hybridMetadataCapabilityReasons(metadata, media.Name)
+	if len(reasons) > 0 {
+		return Capabilities{Strategies: []StrategyCapability{{Strategy: "hybrid_smart_cut", Reasons: reasons}}}, nil
+	}
+	frameTimes, err := (probe.Client{Path: service.FFprobePath}).FrameTimes(ctx, file)
+	if err != nil {
+		return Capabilities{}, fmt.Errorf("probe export capability timestamps: %w", err)
+	}
+	reasons = hybridCapabilityReasons(metadata, media.Name, frameTimes)
+	return Capabilities{Strategies: []StrategyCapability{{Strategy: "hybrid_smart_cut", Supported: len(reasons) == 0, Reasons: reasons}}}, nil
 }
 
 // PreflightItems validates export requirements for project-selected immutable items.

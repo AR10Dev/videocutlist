@@ -11,6 +11,8 @@ import (
 	"io"
 	"log"
 	"net/http"
+
+	"videocutlist/internal/httpapi/transport"
 )
 
 const MaxJSONBody = 1 << 20
@@ -63,7 +65,11 @@ func Error(writer http.ResponseWriter, status int, code, message, requestID stri
 	if observed, ok := writer.(*statusWriter); ok {
 		observed.errorCode = code
 	}
-	WriteJSON(writer, status, map[string]any{"error": map[string]string{"code": code, "message": message, "requestId": requestID}})
+	response := transport.Error{}
+	response.Error.Code = code
+	response.Error.Message = message
+	response.Error.RequestId = requestID
+	WriteJSON(writer, status, response)
 }
 
 // ReadJSON rejects oversized, malformed, and trailing JSON values.

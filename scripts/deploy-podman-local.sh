@@ -2,6 +2,9 @@
 set -euo pipefail
 
 repo=$(git rev-parse --show-toplevel)
+if [ "${1:-}" = "--smoke-test" ]; then
+  exec "$repo/test/harness/container-smoke.sh"
+fi
 app_dir=${VIDEOCUTLIST_APP_DIR:-"$HOME/.config/podman/videocutlist"}
 media_dir=${VIDEOCUTLIST_MEDIA_DIR:-"$app_dir/media"}
 
@@ -22,7 +25,7 @@ else
   sudo chown -R 10001:10001 "$app_dir/data" "$app_dir/cache" "$app_dir/exports"
 fi
 
-podman build -f "$repo/deployments/containers/Dockerfile" -t videocutlist:local "$repo"
+podman build --format docker -f "$repo/deployments/containers/Dockerfile" -t videocutlist:local "$repo"
 if podman compose version >/dev/null 2>&1; then
   (
     cd "$app_dir"
@@ -32,6 +35,9 @@ fi
 podman rm -f videocutlist-local 2>/dev/null || true
 podman run -d --replace --name videocutlist-local \
   --restart unless-stopped \
+  --read-only --read-only-tmpfs=false \
+  --cap-drop ALL --security-opt no-new-privileges \
+  --tmpfs /tmp:rw,noexec,nosuid,nodev,size=64m,mode=1777 \
   --network host \
   --env-file "$app_dir/videocutlist.env" \
   --env VIDEOCUTLIST_LISTEN_ADDRESS=127.0.0.1 \

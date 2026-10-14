@@ -14,6 +14,7 @@ import {
   Project,
   ProjectPage,
   PutProjectRequestJson,
+  SettingsResponse,
   VideoCutListApi,
   Waveform,
 } from "../src/generated/effect-api";
@@ -49,6 +50,38 @@ const completedJob = {
 };
 
 describe("generated Effect response codecs", () => {
+  it("accepts omitted and future media-root reason codes", () => {
+    const response = {
+      settings: {
+        exportLimit: 2,
+        cacheMaxBytes: 1000,
+        previewGlobalLimit: 2,
+        previewBeforeMs: 1000,
+        previewAfterMs: 1000,
+        previewMaxMs: 5000,
+        previewGridMs: 1000,
+        mediaMaxFiles: 100,
+        mediaMaxDepth: 4,
+        mcpEnabled: false,
+      },
+      revision: 1,
+      schemaVersion: 1,
+      updatedAt: "2026-10-01T00:00:00Z",
+      pathsConstrained: false,
+      roots: { archive: { state: "unavailable", message: "Mount unavailable." } },
+    };
+    expect(Schema.decodeUnknownSync(SettingsResponse)(response).roots.archive).toEqual(
+      response.roots.archive,
+    );
+    const futureReason = {
+      ...response,
+      roots: { archive: { ...response.roots.archive, reasonCode: "future_reason" } },
+    };
+    expect(Schema.decodeUnknownSync(SettingsResponse)(futureReason).roots.archive.reasonCode).toBe(
+      "future_reason",
+    );
+  });
+
   it("decodes the native waveform contract without adding its route to JSON HttpApi", () => {
     const waveform = { startMs: 0, durationMs: 1000, peaks: Array(16).fill(0.5) };
     expect(Schema.decodeUnknownSync(Waveform)(waveform)).toEqual(waveform);

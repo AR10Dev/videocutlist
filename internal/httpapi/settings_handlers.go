@@ -9,30 +9,22 @@ import (
 	"net/http"
 	"os"
 
+	"videocutlist/internal/httpapi/transport"
 	jobqueue "videocutlist/internal/jobs/model"
 	settings "videocutlist/internal/settings"
 	settingsmodel "videocutlist/internal/settings/model"
 )
 
+// settingsUpdateRequest keeps deployment-only paths and destinations so unchanged echoes can be accepted and changed values rejected; the generated SettingsUpdate cannot represent them.
 type settingsUpdateRequest struct {
 	Revision int64                         `json:"revision"`
 	Settings settingsmodel.RuntimeSettings `json:"settings"`
 }
 
-// browserSettings is intentionally a projection: deployment paths are never
-// serialized into a browser response.
-func browserSettings(settings settingsmodel.RuntimeSettings) map[string]any {
-	data := map[string]any{}
-	encoded, _ := json.Marshal(settings)
-	_ = json.Unmarshal(encoded, &data)
-	delete(data, "mediaRoots")
-	destinations := make([]DestinationMetadata, 0, len(settings.Destinations))
-	for _, destination := range settings.Destinations {
-		destinations = append(destinations, DestinationMetadata{ID: destination.ID, Label: destination.Label, Description: destination.Description, Kind: destination.Kind, Retention: destination.Retention})
-	}
-	data["destinations"] = destinations
-	return data
-}
+const (
+	settingsRootAvailableReasonCode   = "media_root_available"
+	settingsRootUnavailableReasonCode = "media_root_unavailable"
+)
 
 func (s *Server) getSettings(w http.ResponseWriter, r *http.Request, id string) {
 	if s.config.Settings == nil {
@@ -44,19 +36,23 @@ func (s *Server) getSettings(w http.ResponseWriter, r *http.Request, id string) 
 		internalServerError(w, http.StatusInternalServerError, "settings_unavailable", "Settings are temporarily unavailable.", id, err)
 		return
 	}
-	roots := make(map[string]any, len(record.Settings.MediaRoots))
+	roots := make(map[string]transport.SettingsRootStatus, len(record.Settings.MediaRoots))
 	for alias, path := range record.Settings.MediaRoots {
-		state, message := "ready", "Media root is available to the server."
+		state, message, reasonCode := transport.Ready, "Media root is available to the server.", settingsRootAvailableReasonCode
 		info, statErr := os.Stat(path)
 		if statErr != nil || !info.IsDir() {
-			state, message = "unavailable", "Media root is not available to the server. Check the deployment mount or directory permissions."
+			state, message, reasonCode = transport.Unavailable, "Media root is not available to the server. Check the deployment mount or directory permissions.", settingsRootUnavailableReasonCode
 		}
-		roots[alias] = map[string]string{"state": state, "message": message}
+		roots[alias] = transport.SettingsRootStatus{
+			State: &state, Message: new(message), ReasonCode: new(reasonCode),
+		}
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{
-		"settings": browserSettings(record.Settings), "revision": record.Revision, "schemaVersion": record.SchemaVersion,
-		"updatedAt": record.UpdatedAt, "pathsConstrained": len(s.config.SettingsAllowlist) > 0, "roots": roots,
-	})
+	mapped, err := settingsResponseToTransport(record, len(s.config.SettingsAllowlist) > 0, roots)
+	if err != nil {
+		internalError(w, id, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, mapped)
 }
 
 func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, id string) {
@@ -111,7 +107,12 @@ func (s *Server) putSettings(w http.ResponseWriter, r *http.Request, id string) 
 		}
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, map[string]any{"settings": browserSettings(record.Settings), "revision": record.Revision, "schemaVersion": record.SchemaVersion, "updatedAt": record.UpdatedAt})
+	mapped, err := settingsUpdatedToTransport(record)
+	if err != nil {
+		internalError(w, id, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, mapped)
 }
 
 func (s *Server) refreshSettings(w http.ResponseWriter, r *http.Request, id string) {
@@ -132,5 +133,5 @@ func (s *Server) refreshSettings(w http.ResponseWriter, r *http.Request, id stri
 		}
 		return
 	}
-	httpx.WriteJSON(w, http.StatusAccepted, job)
+	writeImportJobJSON(w, http.StatusAccepted, job)
 }

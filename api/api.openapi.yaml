@@ -199,6 +199,27 @@ paths:
           $ref: "#/components/responses/Error"
         "500":
           $ref: "#/components/responses/Error"
+  /export-capabilities/media/{mediaId}:
+    parameters:
+      - $ref: "#/components/parameters/MediaId"
+    get:
+      summary: Get current export strategy capabilities for one media item
+      operationId: getExportCapabilities
+      responses:
+        "200":
+          description: Backend-evaluated export strategy support
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ExportCapabilities"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "404":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
   /media/{mediaId}/preview:
     parameters:
       - $ref: "#/components/parameters/MediaId"
@@ -349,6 +370,39 @@ paths:
         "401":
           $ref: "#/components/responses/Error"
         "403":
+          $ref: "#/components/responses/Error"
+        "500":
+          $ref: "#/components/responses/Error"
+  /projects/import:
+    post:
+      summary: Validate and convert a project file without saving it
+      description: >-
+        Accepts UTF-8 legacy or v2 project JSON, validates every referenced
+        media item, returning a canonical revision-0 document. This operation
+        never persists a project. The content is limited to 1 MiB of UTF-8
+        bytes; the escaped JSON request envelope is limited to
+        6 MiB + 256 bytes.
+      operationId: importProjectFile
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProjectImportInput"
+      responses:
+        "200":
+          description: Validated staged project document
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProjectImportResult"
+        "400":
+          $ref: "#/components/responses/Error"
+        "401":
+          $ref: "#/components/responses/Error"
+        "403":
+          $ref: "#/components/responses/Error"
+        "413":
           $ref: "#/components/responses/Error"
         "500":
           $ref: "#/components/responses/Error"
@@ -616,17 +670,7 @@ paths:
           content:
             application/json:
               schema:
-                type: object
-                required:
-                  - destinations
-                  - capabilities
-                properties:
-                  destinations:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/Destination"
-                  capabilities:
-                    $ref: "#/components/schemas/DestinationCapabilities"
+                $ref: "#/components/schemas/DestinationsResponse"
         "401":
           $ref: "#/components/responses/Error"
         "403":
@@ -1770,13 +1814,20 @@ components:
         roots:
           type: object
           additionalProperties:
-            type: object
-            properties:
-              state:
-                type: string
-                enum: [ready, unavailable]
-              message:
-                type: string
+            $ref: "#/components/schemas/SettingsRootStatus"
+    SettingsRootStatus:
+      type: object
+      properties:
+        state:
+          type: string
+          enum: [ready, unavailable]
+        message:
+          type: string
+        reasonCode:
+          type: string
+          description: >-
+            Stable open-ended status code; clients must tolerate unknown or
+            omitted values.
     Error:
       type: object
       required:
@@ -1874,6 +1925,29 @@ components:
             - failed
         message:
           type: string
+    ProjectImportInput:
+      type: object
+      additionalProperties: false
+      required: [content]
+      properties:
+        content:
+          type: string
+          description: UTF-8 project-file content limited to 1 MiB in bytes.
+          x-maxUtf8Bytes: 1048576
+    ProjectImportResult:
+      type: object
+      additionalProperties: false
+      required: [sourceFormat, document]
+      properties:
+        sourceFormat:
+          type: string
+          enum: [legacy, v2]
+        mediaId:
+          type: string
+          description: Present only when the source format is legacy.
+          pattern: ^m_[A-Za-z0-9_-]{43}$
+        document:
+          $ref: "#/components/schemas/ProjectInput"
     ProjectInput:
       type: object
       additionalProperties: false
@@ -2273,6 +2347,45 @@ components:
           description: >-
             True only when deployment configuration explicitly includes a
             source_adjacent destination. No filesystem path is exposed.
+    DestinationsResponse:
+      type: object
+      required:
+        - destinations
+        - capabilities
+      properties:
+        destinations:
+          type: array
+          items:
+            $ref: "#/components/schemas/Destination"
+        capabilities:
+          $ref: "#/components/schemas/DestinationCapabilities"
+    ExportCapabilities:
+      type: object
+      required: [strategies]
+      properties:
+        strategies:
+          type: array
+          items:
+            $ref: "#/components/schemas/ExportStrategyCapability"
+    ExportStrategyCapability:
+      type: object
+      required: [strategy, supported, reasons]
+      properties:
+        strategy:
+          type: string
+          enum: [stream_copy_preferred, precise_reencode, hybrid_smart_cut]
+        supported:
+          type: boolean
+        reasons:
+          type: array
+          items:
+            type: string
+            enum:
+              - unsupported_container
+              - unsupported_filename_extension
+              - unsupported_video_codec
+              - non_constant_frame_rate
+              - non_constant_frame_timestamps
     ExportPreflight:
       type: object
       required:

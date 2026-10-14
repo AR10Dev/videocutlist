@@ -74,6 +74,7 @@ func TestRouteCoverageInventory(t *testing.T) {
 		{http.MethodGet, "/api/v2/media/import/" + job, routeGetMediaImport, job},
 		{http.MethodDelete, "/api/v2/media/import/" + job, routeCancelMediaImport, job},
 		{http.MethodGet, "/api/v2/media/" + media, routeGetMedia, media},
+		{http.MethodGet, "/api/v2/export-capabilities/media/" + media, routeExportCapabilities, media},
 		{http.MethodGet, "/media/v2/media/" + media + "/preview", routePreview, media},
 		{http.MethodHead, "/media/v2/media/" + media + "/preview", routePreview, media},
 		{http.MethodGet, "/media/v2/media/" + media + "/thumbnails", routeThumbnails, media},
@@ -106,6 +107,7 @@ func TestRouteCoverageInventory(t *testing.T) {
 		{http.MethodGet, "/api/v2/settings/mcp", routeGetMCPSettings, ""},
 		{http.MethodPost, "/api/v2/settings/mcp/credentials", routeCreateMCPCredential, ""},
 		{http.MethodDelete, "/api/v2/settings/mcp/credentials/" + credential, routeRevokeMCPCredential, credential},
+		{http.MethodPost, "/api/v2/projects/import", routeImportProjectFile, ""},
 	}
 	contract := openAPIOperations(t)
 	normalize := strings.NewReplacer(media, "{mediaId}", project, "{projectId}", job, "{jobId}", batch, "{batchId}", credential, "{credentialId}", proposal, "{proposalId}", "/outputs/0", "/outputs/{position}", "/interchange/csv", "/interchange/{format}", "/interchange/chapters", "/interchange/{format}")
@@ -128,7 +130,7 @@ func TestRouteCoverageInventory(t *testing.T) {
 		}
 		seen[entry.kind] = true
 	}
-	for kind := routeListMedia; kind <= routeStreamBatch; kind++ {
+	for kind := routeListMedia; kind <= routeImportProjectFile; kind++ {
 		if !seen[kind] {
 			t.Errorf("route kind %d is missing from the production route inventory", kind)
 		}
@@ -145,8 +147,8 @@ func TestRouteCoverageInventory(t *testing.T) {
 			t.Errorf("OpenAPI operation missing from production inventory: %s", operation)
 		}
 	}
-	if len(seen) != int(routeStreamBatch) {
-		t.Fatalf("route inventory accounts for %d kinds, want %d", len(seen), routeStreamBatch)
+	if len(seen) != int(routeImportProjectFile) {
+		t.Fatalf("route inventory accounts for %d kinds, want %d", len(seen), routeImportProjectFile)
 	}
 }
 

@@ -7,7 +7,7 @@ import { BatchDownload } from "../export/BatchDownload";
 import { isBatchActive } from "../export/queueResponse";
 
 type Batch = EffectApiTypes.Batch;
-type Destination = EffectApiTypes.Destination;
+type Destination = EffectApiTypes.DestinationsResponse["destinations"][number];
 
 function BatchCard(props: {
   batch: Batch;

@@ -23,6 +23,7 @@ type LibraryRoot = {
   alias: string;
   state?: "ready" | "unavailable";
   message?: string;
+  reasonCode?: string;
 };
 type ServerRuntimeSettings = EffectApiTypes.SettingsResponse["settings"];
 type MCPSettings = GetMCPSettings200;

@@ -4,6 +4,31 @@ import { validDestinationId } from "../export/destination";
 
 type RuntimeSettings = EffectApiTypes.SettingsResponse["settings"];
 type RuntimeSettingsInput = EffectApiTypes.SettingsUpdate["settings"];
+type MediaRootStatus = Pick<
+  EffectApiTypes.SettingsResponse["roots"][string],
+  "state" | "message" | "reasonCode"
+>;
+
+export function mediaRootStatusPresentation(root: MediaRootStatus): {
+  status: string;
+  guidance?: string;
+} {
+  if (root.reasonCode === "media_root_available") return { status: "Available" };
+  if (root.reasonCode === "media_root_unavailable")
+    return {
+      status: "Unavailable",
+      guidance:
+        "Check that the media mount is present and that the server has permission to access the configured directory.",
+    };
+  return {
+    status:
+      root.state === "unavailable"
+        ? "Unavailable"
+        : root.state === "ready"
+          ? "Available"
+          : "Status unavailable",
+  };
+}
 
 const positiveLimit = Schema.Number.check(Schema.isInt()).check(Schema.isGreaterThan(0));
 const runtimeSettingsInput = Schema.Struct({

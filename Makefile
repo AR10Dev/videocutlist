@@ -7,7 +7,11 @@ GO_TEST_PACKAGES := $(GO_PACKAGES) ./test/...
 SHELL_FILES := $(shell find scripts deployments test -type f -name '*.sh')
 DATA_DIR ?= .cache/videocutlist
 
-.PHONY: benchmark-backend build check clean clean-deps clean-all web-install e2e format lint run smoke test test-podman test-real-media
+.PHONY: benchmark-backend build check clean clean-deps clean-all generate-go-api web-install e2e format lint run smoke test test-podman test-real-media
+
+# Regenerate Go transport types from the shared OpenAPI source.
+generate-go-api:
+	$(GO) tool oapi-codegen -config api/oapi-codegen.yaml api/api.openapi.yaml
 
 build:
 	$(PNPM) --dir web run build
@@ -68,7 +72,7 @@ test:
 	$(PNPM) --dir web test
 
 test-podman:
-	./scripts/deploy-podman-local.sh
+	./scripts/deploy-podman-local.sh --smoke-test
 
 test-real-media:
 	./test/harness/acquire-real-media.sh

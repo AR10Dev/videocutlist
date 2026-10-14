@@ -52,6 +52,13 @@ jobs:
                   --ignore-registry-errors
             - run: pnpm --dir web run api:generate
             - run: git diff --exit-code -- web/src/generated/effect-api.ts
+            - run: make generate-go-api
+            - name: Check generated API artifacts are current
+              run: |
+                  git diff --exit-code -- internal/httpapi/transport
+                  untracked=$(git ls-files --others -- \
+                    web/src/generated internal/httpapi/transport)
+                  test -z "$untracked"
             - run: make check
             - run: govulncheck ./...
 

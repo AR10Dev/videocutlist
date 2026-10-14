@@ -1,7 +1,7 @@
 import { Cause, Effect } from "effect";
 import * as Atom from "effect/reactivity/Atom";
 import * as Schema from "effect/Schema";
-import { Project, ProjectInput } from "../../generated/effect-api";
+import { Project, ProjectImportResult, ProjectInput } from "../../generated/effect-api";
 import type { WorkspaceController } from "../../app/controller";
 import { runServerMutation } from "../../app/server";
 import { validateSegments } from "../preview/model";
@@ -11,17 +11,6 @@ import {
   type InterchangeFormat,
   readInterchangeFile,
 } from "./interchange";
-import { parseProjectJson } from "./lifecycle";
-
-const legacySegments = Schema.Array(
-  Schema.Struct({
-    id: Schema.optionalKey(Schema.String),
-    startMs: Schema.Number.check(Schema.isInt()),
-    endMs: Schema.Number.check(Schema.isInt()),
-    label: Schema.optionalKey(Schema.String),
-    included: Schema.optionalKey(Schema.Boolean),
-  }),
-);
 
 /** One tools session owns import/export; interruption is local, not server rollback. */
 export function createProjectToolsSession(
@@ -107,30 +96,37 @@ export function createProjectToolsSession(
         if (current()) yield* workspace.projects.loadProjectEffect(projectId);
         return;
       }
-      const imported = yield* Effect.try(() => parseProjectJson(text));
-      if (imported.schemaVersion === 2) {
-        const document = yield* Effect.try(() =>
-          Schema.decodeUnknownSync(ProjectInput)({ ...imported, revision: 0 }),
-        );
+      const response = yield* runServerMutation(
+        server.registry,
+        server.generatedApi.mutation("default", "importProjectFile"),
+        { payload: { content: text } },
+      );
+      const imported = yield* Effect.try(() =>
+        Schema.decodeUnknownSync(ProjectImportResult)(response),
+      );
+      const document = yield* Effect.try(() =>
+        Schema.decodeUnknownSync(ProjectInput)(imported.document),
+      );
+      if (imported.sourceFormat === "legacy") {
+        const selected = workspace.selected();
+        if (!imported.mediaId || !selected || imported.mediaId !== selected.id)
+          return yield* Effect.fail(new Error("Select the cut list's media before importing."));
+        const item = document.items.find(({ mediaId }) => mediaId === imported.mediaId);
+        if (!item) return yield* Effect.fail(new Error("Imported project response is invalid."));
+        const segments = item.segments.map((segment) => ({ ...segment }));
+        const error = validateSegments(segments, selected.durationMs);
+        if (error) return yield* Effect.fail(new Error(error));
         if (!current()) return;
-        const confirmed = !workspace.dirty() || confirmDiscard();
-        if (current()) yield* workspace.projects.importProjectEffect(document, confirmed);
+        workspace.editor.updateTimeline({ segments });
+        workspace.addMediaToProject();
+        workspace.setStatus("Cut list imported. Save the project to keep it.");
         return;
       }
-      const selected = workspace.selected();
-      if (!selected || imported.mediaId !== selected.id)
-        return yield* Effect.fail(new Error("Select the cut list's media before importing."));
-      const segments = yield* Effect.try(() =>
-        Schema.decodeUnknownSync(legacySegments)(imported.segments).map((segment) => ({
-          ...segment,
-        })),
-      );
-      const error = validateSegments(segments, selected.durationMs);
-      if (error) return yield* Effect.fail(new Error(error));
+      if (imported.mediaId !== undefined)
+        return yield* Effect.fail(new Error("Imported project response is invalid."));
       if (!current()) return;
-      workspace.editor.updateTimeline({ segments });
-      workspace.addMediaToProject();
-      workspace.setStatus("Cut list imported. Save the project to keep it.");
+      const confirmed = !workspace.dirty() || confirmDiscard();
+      if (current()) yield* workspace.projects.importProjectEffect(document, confirmed);
     }).pipe(
       Effect.mapError((error) => {
         const cause = Cause.isUnknownError(error) ? error.cause : error;
