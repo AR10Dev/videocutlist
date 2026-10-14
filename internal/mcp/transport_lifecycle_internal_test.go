@@ -24,7 +24,7 @@ func TestTransportSocketDisconnectKeepsAdmissionAndNumericIDUntilToolExit(t *tes
 	release := make(chan struct{})
 	var releaseOnce sync.Once
 	defer releaseOnce.Do(func() { close(release) })
-	transport, credentials, secret := lifecycleTransport(t, TransportConfig{
+	transport, secret, sessionID, credential := lifecycleSession(t, TransportConfig{
 		MaxConcurrentRequests: 1,
 		Tools: []Tool{{
 			Name: "wait", Permission: PermissionMediaRead, InputSchema: map[string]any{"type": "object"},
@@ -38,11 +38,6 @@ func TestTransportSocketDisconnectKeepsAdmissionAndNumericIDUntilToolExit(t *tes
 			},
 		}},
 	})
-	sessionID := initializeBudgetSession(t, transport, secret)
-	credential, err := credentials.Authenticate(t.Context(), secret)
-	if err != nil {
-		t.Fatal(err)
-	}
 	server := httptest.NewServer(transport)
 	client := server.Client()
 	t.Cleanup(func() {
@@ -135,7 +130,7 @@ func TestTransportHTTPDisconnectKeepsAdmissionAndNumericIDUntilToolExit(t *testi
 	release := make(chan struct{})
 	var releaseOnce sync.Once
 	defer releaseOnce.Do(func() { close(release) })
-	transport, credentials, secret := lifecycleTransport(t, TransportConfig{
+	transport, secret, sessionID, credential := lifecycleSession(t, TransportConfig{
 		MaxConcurrentRequests: 1,
 		Tools: []Tool{{
 			Name: "wait", Permission: PermissionMediaRead, InputSchema: map[string]any{"type": "object"},
@@ -149,11 +144,6 @@ func TestTransportHTTPDisconnectKeepsAdmissionAndNumericIDUntilToolExit(t *testi
 			},
 		}},
 	})
-	sessionID := initializeBudgetSession(t, transport, secret)
-	credential, err := credentials.Authenticate(t.Context(), secret)
-	if err != nil {
-		t.Fatal(err)
-	}
 	request := budgetRequest(http.MethodPost, secret, sessionID, `{"jsonrpc":"2.0","id":9007199254740993,"method":"tools/call","params":{"name":"wait","arguments":{}}}`)
 	requestContext, cancelRequest := context.WithCancel(t.Context())
 	request = request.WithContext(requestContext)
@@ -205,7 +195,7 @@ func TestTransportShutdownCancelsAndReportsContextIgnoringTool(t *testing.T) {
 	release := make(chan struct{})
 	var releaseOnce sync.Once
 	defer releaseOnce.Do(func() { close(release) })
-	transport, credentials, secret := lifecycleTransport(t, TransportConfig{
+	transport, secret, sessionID, credential := lifecycleSession(t, TransportConfig{
 		MaxConcurrentRequests: 1,
 		Tools: []Tool{{
 			Name: "ignore_cancel", Permission: PermissionMediaRead, InputSchema: map[string]any{"type": "object"},
@@ -219,11 +209,6 @@ func TestTransportShutdownCancelsAndReportsContextIgnoringTool(t *testing.T) {
 			},
 		}},
 	})
-	sessionID := initializeBudgetSession(t, transport, secret)
-	credential, err := credentials.Authenticate(t.Context(), secret)
-	if err != nil {
-		t.Fatal(err)
-	}
 	responseDone := make(chan struct{})
 	go func() {
 		response := httptest.NewRecorder()
@@ -291,6 +276,17 @@ func TestTransportSealedAssociationCannotBeClaimed(t *testing.T) {
 	if len(transport.associations) != 0 || len(transport.activeCalls) != 0 {
 		t.Fatal("sealed association retained lookup or active-call state")
 	}
+}
+
+func lifecycleSession(t *testing.T, config TransportConfig) (*Transport, string, string, Credential) {
+	t.Helper()
+	transport, credentials, secret := lifecycleTransport(t, config)
+	sessionID := initializeBudgetSession(t, transport, secret)
+	credential, err := credentials.Authenticate(t.Context(), secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return transport, secret, sessionID, credential
 }
 
 func lifecycleTransport(t *testing.T, config TransportConfig) (*Transport, *CredentialStore, string) {
