@@ -553,27 +553,6 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
-test("desktop and narrow layouts keep the explorer and primary actions reachable", async ({
-  page,
-}) => {
-  for (const width of [1280, 600]) {
-    await page.setViewportSize({ width, height: 800 });
-    await page.goto("/");
-    await expect(page.getByRole("region", { name: "Media library", exact: true })).toBeVisible();
-    await page.getByRole("button", { name: /camera.mp4/ }).click();
-    await expect(page.getByRole("heading", { name: "Timeline" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Set in" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Set out" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "Set in", exact: true })).toBeVisible();
-    if (width >= 1050)
-      await expect(
-        page.getByText(
-          "Set In and Out on the timeline; a valid range becomes one selected segment automatically.",
-        ),
-      ).toBeVisible();
-  }
-});
-
 test("desktop workbench fixes the viewport and styles sidebar resize and overflow regions", async ({
   page,
 }) => {
@@ -3999,19 +3978,6 @@ test("covers the responsive workspace and keyboard editing workflow", async ({ p
   await page.route(`${apiOrigin}/api/v2/batches/b_keyboard-flow01/events`, (route) =>
     route.fulfill(batchEvent(keyboardBatch)),
   );
-  for (const viewport of [
-    { width: 1440, height: 900 },
-    { width: 1024, height: 768 },
-    { width: 390, height: 844 },
-  ]) {
-    await page.setViewportSize(viewport);
-    await page.goto("/");
-    await expect(page.locator("main")).toBeVisible();
-    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
-      viewport.width,
-    );
-  }
-
   await page.setViewportSize({ width: 1024, height: 768 });
   await page.goto("/");
   const projectStatus = page.getByLabel("Project status");

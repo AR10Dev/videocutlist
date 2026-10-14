@@ -332,10 +332,25 @@ test("resize-created thumbnail callbacks are released on redraw and unmount", as
   expect(cleanup).toEqual({ resized: true, releasedPrevious: true, releasedOnDispose: true });
 });
 
-for (const width of [390, 700, 1049, 1050, 1051, 1280, 1717]) {
+for (const width of [390, 600, 700, 1024, 1049, 1050, 1051, 1280, 1440, 1717]) {
   test(`workbench geometry and settings stay usable at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 1005 });
-    await chooseMedia(page);
+    await page.goto("/");
+    await expect(page.locator("main")).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
+      width,
+    );
+    await expect(page.getByRole("region", { name: "Media library", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: /camera.mp4/ }).click();
+    await expect(page.getByRole("heading", { name: "Timeline" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Set in", exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Set out", exact: true })).toBeVisible();
+    if (width >= 1050)
+      await expect(
+        page.getByText(
+          "Set In and Out on the timeline; a valid range becomes one selected segment automatically.",
+        ),
+      ).toBeVisible();
     await page.getByRole("button", { name: "Add to project" }).click();
     const editorHeader = await page.locator(".editor-heading").boundingBox();
     expect(editorHeader!.y).toBeLessThanOrEqual(20);
