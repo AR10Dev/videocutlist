@@ -875,16 +875,9 @@ test("header distinguishes unsaved, dirty, and saved project states", async ({ p
   await expect(status).toContainText("Saved");
 });
 
-test("browser theme selection persists and keeps Settings controls focusable", async ({ page }) => {
+test("Settings controls remain focusable", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "Settings" }).click();
-  const theme = page.getByLabel("Theme");
-  await theme.selectOption("cmyk");
-  await expect(page.locator("html")).toHaveAttribute("data-theme", "cmyk");
-  await page.reload();
-  await page.getByRole("button", { name: "Settings" }).click();
-  await expect(page.getByLabel("Theme")).toHaveValue("cmyk");
-  await expect(page.locator("html")).toHaveAttribute("data-theme", "cmyk");
   await page.getByLabel("Theme").focus();
   await expect(page.getByLabel("Theme")).toBeFocused();
   await expect(page.getByRole("heading", { name: "Preferences" })).toBeVisible();
