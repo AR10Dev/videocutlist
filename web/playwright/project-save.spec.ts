@@ -1,15 +1,8 @@
 import { expect, test } from "@playwright/test";
+import { mediaFixture } from "./fixtures";
+import { mockWorkspaceApi } from "./workspace-api";
 
 const origin = "http://127.0.0.1:8787";
-const media = {
-  id: "m_0123456789012345678901234567890123456789012",
-  name: "camera.mp4",
-  durationMs: 10_000,
-  sizeBytes: 1000,
-  container: "mp4",
-  streams: { tracks: [{ index: 0, type: "video", codec: "h264" }] },
-  etag: "v1",
-};
 
 test("project save ignores playhead and unfinished cuts but persists undo", async ({ page }) => {
   const writes: unknown[] = [];
@@ -19,32 +12,7 @@ test("project save ignores playhead and unfinished cuts but persists undo", asyn
       authentication: { type: "none" },
     };
   });
-  await page.route(`${origin}/api/v2/**`, async (route) => {
-    const request = route.request();
-    const url = new URL(request.url());
-    if (url.pathname === "/api/v2/media/tree")
-      return route.fulfill({ json: { folders: [], items: [media] } });
-    if (url.pathname === `/api/v2/media/${media.id}`) return route.fulfill({ json: media });
-    if (url.pathname === "/api/v2/media/status")
-      return route.fulfill({ json: { state: "ready_with_media", message: "Ready" } });
-    if (url.pathname === "/api/v2/settings") return route.fulfill({ json: {} });
-    if (url.pathname === "/api/v2/destinations")
-      return route.fulfill({ json: { destinations: [] } });
-    if (url.pathname === "/api/v2/batches") return route.fulfill({ json: { items: [] } });
-    if (request.method() === "PUT" && /^\/api\/v2\/projects\/[^/]+$/.test(url.pathname)) {
-      const body = request.postDataJSON();
-      writes.push(body);
-      return route.fulfill({
-        json: {
-          ...body,
-          id: url.pathname.split("/").at(-1),
-          revision: writes.length,
-          updatedAt: "2026-01-01T00:00:00Z",
-        },
-      });
-    }
-    return route.fulfill({ status: 404 });
-  });
+  await mockWorkspaceApi(page, writes);
 
   await page.clock.install();
   await page.goto("/");
@@ -82,7 +50,7 @@ test("project import remains dirty across conflict and recovery restores edits",
     items: [
       {
         id: "i_aaaaaaaaaaaaaaaaaaaaaaaa",
-        mediaId: media.id,
+        mediaId: mediaFixture.id,
         segments: [{ startMs: 250, endMs: 1500, label: "Opening" }],
         exportOptions: {},
       },
@@ -94,40 +62,31 @@ test("project import remains dirty across conflict and recovery restores edits",
       authentication: { type: "none" },
     };
   });
-  await page.route(`${origin}/api/v2/**`, async (route) => {
+  await mockWorkspaceApi(page, []);
+  await page.route(`${origin}/api/v2/projects/*`, async (route) => {
     const request = route.request();
     const url = new URL(request.url());
-    if (url.pathname === "/api/v2/media/tree")
-      return route.fulfill({ json: { folders: [], items: [media] } });
-    if (url.pathname === `/api/v2/media/${media.id}`) return route.fulfill({ json: media });
-    if (url.pathname === "/api/v2/media/status")
-      return route.fulfill({ json: { state: "ready_with_media", message: "Ready" } });
-    if (url.pathname === "/api/v2/settings") return route.fulfill({ json: {} });
-    if (url.pathname === "/api/v2/destinations")
-      return route.fulfill({ json: { destinations: [] } });
-    if (url.pathname === "/api/v2/batches") return route.fulfill({ json: { items: [] } });
-    if (request.method() === "PUT" && /^\/api\/v2\/projects\/[^/]+$/.test(url.pathname)) {
-      const id = url.pathname.split("/").at(-1)!;
-      const body = request.postDataJSON() as Record<string, unknown>;
-      writes.push({ body, id });
-      if (conflict) {
-        conflict = false;
-        return route.fulfill({
-          status: 409,
-          json: {
-            error: {
-              code: "revision_conflict",
-              message: "Project revision changed.",
-              requestId: "browser-test",
-            },
-          },
-        });
-      }
+    if (request.method() !== "PUT" || !/^\/api\/v2\/projects\/[^/]+$/.test(url.pathname))
+      return route.fallback();
+    const id = url.pathname.split("/").at(-1)!;
+    const body = request.postDataJSON() as Record<string, unknown>;
+    writes.push({ body, id });
+    if (conflict) {
+      conflict = false;
       return route.fulfill({
-        json: { ...body, id, revision: 1, updatedAt: "2026-01-01T00:00:00Z" },
+        status: 409,
+        json: {
+          error: {
+            code: "revision_conflict",
+            message: "Project revision changed.",
+            requestId: "browser-test",
+          },
+        },
       });
     }
-    return route.fulfill({ status: 404 });
+    return route.fulfill({
+      json: { ...body, id, revision: 1, updatedAt: "2026-01-01T00:00:00Z" },
+    });
   });
 
   await page.goto("/");
