@@ -79,7 +79,7 @@ describe("projects controller", () => {
     "invalid restored segments",
     "imported document",
     "denied reset",
-    "confirmed reset",
+    "a new project during a pending load",
     "failed media restoration",
     "second media restoration fails",
   ])("loads media through the generated resource and respects %s", async (change) => {
@@ -211,6 +211,7 @@ describe("projects controller", () => {
     const originalTimeline = timeline();
     const originalItems = projectItems();
     let loading: Promise<void> | undefined;
+    let replacementProjectId: string | undefined;
     try {
       loading = controller.loadProject("p_loadedproject");
       if (change === "an edit") {
@@ -276,9 +277,11 @@ describe("projects controller", () => {
         expect(detectionCleared).toBe(0);
         expect(diagnosticsCleared).toBe(0);
       }
-      if (change === "confirmed reset") {
+      if (change === "a new project during a pending load") {
+        await projectStarted;
         setDirty(true);
         controller.newProject(true);
+        replacementProjectId = projectId();
         expect(projectId()).not.toBe("p_currentproject");
         expect(timeline()).toEqual(createTimelineHistory({ playheadMs: 0, segments: [], zoom: 1 }));
         expect(activeItemId()).toBeUndefined();
@@ -288,6 +291,7 @@ describe("projects controller", () => {
         expect(diagnosticsCleared).toBe(1);
       }
       resolveProject(Response.json(document));
+      if (change === "a new project during a pending load") await flushPersistence();
       await loading;
 
       if (change === "a superseding load") {
@@ -298,7 +302,13 @@ describe("projects controller", () => {
         expect(projectId()).toBe(document.id);
         expect(dirty()).toBe(true);
         expect(controller.saveState()).toBe("unsaved");
-      } else if (change === "confirmed reset") {
+      } else if (change === "a new project during a pending load") {
+        expect(projectId()).toBe(replacementProjectId);
+        expect(projectName()).toBe("Untitled project");
+        expect(revision()).toBe(0);
+        expect(dirty()).toBe(false);
+        expect(projectItems()).toEqual([]);
+        expect(status).toBe("New project ready.");
         expect(controller.saveState()).toBe("unsaved");
       } else if (failedRestoration) {
         expect(projectId()).toBe("p_currentproject");
