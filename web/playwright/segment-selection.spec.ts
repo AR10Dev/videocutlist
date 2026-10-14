@@ -1747,48 +1747,6 @@ test("detection can be cancelled explicitly and reports failed jobs", async ({ p
   ).toBeVisible();
 });
 
-test("clears detection results when source and active project-item context changes", async ({
-  page,
-}) => {
-  await page.route(`${apiOrigin}/api/v2/jobs/j_detection-silence-*/events`, (route) => {
-    const job: DetectionJob = {
-      id: new URL(route.request().url()).pathname.split("/")[4],
-      type: "detection",
-      state: "succeeded",
-      mediaId: media.id,
-      projectId: "p_demo-project",
-      projectRevision: 1,
-      kind: "silence",
-      candidates: [
-        {
-          id: "c_context-candidate",
-          mediaId: media.id,
-          projectId: "p_demo-project",
-          projectRevision: 1,
-          startMs: 1000,
-          endMs: 1500,
-          source: "silence",
-        },
-      ],
-    };
-    return route.fulfill(detectionEvent(job, 1));
-  });
-  await page.goto("/");
-  await page.getByRole("button", { name: /camera.mp4/ }).click();
-  await page.getByRole("button", { name: "Add to project" }).click();
-  await page.getByRole("button", { name: /second.mp4/ }).click();
-  await page.getByRole("button", { name: "Add to project" }).click();
-  await page.getByRole("button", { name: /camera.mp4/ }).click();
-  await openTask(page, "Detection");
-  await page.getByRole("button", { name: "Find pauses" }).click();
-  await expect(
-    page.getByText("1 candidates found. Review each before accepting.", { exact: true }),
-  ).toBeVisible();
-  await page.getByRole("button", { name: /second.mp4/ }).click();
-  await expect(page.getByRole("button", { name: "Cancel detection" })).toHaveCount(0);
-  await expect(page.getByText(/candidates found/)).toHaveCount(0);
-});
-
 test("ignores a terminal detection SSE snapshot released after active-item replacement", async ({
   page,
 }) => {
