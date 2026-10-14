@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -19,19 +20,7 @@ import (
 
 func TestPutSettingsRuntimeFailureDoesNotPersist(t *testing.T) {
 	ctx := context.Background()
-	db, err := store.OpenDatabase(ctx, t.TempDir()+"/settings.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := db.Close(); err != nil {
-			t.Error(err)
-		}
-	})
-	settings, err := store.NewRuntimeSettingsStore(db)
-	if err != nil {
-		t.Fatal(err)
-	}
+	_, settings := newSettingsIntegrationStore(t, ctx)
 	previous, err := settings.Seed(ctx, testRuntimeSettings())
 	if err != nil {
 		t.Fatal(err)
@@ -66,19 +55,7 @@ func TestPutSettingsRuntimeFailureDoesNotPersist(t *testing.T) {
 
 func TestPutSettingsRejectsInvalidDocumentsWithoutToggling(t *testing.T) {
 	ctx := t.Context()
-	db, err := store.OpenDatabase(ctx, t.TempDir()+"/settings.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := db.Close(); err != nil {
-			t.Error(err)
-		}
-	})
-	settings, err := store.NewRuntimeSettingsStore(db)
-	if err != nil {
-		t.Fatal(err)
-	}
+	_, settings := newSettingsIntegrationStore(t, ctx)
 	defaults := testRuntimeSettings()
 	defaults.MCPEnabled = true
 	previous, err := settings.Seed(ctx, defaults)
@@ -153,19 +130,7 @@ func TestPutSettingsRejectsInvalidDocumentsWithoutToggling(t *testing.T) {
 
 func TestGetSettingsReturnsCompleteMutableDocument(t *testing.T) {
 	ctx := t.Context()
-	db, err := store.OpenDatabase(ctx, t.TempDir()+"/settings.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := db.Close(); err != nil {
-			t.Error(err)
-		}
-	})
-	settings, err := store.NewRuntimeSettingsStore(db)
-	if err != nil {
-		t.Fatal(err)
-	}
+	_, settings := newSettingsIntegrationStore(t, ctx)
 	runtimeSettings := testRuntimeSettings()
 	availableRoot := t.TempDir()
 	unavailableRoot := filepath.Join(t.TempDir(), "deployment-missing-root")
@@ -247,19 +212,7 @@ func TestGetSettingsReturnsCompleteMutableDocument(t *testing.T) {
 
 func TestPutSettingsRejectsDeploymentMutation(t *testing.T) {
 	ctx := context.Background()
-	db, err := store.OpenDatabase(ctx, t.TempDir()+"/settings.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := db.Close(); err != nil {
-			t.Error(err)
-		}
-	})
-	settings, err := store.NewRuntimeSettingsStore(db)
-	if err != nil {
-		t.Fatal(err)
-	}
+	_, settings := newSettingsIntegrationStore(t, ctx)
 	previous, err := settings.Seed(ctx, testRuntimeSettings())
 	if err != nil {
 		t.Fatal(err)
@@ -296,19 +249,7 @@ func TestPutSettingsRejectsDeploymentMutation(t *testing.T) {
 
 func TestPutSettingsPersistenceFailureRestoresRuntime(t *testing.T) {
 	ctx := context.Background()
-	db, err := store.OpenDatabase(ctx, t.TempDir()+"/settings.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := db.Close(); err != nil {
-			t.Error(err)
-		}
-	})
-	settings, err := store.NewRuntimeSettingsStore(db)
-	if err != nil {
-		t.Fatal(err)
-	}
+	db, settings := newSettingsIntegrationStore(t, ctx)
 	previous, err := settings.Seed(ctx, testRuntimeSettings())
 	if err != nil {
 		t.Fatal(err)
@@ -348,6 +289,24 @@ func TestPutSettingsPersistenceFailureRestoresRuntime(t *testing.T) {
 	if got.Revision != previous.Revision || got.Settings.ExportLimit != previous.Settings.ExportLimit {
 		t.Fatalf("persisted settings changed: got=%#v previous=%#v", got, previous)
 	}
+}
+
+func newSettingsIntegrationStore(t *testing.T, ctx context.Context) (*sql.DB, *store.RuntimeSettingsStore) {
+	t.Helper()
+	db, err := store.OpenDatabase(ctx, t.TempDir()+"/settings.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	settings, err := store.NewRuntimeSettingsStore(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return db, settings
 }
 
 func putSettingsRequest(t *testing.T, server http.Handler, revision int64, settings settingsmodel.RuntimeSettings) *httptest.ResponseRecorder {
