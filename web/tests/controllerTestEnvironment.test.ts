@@ -96,6 +96,30 @@ describe("controller test environment cleanup", () => {
     },
   );
 
+  it("restores nested environments in reverse disposal order", () => {
+    const original = descriptors();
+    const first = overrides();
+    const firstFetch: typeof globalThis.fetch = () =>
+      Promise.resolve(Response.json({ first: true }));
+    first.values.fetch = firstFetch;
+    const firstRoot = createControllerTestRoot(() => undefined, first.values);
+    const firstDescriptors = descriptors();
+    const second = overrides();
+    const secondFetch: typeof globalThis.fetch = () =>
+      Promise.resolve(Response.json({ second: true }));
+    second.values.fetch = secondFetch;
+    const secondRoot = createControllerTestRoot(() => undefined, second.values);
+    expect(globalThis.fetch).toBe(secondFetch);
+    expect(globalThis.localStorage).toBe(second.storage);
+
+    secondRoot.dispose();
+    expectRestored(firstDescriptors);
+    expect(globalThis.fetch).toBe(firstFetch);
+    expect(globalThis.localStorage).toBe(first.storage);
+    firstRoot.dispose();
+    expectRestored(original);
+  });
+
   it("restores globals and disposes nested roots on explicit, repeated disposal", () => {
     const original = descriptors();
     const installed = overrides();
