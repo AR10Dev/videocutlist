@@ -42,7 +42,7 @@ For completed work, remove the active triage label, add `outcome:completed` or `
 
 ## Migrated audit
 
-All 25 legacy tickets, including declined/archive tickets, were imported with acceptance criteria and discussion. See [the mapping](../specs/claude-audit/migration.md) and [historical specification](../specs/claude-audit/spec.md). `.scratch/claude-audit/` is retained as frozen historical evidence. Its Markdown queues and saved workflow scripts must not be resumed as live tracking.
+All 25 legacy tickets, including declined/archive tickets, were imported with acceptance criteria and discussion. See [the mapping](../specs/claude-audit/migration.md). The retired specification is preserved in Git at `8849a73:docs/specs/claude-audit/spec.md`; current outcomes and closure waivers are recorded in Beads. `.scratch/claude-audit/` is retained as frozen historical evidence. Its Markdown queues and saved workflow scripts must not be resumed as live tracking.
 
 ## Wayfinding operations
 
