@@ -1,6 +1,7 @@
 import type * as EffectApiTypes from "../src/generated/effect-api";
 import { RegistryProvider, RegistryContext } from "@effect/atom-solid";
 import { createComponent, createRoot, createSignal, untrack, useContext } from "solid-js";
+import { withControllerTestRoot } from "./controllerTestEnvironment";
 import * as Effect from "effect/Effect";
 import * as Atom from "effect/reactivity/Atom";
 import * as AtomRegistry from "effect/reactivity/AtomRegistry";
@@ -118,9 +119,16 @@ async function withDetection(
     saveProject?: () => Promise<EffectApiTypes.Project | undefined>;
   } = {},
 ) {
-  await new Promise<void>((resolve, reject) => {
-    createRoot((dispose) => {
-      let registry!: AtomRegistry.AtomRegistry;
+  const configuration = {
+    serverBaseUrl: "https://example.test",
+    authentication: { type: "none" as const },
+  };
+  const fetch: typeof globalThis.fetch = (input, init) => {
+    const url = new URL(input instanceof Request ? input.url : input.toString());
+    return api.request(url.pathname.replace(/^\/api\/v2\//, "") + url.search, init);
+  };
+  await withControllerTestRoot(
+    ({ registry }) => {
       const [revision, setRevision] = atomSignal(() => registry, 1);
       const [projectId, setProjectId] = atomSignal(() => registry, queuedDetectionJob.projectId);
       const [editorVersion, setEditorVersion] = atomSignal(() => registry, 0);
@@ -131,57 +139,41 @@ async function withDetection(
         () => registry,
         createTimelineHistory({ playheadMs: 0, segments: [], zoom: 1 }),
       );
-      let controller!: DetectionController;
-      const configuration = {
-        serverBaseUrl: "https://example.test",
-        authentication: { type: "none" as const },
-      };
-      vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) => {
-        const url = new URL(input instanceof Request ? input.url : input.toString());
-        return api.request(url.pathname.replace(/^\/api\/v2\//, "") + url.search, init);
-      });
-      createComponent(RegistryProvider, {
-        get children() {
-          untrack(() => {
-            registry = useContext(RegistryContext);
-            controller = createDetectionController(
-              createServerState({ ...api, mediaRequest: api.request }, registry, configuration),
-              {
-                reviewContext: Atom.make((get) => ({
-                  projectId: get(projectId.atom),
-                  revision: get(revision.atom),
-                  editorVersion: get(editorVersion.atom),
-                  selected: overrides.selected?.() ?? get(reviewMedia.atom),
-                  activeItemId: overrides.activeItemId?.() ?? get(reviewItem.atom),
-                  saveConflict: get(reviewConflict.atom),
-                })),
-                selected: overrides.selected ?? reviewMedia,
-                activeItemId: overrides.activeItemId ?? reviewItem,
-                projectId,
-                revision,
-                dirty: () => false,
-                editorVersion,
-                saveConflict: reviewConflict,
-                segments: () => timeline().present.segments,
-                saveProject: overrides.saveProject
-                  ? () => Effect.tryPromise(overrides.saveProject!)
-                  : () =>
-                      Effect.succeed({
-                        id: projectId(),
-                        revision: revision(),
-                      } as EffectApiTypes.Project),
-                updateSegments: (value) => {
-                  replaceTimeline((current) => editTimeline(current, { segments: value }));
-                  setEditorVersion((version) => version + 1);
-                },
-              },
-            );
-          });
-          return null;
+      const controller = createDetectionController(
+        createServerState({ ...api, mediaRequest: api.request }, registry, configuration),
+        {
+          reviewContext: Atom.make((get) => ({
+            projectId: get(projectId.atom),
+            revision: get(revision.atom),
+            editorVersion: get(editorVersion.atom),
+            selected: overrides.selected?.() ?? get(reviewMedia.atom),
+            activeItemId: overrides.activeItemId?.() ?? get(reviewItem.atom),
+            saveConflict: get(reviewConflict.atom),
+          })),
+          selected: overrides.selected ?? reviewMedia,
+          activeItemId: overrides.activeItemId ?? reviewItem,
+          projectId,
+          revision,
+          dirty: () => false,
+          editorVersion,
+          saveConflict: reviewConflict,
+          segments: () => timeline().present.segments,
+          saveProject: overrides.saveProject
+            ? () => Effect.tryPromise(overrides.saveProject!)
+            : () =>
+                Effect.succeed({
+                  id: projectId(),
+                  revision: revision(),
+                } as EffectApiTypes.Project),
+          updateSegments: (value) => {
+            replaceTimeline((current) => editTimeline(current, { segments: value }));
+            setEditorVersion((version) => version + 1);
+          },
         },
-      });
-      queueMicrotask(() => {
-        void exercise(controller, {
+      );
+      return {
+        controller,
+        state: {
           setRevision,
           editorVersion,
           setProjectId,
@@ -194,21 +186,12 @@ async function withDetection(
             replaceTimeline(undoTimeline(timeline()));
             setEditorVersion(editorVersion() + 1);
           },
-        }).then(
-          () => {
-            dispose();
-            vi.unstubAllGlobals();
-            resolve();
-          },
-          (error: unknown) => {
-            dispose();
-            vi.unstubAllGlobals();
-            reject(error);
-          },
-        );
-      });
-    });
-  });
+        },
+      };
+    },
+    ({ controller, state }) => exercise(controller, state),
+    { configuration, fetch },
+  );
 }
 
 async function withProjectSaveAndDetection(
