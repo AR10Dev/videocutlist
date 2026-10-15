@@ -189,6 +189,7 @@ describe("export queue cancellation", () => {
         expect(
           queue.view.batches().find((candidate: Batch) => candidate.batchId === batchId)?.state,
         ).toBe("succeeded");
+        expect(queue.view.exportStatus()).toBe("Export complete.");
       },
       { fetch },
     );

@@ -189,10 +189,7 @@ export function createExportQueue(deps: {
                 ),
             ),
           );
-          if (current()) {
-            setExportStatus(message);
-            refreshBatches();
-          }
+          if (current()) refreshBatches();
         }).pipe(
           Effect.tapError((error) =>
             Effect.sync(() => {

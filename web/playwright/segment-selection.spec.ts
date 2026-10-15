@@ -376,7 +376,12 @@ test.beforeEach(async ({ page }) => {
     if (url.pathname === `/api/v2/media/${media.id}`) return route.fulfill({ json: media });
     if (url.pathname === `/api/v2/media/${secondMedia.id}`)
       return route.fulfill({ json: secondMedia });
-    if (/^\/api\/v2\/export-capabilities\/media\/m_[A-Za-z0-9_-]+$/.test(url.pathname))
+    if (
+      request.method() === "GET" &&
+      [media.id, secondMedia.id].some(
+        (id) => url.pathname === `/api/v2/export-capabilities/media/${id}`,
+      )
+    )
       return route.fulfill({
         json: {
           strategies: [
@@ -3814,6 +3819,18 @@ test("load fetches project media directly and corrupt recents do not block start
       },
     }),
   );
+  await page.route(`${apiOrigin}/api/v2/export-capabilities/media/${outsideMedia.id}`, (route) => {
+    expect(route.request().method()).toBe("GET");
+    return route.fulfill({
+      json: {
+        strategies: [
+          { strategy: "stream_copy_preferred", supported: true, reasons: [] },
+          { strategy: "precise_reencode", supported: true, reasons: [] },
+          { strategy: "hybrid_smart_cut", supported: true, reasons: [] },
+        ],
+      } satisfies EffectApiTypes.ExportCapabilities,
+    });
+  });
   let outsideMediaReads = 0;
   let refreshes = 0;
   await page.route(`${apiOrigin}/api/v2/media/refresh`, (route) => {
@@ -4329,6 +4346,8 @@ test("persists appearance and recovers from invalid stored values", async ({ pag
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
   await page.reload();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await page.getByRole("button", { name: "Settings" }).click();
+  await expect(page.getByLabel("Theme")).toHaveValue("light");
 
   await page.evaluate(({ key, value }) => localStorage.setItem(key, JSON.stringify(value)), {
     key: browserPreferencesKey,

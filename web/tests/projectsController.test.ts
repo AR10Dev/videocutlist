@@ -752,6 +752,51 @@ describe("workspace save command", () => {
     });
   });
 
+  it("saves a replacement before an old PUT completes and keeps its next revision", async () => {
+    await withSaveWorkspace(async ({ controller, state, edit, requests, nextRequest }) => {
+      const items = state().items;
+      const oldStarted = nextRequest();
+      const oldSave = controller.saveProject();
+      await oldStarted;
+
+      controller.newProject(true);
+      edit({ name: "Replacement", items, selected: media });
+      const replacementId = state().id;
+      const replacementStarted = nextRequest();
+      const replacementSave = controller.saveProject();
+      await replacementStarted;
+      expect(requests[1].id).toBe(replacementId);
+      expect(replacementId).not.toBe(requests[0].id);
+      expect(requests[1].payload.revision).toBe(0);
+      requests[1].complete();
+      expect((await replacementSave)?.revision).toBe(1);
+      expect(controller.saveState()).toBe("saved");
+      expect(state()).toMatchObject({
+        id: replacementId,
+        name: "Replacement",
+        revision: 1,
+        dirty: false,
+      });
+      const saved = state();
+
+      requests[0].complete();
+      expect(await oldSave).toBeUndefined();
+      await flushPersistence();
+      expect(state()).toBe(saved);
+      expect(controller.saveState()).toBe("saved");
+
+      edit({ name: "Replacement edited" });
+      const nextStarted = nextRequest();
+      const nextSave = controller.saveProject();
+      await nextStarted;
+      expect(requests[2].id).toBe(replacementId);
+      expect(requests[2].payload.revision).toBe(1);
+      requests[2].complete();
+      expect((await nextSave)?.revision).toBe(2);
+      expect(state()).toMatchObject({ id: replacementId, revision: 2, dirty: false });
+    });
+  });
+
   it.each(["media switch", "new project", "disposal"])(
     "ignores a late mutation after %s",
     async (change) => {
