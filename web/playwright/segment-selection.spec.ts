@@ -376,6 +376,16 @@ test.beforeEach(async ({ page }) => {
     if (url.pathname === `/api/v2/media/${media.id}`) return route.fulfill({ json: media });
     if (url.pathname === `/api/v2/media/${secondMedia.id}`)
       return route.fulfill({ json: secondMedia });
+    if (/^\/api\/v2\/export-capabilities\/media\/m_[A-Za-z0-9_-]+$/.test(url.pathname))
+      return route.fulfill({
+        json: {
+          strategies: [
+            { strategy: "stream_copy_preferred", supported: true, reasons: [] },
+            { strategy: "precise_reencode", supported: true, reasons: [] },
+            { strategy: "hybrid_smart_cut", supported: true, reasons: [] },
+          ],
+        } satisfies EffectApiTypes.ExportCapabilities,
+      });
     if (url.pathname === "/api/v2/destinations")
       return route.fulfill({
         json: {
