@@ -109,14 +109,21 @@ describe("controller test environment cleanup", () => {
       Promise.resolve(Response.json({ second: true }));
     second.values.fetch = secondFetch;
     const secondRoot = createControllerTestRoot(() => undefined, second.values);
-    expect(globalThis.fetch).toBe(secondFetch);
-    expect(globalThis.localStorage).toBe(second.storage);
+    try {
+      expect(globalThis.fetch).toBe(secondFetch);
+      expect(globalThis.localStorage).toBe(second.storage);
 
-    secondRoot.dispose();
-    expectRestored(firstDescriptors);
-    expect(globalThis.fetch).toBe(firstFetch);
-    expect(globalThis.localStorage).toBe(first.storage);
-    firstRoot.dispose();
+      secondRoot.dispose();
+      expectRestored(firstDescriptors);
+      expect(globalThis.fetch).toBe(firstFetch);
+      expect(globalThis.localStorage).toBe(first.storage);
+    } finally {
+      try {
+        secondRoot.dispose();
+      } finally {
+        firstRoot.dispose();
+      }
+    }
     expectRestored(original);
   });
 
