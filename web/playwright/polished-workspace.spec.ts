@@ -69,6 +69,26 @@ test.beforeEach(async ({ page }) => {
       return route.fulfill({ json: { folders: [], items: [media], nextCursor: null } });
     if (path.endsWith("/media/status"))
       return route.fulfill({ json: { state: "ready_with_media", message: "Library ready." } });
+    if (path === `/api/v2/export-capabilities/media/${media.id}`)
+      return route.fulfill({
+        json: {
+          strategies: [
+            { strategy: "stream_copy_preferred", supported: true, reasons: [] },
+            { strategy: "precise_reencode", supported: true, reasons: [] },
+            { strategy: "hybrid_smart_cut", supported: true, reasons: [] },
+          ],
+        },
+      });
+    if (path === "/api/v2/projects/import" && request.method() === "POST") {
+      const { content } = request.postDataJSON() as { content: string };
+      const document = JSON.parse(content) as { name: string; items: unknown[] };
+      return route.fulfill({
+        json: {
+          sourceFormat: "v2",
+          document: { revision: 0, schemaVersion: 2, name: document.name, items: document.items },
+        },
+      });
+    }
     if (path.endsWith(`/media/${media.id}`)) return route.fulfill({ json: media });
     if (path.endsWith("/projects"))
       return route.fulfill({ json: { items: [project], nextCursor: null } });
