@@ -77,6 +77,31 @@ func TestProductionProcessMediaAndDerivedAssets(t *testing.T) {
 	}
 	mediaID := page.Items[0].ID
 
+	var capabilities struct {
+		Strategies []struct {
+			Strategy  string `json:"strategy"`
+			Supported bool   `json:"supported"`
+		} `json:"strategies"`
+	}
+	getJSON(t, p, "/api/v2/export-capabilities/media/"+mediaID, &capabilities)
+	if len(capabilities.Strategies) == 0 || capabilities.Strategies[0].Strategy == "" {
+		t.Fatalf("export capabilities missing strategies: %#v", capabilities)
+	}
+
+	importResponse := p.requestCommand(t, http.MethodPost, "/api/v2/projects/import", map[string]string{"content": `{"schemaVersion":2,"name":"Real-media import","items":[{"id":"i_aaaaaaaaaaaaaaaaaaaaaaaa","mediaId":"` + mediaID + `","segments":[{"startMs":0,"endMs":1000}]}]}`})
+	var imported struct {
+		MediaID  string `json:"mediaId"`
+		Document struct {
+			Name string `json:"name"`
+		} `json:"document"`
+	}
+	if importResponse.StatusCode != http.StatusOK || json.NewDecoder(importResponse.Body).Decode(&imported) != nil || imported.Document.Name != "Real-media import" {
+		body, _ := io.ReadAll(importResponse.Body)
+		importResponse.Body.Close()
+		t.Fatalf("POST project import status=%d body=%s response=%#v", importResponse.StatusCode, body, imported)
+	}
+	importResponse.Body.Close()
+
 	var detail struct {
 		ID         string         `json:"id"`
 		DurationMS int64          `json:"durationMs"`

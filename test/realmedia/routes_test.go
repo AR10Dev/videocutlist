@@ -26,6 +26,8 @@ var productionRoutes = []struct {
 	{http.MethodGet, "/api/v2/media/import/j_aaaaaaaaaaaa", "media"},
 	{http.MethodDelete, "/api/v2/media/import/j_aaaaaaaaaaaa", "media"},
 	{http.MethodGet, "/api/v2/media/m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "media"},
+	{http.MethodGet, "/api/v2/export-capabilities/media/m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "export_capabilities"},
+	{http.MethodPost, "/api/v2/projects/import", "import_project_file"},
 	{http.MethodGet, "/media/v2/media/m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/preview", "assets"},
 	{http.MethodHead, "/media/v2/media/m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/preview", "assets"},
 	{http.MethodGet, "/media/v2/media/m_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/thumbnails", "assets"},
