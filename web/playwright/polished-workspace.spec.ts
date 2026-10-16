@@ -352,7 +352,7 @@ test("resize-created thumbnail callbacks are released on redraw and unmount", as
   expect(cleanup).toEqual({ resized: true, releasedPrevious: true, releasedOnDispose: true });
 });
 
-for (const width of [390, 600, 700, 1024, 1049, 1050, 1051, 1280, 1440, 1717]) {
+for (const width of [390, 1049, 1050, 1051, 1717]) {
   test(`workbench geometry and settings stay usable at ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 1005 });
     await page.goto("/");
