@@ -110,6 +110,10 @@ export type BrowserPreferences = AppSettings & {
 };
 
 export const browserPreferencesKey = "videocutlist.browser-preferences.v1";
+export const legacySettingsKey = "videocutlist.settings.v1";
+export const legacyWaveformVisibleKey = "videocutlist.waveform-visible.v1";
+export const legacyLoopSelectedSegmentKey = "videocutlist.loop-selected-segment.v1";
+export const legacyDestinationKey = "videocutlist.last-destination.v1";
 export const maxFilenameTemplateLength = 160;
 // Go validates filename templates as UTF-8 bytes, not UTF-16 code units.
 export const validFilenameTemplateLength = (template: string) =>
@@ -160,3 +164,65 @@ export const browserPreferencesSchema = Schema.Struct({
   loopSelectedSegment: Schema.Boolean,
   lastDestinationId: Schema.optionalKey(destinationIdSchema),
 });
+
+function decodeOrDefault<S extends Schema.ConstraintDecoder<unknown>>(
+  schema: S,
+  value: unknown,
+  fallback: S["Type"],
+): S["Type"] {
+  try {
+    return Schema.decodeUnknownSync(schema)(value);
+  } catch {
+    return fallback;
+  }
+}
+
+function legacySettings(value: unknown): AppSettings {
+  const settings = value !== null && typeof value === "object" ? value : {};
+  const field = (key: string): unknown => Object.getOwnPropertyDescriptor(settings, key)?.value;
+  return {
+    filenameTemplate: decodeOrDefault(
+      filenameTemplateSchema,
+      field("filenameTemplate"),
+      defaultSettings.filenameTemplate,
+    ),
+    cutStrategy: decodeOrDefault(
+      cutStrategySchema,
+      field("cutStrategy"),
+      defaultSettings.cutStrategy,
+    ),
+    muted: decodeOrDefault(Schema.Boolean, field("muted"), defaultSettings.muted),
+    appearance: decodeOrDefault(appearanceSchema, field("appearance"), defaultSettings.appearance),
+  };
+}
+
+/** Decodes the former independent preference keys only when the consolidated value is absent. */
+export function decodeLegacyBrowserPreferences(
+  settingsRaw: string | undefined,
+  waveformRaw: string | undefined,
+  loopRaw: string | undefined,
+  destinationRaw: string | undefined,
+): BrowserPreferences | undefined {
+  if (
+    settingsRaw === undefined &&
+    waveformRaw === undefined &&
+    loopRaw === undefined &&
+    destinationRaw === undefined
+  )
+    return undefined;
+
+  let settingsValue: unknown;
+  try {
+    settingsValue = settingsRaw === undefined ? undefined : JSON.parse(settingsRaw);
+  } catch {
+    settingsValue = undefined;
+  }
+  const settings = legacySettings(settingsValue);
+  const destination = validDestinationId(destinationRaw) ? destinationRaw : undefined;
+  return {
+    ...settings,
+    waveformVisible: waveformRaw !== "false",
+    loopSelectedSegment: loopRaw === "true",
+    ...(destination !== undefined ? { lastDestinationId: destination } : {}),
+  };
+}

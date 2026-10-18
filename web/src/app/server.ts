@@ -40,6 +40,11 @@ import {
   browserPreferencesKey,
   browserPreferencesSchema,
   defaultBrowserPreferences,
+  decodeLegacyBrowserPreferences,
+  legacyDestinationKey,
+  legacyLoopSelectedSegmentKey,
+  legacySettingsKey,
+  legacyWaveformVisibleKey,
 } from "../features/settings/model";
 import {
   browserPersistenceLayer,
@@ -119,6 +124,16 @@ export function createServerState(
     key: browserPreferencesKey,
     schema: browserPreferencesSchema,
     defaultValue: defaultBrowserPreferences,
+    legacy: {
+      restore: (store) =>
+        Effect.gen(function* () {
+          const settings = yield* store.get(legacySettingsKey);
+          const waveform = yield* store.get(legacyWaveformVisibleKey);
+          const loop = yield* store.get(legacyLoopSelectedSegmentKey);
+          const destination = yield* store.get(legacyDestinationKey);
+          return decodeLegacyBrowserPreferences(settings, waveform, loop, destination);
+        }),
+    },
   });
   const panelPreferences = persistence.value({
     key: PANEL_PREFERENCES_KEY,

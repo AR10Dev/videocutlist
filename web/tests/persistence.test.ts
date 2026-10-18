@@ -294,6 +294,117 @@ describe("workspace schema persistence", () => {
     },
   );
 
+  it("does not publish or migrate legacy data over an early local edit", async () => {
+    let finishLegacy!: (value: string | undefined) => void;
+    let legacyReadStarted!: () => void;
+    const started = new Promise<void>((resolve) => (legacyReadStarted = resolve));
+    const values = new Map<string, string>([["legacy", "6"]]);
+    const writes: Array<[string, string]> = [];
+    const runtime = Atom.runtime(
+      Layer.succeed(
+        KeyValueStore.KeyValueStore,
+        KeyValueStore.makeStringOnly({
+          get: (key) =>
+            key === "legacy"
+              ? Effect.promise(
+                  () =>
+                    new Promise<string | undefined>((resolve) => {
+                      finishLegacy = resolve;
+                      legacyReadStarted();
+                    }),
+                )
+              : Effect.sync(() => values.get(key)),
+          set: (key, value) =>
+            Effect.sync(() => {
+              writes.push([key, value]);
+              values.set(key, value);
+            }),
+          remove: (key) => Effect.sync(() => void values.delete(key)),
+          clear: Effect.void,
+          size: Effect.succeed(0),
+        }),
+      ),
+    );
+    const registry = AtomRegistry.make();
+    const persisted = createPersistencePolicy(runtime, registry).value({
+      key: "preferences",
+      schema: valueSchema,
+      defaultValue: { value: 0 },
+      legacy: {
+        restore: (store) =>
+          store
+            .get("legacy")
+            .pipe(Effect.map((raw) => (raw === undefined ? undefined : { value: Number(raw) }))),
+      },
+    });
+
+    await started;
+    registry.set(persisted.value, { value: 7 });
+    finishLegacy("6");
+    try {
+      await Effect.runPromise(
+        AtomRegistry.getResult(registry, persisted.initialize, { suspendOnWaiting: true }),
+      );
+      await Effect.runPromise(
+        AtomRegistry.getResult(registry, persisted.save, { suspendOnWaiting: true }),
+      );
+      expect(registry.get(persisted.value)).toEqual({ value: 7 });
+      expect(values.get("preferences")).toBe('{"value":7}');
+      expect(writes).toEqual([["preferences", '{"value":7}']]);
+    } finally {
+      registry.dispose();
+    }
+  });
+
+  it("rechecks current storage before publishing a delayed legacy restore", async () => {
+    let finishLegacy!: (value: string | undefined) => void;
+    let legacyReadStarted!: () => void;
+    const started = new Promise<void>((resolve) => (legacyReadStarted = resolve));
+    const values = new Map<string, string>([["legacy", "6"]]);
+    const { runtime } = testRuntime({
+      get: (key) =>
+        key === "legacy"
+          ? Effect.promise(
+              () =>
+                new Promise<string | undefined>((resolve) => {
+                  finishLegacy = resolve;
+                  legacyReadStarted();
+                }),
+            )
+          : Effect.sync(() => values.get(key)),
+      set: (key, value) =>
+        Effect.sync(() => {
+          values.set(key, value);
+        }),
+    });
+    const registry = AtomRegistry.make();
+    const persisted = createPersistencePolicy(runtime, registry).value({
+      key: "preferences",
+      schema: valueSchema,
+      defaultValue: { value: 0 },
+      legacy: {
+        restore: (store) =>
+          store
+            .get("legacy")
+            .pipe(Effect.map((raw) => (raw === undefined ? undefined : { value: Number(raw) }))),
+      },
+    });
+
+    await started;
+    values.set("preferences", '{"value":9}');
+    finishLegacy("6");
+    try {
+      await Effect.runPromise(
+        AtomRegistry.getResult(registry, persisted.initialize, { suspendOnWaiting: true }),
+      );
+      expect(registry.get(persisted.value)).toEqual({ value: 9 });
+      expect(values.get("preferences")).toBe('{"value":9}');
+      expect(registry.get(persisted.status)).toMatchObject({ write: "idle" });
+    } finally {
+      registry.dispose();
+    }
+  });
+
   it("interrupts a pending initial read when the workspace registry is disposed", async () => {
     let readStarted!: () => void;
     const started = new Promise<void>((resolve) => (readStarted = resolve));

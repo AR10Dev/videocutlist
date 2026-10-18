@@ -106,6 +106,10 @@ export function createProjectsController(deps: ProjectsControllerDeps) {
     schema: rememberedProjectSchema,
     defaultValue: null,
     removeWhen: (value) => value === null,
+    legacy: {
+      onDecodeFailure: true,
+      restore: (_store, raw) => Effect.succeed(validProjectId(raw) ? raw : undefined),
+    },
   });
   const observedRecovery = useAtomValue(() => recoveryValue.value);
   const recovery = () => {

@@ -947,6 +947,59 @@ const storedRecovery = {
 const flushPersistence = () => new Promise<void>((resolve) => setImmediate(resolve));
 
 describe("workspace project persistence", () => {
+  it("restores and rewrites the historical raw active project ID", async () => {
+    const storage = memoryStorage();
+    const id = "p_legacyremembered01";
+    storage.setItem(rememberedProjectKey, id);
+    await withSaveWorkspace(
+      async ({ controller, reads, storage: persistedStorage }) => {
+        await Effect.runPromise(controller.restorationEffect());
+        expect(reads.some((url) => url.includes(`/projects/${id}`))).toBe(true);
+        expect(persistedStorage.getItem(rememberedProjectKey)).toBe(JSON.stringify(id));
+      },
+      {
+        storage,
+        clean: true,
+        projectResponse: () =>
+          Response.json({
+            id,
+            name: "Remembered project",
+            revision: 1,
+            schemaVersion: 2,
+            items: storedRecovery.items,
+            updatedAt: "2026-01-01T00:00:00Z",
+          }),
+      },
+    );
+  });
+
+  it("does not restore or rewrite an invalid historical raw active project ID", async () => {
+    const storage = memoryStorage();
+    storage.setItem(rememberedProjectKey, "not-a-project-id");
+    await withSaveWorkspace(
+      async ({ controller, reads, storage: persistedStorage }) => {
+        await Effect.runPromise(controller.restorationEffect());
+        expect(reads.some((url) => url.includes("/projects/"))).toBe(false);
+        expect(persistedStorage.getItem(rememberedProjectKey)).toBe("not-a-project-id");
+      },
+      { storage, clean: true },
+    );
+  });
+
+  it("still loads a validated historical project when its migration rewrite fails", async () => {
+    const storage = memoryStorage();
+    const id = "p_legacyremembered01";
+    storage.setItem(rememberedProjectKey, id);
+    await withSaveWorkspace(
+      async ({ controller, reads, storage: persistedStorage }) => {
+        await Effect.runPromise(controller.restorationEffect());
+        expect(reads.some((url) => url.includes(`/projects/${id}`))).toBe(true);
+        expect(persistedStorage.getItem(rememberedProjectKey)).toBe(id);
+      },
+      { storage, clean: true, failWrites: true },
+    );
+  });
+
   it("persists a Unicode-named project and a later ordinary project across reinitialization", async () => {
     const storage = memoryStorage();
     const unicode = { id: "p_unicodeproject01", label: "🎬".repeat(61) };
