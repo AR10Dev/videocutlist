@@ -392,31 +392,6 @@ export function App() {
                         <CircleHelp size={15} aria-hidden="true" /> Keyboard help
                       </DropdownMenu.Item>
                     </li>
-                    <DropdownMenu.Group as="li">
-                      <DropdownMenu.GroupLabel class="menu-title text-[0.7rem] text-base-content/72">
-                        Panel layout
-                      </DropdownMenu.GroupLabel>
-                      <ul>
-                        <li>
-                          <DropdownMenu.Item
-                            as="button"
-                            class="data-highlighted:bg-base-300"
-                            onSelect={() => resetPanelWidth("media")}
-                          >
-                            Reset media panel size
-                          </DropdownMenu.Item>
-                        </li>
-                        <li>
-                          <DropdownMenu.Item
-                            as="button"
-                            class="data-highlighted:bg-base-300"
-                            onSelect={() => resetPanelWidth("segments")}
-                          >
-                            Reset tasks panel size
-                          </DropdownMenu.Item>
-                        </li>
-                      </ul>
-                    </DropdownMenu.Group>
                   </DropdownMenu.Content>
                 </DropdownMenu.Portal>
               </DropdownMenu>

@@ -34,18 +34,20 @@ export function CutsView() {
       <header class="task-heading flex items-baseline justify-between gap-2">
         <h2>Cuts</h2>
         <div class="cut-summary text-sm" role="status">
-          <span>{workspace.editor.present().segments.length} selected</span>
-          <span>
+          {workspace.editor.present().segments.length}{" "}
+          {workspace.editor.present().segments.length === 1 ? "cut" : "cuts"} ·{" "}
+          <Show
+            when={workspace.editor.present().segments.some((segment) => !segmentIncluded(segment))}
+          >
             {workspace.editor.present().segments.filter(segmentIncluded).length} included ·{" "}
-            {formatTime(
-              workspace.editor
-                .present()
-                .segments.filter(segmentIncluded)
-                .reduce((total, segment) => total + segment.endMs - segment.startMs, 0),
-              workspace.editor.duration(),
-            )}{" "}
-            requested
-          </span>
+          </Show>
+          {formatTime(
+            workspace.editor
+              .present()
+              .segments.filter(segmentIncluded)
+              .reduce((total, segment) => total + segment.endMs - segment.startMs, 0),
+            workspace.editor.duration(),
+          )}
         </div>
       </header>
       <Show

@@ -86,20 +86,6 @@ export function EditorView(props: {
                 </div>
               )}
             </Show>
-            <Show when={!workspace.activeItemId()}>
-              <div class="preview-only-notice" role="status">
-                <p class="text-sm text-base-content/70">
-                  Preview only · Your first valid cut adds this video to the project.
-                </p>
-                <button
-                  class="btn btn-primary btn-sm"
-                  type="button"
-                  onClick={() => workspace.addMediaToProject()}
-                >
-                  Add to project
-                </button>
-              </div>
-            </Show>
             <p id="timeline-description" class="sr-only">
               Playhead {formatTime(workspace.editor.playheadMs(), workspace.editor.duration())}. In
               marker{" "}
@@ -133,9 +119,6 @@ export function EditorView(props: {
               )}
             </Show>
             <PreviewPlayer timeline={<Timeline />} />
-            <p class="asset-capability" role="status" aria-label="Keyframe snapping availability">
-              Keyframe snapping unavailable; authoritative source timestamps are not exposed.
-            </p>
             <Show when={workspace.editor.editorStatus()}>
               <p class="control-help" role="alert">
                 {workspace.editor.editorStatus()}

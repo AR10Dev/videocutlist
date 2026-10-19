@@ -379,17 +379,6 @@
     color: var(--text-muted);
     white-space: nowrap;
   }
-  .preview-only-notice {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    flex-wrap: wrap;
-    gap: 8px;
-    margin-bottom: 10px;
-  }
-  .preview-only-notice p {
-    margin: 0;
-  }
   .preview-player {
     min-width: 0;
   }
@@ -902,13 +891,7 @@
     margin: 0;
   }
   .cut-summary {
-    display: grid;
-    gap: 2px;
     text-align: right;
-  }
-  .cut-summary span:last-child {
-    color: var(--text-muted);
-    font-size: 0.72rem;
   }
   .task-heading p {
     margin: 4px 0 0;
