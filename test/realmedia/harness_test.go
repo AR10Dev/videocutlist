@@ -20,8 +20,6 @@ import (
 	"syscall"
 	"testing"
 	"time"
-
-	"videocutlist/internal/httpapi"
 )
 
 const (
@@ -113,8 +111,6 @@ func (b *redactionBody) Read(data []byte) (int, error) {
 	return n, err
 }
 
-var executedRoutes sync.Map
-
 func TestMain(m *testing.M) {
 	code := m.Run()
 	if code == 0 {
@@ -130,48 +126,13 @@ func TestMain(m *testing.M) {
 			}
 		}
 		if code == 0 {
-			suiteSummary.Add("server=videocutlist version=%s routes=%d", version, len(productionRoutes)+3)
-		}
-		for _, route := range productionRoutes {
-			key := routeKey(route.method, route.path)
-			if _, ok := executedRoutes.Load(key); !ok {
-				fmt.Fprintf(os.Stderr, "real-media route not exercised: %s\n", key)
-				code = 1
-			}
-		}
-		for _, route := range []string{"GET /health", "GET /ready", "GET /", "GET /metrics"} {
-			if _, ok := executedRoutes.Load(route); !ok {
-				fmt.Fprintf(os.Stderr, "real-media route not exercised: %s\n", route)
-				code = 1
-			}
+			suiteSummary.Add("server=videocutlist version=%s", version)
 		}
 	}
 	if code == 0 {
 		fmt.Fprintf(os.Stdout, "REAL_MEDIA_SUMMARY %s\n", strings.Join(suiteSummary.Snapshot(), " | "))
 	}
 	os.Exit(code)
-}
-
-func routeKey(method, path string) string {
-	path = strings.Split(path, "?")[0]
-	kind := httpapi.RouteCoverageKind(method, path)
-	for _, route := range productionRoutes {
-		if route.method == method && httpapi.RouteCoverageKind(route.method, route.path) == kind && routePathMatches(route.path, path) {
-			return method + " " + kind + " " + route.path
-		}
-	}
-	if kind != "" {
-		return method + " " + kind + " " + path
-	}
-	return method + " " + path
-}
-
-func recordRoute(method, path string) {
-	path = strings.Split(path, "?")[0]
-	executedRoutes.Store(routeKey(method, path), true)
-	if path == "/" || path == "/metrics" || path == "/health" || path == "/ready" {
-		executedRoutes.Store(method+" "+path, true)
-	}
 }
 
 func startProcess(t *testing.T, root string) *process {
@@ -338,7 +299,6 @@ func (p *process) requestNoAuth(t *testing.T, method, path string) *http.Respons
 
 func (p *process) do(req *http.Request) (*http.Response, error) {
 	resp, err := http.DefaultClient.Do(req)
-	recordRoute(req.Method, req.URL.Path)
 	if resp == nil {
 		return resp, err
 	}

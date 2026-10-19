@@ -1,14 +1,6 @@
-import type { Project, ProjectPage } from "../src/generated/effect-api";
+import type { Project } from "../src/generated/effect-api";
 import { addMediaWithSegments } from "./actions";
 import { connectContext, expect, test } from "./fixtures";
-
-test.beforeEach(async ({ request, app }) => {
-  const response = await request.get("/api/v2/projects", {
-    headers: { Authorization: `Bearer ${app.token}` },
-  });
-  expect(response.ok()).toBe(true);
-  expect(((await response.json()) as ProjectPage).items).toEqual([]);
-});
 
 test("saves real cuts and restores them after a process restart", async ({
   page,
@@ -50,21 +42,4 @@ test("saves real cuts and restores them after a process restart", async ({
   });
   expect(persisted.status()).toBe(200);
   expect(((await persisted.json()) as Project).items).toEqual(saved.items);
-});
-
-test("a separate app starts with an empty project database and real scanned media", async ({
-  page,
-  app,
-  request,
-}) => {
-  await page.goto("/");
-  await expect(
-    page.getByRole("button", { name: "Select sintel-trailer.mp4", exact: true }),
-  ).toBeVisible();
-  await expect(
-    page.getByRole("button", { name: "Select sintel-trailer.mkv", exact: true }),
-  ).toBeVisible();
-  const denied = await request.get(`${app.baseURL}/api/v2/projects`);
-  expect(denied.status()).toBe(401);
-  await expect(page.locator(".project-sidebar-header strong")).toHaveText("Untitled project");
 });

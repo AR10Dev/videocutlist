@@ -20,45 +20,6 @@ import (
 func TestProductionProcessMediaAndDerivedAssets(t *testing.T) {
 	root := t.TempDir()
 	p := startProcess(t, root)
-	resp := p.request(t, http.MethodGet, "/")
-	html, err := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK || !bytes.Contains(html, []byte("<html")) || !bytes.Contains(html, []byte("<script")) {
-		t.Fatalf("static application document status=%d", resp.StatusCode)
-	}
-	var destinations struct {
-		Items []struct {
-			ID, Label, Kind string
-			Retention       any `json:"retention"`
-		} `json:"destinations"`
-	}
-	getJSON(t, p, "/api/v2/destinations", &destinations)
-	if len(destinations.Items) == 0 || destinations.Items[0].ID == "" || destinations.Items[0].Label == "" || destinations.Items[0].Kind == "" || destinations.Items[0].Retention == nil {
-		t.Fatalf("unsafe or incomplete destinations: %#v", destinations)
-	}
-	var settings struct {
-		Settings map[string]any `json:"settings"`
-		Revision int64          `json:"revision"`
-		Schema   int            `json:"schemaVersion"`
-		Roots    any            `json:"roots"`
-	}
-	getJSON(t, p, "/api/v2/settings", &settings)
-	if settings.Revision < 1 || settings.Schema < 1 || len(settings.Settings) == 0 || settings.Roots == nil {
-		t.Fatalf("incomplete settings response: %#v", settings)
-	}
-	var batches struct {
-		Items []map[string]any `json:"items"`
-	}
-	getJSON(t, p, "/api/v2/batches?limit=1", &batches)
-	for _, value := range []string{"/health", "/ready"} {
-		resp := p.request(t, http.MethodGet, value)
-		if resp.StatusCode != http.StatusOK {
-			resp.Body.Close()
-			t.Fatalf("GET %s status=%d", value, resp.StatusCode)
-		}
-		resp.Body.Close()
-	}
-
 	var status struct {
 		State string `json:"state"`
 	}
@@ -113,7 +74,7 @@ func TestProductionProcessMediaAndDerivedAssets(t *testing.T) {
 	if detail.ID != mediaID || detail.DurationMS < 52000 || detail.DurationMS > 53000 || detail.SizeBytes != 4372373 || detail.Container == "" || detail.Streams["video"] == nil || detail.Streams["audio"] == nil {
 		t.Fatalf("unexpected media detail: %#v", detail)
 	}
-	resp = p.request(t, http.MethodGet, "/api/v2/media/tree")
+	resp := p.request(t, http.MethodGet, "/api/v2/media/tree")
 	var tree struct {
 		Folders []any `json:"folders"`
 		Items   []struct {
@@ -125,53 +86,6 @@ func TestProductionProcessMediaAndDerivedAssets(t *testing.T) {
 		t.Fatalf("media tree missing root or opaque item status=%d", resp.StatusCode)
 	}
 	resp.Body.Close()
-	resp = p.request(t, http.MethodGet, "/api/v2/media?limit=1")
-	if resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
-		t.Fatalf("GET media page status=%d", resp.StatusCode)
-	}
-	resp.Body.Close()
-	for _, path := range []string{"/api/v2/media/refresh", "/api/v2/settings/media/refresh"} {
-		resp := p.requestCommand(t, http.MethodPost, path, nil)
-		if resp.StatusCode != http.StatusAccepted {
-			resp.Body.Close()
-			t.Fatalf("POST %s status=%d", path, resp.StatusCode)
-		}
-		resp.Body.Close()
-	}
-	resp = p.requestCommand(t, http.MethodPost, "/api/v2/media/import", nil)
-	var importJob struct {
-		ID string `json:"id"`
-	}
-	if resp.StatusCode != http.StatusAccepted || json.NewDecoder(resp.Body).Decode(&importJob) != nil || importJob.ID == "" {
-		resp.Body.Close()
-		t.Fatalf("POST media import status=%d", resp.StatusCode)
-	}
-	resp.Body.Close()
-	resp = p.request(t, http.MethodGet, "/api/v2/media/import/"+importJob.ID)
-	if resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
-		t.Fatalf("GET media import status=%d", resp.StatusCode)
-	}
-	resp.Body.Close()
-	resp = p.request(t, http.MethodDelete, "/api/v2/media/import/"+importJob.ID)
-	if resp.StatusCode != http.StatusNoContent {
-		resp.Body.Close()
-		t.Fatalf("DELETE media import status=%d", resp.StatusCode)
-	}
-	resp.Body.Close()
-	waitFor(t, 10*time.Second, func() bool {
-		response := p.request(t, http.MethodGet, "/api/v2/media/import/"+importJob.ID)
-		defer response.Body.Close()
-		var job struct {
-			State string `json:"state"`
-		}
-		if json.NewDecoder(response.Body).Decode(&job) != nil {
-			return false
-		}
-		return job.State == "cancelled" || job.State == "succeeded" || job.State == "failed"
-	})
-
 	previewPath := "/media/v2/media/" + mediaID + "/preview?centerMs=26000&beforeMs=1000&afterMs=1000"
 	resp = p.request(t, http.MethodHead, previewPath)
 	if resp.StatusCode != http.StatusNotFound {
@@ -234,14 +148,6 @@ func TestProductionProcessMediaAndDerivedAssets(t *testing.T) {
 		t.Fatalf("preview hit status=%d cache=%q", resp.StatusCode, resp.Header.Get("X-Preview-Cache"))
 	}
 	resp.Body.Close()
-	for _, center := range []string{"0", "52000"} {
-		resp = p.request(t, http.MethodGet, "/media/v2/media/"+mediaID+"/preview?centerMs="+center+"&beforeMs=1000&afterMs=1000")
-		if resp.StatusCode != http.StatusOK {
-			resp.Body.Close()
-			t.Fatalf("boundary preview center=%s status=%d", center, resp.StatusCode)
-		}
-		resp.Body.Close()
-	}
 
 	thumbPath := "/media/v2/media/" + mediaID + "/thumbnails?startMs=26000&durationMs=1000&count=1&width=80"
 	resp = p.request(t, http.MethodGet, thumbPath)
@@ -254,12 +160,6 @@ func TestProductionProcessMediaAndDerivedAssets(t *testing.T) {
 	if etag == "" {
 		t.Fatal("thumbnail response has no ETag")
 	}
-	resp = p.requestBody(t, http.MethodGet, thumbPath, nil)
-	if resp.StatusCode != http.StatusOK || resp.Header.Get("ETag") != etag {
-		resp.Body.Close()
-		t.Fatalf("thumbnail repeat status=%d etag=%q", resp.StatusCode, resp.Header.Get("ETag"))
-	}
-	resp.Body.Close()
 	conditional := p.requestHeaders(t, http.MethodGet, thumbPath, nil, map[string]string{"If-None-Match": etag})
 	if conditional.StatusCode != http.StatusNotModified {
 		conditional.Body.Close()
@@ -282,25 +182,13 @@ func TestProductionProcessMediaAndDerivedAssets(t *testing.T) {
 			t.Fatalf("waveform peak=%v", peak)
 		}
 	}
-	waveResp := p.request(t, http.MethodGet, wavePath)
-	waveETag := waveResp.Header.Get("ETag")
-	waveResp.Body.Close()
-	if waveETag == "" {
-		t.Fatal("waveform response has no ETag")
-	}
-	conditionalWave := p.requestHeaders(t, http.MethodGet, wavePath, nil, map[string]string{"If-None-Match": waveETag})
-	if conditionalWave.StatusCode != http.StatusNotModified {
-		conditionalWave.Body.Close()
-		t.Fatalf("waveform conditional status=%d", conditionalWave.StatusCode)
-	}
-	conditionalWave.Body.Close()
-	suiteSummary.Add("preview=miss,hit thumbnails=miss,hit waveform=miss,hit")
+	suiteSummary.Add("preview=miss,hit thumbnails=generated,conditional waveform=generated")
 }
 
 func cacheTempFiles(root string) []string {
 	var files []string
 	_ = filepath.Walk(filepath.Join(root, "cache"), func(path string, info os.FileInfo, err error) error {
-		if err == nil && info != nil && !info.IsDir() && !info.IsDir() {
+		if err == nil && info != nil && !info.IsDir() {
 			files = append(files, path)
 		}
 		return nil

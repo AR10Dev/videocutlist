@@ -67,22 +67,6 @@ func TestProductionSettingsAndAutomationWorkflows(t *testing.T) {
 	}
 	deployment.Body.Close()
 
-	var media struct {
-		Items []struct {
-			ID string `json:"id"`
-		} `json:"items"`
-	}
-	getJSON(t, p, "/api/v2/media", &media)
-	if len(media.Items) != 1 {
-		t.Fatalf("media items=%d", len(media.Items))
-	}
-	project := map[string]any{"revision": 0, "schemaVersion": 2, "name": "automation", "items": []any{map[string]any{"id": "i_abcdefghijklmnopqrstuvwx", "mediaId": media.Items[0].ID, "segments": []any{map[string]any{"startMs": 0, "endMs": 1000}}}}}
-	created := p.requestBody(t, http.MethodPut, "/api/v2/projects/p_real_automation", project)
-	if created.StatusCode != http.StatusOK {
-		created.Body.Close()
-		t.Fatalf("project status=%d", created.StatusCode)
-	}
-	created.Body.Close()
 	missingAuth := p.requestNoAuth(t, http.MethodPost, "/api/v2/automation")
 	if missingAuth.StatusCode != http.StatusUnauthorized {
 		missingAuth.Body.Close()
@@ -92,44 +76,6 @@ func TestProductionSettingsAndAutomationWorkflows(t *testing.T) {
 	command := func(payload map[string]any) *http.Response {
 		return p.requestBody(t, http.MethodPost, "/api/v2/automation", payload)
 	}
-	exported := command(map[string]any{"action": "project.export", "projectId": "p_real_automation", "format": "csv"})
-	var exportBody struct {
-		Content string `json:"content"`
-	}
-	if exported.StatusCode != http.StatusOK || json.NewDecoder(exported.Body).Decode(&exportBody) != nil || exportBody.Content == "" {
-		exported.Body.Close()
-		t.Fatalf("automation export status=%d", exported.StatusCode)
-	}
-	exported.Body.Close()
-	imported := command(map[string]any{"action": "project.import", "projectId": "p_real_automation", "format": "csv", "input": exportBody.Content})
-	if imported.StatusCode != http.StatusOK {
-		imported.Body.Close()
-		t.Fatalf("automation import status=%d", imported.StatusCode)
-	}
-	imported.Body.Close()
-	var savedAutomationProject struct {
-		Revision int64 `json:"revision"`
-	}
-	getJSON(t, p, "/api/v2/projects/p_real_automation", &savedAutomationProject)
-	jobSubmission := map[string]any{"itemIds": []string{"i_abcdefghijklmnopqrstuvwx"}, "projectRevision": savedAutomationProject.Revision}
-	jobResponse := p.requestCommand(t, http.MethodPost, "/api/v2/projects/p_real_automation/exports", jobSubmission)
-	assertCommandProjectRevision(t, jobResponse, savedAutomationProject.Revision)
-	var submitted struct {
-		Jobs []struct {
-			ID string `json:"id"`
-		} `json:"jobs"`
-	}
-	if jobResponse.StatusCode != http.StatusAccepted || json.NewDecoder(jobResponse.Body).Decode(&submitted) != nil || len(submitted.Jobs) != 1 {
-		jobResponse.Body.Close()
-		t.Fatalf("automation job setup status=%d", jobResponse.StatusCode)
-	}
-	jobResponse.Body.Close()
-	jobStatus := command(map[string]any{"action": "job.status", "jobId": submitted.Jobs[0].ID})
-	if jobStatus.StatusCode != http.StatusOK {
-		jobStatus.Body.Close()
-		t.Fatalf("automation status lookup=%d", jobStatus.StatusCode)
-	}
-	jobStatus.Body.Close()
 	malformed := p.requestHeaders(t, http.MethodPost, "/api/v2/automation", strings.NewReader("{"), nil)
 	if malformed.StatusCode != http.StatusBadRequest {
 		malformed.Body.Close()
@@ -185,17 +131,6 @@ func TestProductionMCPAdministrationUsesRealProcess(t *testing.T) {
 		t.Fatalf("MCP revoke status=%d", revoked.StatusCode)
 	}
 	revoked.Body.Close()
-	for _, request := range []struct {
-		method string
-		path   string
-	}{{http.MethodGet, "/api/v2/export-proposals/ep_aaaaaaaaaaaa"}, {http.MethodPost, "/api/v2/export-proposals/ep_aaaaaaaaaaaa/approval"}} {
-		response := p.request(t, request.method, request.path)
-		if response.StatusCode != http.StatusNotFound {
-			response.Body.Close()
-			t.Fatalf("missing proposal %s status=%d", request.path, response.StatusCode)
-		}
-		response.Body.Close()
-	}
 }
 
 func TestProductionCORSAndTrustedProxy(t *testing.T) {

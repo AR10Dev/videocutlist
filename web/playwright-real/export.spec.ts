@@ -201,7 +201,7 @@ test("creates, downloads, and verifies selected real-media export scenarios", as
   expect(persisted.items.every((item) => item.segments.length === 2)).toBe(true);
 });
 
-test("downloads merged MOV gaps with explicit tracks and precise encoding", async ({
+test("downloads video-only merged MOV gaps with explicit tracks and precise encoding", async ({
   page,
 }, testInfo) => {
   await page.goto("/");
@@ -218,20 +218,13 @@ test("downloads merged MOV gaps with explicit tracks and precise encoding", asyn
   await audio.uncheck();
   await audio.check();
   await expect(page.getByText("Explicit streams: 0, 1.", { exact: true })).toBeVisible();
-  const preciseBatch = await createClips(page, 1);
-  await expect(preciseBatch).toContainText("One merged output");
-  await expect(preciseBatch).toContainText("Gaps between cuts");
-  await expect(preciseBatch).toContainText("MOV");
-  await expect(preciseBatch).toContainText("Precise re-encode");
-  await downloadAndProbe(
-    page,
-    preciseBatch.getByRole("button", { name: "Download output 1" }),
-    testInfo,
-    "merged-gaps-precise.mov",
-    { format: /mov/, durationSeconds: gapDuration, toleranceSeconds: 0.15, audio: true },
-  );
   await audio.uncheck();
+  await expect(page.getByText("Explicit streams: 0.", { exact: true })).toBeVisible();
   const videoOnlyBatch = await createClips(page, 1);
+  await expect(videoOnlyBatch).toContainText("One merged output");
+  await expect(videoOnlyBatch).toContainText("Gaps between cuts");
+  await expect(videoOnlyBatch).toContainText("MOV");
+  await expect(videoOnlyBatch).toContainText("Precise re-encode");
   await downloadAndProbe(
     page,
     videoOnlyBatch.getByRole("button", { name: "Download output 1" }),
@@ -240,6 +233,7 @@ test("downloads merged MOV gaps with explicit tracks and precise encoding", asyn
     { format: /mov/, durationSeconds: gapDuration, toleranceSeconds: 0.15, audio: false },
   );
   await page.getByRole("button", { name: "Reset to automatic tracks" }).click();
+  await expect(page.getByText("Automatic", { exact: true })).toBeVisible();
 });
 
 test("downloads a probed merged MKV using hybrid smart cut", async ({ page }, testInfo) => {

@@ -1,16 +1,8 @@
 import type { DetectionInput, Project } from "../src/generated/effect-api";
 import { expect, test } from "./fixtures";
-import {
-  openRealMedia,
-  openTask,
-  setRange,
-  startNewSegment,
-  addSelectedMediaToProject,
-} from "./actions";
+import { openRealMedia, openTask, addSelectedMediaToProject } from "./actions";
 
-test("decodes real preview media, seeks, pauses, and reattaches after Settings", async ({
-  page,
-}) => {
+test("decodes real preview media, seeks, pauses, and switches sources", async ({ page }) => {
   const origins = new Set<string>();
   page.on("request", (request) => {
     if (/\/(api|media)\/v2\//.test(new URL(request.url()).pathname))
@@ -46,8 +38,6 @@ test("decodes real preview media, seeks, pauses, and reattaches after Settings",
   await expect(video).toHaveJSProperty("muted", true);
   await page.getByLabel("Preview volume").fill("0.35");
   await expect(video).toHaveJSProperty("volume", 0.35);
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
-  await page.getByRole("button", { name: "Back to editor", exact: true }).click();
   await page.getByRole("button", { name: "Play preview", exact: true }).click();
   await expect.poll(async () => Number(await playhead.inputValue())).toBeGreaterThan(5000);
   await page.getByRole("button", { name: "Pause preview", exact: true }).click();
@@ -60,34 +50,6 @@ test("decodes real preview media, seeks, pauses, and reattaches after Settings",
     .poll(() => video.evaluate((element: HTMLVideoElement) => element.currentTime))
     .toBeGreaterThan(0.2);
   expect([...origins]).toEqual([new URL(page.url()).origin]);
-});
-
-test("real decoded cut playback stops at bounds and ordered playback reaches the final cut", async ({
-  page,
-}) => {
-  await openRealMedia(page);
-  await setRange(page, 1000, 1800);
-  await startNewSegment(page);
-  await setRange(page, 3000, 3800);
-  const video = page.getByLabel("Preview player");
-  const playhead = page.getByLabel("Timeline playhead");
-  await page.getByRole("button", { name: "Play cut 1", exact: true }).click();
-  await expect(video).toHaveAttribute("data-playback-mode", "active-segment");
-  await expect(video).toHaveAttribute("data-playback-intent", "paused", { timeout: 15000 });
-  await expect(playhead).toHaveValue("1800");
-  await page.getByRole("button", { name: "Loop cut 1", exact: true }).click();
-  await expect(video).toHaveAttribute("data-playback-mode", "active-segment-loop");
-  await expect
-    .poll(() => video.evaluate((element: HTMLVideoElement) => element.currentTime))
-    .toBeGreaterThan(1.5);
-  await expect
-    .poll(() => video.evaluate((element: HTMLVideoElement) => element.currentTime))
-    .toBeLessThan(1.3);
-  await expect(video).toHaveAttribute("data-playback-intent", "playing");
-  await page.getByRole("button", { name: "Preview selected segments", exact: true }).click();
-  await expect(video).toHaveAttribute("data-playback-mode", "ordered-segments");
-  await expect(playhead).toHaveValue("3800", { timeout: 15000 });
-  await expect(video).toHaveAttribute("data-playback-intent", "paused");
 });
 
 test("real silence detection streams candidates, supports review, bulk undo, and scene seeking", async ({

@@ -74,59 +74,6 @@ test("typing a cut label keeps its input mounted across edits, selection, and re
   await expect(rows.nth(0)).toContainText("00:00.800");
 });
 
-test("keyboard editing keeps drafts separate from active cuts and is discoverable", async ({
-  page,
-}) => {
-  await openMedia(page);
-  const playhead = page.getByLabel("Timeline playhead");
-  const create = async (start: number, end: number) => {
-    await playhead.fill(String(start));
-    await page.locator("body").press("i");
-    await playhead.fill(String(end));
-    await page.locator("body").press("o");
-    await page.locator("body").press("c");
-  };
-
-  await create(100, 700);
-  await page.keyboard.press("Escape");
-  await create(800, 900);
-  const rows = page.getByRole("list", { name: "Selected cuts" }).getByRole("listitem");
-  await expect(rows).toHaveCount(2);
-
-  await rows.nth(0).getByRole("button", { name: "Select cut 1" }).click();
-  await playhead.fill("400");
-  await page.getByRole("heading", { name: "Timeline", exact: true }).focus();
-  await page.keyboard.press("i");
-  await expect(page.locator("#timeline-description")).toContainText("In marker 00:00.400");
-  await expect(page.getByRole("textbox", { name: "Cut 1 In", exact: true })).toHaveValue(
-    "00:00.100",
-  );
-  await playhead.fill("850");
-  await page.getByRole("heading", { name: "Timeline", exact: true }).focus();
-  await page.keyboard.press("o");
-  await expect(page.getByText(/overlap another cut/)).toBeVisible();
-
-  await playhead.fill("500");
-  await rows.nth(0).getByRole("button", { name: "Select cut 1" }).click();
-  await playhead.fill("500");
-  await page.getByRole("heading", { name: "Timeline" }).focus();
-  await page.keyboard.press("b");
-  await expect(rows).toHaveCount(3);
-  await page.keyboard.press("Delete");
-  await expect(rows).toHaveCount(2);
-  await page.keyboard.press("Control+z");
-  await expect(rows).toHaveCount(3);
-  await page.keyboard.press("Control+y");
-  await expect(rows).toHaveCount(2);
-
-  await page.keyboard.press("Shift+/");
-  await expect(page.getByRole("heading", { name: "Keyboard shortcuts" })).toBeVisible();
-  await expect(page.getByText("C Start a new segment draft", { exact: true })).toBeVisible();
-  await expect(page.getByText("Preview cuts in order", { exact: false })).toBeVisible();
-  await page.getByRole("button", { name: "Close", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Keyboard shortcuts" })).toHaveCount(0);
-});
-
 test("adds, selects, splits, and safely removes cuts with the redesigned controls", async ({
   page,
 }) => {

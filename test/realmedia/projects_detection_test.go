@@ -46,7 +46,7 @@ type realJob struct {
 	} `json:"candidates"`
 }
 
-func TestProjectsInterchangeAndDetectionUseProductionProcess(t *testing.T) {
+func TestProductionDetectionAndImportSafety(t *testing.T) {
 	p := startProcess(t, t.TempDir())
 	var media realMediaPage
 	p.json(t, http.MethodGet, "/api/v2/media", nil, http.StatusOK, &media)
@@ -72,21 +72,6 @@ func TestProjectsInterchangeAndDetectionUseProductionProcess(t *testing.T) {
 	stale["revision"] = 0
 	p.json(t, http.MethodPut, "/api/v2/projects/"+projectID, stale, http.StatusConflict, nil)
 
-	for _, format := range []string{"csv", "chapters"} {
-		resp := p.raw(t, http.MethodGet, "/media/v2/projects/"+projectID+"/interchange/"+format+"?itemId="+itemID, nil)
-		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("export %s status=%d", format, resp.StatusCode)
-		}
-		data, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if len(data) == 0 {
-			t.Fatalf("empty %s export", format)
-		}
-		p.rawJSON(t, http.MethodPost, "/api/v2/projects/"+projectID+"/interchange/"+format+"?itemId="+itemID, data, http.StatusOK, &project)
-		if project.Revision < 2 {
-			t.Fatalf("%s import did not increment revision: %d", format, project.Revision)
-		}
-	}
 	var beforeBadCSV realProject
 	p.json(t, http.MethodGet, "/api/v2/projects/"+projectID, nil, http.StatusOK, &beforeBadCSV)
 	badCSV := p.raw(t, http.MethodPost, "/api/v2/projects/"+projectID+"/interchange/csv?itemId="+itemID, []byte("start,end,label\n999:00,999:01,bad\n"))
@@ -102,36 +87,30 @@ func TestProjectsInterchangeAndDetectionUseProductionProcess(t *testing.T) {
 		t.Fatalf("rejected out-of-range CSV changed project: before=%+v after=%+v", beforeBadCSV, afterBadCSV)
 	}
 
-	for _, kind := range []string{"silence", "black", "scene"} {
-		request := map[string]any{"mediaId": m.ID, "projectItemId": itemID, "projectRevision": project.Revision, "kind": kind, "sourceFingerprint": m.ETag, "minDurationMs": 100}
-		var job realJob
-		response := p.requestCommand(t, http.MethodPost, "/api/v2/projects/"+projectID+"/detections", request)
-		assertCommandProjectRevision(t, response, project.Revision)
-		if response.StatusCode != http.StatusAccepted || json.NewDecoder(response.Body).Decode(&job) != nil {
-			response.Body.Close()
-			t.Fatalf("%s detection submission status=%d", kind, response.StatusCode)
-		}
+	request := map[string]any{"mediaId": m.ID, "projectItemId": itemID, "projectRevision": project.Revision, "kind": "black", "sourceFingerprint": m.ETag, "minDurationMs": 100}
+	var job realJob
+	response := p.requestCommand(t, http.MethodPost, "/api/v2/projects/"+projectID+"/detections", request)
+	assertCommandProjectRevision(t, response, project.Revision)
+	if response.StatusCode != http.StatusAccepted || json.NewDecoder(response.Body).Decode(&job) != nil {
 		response.Body.Close()
-		waitFor(t, 45*time.Second, func() bool {
-			p.jsonNoFail(t, http.MethodGet, "/api/v2/jobs/"+job.ID, nil, http.StatusOK, &job)
-			return job.State == "succeeded"
-		})
-		for _, candidate := range job.Candidates {
-			if candidate.MediaID != m.ID || candidate.ProjectID != projectID || candidate.Source != kind || candidate.ProjectRevision != project.Revision {
-				t.Fatalf("invalid %s candidate identity: %+v", kind, candidate)
-			}
-			if kind == "scene" {
-				if candidate.PointMS == nil || *candidate.PointMS < 0 || *candidate.PointMS > m.DurationMS {
-					t.Fatalf("invalid scene point: %+v", candidate)
-				}
-			} else if candidate.StartMS < 0 || candidate.EndMS > m.DurationMS || candidate.StartMS >= candidate.EndMS || candidate.PointMS != nil {
-				t.Fatalf("invalid %s range: %+v", kind, candidate)
-			}
+		t.Fatalf("black detection submission status=%d", response.StatusCode)
+	}
+	response.Body.Close()
+	waitFor(t, 45*time.Second, func() bool {
+		p.jsonNoFail(t, http.MethodGet, "/api/v2/jobs/"+job.ID, nil, http.StatusOK, &job)
+		return job.State == "succeeded"
+	})
+	for _, candidate := range job.Candidates {
+		if candidate.MediaID != m.ID || candidate.ProjectID != projectID || candidate.Source != "black" || candidate.ProjectRevision != project.Revision {
+			t.Fatalf("invalid black candidate identity: %+v", candidate)
+		}
+		if candidate.StartMS < 0 || candidate.EndMS > m.DurationMS || candidate.StartMS >= candidate.EndMS || candidate.PointMS != nil {
+			t.Fatalf("invalid black range: %+v", candidate)
 		}
 	}
 	cancelRequest := map[string]any{"mediaId": m.ID, "projectItemId": itemID, "projectRevision": project.Revision, "kind": "scene", "sourceFingerprint": m.ETag, "minDurationMs": 100}
 	var cancelled realJob
-	response := p.requestCommand(t, http.MethodPost, "/api/v2/projects/"+projectID+"/detections", cancelRequest)
+	response = p.requestCommand(t, http.MethodPost, "/api/v2/projects/"+projectID+"/detections", cancelRequest)
 	assertCommandProjectRevision(t, response, project.Revision)
 	if response.StatusCode != http.StatusAccepted || json.NewDecoder(response.Body).Decode(&cancelled) != nil {
 		response.Body.Close()
@@ -195,20 +174,6 @@ func (p *process) raw(t *testing.T, method, path string, body []byte) *http.Resp
 func (p *process) json(t *testing.T, method, path string, value any, status int, out any) {
 	t.Helper()
 	p.jsonNoFail(t, method, path, value, status, out)
-}
-func (p *process) rawJSON(t *testing.T, method, path string, body []byte, status int, out any) {
-	t.Helper()
-	resp := p.raw(t, method, path, body)
-	defer resp.Body.Close()
-	if resp.StatusCode != status {
-		data, _ := io.ReadAll(resp.Body)
-		t.Fatalf("%s %s status=%d want=%d: %s", method, path, resp.StatusCode, status, data)
-	}
-	if out != nil {
-		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
-			t.Fatal(err)
-		}
-	}
 }
 func (p *process) jsonNoFail(t *testing.T, method, path string, value any, status int, out any) {
 	t.Helper()

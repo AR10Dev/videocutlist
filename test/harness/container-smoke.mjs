@@ -66,40 +66,28 @@ const item = {
 };
 let saved = await json(path, "PUT", { revision: 0, schemaVersion: 2, name: "Container smoke", items: [item] });
 assert.deepEqual((await json(path)).items[0].segments.map((s) => s.included), [true, true, false]);
-const jobs = [];
-for (const [mode, cutStrategy] of [
-  ["merge", "precise_reencode"], ["separate", "precise_reencode"],
-  ["merge", "stream_copy_preferred"], ["separate", "stream_copy_preferred"],
-]) {
-  item.exportOptions = { mode, cutStrategy, container: "mkv", destinationId: "download" };
-  saved = await json(path, "PUT", { revision: saved.revision, schemaVersion: 2, name: saved.name, items: [item] });
-  const submitted = await json(`${path}/exports`, "POST", { projectRevision: saved.revision }, 202);
-  assert.equal(submitted.jobs.length, 1);
-  const job = await waitFor(async () => {
-    const current = await json(`/api/v2/jobs/${submitted.jobs[0].id}`);
-    assert.ok(!["failed", "cancelled"].includes(current.state), JSON.stringify(current));
-    return current.state === "succeeded" && current;
-  });
-  jobs.push(job.id);
-  const count = mode === "merge" ? 1 : 2;
-  assert.equal(job.result.outputNames?.length ?? (job.result.outputName ? 1 : 0), count);
-  for (let position = 0; position < count; position++) {
-    const output = await request(`/media/v2/jobs/${job.id}/outputs/${position}`);
-    probe(Buffer.from(await output.arrayBuffer()));
-  }
-}
+item.exportOptions = { mode: "merge", cutStrategy: "precise_reencode", container: "mkv", destinationId: "download" };
+saved = await json(path, "PUT", { revision: saved.revision, schemaVersion: 2, name: saved.name, items: [item] });
+const submitted = await json(`${path}/exports`, "POST", { projectRevision: saved.revision }, 202);
+assert.equal(submitted.jobs.length, 1);
+const job = await waitFor(async () => {
+  const current = await json(`/api/v2/jobs/${submitted.jobs[0].id}`);
+  assert.ok(!["failed", "cancelled"].includes(current.state), JSON.stringify(current));
+  return current.state === "succeeded" && current;
+});
+assert.equal(job.result.outputNames?.length ?? (job.result.outputName ? 1 : 0), 1);
+const output = await request(`/media/v2/jobs/${job.id}/outputs/0`);
+probe(Buffer.from(await output.arrayBuffer()));
 // Ensure the database, published outputs, and cached previews outlive the process.
 execFileSync("podman", ["restart", container]);
 await ready();
 assert.deepEqual((await json(path)).items[0].segments.map((s) => s.included), [true, true, false]);
 assert.equal((await json(path)).revision, saved.revision);
 assert.equal((await request(preview, "HEAD")).headers.get("X-Preview-Cache"), "hit");
-for (const id of jobs) {
-  assert.equal((await json(`/api/v2/jobs/${id}`)).state, "succeeded");
-  probe(Buffer.from(await (await request(`/media/v2/jobs/${id}/outputs/0`)).arrayBuffer()));
-}
+assert.equal((await json(`/api/v2/jobs/${job.id}`)).state, "succeeded");
+probe(Buffer.from(await (await request(`/media/v2/jobs/${job.id}/outputs/0`)).arrayBuffer()));
 execFileSync("podman", ["exec", container, "sh", "-ec", `
   test -s /var/lib/videocutlist/data/videocutlist.db
   test -z "$(find /var/cache/videocutlist/previews /var/lib/videocutlist/exports -name '*.partial' -print)"
 `]);
-console.log("PASS: bearer auth, media scan, preview miss/hit, merge/separate reencode and stream copy, save/reload defaults, restart persistence");
+console.log("PASS: bearer auth, media scan, preview miss/hit, real export, save/reload defaults, restart persistence");

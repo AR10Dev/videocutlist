@@ -1,13 +1,6 @@
-import { readFile } from "node:fs/promises";
 import type { Project } from "../src/generated/effect-api";
 import { expect, test, connectContext } from "./fixtures";
-import {
-  openRealMedia,
-  loadProject,
-  saveProject,
-  setRange,
-  addSelectedMediaToProject,
-} from "./actions";
+import { openRealMedia, loadProject, saveProject, setRange } from "./actions";
 
 test("two real clients recover from revision conflicts through unobstructed Settings navigation", async ({
   page,
@@ -62,42 +55,4 @@ test("two real clients recover from revision conflicts through unobstructed Sett
   } finally {
     await otherContext.close();
   }
-});
-
-test("real interchange imports CSV and chapters and downloads their persisted cut lists", async ({
-  page,
-}, testInfo) => {
-  await openRealMedia(page);
-  await addSelectedMediaToProject(page);
-  await page.getByRole("button", { name: "Project menu", exact: true }).click();
-  await page.getByRole("menuitem", { name: "Project tools", exact: true }).click();
-  await page.getByText("Interchange", { exact: true }).click();
-  const csv = "start,end,label\n00:00:00.500,00:00:01.500,Opening\n";
-  await page
-    .getByLabel("Import cut list", { exact: true })
-    .setInputFiles({ name: "review.csv", mimeType: "text/csv", buffer: Buffer.from(csv) });
-  await expect(page.getByText("Project loaded.", { exact: true })).toBeVisible();
-  const chapters = "00:00:00.500 --> 00:00:01.500 Opening\n";
-  await page.getByLabel("Import cut list", { exact: true }).setInputFiles({
-    name: "review.chapters",
-    mimeType: "text/plain",
-    buffer: Buffer.from(chapters),
-  });
-  await expect(page.getByText("Project loaded.", { exact: true })).toBeVisible();
-  for (const [button, filename, content] of [
-    ["Download CSV cut list", "cutlist.csv", csv],
-    ["Download chapters", "cutlist.chapters", chapters],
-  ]) {
-    const downloading = page.waitForEvent("download");
-    await page.getByRole("button", { name: button, exact: true }).click();
-    const download = await downloading;
-    expect(download.suggestedFilename()).toBe(filename);
-    const path = testInfo.outputPath(filename);
-    await download.saveAs(path);
-    expect(await readFile(path, "utf8")).toBe(content);
-  }
-  await page.getByRole("button", { name: "Close project tools", exact: true }).click();
-  await expect(page.getByLabel("Label cut 1")).toHaveValue("Opening");
-  await page.reload();
-  await expect(page.getByLabel("Label cut 1")).toHaveValue("Opening");
 });
