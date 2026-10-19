@@ -39,7 +39,7 @@ export function Timeline() {
     return timelineTimeFromPointer(clientX, bounds.left, bounds.width, workspace.editor.duration());
   };
   const updateWindow = () => {
-    if (!scroller || !timeline) return;
+    if (!scroller || !timeline || scroller.clientWidth === 0) return;
     const next = {
       ...visibleTimelineWindow(
         scroller.scrollLeft,

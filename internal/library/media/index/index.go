@@ -90,7 +90,7 @@ type RootStatus struct {
 type Scanner struct {
 	roots    map[string]Root
 	prober   probe.Runner
-	limits   ScanLimits
+	limits   ScanLimits // guarded by mu; each scan takes one snapshot
 	mu       sync.Mutex
 	config   sync.RWMutex
 	statusMu sync.RWMutex
@@ -148,6 +148,9 @@ func (s *Scanner) Scan(ctx context.Context, alias string) ([]Record, error) {
 
 // scanLocked requires config to remain read-locked through catalog publication.
 func (s *Scanner) scanLocked(ctx context.Context, alias string) ([]Record, error) {
+	s.mu.Lock()
+	limits := s.limits
+	s.mu.Unlock()
 	root, err := s.root(alias)
 	if err != nil {
 		return nil, err
@@ -161,7 +164,7 @@ func (s *Scanner) scanLocked(ctx context.Context, alias string) ([]Record, error
 			return err
 		}
 		if entry.IsDir() {
-			if strings.Count(filepath.ToSlash(path), "/") > s.limits.MaxDepth {
+			if strings.Count(filepath.ToSlash(path), "/") > limits.MaxDepth {
 				return fs.SkipDir
 			}
 			if filepath.Base(path) == ".videocutlist-exports" {
@@ -172,7 +175,7 @@ func (s *Scanner) scanLocked(ctx context.Context, alias string) ([]Record, error
 		if !isMediaPath(path) {
 			return nil
 		}
-		if len(records) >= s.limits.MaxFiles {
+		if len(records) >= limits.MaxFiles {
 			return ErrScanLimit
 		}
 		if entry.Type() != 0 {
@@ -212,9 +215,9 @@ func (s *Scanner) ReconfigureLimits(limits ScanLimits) error {
 	if limits.MaxFiles < 1 || limits.MaxDepth < 1 {
 		return errors.New("scan limits must be positive")
 	}
-	s.config.Lock()
+	s.mu.Lock()
 	s.limits = limits
-	s.config.Unlock()
+	s.mu.Unlock()
 	return nil
 }
 

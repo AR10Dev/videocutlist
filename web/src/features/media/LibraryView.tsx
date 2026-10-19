@@ -1,7 +1,15 @@
 import { useAtomValue } from "@effect/atom-solid";
 import type * as EffectApiTypes from "../../generated/effect-api";
 import { For, Show, createMemo, createSignal, onCleanup, onMount } from "solid-js";
-import { ChevronDown, Film, Folder, FolderOpen, LoaderCircle, RefreshCw } from "lucide-solid";
+import {
+  ChevronDown,
+  ChevronRight,
+  Film,
+  Folder,
+  FolderOpen,
+  LoaderCircle,
+  RefreshCw,
+} from "lucide-solid";
 import { Option } from "effect";
 import * as Atom from "effect/reactivity/Atom";
 import * as AsyncResult from "effect/reactivity/AsyncResult";
@@ -41,13 +49,148 @@ function MediaThumbnail(props: { item: Media; api: ApiClient; server: ServerStat
   );
 }
 
+function MediaItems(props: {
+  items: readonly Media[];
+  api: ApiClient;
+  onChoose: (item: Media) => void;
+}) {
+  const workspace = useWorkspace();
+  return (
+    <ul class="media-list" aria-label="Media list">
+      <For each={props.items}>
+        {(item) => (
+          <li>
+            <button
+              class="btn btn-ghost btn-sm justify-start"
+              aria-pressed={workspace.selected()?.id === item.id ? "true" : "false"}
+              aria-label={`Select ${item.name}`}
+              onClick={() => props.onChoose(item)}
+            >
+              <MediaThumbnail item={item} api={props.api} server={workspace.server} />
+              <span class="media-file-copy">
+                <strong>{item.name}</strong>
+                <span>{formatLibraryDuration(item.durationMs)}</span>
+                <small>{mediaSummary(item)}</small>
+              </span>
+            </button>
+          </li>
+        )}
+      </For>
+    </ul>
+  );
+}
+
+function FolderBranch(props: {
+  folder: EffectApiTypes.FolderPage["folders"][number];
+  api: ApiClient;
+  onChoose: (item: Media) => void;
+}) {
+  const [open, setOpen] = createSignal(false);
+  return (
+    <li>
+      <button
+        class="folder btn btn-ghost btn-sm"
+        aria-expanded={open()}
+        onClick={() => setOpen(!open())}
+      >
+        <Show when={open()} fallback={<ChevronRight size={15} aria-hidden="true" />}>
+          <ChevronDown size={15} aria-hidden="true" />
+        </Show>
+        <Folder size={16} aria-hidden="true" />
+        <span>{props.folder.label}</span>
+      </button>
+      <Show when={open()}>
+        <FolderContents folderId={props.folder.id} api={props.api} onChoose={props.onChoose} />
+      </Show>
+    </li>
+  );
+}
+
+function FolderContents(props: {
+  folderId: string;
+  api: ApiClient;
+  onChoose: (item: Media) => void;
+}) {
+  const { server } = useWorkspace();
+  const revision = useAtomValue(() => server.mediaRevision);
+  const [pagination, setPagination] = createSignal({
+    revision: revision(),
+    cursors: [] as string[],
+  });
+  const resources = createMemo(() =>
+    [undefined, ...(pagination().revision === revision() ? pagination().cursors : [])].map(
+      (cursor) => server.mediaTree(props.folderId, cursor, revision()),
+    ),
+  );
+  const pages = useAtomValue(
+    createMemo(() => {
+      const current = resources();
+      return Atom.make((get) => current.map((resource) => get(resource)));
+    }),
+  );
+  const values = () => pages().flatMap((page) => Option.toArray(AsyncResult.value(page)));
+  const failed = () => pages().some(AsyncResult.isFailure);
+  const waiting = () => pages().some((page) => page.waiting);
+  const nextCursor = () => values().at(-1)?.nextCursor;
+  return (
+    <div class="folder-contents pl-3">
+      <ul class="folder-list" aria-label="Subfolders">
+        <For each={values()[0]?.folders ?? []}>
+          {(folder) => <FolderBranch folder={folder} api={props.api} onChoose={props.onChoose} />}
+        </For>
+      </ul>
+      <MediaItems
+        items={values().flatMap((page) => page.items)}
+        api={props.api}
+        onChoose={props.onChoose}
+      />
+      <Show when={waiting()}>
+        <p role="status">Loading media…</p>
+      </Show>
+      <Show when={failed()}>
+        <p role="alert">Media could not be loaded. Try again.</p>
+        <button
+          class="btn btn-ghost btn-sm"
+          onClick={() => resources().forEach((resource) => server.registry.refresh(resource))}
+        >
+          Retry
+        </button>
+      </Show>
+      <Show when={nextCursor() && !failed()}>
+        <button
+          class="btn btn-ghost btn-sm"
+          disabled={waiting()}
+          onClick={() => {
+            const cursor = nextCursor();
+            if (cursor)
+              setPagination({
+                revision: revision(),
+                cursors: [
+                  ...(pagination().revision === revision() ? pagination().cursors : []),
+                  cursor,
+                ],
+              });
+          }}
+        >
+          Load more
+        </button>
+      </Show>
+    </div>
+  );
+}
+
 export function LibraryView() {
   const api = createApiClient(resolveBrowserConfiguration());
   const [explorerOpen, setExplorerOpen] = createSignal(false);
+  const [rootOpen, setRootOpen] = createSignal(true);
   const workspace = useWorkspace();
   const { library, visibleMedia, selected, status, chooseMedia, refreshMedia } = workspace;
   const state = useAtomValue(() => library.view);
   const { loadFolder } = library;
+  const choose = (item: Media) => {
+    chooseMedia(item);
+    setExplorerOpen(false);
+  };
   return (
     <section
       class="media-panel"
@@ -55,6 +198,18 @@ export function LibraryView() {
       aria-label="Media library"
     >
       <div class="panel-heading">
+        <button
+          class="folder btn btn-ghost btn-sm mr-auto w-auto!"
+          aria-expanded={rootOpen()}
+          aria-controls="all-media-contents"
+          onClick={() => setRootOpen((open) => !open)}
+        >
+          <Show when={rootOpen()} fallback={<ChevronRight size={15} aria-hidden="true" />}>
+            <ChevronDown size={15} aria-hidden="true" />
+          </Show>
+          <FolderOpen size={16} aria-hidden="true" />
+          <span>All media</span>
+        </button>
         <Show when={selected()}>
           <button
             class="change-video btn btn-ghost btn-sm"
@@ -147,71 +302,33 @@ export function LibraryView() {
           <p role="status">{state().libraryMessage}</p>
         </div>
       </Show>
-      <nav class="file-tree" classList={{ "is-open": explorerOpen() }} aria-label="Media folders">
-        <button
-          class="folder btn btn-ghost btn-sm"
-          aria-current="page"
-          onClick={() => void loadFolder()}
+      <Show when={rootOpen()}>
+        <nav
+          id="all-media-contents"
+          class="file-tree"
+          classList={{ "is-open": explorerOpen() }}
+          aria-label="Media folders"
         >
-          <ChevronDown size={15} aria-hidden="true" />
-          <FolderOpen size={16} aria-hidden="true" />
-          <span>All media</span>
-        </button>
-        <div class="folder-contents">
-          <Show when={state().folders.length}>
-            <ul class="folder-list" aria-label="Virtual folders">
-              <For each={state().folders}>
-                {(folder) => (
-                  <li>
-                    <button
-                      class="folder btn btn-ghost btn-sm"
-                      onClick={() => void loadFolder(folder.id)}
-                    >
-                      <Folder size={16} aria-hidden="true" />
-                      <span>{folder.label}</span>
-                    </button>
-                  </li>
-                )}
-              </For>
-            </ul>
-          </Show>
-          <Show when={state().activeFolder}>
-            <span class="folder-label">Videos in folder</span>
-          </Show>
-          <ul class="media-list" aria-label="Media list">
-            <For each={visibleMedia()}>
-              {(item) => (
-                <li>
-                  <button
-                    class="btn btn-ghost btn-sm justify-start"
-                    aria-pressed={selected()?.id === item.id ? "true" : "false"}
-                    aria-label={`Select ${item.name}`}
-                    onClick={() => {
-                      chooseMedia(item);
-                      setExplorerOpen(false);
-                    }}
-                  >
-                    <MediaThumbnail item={item} api={api} server={workspace.server} />
-                    <span class="media-file-copy">
-                      <strong>{item.name}</strong>
-                      <span>{formatLibraryDuration(item.durationMs)}</span>
-                      <small>{mediaSummary(item)}</small>
-                    </span>
-                  </button>
-                </li>
-              )}
-            </For>
-          </ul>
-        </div>
-      </nav>
-      <Show when={state().nextCursor}>
-        <button
-          class="btn btn-ghost btn-sm"
-          disabled={state().loadingMore}
-          onClick={() => void loadFolder(state().activeFolder, state().nextCursor)}
-        >
-          {state().loadingMore ? "Loading more…" : "Load more"}
-        </button>
+          <div class="folder-contents">
+            <Show when={state().folders.length}>
+              <ul class="folder-list" aria-label="Virtual folders">
+                <For each={state().folders}>
+                  {(folder) => <FolderBranch folder={folder} api={api} onChoose={choose} />}
+                </For>
+              </ul>
+            </Show>
+            <MediaItems items={visibleMedia()} api={api} onChoose={choose} />
+          </div>
+        </nav>
+        <Show when={state().nextCursor}>
+          <button
+            class="btn btn-ghost btn-sm"
+            disabled={state().loadingMore}
+            onClick={() => void loadFolder(state().activeFolder, state().nextCursor)}
+          >
+            {state().loadingMore ? "Loading more…" : "Load more"}
+          </button>
+        </Show>
       </Show>
     </section>
   );

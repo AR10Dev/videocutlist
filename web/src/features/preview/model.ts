@@ -213,6 +213,7 @@ export function streamPreview(
   onDiagnostics: (diagnostics: PreviewDiagnostics) => void,
   onError: (error: Error) => void,
   shouldPlay: () => boolean = () => true,
+  nextRequest?: (endMs: number) => ((signal: AbortSignal) => Promise<Response>) | undefined,
 ): Effect.Effect<void, never, import("effect/Scope").Scope> {
   const failure = (message: string) =>
     new Error(
@@ -325,44 +326,90 @@ export function streamPreview(
         function sourceError() {
           signalFailure("Preview data could not be played. Try again.");
         }
-        const streaming = Effect.gen(function* () {
-          const started = performance.now();
-          // Some request implementations ignore abortion. Their late bodies still need disposal.
-          const response = yield* Effect.tryPromise({
-            try: async (signal) => {
-              const response = await request(signal);
-              if (disposed || signal.aborted) await response.body?.cancel().catch(() => undefined);
-              return response;
-            },
-            catch: () => failure("Preview data could not be read. Try again."),
-          });
-          const reader = yield* Effect.acquireRelease(
-            Effect.sync(() => response.body?.getReader()),
-            (reader) =>
-              Effect.promise(async () => {
-                if (!reader) return;
-                await reader.cancel().catch(() => undefined);
-                reader.releaseLock();
-              }),
-          );
-          if (!response.ok)
-            return yield* Effect.fail(failure("Preview request failed. Try again."));
-          if (!reader)
-            return yield* Effect.fail(failure("Preview returned no playable data. Try again."));
-          const diagnostics = headersToDiagnostics(
-            response.headers,
-            Math.round(performance.now() - started),
-          );
-          previewOffsetMs = diagnostics.offsetMs;
-          if (!disposed) onDiagnostics(diagnostics);
-          while (true) {
-            const next = yield* Effect.tryPromise({
-              try: () => reader.read(),
+        const readWindow = (windowRequest: typeof request) =>
+          Effect.gen(function* () {
+            const started = performance.now();
+            // Some request implementations ignore abortion. Their late bodies still need disposal.
+            const response = yield* Effect.tryPromise({
+              try: async (signal) => {
+                const response = await windowRequest(signal);
+                if (disposed || signal.aborted)
+                  await response.body?.cancel().catch(() => undefined);
+                return response;
+              },
               catch: () => failure("Preview data could not be read. Try again."),
             });
-            if (next.done) break;
-            queued.push(next.value);
-            appendNext();
+            const reader = yield* Effect.acquireRelease(
+              Effect.sync(() => response.body?.getReader()),
+              (reader) =>
+                Effect.promise(async () => {
+                  if (!reader) return;
+                  await reader.cancel().catch(() => undefined);
+                  reader.releaseLock();
+                }),
+            );
+            if (!response.ok)
+              return yield* Effect.fail(failure("Preview request failed. Try again."));
+            if (!reader)
+              return yield* Effect.fail(failure("Preview returned no playable data. Try again."));
+            const diagnostics = headersToDiagnostics(
+              response.headers,
+              Math.round(performance.now() - started),
+            );
+            return { reader, diagnostics };
+          });
+        const streaming = Effect.gen(function* () {
+          let windowRequest: typeof request | undefined = request;
+          let initial: PreviewDiagnostics | undefined;
+          let endMs = 0;
+          while (windowRequest) {
+            const currentRequest = windowRequest;
+            yield* Effect.scoped(
+              Effect.gen(function* () {
+                const { reader, diagnostics } = yield* readWindow(currentRequest);
+                const previousEndMs = endMs;
+                endMs = diagnostics.startMs + diagnostics.durationMs;
+                if (endMs <= previousEndMs)
+                  return yield* Effect.fail(
+                    failure("Preview returned a non-advancing window. Try again."),
+                  );
+                if (!initial) {
+                  initial = diagnostics;
+                  previewOffsetMs = diagnostics.offsetMs;
+                } else {
+                  sourceBuffer.timestampOffset = (diagnostics.startMs - initial.startMs) / 1000;
+                  // The final normalized window can overlap; MSE replaces those future frames.
+                }
+                if (!disposed)
+                  onDiagnostics({
+                    ...diagnostics,
+                    startMs: initial.startMs,
+                    durationMs: endMs - initial.startMs,
+                    offsetMs: initial.offsetMs,
+                  });
+                while (true) {
+                  const next = yield* Effect.tryPromise({
+                    try: () => reader.read(),
+                    catch: () => failure("Preview data could not be read. Try again."),
+                  });
+                  if (next.done) break;
+                  queued.push(next.value);
+                  appendNext();
+                }
+                while (sourceBuffer.updating || queued.length > 0) yield* Effect.sleep(10);
+              }),
+            );
+            // Keep one window ahead without downloading an entire long video into memory.
+            while (
+              nextRequest &&
+              (!shouldPlay() || (endMs - initial!.startMs) / 1000 - video.currentTime > 8)
+            )
+              yield* Effect.sleep(100);
+            windowRequest = nextRequest?.(endMs);
+            if (windowRequest && video.currentTime > 30) {
+              sourceBuffer.remove(0, video.currentTime - 30);
+              while (sourceBuffer.updating) yield* Effect.sleep(10);
+            }
           }
           completed = true;
           appendNext();

@@ -116,8 +116,6 @@
   .left-sidebar,
   .task-panel {
     background: var(--surface-raised);
-    border: 1px solid var(--panel-border);
-    border-radius: 8px;
     overflow-y: auto;
   }
   .left-sidebar {
@@ -203,19 +201,24 @@
     align-items: center;
     gap: 2px;
   }
+  .app-shell:has(.workspace-notices > *) {
+    grid-template-areas:
+      "notices notices notices notices notices"
+      "media media-resizer editor segments-resizer task";
+    grid-template-rows: auto minmax(0, 1fr);
+    row-gap: 8px;
+  }
   .workspace-notices {
-    position: fixed;
-    z-index: 60;
-    top: 12px;
-    left: 50%;
+    grid-area: notices;
     display: grid;
-    width: min(calc(100vw - 24px), 960px);
+    width: min(100%, 960px);
+    margin-inline: auto;
     gap: 8px;
-    transform: translateX(-50%);
-    pointer-events: none;
+  }
+  .workspace-notices:empty {
+    display: none;
   }
   .workspace-notices > * {
-    pointer-events: auto;
     box-shadow: 0 8px 24px color-mix(in srgb, #000 20%, transparent);
   }
   .spin {
@@ -973,17 +976,15 @@
   }
 
   .settings-view {
-    grid-column: 1 / -1;
-    grid-row: 2;
-    width: min(100%, 960px);
-    margin-inline: auto;
+    grid-area: settings;
     overflow-y: auto;
     padding: 20px;
     background: var(--surface-raised);
-    border: 1px solid var(--panel-border);
-    border-radius: 8px;
   }
   .app-shell:has(.settings-view) .left-sidebar,
+  .app-shell:has(.settings-view) .editor-panel,
+  .app-shell:has(.settings-view) .task-panel,
+  .app-shell:has(.settings-view) .drawer-backdrop,
   .app-shell:has(.settings-view) .panel-resizer {
     display: none;
   }
@@ -1099,6 +1100,9 @@
       grid-template-rows: minmax(0, 1fr);
       gap: 8px;
     }
+    .app-shell:has(.workspace-notices > *) {
+      grid-template-areas: "notices" "editor";
+    }
     .left-sidebar,
     .task-panel {
       position: fixed;
@@ -1129,10 +1133,6 @@
     }
     .editor-panel {
       overflow: visible;
-    }
-    .settings-view {
-      grid-column: 1 / -1;
-      grid-row: 2;
     }
     .app-shell:has(.settings-view) .left-sidebar {
       display: none;
@@ -1168,6 +1168,18 @@
     .settings-view {
       padding: 12px;
     }
+  }
+  .app-shell:has(.settings-view) {
+    height: 100dvh;
+    padding: 0;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "settings";
+    grid-template-rows: minmax(0, 1fr);
+    gap: 0;
+  }
+  .app-shell:has(.settings-view):has(.workspace-notices > *) {
+    grid-template-areas: "notices" "settings";
+    grid-template-rows: auto minmax(0, 1fr);
   }
 }
 @media (prefers-reduced-motion: reduce) {

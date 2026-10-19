@@ -58,7 +58,6 @@ export function App() {
     setProjectToolsOpen,
     openMediaPanel,
     closeMediaPanel,
-    hideMediaPanel,
     openTaskPanel,
     closeTaskPanel,
     closeOpenDrawer,
@@ -93,11 +92,8 @@ export function App() {
   const toggleSettings = () => {
     if (settingsOpen()) {
       setSettingsOpen(false);
-      openMediaPanel(false);
       return;
     }
-    if (mediaOpen()) hideMediaPanel();
-    closeTaskPanel(false);
     void openSettings();
   };
   createEffect(() => {
@@ -277,7 +273,7 @@ export function App() {
             "drawer-open": narrowViewport() && mediaOpen(),
           }}
           aria-label="Media workspace"
-          aria-hidden={!mediaOpen()}
+          aria-hidden={!mediaOpen() || settingsOpen()}
           role={narrowViewport() ? "dialog" : undefined}
           aria-modal={narrowViewport() ? "true" : undefined}
         >
@@ -397,9 +393,7 @@ export function App() {
               </DropdownMenu>
             </div>
           </header>
-          <Show when={!settingsOpen()}>
-            <LibraryView />
-          </Show>
+          <LibraryView />
         </aside>
         <div
           class="panel-resizer media-resizer"
@@ -415,118 +409,101 @@ export function App() {
           onDblClick={() => resetPanelWidth("media")}
           onKeyDown={(event) => resizePanelWithKeyboard("media", event)}
         />
-        <Show
-          when={settingsOpen()}
-          fallback={
-            <>
-              <EditorView
-                mediaOpen={mediaOpen()}
-                tasksOpen={tasksOpen()}
-                openMediaPanel={() => (mediaOpen() ? closeMediaPanel() : openMediaPanel())}
-                openTaskPanel={() => (tasksOpen() ? closeTaskPanel() : openTaskPanel(activeTask()))}
-                onChooseMedia={() => {
-                  openMediaPanel(false);
-                  scheduleFrame(() => {
-                    const target =
-                      document.querySelector<HTMLElement>(".media-list button") ??
-                      document.querySelector<HTMLElement>(
-                        "#media-panel .media-panel .panel-heading button",
-                      );
-                    target?.focus();
-                    target?.scrollIntoView({ block: "nearest" });
-                  });
-                }}
-              />
-              <div
-                class="panel-resizer segments-resizer"
-                classList={{ "is-collapsed": !tasksOpen() }}
-                role="separator"
-                aria-label="Resize segments panel"
-                aria-orientation="vertical"
-                aria-valuemin="200"
-                aria-valuemax="420"
-                aria-valuenow={segmentsWidth()}
-                tabIndex={0}
-                onPointerDown={(event) => beginPanelResize("segments", event)}
-                onDblClick={() => resetPanelWidth("segments")}
-                onKeyDown={(event) => resizePanelWithKeyboard("segments", event)}
-              />
-              <Tabs
-                as="aside"
-                value={activeTask()}
-                onChange={(value) => {
-                  if (value === "cuts" || value === "detection" || value === "export")
-                    selectTask(value);
-                }}
-                id="segments-panel"
-                class="task-panel"
-                classList={{
-                  "is-collapsed": !tasksOpen(),
-                  "drawer-open": narrowViewport() && tasksOpen(),
-                }}
-                aria-label="Segments and workspace tasks"
-                aria-hidden={!tasksOpen()}
-                role={narrowViewport() ? "dialog" : undefined}
-                aria-modal={narrowViewport() ? "true" : undefined}
-              >
-                <Tabs.List class="tabs mb-4 grid grid-cols-3 gap-0.5" aria-label="Workspace tasks">
-                  <Tabs.Trigger
-                    id="cuts-tab"
-                    value="cuts"
-                    class="tab min-h-11 min-w-0 px-1 text-[0.8rem] aria-selected:rounded-md aria-selected:bg-primary aria-selected:font-bold aria-selected:text-primary-content"
-                  >
-                    Cuts
-                  </Tabs.Trigger>
-                  <Tabs.Trigger
-                    id="detection-tab"
-                    value="detection"
-                    class="tab min-h-11 min-w-0 px-1 text-[0.8rem] aria-selected:rounded-md aria-selected:bg-primary aria-selected:font-bold aria-selected:text-primary-content"
-                    disabled={!selected() || !controller.activeItemId()}
-                  >
-                    Auto-detect
-                  </Tabs.Trigger>
-                  <Tabs.Trigger
-                    id="export-tab"
-                    value="export"
-                    class="tab min-h-11 min-w-0 px-1 text-[0.8rem] aria-selected:rounded-md aria-selected:bg-primary aria-selected:font-bold aria-selected:text-primary-content"
-                  >
-                    Export
-                  </Tabs.Trigger>
-                </Tabs.List>
-                <Tabs.Content
-                  id="cuts-tabpanel"
-                  value="cuts"
-                  forceMount
-                  hidden={activeTask() !== "cuts"}
-                >
-                  <CutsView />
-                </Tabs.Content>
-                <Tabs.Content
-                  id="export-tabpanel"
-                  value="export"
-                  forceMount
-                  hidden={activeTask() !== "export"}
-                >
-                  <ExportView />
-                </Tabs.Content>
-                <Tabs.Content
-                  id="detection-tabpanel"
-                  value="detection"
-                  forceMount
-                  hidden={activeTask() !== "detection"}
-                >
-                  <DetectionView />
-                </Tabs.Content>
-              </Tabs>
-            </>
-          }
+        <EditorView
+          mediaOpen={mediaOpen()}
+          tasksOpen={tasksOpen()}
+          openMediaPanel={() => (mediaOpen() ? closeMediaPanel() : openMediaPanel())}
+          openTaskPanel={() => (tasksOpen() ? closeTaskPanel() : openTaskPanel(activeTask()))}
+          onChooseMedia={() => {
+            openMediaPanel(false);
+            scheduleFrame(() => {
+              const target =
+                document.querySelector<HTMLElement>(".media-list button") ??
+                document.querySelector<HTMLElement>(
+                  "#media-panel .media-panel .panel-heading button",
+                );
+              target?.focus();
+              target?.scrollIntoView({ block: "nearest" });
+            });
+          }}
+        />
+        <div
+          class="panel-resizer segments-resizer"
+          classList={{ "is-collapsed": !tasksOpen() }}
+          role="separator"
+          aria-label="Resize segments panel"
+          aria-orientation="vertical"
+          aria-valuemin="200"
+          aria-valuemax="420"
+          aria-valuenow={segmentsWidth()}
+          tabIndex={0}
+          onPointerDown={(event) => beginPanelResize("segments", event)}
+          onDblClick={() => resetPanelWidth("segments")}
+          onKeyDown={(event) => resizePanelWithKeyboard("segments", event)}
+        />
+        <Tabs
+          as="aside"
+          value={activeTask()}
+          onChange={(value) => {
+            if (value === "cuts" || value === "detection" || value === "export") selectTask(value);
+          }}
+          id="segments-panel"
+          class="task-panel"
+          classList={{
+            "is-collapsed": !tasksOpen(),
+            "drawer-open": narrowViewport() && tasksOpen(),
+          }}
+          aria-label="Segments and workspace tasks"
+          aria-hidden={!tasksOpen() || settingsOpen()}
+          role={narrowViewport() ? "dialog" : undefined}
+          aria-modal={narrowViewport() ? "true" : undefined}
         >
-          <SettingsView
-            onClose={() => {
-              setSettingsOpen(false);
-              openMediaPanel(false);
-            }}
-          />
+          <Tabs.List class="tabs mb-4 grid grid-cols-3 gap-0.5" aria-label="Workspace tasks">
+            <Tabs.Trigger
+              id="cuts-tab"
+              value="cuts"
+              class="tab min-h-11 min-w-0 px-1 text-[0.8rem] aria-selected:rounded-md aria-selected:bg-primary aria-selected:font-bold aria-selected:text-primary-content"
+            >
+              Cuts
+            </Tabs.Trigger>
+            <Tabs.Trigger
+              id="detection-tab"
+              value="detection"
+              class="tab min-h-11 min-w-0 px-1 text-[0.8rem] aria-selected:rounded-md aria-selected:bg-primary aria-selected:font-bold aria-selected:text-primary-content"
+              disabled={!selected() || !controller.activeItemId()}
+            >
+              Auto-detect
+            </Tabs.Trigger>
+            <Tabs.Trigger
+              id="export-tab"
+              value="export"
+              class="tab min-h-11 min-w-0 px-1 text-[0.8rem] aria-selected:rounded-md aria-selected:bg-primary aria-selected:font-bold aria-selected:text-primary-content"
+            >
+              Export
+            </Tabs.Trigger>
+          </Tabs.List>
+          <Tabs.Content id="cuts-tabpanel" value="cuts" forceMount hidden={activeTask() !== "cuts"}>
+            <CutsView />
+          </Tabs.Content>
+          <Tabs.Content
+            id="export-tabpanel"
+            value="export"
+            forceMount
+            hidden={activeTask() !== "export"}
+          >
+            <ExportView />
+          </Tabs.Content>
+          <Tabs.Content
+            id="detection-tabpanel"
+            value="detection"
+            forceMount
+            hidden={activeTask() !== "detection"}
+          >
+            <DetectionView />
+          </Tabs.Content>
+        </Tabs>
+        <Show when={settingsOpen()}>
+          <SettingsView onClose={() => setSettingsOpen(false)} />
         </Show>
       </main>
     </WorkspaceProvider>

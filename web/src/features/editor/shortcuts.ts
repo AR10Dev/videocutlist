@@ -8,7 +8,12 @@ export function installEditorShortcuts(
   if (typeof window === "undefined") return;
   const handleKeyDown = (event: KeyboardEvent) => {
     const target = event.target;
-    if (!(target instanceof Element) || event.defaultPrevented) return;
+    if (
+      !(target instanceof Element) ||
+      event.defaultPrevented ||
+      document.querySelector(".settings-view")
+    )
+      return;
     const key = event.key.toLowerCase();
     const historyShortcut = (event.ctrlKey || event.metaKey) && ["z", "y"].includes(key);
     if (

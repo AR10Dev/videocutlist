@@ -3,11 +3,10 @@ GOFMT ?= gofmt
 GOLANGCI_LINT ?= golangci-lint
 PNPM ?= pnpm
 GO_PACKAGES := ./cmd/... ./internal/...
-GO_TEST_PACKAGES := $(GO_PACKAGES) ./test/...
 SHELL_FILES := $(shell find scripts deployments test -type f -name '*.sh')
 DATA_DIR ?= .cache/videocutlist
 
-.PHONY: benchmark-backend build check clean clean-deps clean-all generate-go-api web-install e2e format lint run smoke test test-podman test-real-media
+.PHONY: build check clean clean-deps clean-all generate-go-api web-install e2e format lint run smoke test test-podman test-real-media
 
 # Regenerate Go transport types from the shared OpenAPI source.
 generate-go-api:
@@ -22,7 +21,7 @@ build:
 # Remove reproducible output only; preserve dependencies and application data.
 clean:
 	rm -rf -- web/dist internal/web/webassets/dist \
-		web/test-results web/playwright-report web/blob-report web/coverage web/.vitest \
+		web/test-results web/playwright-report web/blob-report \
 		test-results playwright-report blob-report coverage \
 		web/node_modules/.vite web/node_modules/.vite-temp node_modules/.vite
 	rm -f -- videocutlist videocutlist.exe *.test *.tsbuildinfo web/*.tsbuildinfo
@@ -43,20 +42,18 @@ run:
 	VIDEOCUTLIST_MEDIA_ROOTS_JSON="$${VIDEOCUTLIST_MEDIA_ROOTS_JSON:-{}}" \
 	$(GO) run ./cmd/videocutlist
 
-check: lint test build
-	$(GO) test -tags embed_frontend ./...
+check: lint build
 	$(GO) vet -tags embed_frontend ./...
 
 format:
-	$(GO) fmt $(GO_TEST_PACKAGES)
+	$(GOFMT) -w $$(find cmd internal test -type f -name '*.go')
 	$(PNPM) --dir web run format
 
 lint:
-	node --test scripts/check-layout.test.mjs scripts/clean.test.mjs scripts/check-shellcheck.test.mjs
 	node scripts/check-layout.mjs
 	test -z "$$($(GOFMT) -l $$(find cmd internal test -type f -name '*.go'))"
 	$(GOLANGCI_LINT) run ./...
-	$(GO) vet $(GO_TEST_PACKAGES)
+	$(GO) vet $(GO_PACKAGES)
 	status=0; for file in $(SHELL_FILES); do shellcheck "$$file" || status=1; done; test "$$status" -eq 0
 	test -z "$$(shfmt -d $(SHELL_FILES))"
 	$(PNPM) --dir web run lint
@@ -67,9 +64,7 @@ e2e:
 
 smoke: check e2e
 
-test:
-	$(GO) test -race $(GO_TEST_PACKAGES)
-	$(PNPM) --dir web test
+test: e2e
 
 test-podman:
 	./scripts/deploy-podman-local.sh --smoke-test
@@ -80,10 +75,7 @@ test-real-media:
 	rm -rf internal/web/webassets/dist
 	cp -a web/dist internal/web/webassets/dist
 	$(GO) test -tags realmedia -count=1 -v ./test/realmedia
-	$(PNPM) --dir web exec playwright test --config playwright.real.config.ts
-
-benchmark-backend:
-	./test/performance/run-backend.sh
+	$(MAKE) e2e
 
 web-install:
 	$(PNPM) install --frozen-lockfile

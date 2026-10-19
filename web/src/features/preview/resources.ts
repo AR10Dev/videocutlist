@@ -20,6 +20,11 @@ type ThumbnailRequestResult = {
   thumbnailFailed: boolean;
 };
 
+function assetPixelWidth(viewport: AssetViewport): number {
+  const width = Number.isFinite(viewport.widthPx) ? Math.max(1, viewport.widthPx ?? 1) : 960;
+  return Math.max(16, Math.min(4096, Math.ceil(width * (globalThis.devicePixelRatio || 1))));
+}
+
 function loadThumbnail(url: string, signal: AbortSignal): Promise<HTMLImageElement | undefined> {
   return new Promise((resolve) => {
     const image = new Image();
@@ -43,6 +48,7 @@ async function composeThumbnailStrip(
   results: ThumbnailRequestResult[],
   signal: AbortSignal,
   viewport: AssetRange,
+  pixelWidth: number,
 ): Promise<Blob | undefined> {
   const images = await Promise.all(
     results.map(({ thumbnailURL }) =>
@@ -54,10 +60,9 @@ async function composeThumbnailStrip(
     if (results[index].thumbnailURL && !image) results[index].thumbnailFailed = true;
   });
   if (!images.some(Boolean)) return undefined;
-  const tileWidth = 320;
   const tileHeight = Math.max(1, ...images.map((image) => image?.naturalHeight || 180));
   const canvas = document.createElement("canvas");
-  canvas.width = Math.max(1, tileWidth * results.length);
+  canvas.width = pixelWidth;
   canvas.height = tileHeight;
   const context = canvas.getContext("2d");
   if (!context) return undefined;
@@ -177,7 +182,7 @@ export function createPreviewAssets(
           { concurrency: "unbounded" },
         );
         const combinedBlob = yield* Effect.tryPromise((signal) =>
-          composeThumbnailStrip(results, signal, fullRange),
+          composeThumbnailStrip(results, signal, fullRange, assetPixelWidth(viewport)),
         ).pipe(Effect.catch(() => Effect.succeed(undefined)));
         const combinedThumbnail = yield* Effect.try({
           try: () => {
@@ -219,7 +224,10 @@ export function createPreviewAssets(
               const blob = yield* readPreviewAsset(api, item.id, "waveform", {
                 startMs: range.startMs,
                 durationMs: range.durationMs,
-                samples: 256,
+                samples: Math.max(
+                  16,
+                  Math.ceil((assetPixelWidth(viewport) * range.durationMs) / fullRange.durationMs),
+                ),
               });
               const text = yield* Effect.tryPromise(() => blob.text());
               const value = yield* Effect.try({
@@ -239,7 +247,7 @@ export function createPreviewAssets(
           ),
           { concurrency: "unbounded" },
         );
-        const peaks = new Array<number>(2048).fill(0);
+        const peaks = new Array<number>(assetPixelWidth(viewport)).fill(0);
         for (const result of results) {
           const first = Math.ceil(
             ((result.range.startMs - fullRange.startMs) / fullRange.durationMs) * peaks.length,

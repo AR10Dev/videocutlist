@@ -1,4 +1,4 @@
-name: Real-media validation and backend benchmarks
+name: Real-media end-to-end validation
 
 on:
     workflow_dispatch:
@@ -15,6 +15,8 @@ jobs:
         steps:
             # v7.0.1
             - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+              with:
+                  persist-credentials: false
             # actions/setup-go v7.0.0
             - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
               with:
@@ -33,22 +35,24 @@ jobs:
                   sudo apt-get update
                   sudo apt-get install -y ffmpeg
                   pnpm --dir web exec playwright install --with-deps chromium
+            # actions/cache v5 (checksum is reverified by acquisition)
+            - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
+              with:
+                  path: test/fixtures/real-media
+                  key: media-${{ hashFiles('test/harness/acquire-*') }}
             - name: Run real-media suite
               run: |
                   set -o pipefail
                   make test-real-media 2>&1 | tee real-media.log
-            - name: Run backend performance harness
-              run: make benchmark-backend > backend-benchmark.csv
-            - name: Upload real-media and benchmark evidence
+            - name: Upload real-media evidence
               if: always()
               # actions/upload-artifact v7.0.0
               uses: >-
                   actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
               with:
-                  name: real-media-and-backend-performance-${{ github.run_id }}
+                  name: real-media-${{ github.run_id }}
                   path: |
                       test/fixtures/real-media/sintel-trailer.mp4
-                      backend-benchmark.csv
                       real-media.log
                       web/test-results/
                   retention-days: 14

@@ -182,7 +182,8 @@ func (s *Scheduler) SetLimits(config SchedulerConfig) error {
 	if s.stopped {
 		return ErrSchedulerStopped
 	}
-	s.config = config
+	s.config.QueueCapacity = config.QueueCapacity
+	s.config.WorkerLimit = config.WorkerLimit
 	if s.started {
 		s.startWorkers()
 	}

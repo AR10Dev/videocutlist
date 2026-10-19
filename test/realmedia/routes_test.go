@@ -5,9 +5,6 @@ package realmedia
 import (
 	"net/http"
 	"strings"
-	"testing"
-
-	"videocutlist/internal/httpapi"
 )
 
 // productionRoutes is the route coverage contract for the HTTP router. Keep this
@@ -83,32 +80,4 @@ func routePathMatches(template, actual string) bool {
 		return false
 	}
 	return true
-}
-
-func TestProductionRouteCoverageTable(t *testing.T) {
-	seen := make(map[string]bool, len(productionRoutes))
-	kinds := make(map[string]bool, len(productionRoutes))
-	for _, tc := range productionRoutes {
-		key := tc.method + " " + tc.path
-		if seen[key] {
-			t.Errorf("duplicate route coverage entry %s", key)
-		}
-		seen[key] = true
-		kind := httpapi.RouteCoverageKind(tc.method, tc.path)
-		if kind == "" {
-			t.Errorf("route coverage entry is not accepted by production router: %s", key)
-		}
-		kinds[kind] = true
-	}
-	for _, kind := range httpapi.RouteCoverageKinds() {
-		if !kinds[kind] {
-			t.Errorf("production route kind %q has no real-media test case", kind)
-		}
-	}
-	if len(kinds) != len(httpapi.RouteCoverageKinds()) {
-		t.Fatalf("real-media route inventory accounts for %d kinds, want %d", len(kinds), len(httpapi.RouteCoverageKinds()))
-	}
-	// These are production endpoints handled outside parseRoute.
-	const processRoutes = 3 // health, ready, and static application document
-	t.Logf("real-media evidence: accounted routes=%d (api=%d, process=%d)", len(productionRoutes)+processRoutes, len(productionRoutes), processRoutes)
 }

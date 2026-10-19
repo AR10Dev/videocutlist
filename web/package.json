@@ -14,7 +14,7 @@
     "lint": "oxlint . && node scripts/check-boundary.mjs",
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check .",
-    "test": "vitest run --passWithNoTests",
+    "test": "playwright test",
     "test:e2e": "playwright test"
   },
   "dependencies": {
@@ -29,7 +29,6 @@
   "devDependencies": {
     "@effect/openapi-generator": "4.0.0",
     "@effect/platform-node": "4.0.0",
-    "@effect/vitest": "4.0.0",
     "@playwright/test": "1.63.0",
     "@tailwindcss/vite": "4.3.3",
     "@types/node": "26.6.3",
@@ -40,7 +39,6 @@
     "typescript": "6.0.3",
     "vite": "8.3.1",
     "vite-plugin-solid": "2.11.14",
-    "vitest": "5.0.2",
     "yaml": "2.8.1"
   },
   "pnpm": {

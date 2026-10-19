@@ -84,7 +84,6 @@ export function createPreviewController(
   const setPreviewReload = (f: (n: number) => number) =>
     registry.update(request, (s) => ({ ...s, reload: f(s.reload) }));
   const video = () => registry.get(attachment);
-  const previewRenewalLeadMs = 1000;
   const loopSelectedSegment = () => dependencies.preferences().loopSelectedSegment;
   const stream = Atom.keepAlive(
     runtime.atom((get) => {
@@ -172,6 +171,15 @@ export function createPreviewController(
             }
           },
           () => current && playbackIntent(),
+          (endMs) => {
+            if (endMs >= playbackBounds(item).endMs) return;
+            const params = new URLSearchParams({
+              centerMs: String(Math.round(endMs + 2000)),
+              beforeMs: "2000",
+              afterMs: "6000",
+            });
+            return previewMediaRequest(api, item.id, params);
+          },
         );
       });
     }),
@@ -226,21 +234,6 @@ export function createPreviewController(
     }
     stopAtBoundary(bounds.endMs);
   };
-  const requestRenewal = (positionMs: number, force = false) => {
-    const item = dependencies.selected();
-    const info = diagnostics();
-    if (!item || !info || !playbackIntent() || info.durationMs <= 0) return false;
-    const position = clampMediaPosition(positionMs, item.durationMs);
-    const bounds = playbackBounds(item);
-    if (position >= bounds.endMs) {
-      advancePlayback(position);
-      return false;
-    }
-    const windowEnd = Math.min(item.durationMs, info.startMs + info.durationMs);
-    if (!force && windowEnd - position > previewRenewalLeadMs) return false;
-    setPreviewCenterMs(position);
-    return true;
-  };
   const syncPreviewPosition = (currentTime: number) => {
     const item = dependencies.selected();
     const info = diagnostics();
@@ -254,7 +247,6 @@ export function createPreviewController(
       }
     }
     dependencies.updatePlaybackPosition(position);
-    if (playbackIntent()) requestRenewal(position);
   };
   const handlePreviewEnded = (currentTime: number) => {
     const item = dependencies.selected();
@@ -273,7 +265,7 @@ export function createPreviewController(
       }
     }
     dependencies.updatePlaybackPosition(position);
-    if (!playbackIntent() || !requestRenewal(position, true)) setPlaybackIntent(false);
+    setPlaybackIntent(false);
   };
   const startPlayback = (mode: PreviewPlaybackMode, positionMs: number, segment?: Segment) => {
     setPlaybackMode(mode);
@@ -417,8 +409,7 @@ export function createPreviewController(
       }
     }
     setPlaybackIntent(true);
-    if (!diagnostics() && previewStatus().includes("Try again."))
-      setPreviewReload((value: number) => value + 1);
+    if (previewStatus().includes("Try again.")) setPreviewReload((value: number) => value + 1);
     if (player)
       registry.set(nativePlay, {
         player,
