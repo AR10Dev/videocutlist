@@ -42,6 +42,7 @@ export async function addSelectedMediaToProject(page: Page) {
   // Create membership automatically, then leave an empty item for these workflows.
   await setRange(page, 100, 700);
   await openTask(page, "Cuts");
+  await page.locator(".cut-menu summary").click();
   await page.getByRole("button", { name: "Remove cut 1", exact: true }).click();
   await page.getByLabel("Timeline playhead").fill("0");
 }
@@ -58,8 +59,7 @@ export async function saveProject(page: Page) {
   await expect(page.getByRole("status", { name: "Project status" })).toHaveText("Saved");
 }
 
-export async function loadProject(page: Page, id: string) {
-  page.once("dialog", (dialog) => void dialog.accept(id));
+export async function loadProject(page: Page, id: string, name: string) {
   await page.getByRole("button", { name: "Project menu", exact: true }).click();
   const loading = page.waitForResponse(
     (response) =>
@@ -67,7 +67,15 @@ export async function loadProject(page: Page, id: string) {
       response.request().method() === "GET",
   );
   await page.getByRole("menuitem", { name: "Load project", exact: true }).click();
+  await page
+    .getByRole("list", { name: "Saved projects" })
+    .getByRole("button", { name, exact: true })
+    .click();
+  const confirmation = page.getByRole("dialog", { name: "Discard unsaved changes?" });
+  if (await confirmation.isVisible())
+    await confirmation.getByRole("button", { name: "Discard changes" }).click();
   expect((await loading).status()).toBe(200);
+  await page.getByRole("button", { name: "Close project tools" }).click();
 }
 
 export async function openRealMedia(page: Page) {

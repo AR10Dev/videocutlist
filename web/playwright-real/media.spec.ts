@@ -102,7 +102,7 @@ test("real silence detection streams candidates, supports review, bulk undo, and
   expect(saved.items[0].id).toMatch(/^i_[A-Za-z0-9_-]{12,64}$/);
   const count = await candidates.count();
   await expect(
-    page.getByText(`${count} candidates found. Review each before accepting.`, { exact: true }),
+    page.getByRole("status").filter({ hasText: `${count} candidates found.` }),
   ).toBeVisible();
   await page.getByRole("button", { name: "Preview candidate 1", exact: true }).click();
   await expect(page.getByLabel("Preview player")).toHaveAttribute(
@@ -118,6 +118,7 @@ test("real silence detection streams candidates, supports review, bulk undo, and
   await expect(candidates).toHaveCount(count - 1);
   if (count > 1) await expect(candidates.first()).toBeFocused();
   await openTask(page, "Export");
+  await page.locator(".export-options > summary").click();
   await expect(page.getByLabel("What to export", { exact: true })).toHaveValue("segments");
   await openTask(page, "Cuts");
   await expect(page.locator(".cut-row[data-segment-id]")).toHaveCount(1);
@@ -127,8 +128,11 @@ test("real silence detection streams candidates, supports review, bulk undo, and
   await openTask(page, "Detection");
   await page.getByRole("button", { name: "Find pauses", exact: true }).click();
   await expect(candidates).toHaveCount(count);
-  page.once("dialog", (dialog) => void dialog.accept());
   await page.getByRole("button", { name: "Accept all valid", exact: true }).click();
+  await page
+    .getByRole("dialog")
+    .getByRole("button", { name: "Accept all valid", exact: true })
+    .click();
   await openTask(page, "Cuts");
   await expect(page.locator(".cut-row[data-segment-id]")).toHaveCount(count);
   await page.getByRole("heading", { name: "Timeline", exact: true }).focus();

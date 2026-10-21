@@ -46,6 +46,7 @@ test("browser export defaults never silently change a saved project's options", 
   await expect(page.getByLabel("Processing")).toHaveValue("precise_reencode");
   await expect(page.getByLabel("Filename template")).toHaveValue("future-{segment}.{ext}");
   await openTask(page, "Export");
+  await page.locator(".export-options > summary").click();
   await page.getByText("Advanced naming", { exact: true }).click();
   await page.getByLabel("Filename template").fill("é".repeat(80));
   await expect(page.getByLabel("Filename template")).toHaveValue("é".repeat(80));
@@ -92,11 +93,9 @@ test("keeps motion reduced and overflow local at a narrow viewport", async ({ pa
   );
   await setRange(page, 100, 700);
   await expect(page.locator(".cut-row[data-segment-id]")).toHaveCount(1);
-  await expect(
-    page.getByRole("listitem", { name: /Segment 001/ }).getByRole("button", {
-      name: "Remove cut 1",
-    }),
-  ).toBeVisible();
+  await expect(page.locator(".cut-menu")).not.toHaveAttribute("open");
+  await page.locator(".cut-menu summary").click();
+  await expect(page.getByRole("button", { name: "Remove cut 1" })).toBeVisible();
   await expect(page.getByLabel("Label cut 1")).toBeVisible();
   const closeTasks = page.getByRole("button", { name: "Close segments panel" });
   if (await closeTasks.isVisible()) await closeTasks.click();

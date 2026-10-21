@@ -1,4 +1,5 @@
 import { Show } from "solid-js";
+import { Notice } from "../../components/Notice";
 import { PanelLeft, PanelRight } from "lucide-solid";
 import { installEditorShortcuts } from "./shortcuts";
 import { Timeline } from "./Timeline";
@@ -55,7 +56,6 @@ export function EditorView(props: {
         fallback={
           <section class="editor-onboarding" aria-labelledby="editor-onboarding-heading">
             <h3 id="editor-onboarding-heading">Choose a video to begin</h3>
-            <p>Select a video from the Media library to unlock the editing workspace.</p>
             <button class="btn btn-primary" type="button" onClick={props.onChooseMedia}>
               Choose a video
             </button>
@@ -70,10 +70,7 @@ export function EditorView(props: {
             </div>
             <Show when={workspace.metadataError()}>
               {(message) => (
-                <div
-                  class="alert alert-error mb-2 flex flex-wrap items-center justify-between gap-2 [&>span]:min-w-0 [&>span]:wrap-anywhere"
-                  role="alert"
-                >
+                <Notice variant="error">
                   <span>{message()}</span>
                   <button
                     class="btn btn-ghost btn-xs"
@@ -83,7 +80,7 @@ export function EditorView(props: {
                   >
                     {workspace.metadataLoading() ? "Retrying…" : "Retry metadata"}
                   </button>
-                </div>
+                </Notice>
               )}
             </Show>
             <p id="timeline-description" class="sr-only">
@@ -103,10 +100,7 @@ export function EditorView(props: {
             </p>
             <Show when={workspace.preview.assetStatus()}>
               {(message) => (
-                <div
-                  class="alert alert-info mb-2 flex flex-wrap items-center justify-between gap-2 [&>span]:min-w-0 [&>span]:wrap-anywhere"
-                  role="status"
-                >
+                <Notice variant="info">
                   <span>{message()}</span>
                   <button
                     class="btn btn-ghost btn-xs"
@@ -115,7 +109,7 @@ export function EditorView(props: {
                   >
                     Retry assets
                   </button>
-                </div>
+                </Notice>
               )}
             </Show>
             <PreviewPlayer timeline={<Timeline />} />

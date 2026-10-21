@@ -7,7 +7,7 @@
   "env": {
     "builtin": true
   },
-  "ignorePatterns": ["dist"],
+  "ignorePatterns": ["dist", "src/generated/effect-api.ts"],
   "overrides": [
     {
       "files": ["**/*.{ts,tsx}"],

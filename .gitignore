@@ -1,5 +1,10 @@
 /.claude/
 
+# Local agent tooling
+/.agents/
+/.pi-lens.json
+/skills-lock.json
+
 # Local agent and review worktrees
 .worktrees/
 /pi-worktree-*/

@@ -5,14 +5,15 @@ import { useServerAtom } from "../../app/server";
 import { createProjectToolsSession } from "./import";
 import { ProjectBrowser } from "./ProjectBrowser";
 
+import { useConfirmation, discardChanges } from "../../components/ConfirmDialog";
+
 export function ProjectDialog(props: {
   onClose: () => void;
   onCloseAutoFocus: (event: Event) => void;
 }) {
   const workspace = useWorkspace();
-  const tools = createProjectToolsSession(workspace, () =>
-    window.confirm("Discard unsaved changes?"),
-  );
+  const confirm = useConfirmation();
+  const tools = createProjectToolsSession(workspace, () => confirm(discardChanges));
   const operationState = useServerAtom(() => tools.result);
   const pending = () => operationState.waiting();
   onCleanup(() => {

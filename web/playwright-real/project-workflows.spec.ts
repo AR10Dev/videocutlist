@@ -22,7 +22,7 @@ test("two real clients recover from revision conflicts through unobstructed Sett
     await connectContext(otherContext, app);
     const other = await otherContext.newPage();
     await other.goto("/");
-    await loadProject(other, saved.id);
+    await loadProject(other, saved.id, saved.name);
     await expect(other.getByLabel("Label cut 1")).toHaveValue("Segment 001");
     await page.getByLabel("Label cut 1").fill("First client's cut");
     await page.getByLabel("Label cut 1").press("Tab");

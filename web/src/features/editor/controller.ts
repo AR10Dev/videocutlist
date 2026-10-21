@@ -5,6 +5,7 @@ import { syncCommand } from "../../app/syncCommand";
 import type * as EffectApiTypes from "../../generated/effect-api";
 import { type Accessor, type Setter } from "solid-js";
 import { frameDuration } from "./frame";
+import { createInputDrafts, type EditorInteraction } from "./inputDrafts";
 import {
   moveSegment as moveSegments,
   moveSegmentTo,
@@ -26,7 +27,6 @@ import {
   nextSegmentName,
   normalizeSegments,
   newSegmentId,
-  parseTimecode,
   validateSegmentLabel,
   validateSegments,
   type Segment,
@@ -61,7 +61,7 @@ export function createEditorController(deps: {
 }) {
   const { registry } = deps.server;
   const interactionAtom = Atom.keepAlive(
-    Atom.make({
+    Atom.make<EditorInteraction>({
       selectedId: undefined as string | undefined,
       status: "",
       discardedMarks: false,
@@ -468,67 +468,17 @@ export function createEditorController(deps: {
     setActiveIndex(index + 1);
   };
 
-  const setBoundaryDraft = (id: string, boundary: "start" | "end", draft: string) => {
-    registry.update(interactionAtom, (value) => ({
-      ...value,
-      boundaryDrafts: {
-        ...value.boundaryDrafts,
-        [id]: { ...value.boundaryDrafts[id], [boundary]: draft },
-      },
-    }));
-  };
-  const cancelBoundary = (id: string, boundary: "start" | "end") => {
-    registry.update(interactionAtom, (value) => {
-      const boundaryErrors = { ...value.boundaryErrors };
-      delete boundaryErrors[id];
-      return {
-        ...value,
-        boundaryErrors,
-        boundaryDrafts: {
-          ...value.boundaryDrafts,
-          [id]: { ...value.boundaryDrafts[id], [boundary]: undefined },
-        },
-      };
+  const { setBoundaryDraft, cancelBoundary, confirmBoundary, editLabelDraft, commitLabelDraft } =
+    createInputDrafts({
+      registry,
+      interactionAtom,
+      interaction,
+      present,
+      updateSegmentBoundary,
+      updateSegmentLabel,
+      editorStatus,
+      setEditorStatus,
     });
-  };
-  const confirmBoundary = (id: string, boundary: "start" | "end") => {
-    const draft = interaction().boundaryDrafts[id]?.[boundary];
-    if (draft === undefined) return;
-    const index = present().segments.findIndex((segment) => segment.id === id);
-    if (index < 0) return;
-    const value = parseTimecode(draft);
-    if (value !== undefined && updateSegmentBoundary(index, boundary, value)) {
-      cancelBoundary(id, boundary);
-      return;
-    }
-    const message =
-      value === undefined ? "Enter a valid timecode within this video." : editorStatus();
-    registry.update(interactionAtom, (value) => ({
-      ...value,
-      boundaryErrors: { ...value.boundaryErrors, [id]: message },
-    }));
-  };
-  const editLabelDraft = (id: string, label: string) => {
-    const index = present().segments.findIndex((segment) => segment.id === id);
-    if (index < 0) return;
-    const error = validateSegmentLabel(label);
-    registry.update(interactionAtom, (value) => {
-      const labelErrors = { ...value.labelErrors };
-      if (error) labelErrors[id] = error;
-      else delete labelErrors[id];
-      return { ...value, labelErrors, labelDrafts: { ...value.labelDrafts, [id]: label } };
-    });
-    if (error) setEditorStatus(error);
-    else updateSegmentLabel(index, label);
-  };
-  const commitLabelDraft = (id: string) => {
-    if (validateSegmentLabel(interaction().labelDrafts[id] ?? "")) return;
-    registry.update(interactionAtom, (value) => {
-      const labelDrafts = { ...value.labelDrafts };
-      delete labelDrafts[id];
-      return { ...value, labelDrafts };
-    });
-  };
 
   const prepareMediaSwitch = () => {
     cancelDrag();

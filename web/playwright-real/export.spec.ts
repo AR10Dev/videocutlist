@@ -12,6 +12,7 @@ async function openExport(page: Page) {
   if ((await taskToggle.getAttribute("aria-expanded")) === "false") await taskToggle.click();
   await page.getByRole("tab", { name: "Export", exact: true }).click();
   await expect(page.getByRole("button", { name: "Create clips" })).toBeVisible();
+  await page.locator(".export-options > summary").click();
 }
 
 async function createClips(page: Page, jobCount: number) {
@@ -26,10 +27,13 @@ async function createClips(page: Page, jobCount: number) {
   const response = await submitted;
   expect(response.status()).toBe(202);
   const submission = (await response.json()) as EffectApiTypes.BatchExportSubmission;
-  const batch = page.getByRole("region", { name: "Current batch" });
-  for (const job of submission.jobs)
-    await expect(batch.getByText(job.id, { exact: true })).toBeVisible();
-  await expect(batch.getByText("succeeded", { exact: true })).toHaveCount(jobCount, {
+  expect(submission.jobs).toHaveLength(jobCount);
+  await page.locator(".queue-footer > summary").click();
+  const batch = page.getByRole("article", { name: "Export batch 1", exact: true });
+  await batch.locator(":scope > details > summary").click();
+  await expect(
+    batch.locator(".export-job-card").getByText("succeeded", { exact: true }),
+  ).toHaveCount(jobCount, {
     timeout: 120_000,
   });
   return batch;
@@ -139,9 +143,12 @@ test("creates, downloads, and verifies selected real-media export scenarios", as
   const projectName = page.getByLabel("Project name");
   await projectName.fill(" ");
   await page.getByRole("button", { name: "Save project", exact: true }).click();
-  await expect(page.getByRole("dialog", { name: "Project tools" }).getByRole("status")).toHaveText(
-    "Project name is required.",
-  );
+  await expect(
+    page
+      .getByRole("dialog", { name: "Project tools" })
+      .getByRole("status")
+      .filter({ hasText: "Project name is required." }),
+  ).toBeVisible();
   expect(saveRequests).toBe(0);
   await projectName.fill("Real media exports");
 
@@ -161,7 +168,7 @@ test("creates, downloads, and verifies selected real-media export scenarios", as
   await openExport(page);
 
   // Selected/all items, separate cuts, automatic tracks, fast copy, MP4, naming, destination.
-  await page.getByRole("radio", { name: "Selected project items" }).check();
+  await page.getByRole("radio", { name: "Selected videos" }).check();
   await page.getByRole("button", { name: "Select none" }).click();
   await expect(page.getByRole("button", { name: "Create clips" })).toBeDisabled();
   await page.getByRole("button", { name: "Select all" }).click();
@@ -172,13 +179,10 @@ test("creates, downloads, and verifies selected real-media export scenarios", as
   await page.getByLabel("Destination", { exact: true }).selectOption("download");
   await page.getByText("Advanced naming", { exact: true }).click();
   await page.getByLabel("Filename template").fill("ui-{source}-{segment}.{ext}");
-  await expect(page.getByText("Automatic", { exact: true })).toBeVisible();
+  await expect(page.locator(".export-track-fieldset > summary")).toHaveText("Tracks (auto)");
   const separateBatch = await createClips(page, 2);
-  await expect(separateBatch).toContainText("One output per cut");
-  await expect(separateBatch).toContainText("Included cuts");
   await expect(separateBatch).toContainText("MP4");
-  await expect(separateBatch).toContainText("Stream copy preferred");
-  await expect(separateBatch).toContainText("Browser download");
+  await expect(separateBatch).toContainText("Downloads");
   await expect(
     separateBatch.locator(".export-output-list code").filter({ hasText: "ui-" }),
   ).toHaveCount(2);
@@ -214,26 +218,24 @@ test("downloads video-only merged MOV gaps with explicit tracks and precise enco
     Number(await page.getByLabel("Timeline playhead").getAttribute("max")) / 1000 - 4;
   await page.getByLabel("What to export").selectOption("gaps");
   await page.getByLabel("Processing").selectOption("precise_reencode");
+  await page.locator(".export-track-fieldset > summary").click();
   const audio = page.getByRole("checkbox", { name: "Audio: aac" });
   await audio.uncheck();
   await audio.check();
-  await expect(page.getByText("Explicit streams: 0, 1.", { exact: true })).toBeVisible();
+  await expect(page.locator(".export-track-fieldset > summary")).toHaveText("Tracks (custom)");
   await audio.uncheck();
-  await expect(page.getByText("Explicit streams: 0.", { exact: true })).toBeVisible();
+  await expect(audio).not.toBeChecked();
   const videoOnlyBatch = await createClips(page, 1);
-  await expect(videoOnlyBatch).toContainText("One merged output");
-  await expect(videoOnlyBatch).toContainText("Gaps between cuts");
   await expect(videoOnlyBatch).toContainText("MOV");
-  await expect(videoOnlyBatch).toContainText("Precise re-encode");
   await downloadAndProbe(
     page,
-    videoOnlyBatch.getByRole("button", { name: "Download output 1" }),
+    videoOnlyBatch.locator(".export-job-card").getByRole("button", { name: "Download output 1" }),
     testInfo,
     "video-only-gaps.mov",
     { format: /mov/, durationSeconds: gapDuration, toleranceSeconds: 0.15, audio: false },
   );
-  await page.getByRole("button", { name: "Reset to automatic tracks" }).click();
-  await expect(page.getByText("Automatic", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Use automatic tracks" }).click();
+  await expect(page.locator(".export-track-fieldset > summary")).toHaveText("Tracks (auto)");
 });
 
 test("downloads a probed merged MKV using hybrid smart cut", async ({ page }, testInfo) => {
@@ -249,11 +251,10 @@ test("downloads a probed merged MKV using hybrid smart cut", async ({ page }, te
   await page.getByLabel("What to export").selectOption("segments");
   await page.getByLabel("Processing").selectOption("hybrid_smart_cut");
   const hybridBatch = await createClips(page, 1);
-  await expect(hybridBatch).toContainText("Hybrid smart cut");
   await expect(hybridBatch).toContainText("MKV");
   await downloadAndProbe(
     page,
-    hybridBatch.getByRole("button", { name: "Download output 1" }),
+    hybridBatch.locator(".export-job-card").getByRole("button", { name: "Download output 1" }),
     testInfo,
     "hybrid-smart-cut.mkv",
     // Allow bounded splice/mux padding; precise mode above uses a tighter bound.

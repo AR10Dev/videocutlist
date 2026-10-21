@@ -7,13 +7,14 @@ import {
   LoaderCircle,
   Play,
   ScanLine,
-  Search,
   SlidersHorizontal,
   Sparkles,
   X,
 } from "lucide-solid";
 import { canStreamPreview, formatTime } from "../preview/model";
 import { candidatePointMs, candidateRange, type Candidate, type DetectionKind } from "./model";
+import { Notice } from "../../components/Notice";
+import { useConfirmation } from "../../components/ConfirmDialog";
 import { useWorkspace } from "../../app/WorkspaceContext";
 
 const kindLabel: Record<DetectionKind, string> = {
@@ -36,13 +37,9 @@ const candidateLabel = (candidate: Candidate, durationMs: number) => {
   return `${formatTime(range.startMs, durationMs)} – ${formatTime(range.endMs, durationMs)}`;
 };
 
-const formatCandidateDuration = (candidate: Candidate) => {
-  const range = candidateRange(candidate);
-  return range ? formatTime(range.endMs - range.startMs, range.endMs - range.startMs) : "Point";
-};
-
 export function DetectionView() {
   const workspace = useWorkspace();
+  const confirm = useConfirmation();
   const options = workspace.detection.detectionOptions;
   const setOptions = workspace.detection.setDetectionOptions;
   const starting = workspace.detection.detectionStarting;
@@ -122,7 +119,8 @@ export function DetectionView() {
     if (starting()) return;
     const invalid = optionsElement?.querySelector<HTMLInputElement>("input:invalid");
     if (invalid) {
-      optionsElement!.closest("details")!.open = true;
+      const details = optionsElement?.closest("details");
+      if (details) details.open = true;
       invalid.reportValidity();
       return;
     }
@@ -133,15 +131,18 @@ export function DetectionView() {
     workspace.detection.detectionLoading() ||
     isActiveState(workspace.detection.detectionJob()?.state);
   const canStart = () => Boolean(workspace.selected() && workspace.activeItemId()) && !active();
-  const acceptAll = () => {
+  const acceptAll = async () => {
     const candidates = workspace.detection.detectionCandidates();
     if (!candidates.length) return;
     if (
-      !window.confirm(
-        `Accept all ${candidates.length} detection candidates that are still valid? Stale, invalid, and overlapping candidates will be skipped.`,
-      )
+      !(await confirm({
+        title: `Accept all ${candidates.length} candidates?`,
+        message: "Stale, invalid, and overlapping candidates will be skipped.",
+        action: "Accept all valid",
+      }))
     )
       return;
+    if (candidates !== workspace.detection.detectionCandidates()) return;
     const result = workspace.detection.bulkAcceptDetection();
     if (result.accepted.length) focusCandidate(workspace.detection.detectionCandidates()[0]);
   };
@@ -187,10 +188,6 @@ export function DetectionView() {
       <header class="task-heading detection-heading">
         <div>
           <h2 id="detection-heading">Auto-detect</h2>
-          <p id="detection-description">
-            Scan the active media item, then review every proposed range or scene point
-            deliberately.
-          </p>
         </div>
         <Show when={workspace.detection.detectionCandidates().length > 0}>
           <span class="badge badge-sm badge-neutral">
@@ -211,69 +208,46 @@ export function DetectionView() {
           </div>
         }
       >
-        <div class="detection-source-strip" aria-label="Detection source">
-          <div class="detection-source-icon" aria-hidden="true">
-            <ScanLine size={18} />
-          </div>
-          <div class="detection-source-copy">
-            <strong>{workspace.selected()!.name}</strong>
-            <span>
-              {formatTime(workspace.editor.duration(), workspace.editor.duration())} · project
-              revision {workspace.revision() || "not saved"}
-            </span>
-          </div>
-        </div>
-
         <Show when={workspace.detection.detectionQueryError()}>
           {(message) => (
-            <div
-              class="alert alert-error alert-soft flex flex-wrap items-center justify-between gap-2 [&>span]:min-w-0 [&>span]:wrap-anywhere"
-              role="alert"
-            >
+            <Notice variant="error">
               <CircleAlert size={16} aria-hidden="true" />
               <span>{message()}</span>
-            </div>
+            </Notice>
           )}
         </Show>
 
         <div class="detection-workflow-group">
-          <div class="detection-section-label">
-            <div>
-              <h3>Find candidates</h3>
-              <p>Choose one deliberate scan; reviewing results never changes export selection.</p>
-            </div>
-            <Search size={16} aria-hidden="true" />
-          </div>
           <div class="detection-methods" aria-label="Detection methods">
             <div class="detection-method-row">
               <button
                 class="btn btn-primary btn-sm"
                 disabled={!canStart()}
+                title={kindDescription.silence}
                 onClick={() => void start("silence")}
               >
                 <Sparkles size={15} aria-hidden="true" /> Find pauses
               </button>
-              <span>{kindDescription.silence}</span>
             </div>
             <div class="detection-method-row">
               <button
                 class="btn btn-ghost btn-sm"
                 disabled={!canStart()}
+                title={kindDescription.black}
                 onClick={() => void start("black")}
               >
                 <ScanLine size={15} aria-hidden="true" /> Find black sections
               </button>
-              <span>{kindDescription.black}</span>
             </div>
             <div class="detection-method-row">
               <button
                 class="btn btn-ghost btn-sm"
                 disabled={!canStart()}
+                title={kindDescription.scene}
                 onClick={() => void start("scene")}
               >
                 <Crosshair size={15} aria-hidden="true" /> Find scene changes
               </button>
-              <span>{kindDescription.scene}</span>
             </div>
           </div>
         </div>
@@ -286,11 +260,7 @@ export function DetectionView() {
             starting()
           }
         >
-          <div
-            class="alert alert-info alert-soft flex flex-wrap items-center justify-between gap-2 rounded-md border-info/40 px-2.5 py-[9px] text-[0.78rem] text-base-content"
-            aria-busy="true"
-            role="status"
-          >
+          <Notice variant="info" busy={true}>
             <div class="detection-job-state-main">
               <LoaderCircle class="spin" size={18} aria-hidden="true" />
               <div>
@@ -319,18 +289,14 @@ export function DetectionView() {
                 <X size={15} aria-hidden="true" /> Cancel detection
               </button>
             </Show>
-          </div>
+          </Notice>
         </Show>
 
         <Show when={jobIsTerminal()}>
-          <div
-            class="alert alert-soft flex flex-wrap items-center justify-between gap-2 rounded-md px-2.5 py-[9px] text-[0.78rem] text-base-content"
-            classList={{
-              "alert-success border-success/45 [&_svg]:text-success": jobState() === "succeeded",
-              "alert-error border-error/45 [&_svg]:text-error": jobState() === "failed",
-              "alert-warning border-warning/45 [&_svg]:text-warning": jobState() === "cancelled",
-            }}
-            role={jobState() === "failed" ? "alert" : "status"}
+          <Notice
+            variant={
+              jobState() === "succeeded" ? "success" : jobState() === "failed" ? "error" : "warning"
+            }
           >
             <div class="detection-job-state-main">
               {jobState() === "succeeded" ? (
@@ -349,14 +315,13 @@ export function DetectionView() {
                 <span>
                   {jobKind() ? `${kindLabel[jobKind()!]} · ` : ""}
                   {workspace.detection.detectionStatus()}
-                  <Show when={job()?.errorCode}> · code: {job()!.errorCode}</Show>
                 </span>
               </div>
             </div>
             <Show when={workspace.detection.detectionLoading()}>
               <LoaderCircle class="spin" size={15} aria-label="Updating detection status" />
             </Show>
-          </div>
+          </Notice>
         </Show>
 
         <details class="detection-options">
@@ -370,7 +335,6 @@ export function DetectionView() {
             class="option-fields"
             disabled={active()}
           >
-            <legend>Optional overrides</legend>
             <label>
               Silence threshold (dB)
               <input
@@ -380,7 +344,7 @@ export function DetectionView() {
                 max="0"
                 step="1"
                 value={options().noiseDb ?? ""}
-                placeholder="Server default"
+                placeholder="Default"
                 onInput={(event) => updateOption("noiseDb", event.currentTarget.value)}
               />
               <span class="control-help">Lower values require quieter audio.</span>
@@ -394,7 +358,7 @@ export function DetectionView() {
                 max="86400000"
                 step="1"
                 value={options().minDurationMs ?? ""}
-                placeholder="Server default"
+                placeholder="Default"
                 onInput={(event) => updateOption("minDurationMs", event.currentTarget.value)}
               />
               <span class="control-help">
@@ -410,15 +374,12 @@ export function DetectionView() {
                 max="1"
                 step="0.01"
                 value={options().sceneThreshold ?? ""}
-                placeholder="Server default"
+                placeholder="Default"
                 onInput={(event) => updateOption("sceneThreshold", event.currentTarget.value)}
               />
               <span class="control-help">Range 0–1. Higher values find fewer changes.</span>
             </label>
             <div class="detection-option-actions">
-              <span class="control-help">
-                Detection sensitivity overrides; blank fields and zero values use server defaults.
-              </span>
               <button
                 class="btn btn-ghost btn-xs"
                 type="button"
@@ -454,12 +415,6 @@ export function DetectionView() {
         <Show when={workspace.detection.detectionCandidates().length > 0}>
           <div class="detection-review" aria-label="Detection review">
             <div class="detection-review-heading">
-              <div>
-                <h3>Review candidates</h3>
-                <p>
-                  Review ranges before adding a segment; scene points can be previewed or dismissed.
-                </p>
-              </div>
               <button
                 class="btn btn-sm"
                 type="button"
@@ -470,10 +425,6 @@ export function DetectionView() {
                 <CheckCircle2 size={15} aria-hidden="true" /> Accept all valid
               </button>
             </div>
-            <p class="shortcut-help">
-              Candidate {reviewIndex() + 1} of {workspace.detection.detectionCandidates().length}.
-              Use A or Enter to accept, R/X/N to dismiss.
-            </p>
             <ol aria-label="Detection candidates">
               <For each={workspace.detection.detectionCandidates()}>
                 {(candidate, index) => (
@@ -490,14 +441,6 @@ export function DetectionView() {
                         <span class="badge badge-sm">{kindLabel[candidate.source]}</span>
                         <strong>{candidateLabel(candidate, workspace.editor.duration())}</strong>
                       </div>
-                      <dl>
-                        <dt>{candidate.source === "scene" ? "Point" : "Duration"}</dt>
-                        <dd>{formatCandidateDuration(candidate)}</dd>
-                        <dt>Candidate ID</dt>
-                        <dd>
-                          <code>{candidate.id}</code>
-                        </dd>
-                      </dl>
                     </div>
                     <div class="detection-candidate-actions">
                       <button
@@ -535,7 +478,7 @@ export function DetectionView() {
                           data-action="accept-candidate"
                           onClick={() => accept(candidate)}
                         >
-                          <CheckCircle2 size={15} aria-hidden="true" /> Add segment
+                          <CheckCircle2 size={15} aria-hidden="true" />
                         </button>
                       </Show>
                       <button
@@ -547,7 +490,7 @@ export function DetectionView() {
                         data-action="reject-candidate"
                         onClick={() => reject(candidate)}
                       >
-                        <X size={15} aria-hidden="true" /> Dismiss
+                        <X size={15} aria-hidden="true" />
                       </button>
                     </div>
                   </li>
@@ -558,9 +501,16 @@ export function DetectionView() {
         </Show>
       </Show>
 
-      <p class="detection-status" role="status" aria-live="polite">
-        {workspace.detection.detectionStatus()}
-      </p>
+      <Show
+        when={
+          !active() &&
+          !jobIsTerminal() &&
+          !workspace.detection.detectionQueryError() &&
+          workspace.detection.detectionStatus()
+        }
+      >
+        {(message) => <Notice>{message()}</Notice>}
+      </Show>
     </section>
   );
 }

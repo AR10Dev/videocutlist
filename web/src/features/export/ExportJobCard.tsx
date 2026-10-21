@@ -11,6 +11,7 @@ import {
   X,
 } from "lucide-solid";
 import { BatchDownload } from "./BatchDownload";
+import { containerLabel } from "./labels";
 import { OutputDownload } from "./OutputDownload";
 
 type Job = EffectApiTypes.Job;
@@ -51,12 +52,6 @@ export const strategyLabel = (value?: string) => {
       return value || "Not reported";
   }
 };
-
-const selectionLabel = (value?: string) =>
-  value === "gaps" ? "Gaps between cuts" : value === "segments" ? "Included cuts" : "Not reported";
-
-const containerLabel = (value?: string) =>
-  value === "mp4" ? "MP4" : value === "mov" ? "MOV" : value === "mkv" ? "MKV" : "Not reported";
 
 const destinationKindLabel = (value?: string) => {
   switch (value) {
@@ -104,7 +99,6 @@ export function ExportJobCard(props: {
     ),
   ];
   const outputFailures = () => props.job.result?.outputFailures ?? [];
-  const selectedStreams = () => props.job.selectedStreams ?? [];
   const destination = () =>
     destinationLabel(props.destinations(), props.job.result?.destinationId, destinationKind());
   const actionPending = () => props.childJobPending?.(props.job.id) ?? false;
@@ -116,9 +110,6 @@ export function ExportJobCard(props: {
           <h4>
             {props.job.mediaLabel ?? props.job.projectItemId ?? `Export job ${props.ordinal}`}
           </h4>
-          <p>
-            <code>{props.job.id}</code>
-          </p>
         </div>
         <span
           class={`badge badge-sm ${
@@ -150,15 +141,6 @@ export function ExportJobCard(props: {
         </div>
       </Show>
 
-      <p class="export-job-summary">
-        {strategyLabel(props.job.appliedStrategy ?? props.job.strategy)} ·{" "}
-        {props.job.mode === "separate" ? "One output per cut" : "One merged output"} ·{" "}
-        {selectionLabel(props.job.selection)}
-        <Show when={selectedStreams().length > 0}>
-          {` · Streams ${selectedStreams().join(", ")}`}
-        </Show>
-      </p>
-
       <Show when={props.job.errorCode}>
         {(code) => (
           <div class="alert alert-error alert-soft" role="alert">
@@ -189,7 +171,7 @@ export function ExportJobCard(props: {
             </div>
             <p class="export-job-summary">
               {containerLabel(result().container ?? props.job.container)} · {destination()} ·{" "}
-              {destinationKindLabel(result().destinationKind)} · {formatBytes(result().sizeBytes)}
+              {formatBytes(result().sizeBytes)}
             </p>
             <Show
               when={outputs().length > 0}
@@ -241,7 +223,12 @@ export function ExportJobCard(props: {
 
       <Show when={warnings().length}>
         <details class="export-job-subdetails collapse collapse-arrow">
-          <summary class="collapse-title">Warnings and review notes ({warnings().length})</summary>
+          <summary
+            class="collapse-title"
+            aria-label={`${warnings().length} warnings and review notes`}
+          >
+            ⚠ {warnings().length}
+          </summary>
           <div class="collapse-content">
             <ul class="export-detail-list">
               <For each={warnings()}>{(warning) => <li>{warning}</li>}</For>
@@ -257,7 +244,7 @@ export function ExportJobCard(props: {
             type="button"
             disabled={actionPending()}
             aria-busy={actionPending()}
-            onClick={() => void props.onCancel!(props.job.id, props.batchId)}
+            onClick={() => void props.onCancel?.(props.job.id, props.batchId)}
           >
             <Show when={actionPending()} fallback={<X size={15} aria-hidden="true" />}>
               <span class="loading loading-spinner loading-xs" aria-hidden="true" />
@@ -273,7 +260,7 @@ export function ExportJobCard(props: {
             type="button"
             disabled={actionPending()}
             aria-busy={actionPending()}
-            onClick={() => props.onRetry!(props.job.id, props.batchId)}
+            onClick={() => props.onRetry?.(props.job.id, props.batchId)}
           >
             <Show when={actionPending()} fallback={<RotateCcw size={15} aria-hidden="true" />}>
               <span class="loading loading-spinner loading-xs" aria-hidden="true" />

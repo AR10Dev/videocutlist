@@ -6,7 +6,7 @@ GO_PACKAGES := ./cmd/... ./internal/...
 SHELL_FILES := $(shell find scripts deployments test -type f -name '*.sh')
 DATA_DIR ?= .cache/videocutlist
 
-.PHONY: build check clean clean-deps clean-all generate-go-api web-install e2e format lint run smoke test test-podman test-real-media
+.PHONY: build check clean clean-deps clean-all generate-go-api web-install e2e format lint run smoke test test-unit test-podman test-real-media
 
 # Regenerate Go transport types from the shared OpenAPI source.
 generate-go-api:
@@ -42,7 +42,7 @@ run:
 	VIDEOCUTLIST_MEDIA_ROOTS_JSON="$${VIDEOCUTLIST_MEDIA_ROOTS_JSON:-{}}" \
 	$(GO) run ./cmd/videocutlist
 
-check: lint build
+check: lint build test-unit
 	$(GO) vet -tags embed_frontend ./...
 
 format:
@@ -64,7 +64,10 @@ e2e:
 
 smoke: check e2e
 
-test: e2e
+test: test-unit e2e
+
+test-unit:
+	$(GO) test $(GO_PACKAGES)
 
 test-podman:
 	./scripts/deploy-podman-local.sh --smoke-test

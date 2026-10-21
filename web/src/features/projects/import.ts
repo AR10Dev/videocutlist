@@ -24,7 +24,7 @@ export function createProjectToolsSession(
     >;
     editor: Pick<WorkspaceController["editor"], "updateTimeline">;
   },
-  confirmDiscard: () => boolean,
+  confirmDiscard: () => boolean | Promise<boolean>,
 ) {
   const { server } = workspace;
   const contextAtom = Atom.make((get) => {
@@ -125,7 +125,7 @@ export function createProjectToolsSession(
       if (imported.mediaId !== undefined)
         return yield* Effect.fail(new Error("Imported project response is invalid."));
       if (!current()) return;
-      const confirmed = !workspace.dirty() || confirmDiscard();
+      const confirmed = !workspace.dirty() || (yield* Effect.promise(async () => confirmDiscard()));
       if (current()) yield* workspace.projects.importProjectEffect(document, confirmed);
     }).pipe(
       Effect.mapError((error) => {

@@ -30,36 +30,14 @@ type Project = EffectApiTypes.Project;
 type DetectionJob = EffectApiTypes.DetectionJob;
 type DetectionInput = EffectApiTypes.DetectionInput;
 
-type DetectionReview = {
-  jobId: string;
-  projectId: string;
-  mediaId: string;
-  activeItemId: string | undefined;
-  sourceFingerprint: string | undefined;
-  baselineRevision: number;
-  currentRevision: number;
-  editorVersion: number;
-  pendingLocalSave: boolean;
-  invalidated: boolean;
-};
-
-export type DetectionReviewContext = {
-  projectId: string;
-  activeItemId: string | undefined;
-  selected: Media | undefined;
-  revision: number;
-  editorVersion: number;
-  saveConflict: boolean;
-};
-
-type SubmittedDetection = {
-  jobId: string;
-  projectId: string;
-  mediaId: string;
-  activeItemId: string | undefined;
-  sourceFingerprint: string | undefined;
-  editorVersion: number;
-};
+export type { DetectionReviewContext } from "./review";
+import {
+  synchronizeReview,
+  newDetectionReview,
+  type DetectionReview,
+  type DetectionReviewContext,
+  type SubmittedDetection,
+} from "./review";
 
 type DetectionSubmissionAttempt = {
   key: string;
@@ -208,64 +186,17 @@ export function createDetectionController(
       ...value,
       review: value.review ? { ...value.review, ...update } : undefined,
     }));
-  const invalidateDetectionReview = () =>
-    updateReview({ invalidated: true, pendingLocalSave: false });
   const synchronizeDetectionReview = () => {
     const review = registry.get(reviewState).review;
     if (!review) return true;
-    if (review.invalidated) return false;
-    const context = registry.get(dependencies.reviewContext);
-    const selected = context.selected;
-    if (
-      context.projectId !== review.projectId ||
-      context.activeItemId !== review.activeItemId ||
-      selected?.id !== review.mediaId ||
-      selected?.etag !== review.sourceFingerprint ||
-      context.saveConflict ||
-      context.editorVersion !== review.editorVersion
-    ) {
-      invalidateDetectionReview();
-      return false;
-    }
-    const revision = context.revision;
-    if (revision === review.currentRevision) return true;
-    if (review.pendingLocalSave && revision === review.currentRevision + 1) {
-      updateReview({ currentRevision: revision, pendingLocalSave: false });
-      return true;
-    }
-    invalidateDetectionReview();
-    return false;
+    const next = synchronizeReview(review, registry.get(dependencies.reviewContext));
+    updateReview(next);
+    return !next.invalidated;
   };
   const createDetectionReview = (job: DetectionJob) => {
     if (registry.get(reviewState).review?.jobId === job.id) return;
     const context = registry.get(dependencies.reviewContext);
-    const selected = context.selected;
-    const currentRevision = context.revision;
-    const submittedValue = registry.get(reviewState).submitted;
-    const submitted = submittedValue?.jobId === job.id ? submittedValue : undefined;
-    const review: DetectionReview = {
-      jobId: job.id,
-      projectId: submitted?.projectId ?? context.projectId,
-      mediaId: job.mediaId,
-      activeItemId: submitted ? submitted.activeItemId : context.activeItemId,
-      sourceFingerprint: submitted ? submitted.sourceFingerprint : selected?.etag,
-      baselineRevision: job.projectRevision,
-      currentRevision,
-      editorVersion: submitted?.editorVersion ?? context.editorVersion,
-      pendingLocalSave: false,
-      invalidated:
-        !selected ||
-        selected.id !== job.mediaId ||
-        currentRevision !== job.projectRevision ||
-        context.saveConflict ||
-        (submitted !== undefined &&
-          (context.projectId !== submitted.projectId ||
-            job.projectId !== submitted.projectId ||
-            job.mediaId !== submitted.mediaId ||
-            context.activeItemId !== submitted.activeItemId ||
-            selected.etag !== submitted.sourceFingerprint ||
-            context.editorVersion !== submitted.editorVersion)),
-    };
+    const review = newDetectionReview(job, context, registry.get(reviewState).submitted);
     registry.update(reviewState, (value) => ({ ...value, review }));
   };
   const staleAcceptance = (candidates: Candidate[]): CandidateAcceptance => ({

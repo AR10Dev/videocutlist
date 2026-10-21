@@ -3,10 +3,12 @@ import { For, Show, onCleanup } from "solid-js";
 import * as AsyncResult from "effect/reactivity/AsyncResult";
 import { useServerAtom } from "../../app/server";
 import { useWorkspace } from "../../app/WorkspaceContext";
+import { useConfirmation, discardChanges } from "../../components/ConfirmDialog";
 import { createProjectBrowser } from "./browser";
 
 export function ProjectBrowser() {
-  const { projects, server, dirty } = useWorkspace();
+  const { projects, server, dirty, workspaceIdentity } = useWorkspace();
+  const confirm = useConfirmation();
   const browser = createProjectBrowser(server);
   const page = useAtomValue(() => browser.page);
   const operation = useServerAtom(() => browser.result);
@@ -19,6 +21,7 @@ export function ProjectBrowser() {
   onCleanup(browser.close);
   return (
     <details
+      open
       onToggle={(event) => {
         if (event.currentTarget.open) browser.open();
         else browser.close();
@@ -40,13 +43,12 @@ export function ProjectBrowser() {
             <li>
               <button
                 class="btn btn-ghost btn-sm"
-                onClick={() =>
-                  void projects.loadProject(
-                    project.id,
-                    undefined,
-                    !dirty() || window.confirm("Discard unsaved changes?"),
-                  )
-                }
+                onClick={async () => {
+                  const identity = server.registry.get(workspaceIdentity);
+                  const accepted = !dirty() || (await confirm(discardChanges));
+                  if (identity === server.registry.get(workspaceIdentity))
+                    void projects.loadProject(project.id, undefined, accepted);
+                }}
               >
                 {project.name}
               </button>

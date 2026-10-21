@@ -3,10 +3,12 @@
 ### Issue tracker
 
 Beads (`bd`) is the authoritative task tracker, stored in this repository's
-`.beads/` Dolt workspace and managed through `bd`.
+`.beads/` Dolt workspace and managed through `bd`. This private workspace is
+not included in Git clones or source archives. If `bd where` cannot resolve it,
+request tracker onboarding before starting tracked work.
 Before planning, fetching, publishing, implementing, triaging, or handing off
-tracked work, read `.beads/WORKFLOW.md` and load the shared `beads` skill when
-available.
+tracked work, read the resolved workspace’s `.beads/WORKFLOW.md` and load the
+shared `beads` skill when available.
 Run `bd prime --no-memories` at session start and after compaction.
 
 Development specifications live in `.beads/specs/<feature>/spec.md`; status,

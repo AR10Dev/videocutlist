@@ -151,11 +151,13 @@ try {
     generatedApiClose,
     `.annotate(HttpApi.PayloadParseOptions, { onExcessProperty: "error" })\n  .annotate(HttpApi.SuccessParseOptions, { onExcessProperty: "error" })\n  ${generatedApiClose}`,
   );
-  await writeFile(outputPath, generated);
-  execFileSync("pnpm", ["exec", "oxfmt", "--write", outputPath], {
+  // Format generation explicitly; normal lint/format runs ignore generated files.
+  const formatted = execFileSync("pnpm", ["exec", "oxfmt", "--stdin-filepath", "effect-api.ts"], {
     cwd: webRoot,
-    stdio: "inherit",
+    input: generated,
+    encoding: "utf8",
   });
+  await writeFile(outputPath, formatted);
 } finally {
   await rm(temporaryDirectory, { recursive: true, force: true });
 }

@@ -1,5 +1,5 @@
 import type { Project } from "../src/generated/effect-api";
-import { addMediaWithSegments } from "./actions";
+import { addMediaWithSegments, loadProject } from "./actions";
 import { connectContext, expect, test } from "./fixtures";
 
 test("saves real cuts and restores them after a process restart", async ({
@@ -32,9 +32,7 @@ test("saves real cuts and restores them after a process restart", async ({
   await app.restart();
   await connectContext(context, app);
   await page.goto(app.baseURL);
-  page.once("dialog", (dialog) => void dialog.accept(saved.id));
-  await page.getByRole("button", { name: "Project menu", exact: true }).click();
-  await page.getByRole("menuitem", { name: "Load project", exact: true }).click();
+  await loadProject(page, saved.id, saved.name);
   await expect(page.locator(".project-sidebar-header strong")).toHaveText(saved.name);
   await expect(page.locator(".cut-row[data-segment-id]")).toHaveCount(2);
   const persisted = await request.get(`${app.baseURL}/api/v2/projects/${saved.id}`, {

@@ -61,6 +61,7 @@ test("typing a cut label keeps its input mounted across edits, selection, and re
   await expect(label).toHaveValue("Opening");
   await rows.nth(1).getByRole("button", { name: "Select cut 2" }).click();
   await expect(first.getByRole("textbox", { name: "Label cut 1" })).toHaveValue("Opening");
+  await first.locator(".cut-menu summary").click();
   await first.getByRole("button", { name: "Move cut 1 down" }).click();
   const moved = rows.nth(1);
   await expect(moved).toHaveAttribute("data-segment-id", originalId!);
@@ -79,11 +80,7 @@ test("adds, selects, splits, and safely removes cuts with the redesigned control
 }) => {
   await openMedia(page);
   await expect(page.getByRole("tab", { name: "Cuts" })).toHaveAttribute("aria-selected", "true");
-  await expect(
-    page.getByText(
-      "Set In and Out on the timeline; a valid range becomes one selected segment automatically.",
-    ),
-  ).toBeVisible();
+  await expect(page.getByText("Press I and O to mark a cut.")).toBeVisible();
 
   await setRange(page, 1000, 3000);
   await expect(page.locator(".cut-summary")).toHaveText("1 cut · 00:02.000");
@@ -107,6 +104,7 @@ test("adds, selects, splits, and safely removes cuts with the redesigned control
   await page.getByRole("heading", { name: "Timeline" }).focus();
   await page.keyboard.press("b");
   await expect(cuts).toHaveCount(2);
+  await cuts.first().locator(".cut-menu summary").click();
   await page.getByRole("button", { name: /Move cut 1 down/ }).click();
   await expect(cuts.first().getByRole("button", { name: "Select cut 1" })).toHaveAttribute(
     "aria-pressed",
@@ -121,7 +119,12 @@ test("adds, selects, splits, and safely removes cuts with the redesigned control
 
   await expect(page.locator(".timeline-visual")).toBeVisible();
   await openTask(page, "Export");
+  await expect(page.getByLabel(/Output arrangement/)).toBeHidden();
+  await page.locator(".export-options > summary").click();
   await expect(page.getByLabel(/Output arrangement/)).toContainText("Combine selected cuts");
   await expect(page.getByLabel("Processing")).toContainText("Fast copy");
-  await expect(page.getByText(/not frame-exact/)).toBeVisible();
+  await expect(page.getByRole("option", { name: "Fast copy" })).toHaveAttribute(
+    "title",
+    /not frame-exact/,
+  );
 });
