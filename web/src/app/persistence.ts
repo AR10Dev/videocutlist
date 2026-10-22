@@ -6,7 +6,7 @@ import * as Layer from "effect/Layer";
 import * as Schema from "effect/Schema";
 import * as KeyValueStore from "effect/persistence/KeyValueStore";
 import * as Atom from "effect/reactivity/Atom";
-import * as AsyncResult from "effect/reactivity/AsyncResult";
+import type * as AsyncResult from "effect/reactivity/AsyncResult";
 import * as AtomRegistry from "effect/reactivity/AtomRegistry";
 
 const failedBrowserStorage = (cause: unknown): KeyValueStore.KeyValueStoreError =>

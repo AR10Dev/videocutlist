@@ -53,7 +53,6 @@ lint:
 	node scripts/check-layout.mjs
 	test -z "$$($(GOFMT) -l $$(find cmd internal test -type f -name '*.go'))"
 	$(GOLANGCI_LINT) run ./...
-	$(GO) vet $(GO_PACKAGES)
 	status=0; for file in $(SHELL_FILES); do shellcheck "$$file" || status=1; done; test "$$status" -eq 0
 	test -z "$$(shfmt -d $(SHELL_FILES))"
 	$(PNPM) --dir web run lint
@@ -68,6 +67,7 @@ test: test-unit e2e
 
 test-unit:
 	$(GO) test $(GO_PACKAGES)
+	$(PNPM) --dir web run test:lint
 
 test-podman:
 	./scripts/deploy-podman-local.sh --smoke-test

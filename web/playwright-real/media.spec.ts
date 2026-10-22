@@ -1,4 +1,4 @@
-import type { DetectionInput, Project } from "../src/generated/effect-api";
+import type { Project } from "../src/generated/effect-api";
 import { expect, test } from "./fixtures";
 import { openRealMedia, openTask, addSelectedMediaToProject } from "./actions";
 
@@ -57,7 +57,7 @@ test("real silence detection streams candidates, supports review, bulk undo, and
 }) => {
   const streams: string[] = [];
   const calls: string[] = [];
-  let submitted: { input: DetectionInput; key: string | undefined } | undefined;
+  let submitted: { input: unknown; key: string | undefined } | undefined;
   page.on("request", (request) => {
     const path = new URL(request.url()).pathname;
     if (request.method() === "PUT" && /^\/api\/v2\/projects\/[^/]+$/.test(path)) calls.push("save");

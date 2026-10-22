@@ -34,7 +34,7 @@ export function EditorView(props: {
             aria-label={mediaPanelAction()}
             aria-expanded={props.mediaOpen}
             aria-controls="media-panel"
-            onClick={props.openMediaPanel}
+            onClick={() => props.openMediaPanel()}
           >
             <PanelLeft size={16} aria-hidden="true" />
           </button>
@@ -45,7 +45,7 @@ export function EditorView(props: {
             aria-label={tasksPanelAction()}
             aria-expanded={props.tasksOpen}
             aria-controls="segments-panel"
-            onClick={props.openTaskPanel}
+            onClick={() => props.openTaskPanel()}
           >
             <PanelRight size={16} aria-hidden="true" />
           </button>

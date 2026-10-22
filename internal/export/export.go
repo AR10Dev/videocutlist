@@ -147,12 +147,12 @@ func (s Service) Run(ctx context.Context, source *os.File, document model.Docume
 	var metadata probe.Metadata
 	var probeErr error
 	if err := ctx.Err(); err != nil {
-		return Result{}, fmt.Errorf("%w: %v", ErrCancelled, err)
+		return Result{}, fmt.Errorf("%w: %w", ErrCancelled, err)
 	}
 	metadata, probeErr = (probe.Client{Path: s.FFprobePath}).ProbeFile(ctx, source)
 	if probeErr != nil {
 		if err := ctx.Err(); err != nil {
-			return Result{}, fmt.Errorf("%w: %v", ErrCancelled, err)
+			return Result{}, fmt.Errorf("%w: %w", ErrCancelled, err)
 		}
 		return Result{}, fmt.Errorf("probe export source: %w", probeErr)
 	}
@@ -162,9 +162,9 @@ func (s Service) Run(ctx context.Context, source *os.File, document model.Docume
 	}
 	if err := s.checkCapabilities(ctx, policy, request.CutStrategy); err != nil {
 		if ctx.Err() != nil {
-			return Result{}, fmt.Errorf("%w: %v", ErrCancelled, err)
+			return Result{}, fmt.Errorf("%w: %w", ErrCancelled, err)
 		}
-		return Result{}, fmt.Errorf("%w: %v", ErrInvalidRequest, err)
+		return Result{}, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
 	request.StreamIndexes = preflight.Selection
 	if len(document.Items) != 1 {
@@ -194,7 +194,7 @@ func (s Service) Run(ctx context.Context, source *os.File, document model.Docume
 		keyframes, err = (probe.Client{Path: s.FFprobePath}).Keyframes(ctx, source)
 		if err != nil {
 			if ctx.Err() != nil {
-				return Result{}, fmt.Errorf("%w: %v", ErrCancelled, ctx.Err())
+				return Result{}, fmt.Errorf("%w: %w", ErrCancelled, ctx.Err())
 			}
 			return Result{}, fmt.Errorf("probe export keyframes: %w", err)
 		}
@@ -202,7 +202,7 @@ func (s Service) Run(ctx context.Context, source *os.File, document model.Docume
 			frameTimes, err := (probe.Client{Path: s.FFprobePath}).FrameTimes(ctx, source)
 			if err != nil {
 				if ctx.Err() != nil {
-					return Result{}, fmt.Errorf("%w: %v", ErrCancelled, ctx.Err())
+					return Result{}, fmt.Errorf("%w: %w", ErrCancelled, ctx.Err())
 				}
 				return Result{}, fmt.Errorf("%w: %w: hybrid smart cut requires finite CFR timestamps: %w", ErrInvalidRequest, ErrHybridSmartCutUnsupportedMedia, err)
 			}
@@ -225,11 +225,11 @@ func (s Service) Run(ctx context.Context, source *os.File, document model.Docume
 	}
 	destination, err := s.destinationForRequest(request)
 	if err != nil {
-		return Result{}, fmt.Errorf("%w: %v", ErrInvalidRequest, err)
+		return Result{}, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
 	prepared, err := prepareDestination(destination, source, sourceName, SourceLocation{RootPath: request.SourceRoot, RelativePath: request.SourceRelative})
 	if err != nil {
-		return Result{}, fmt.Errorf("%w: %v", ErrInvalidRequest, err)
+		return Result{}, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
 	defer prepared.close()
 	outputDir := prepared.path

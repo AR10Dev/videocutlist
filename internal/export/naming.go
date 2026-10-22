@@ -27,7 +27,7 @@ func (p preparedDestination) outputFileName(request Request, source string, segm
 	values := map[string]string{"source": strings.TrimSuffix(filepath.Base(source), filepath.Ext(source)), "date": at.Format("20060102"), "time": at.Format("150405"), "segment": strconv.Itoa(segment + 1), "mode": request.Mode, "ext": policy.Extension}
 	name, err := RenderTemplate(request.FilenameTemplate, values)
 	if err != nil {
-		return "", fmt.Errorf("%w: %v", ErrInvalidRequest, err)
+		return "", fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
 	for range 100 {
 		candidateName := name
@@ -36,7 +36,7 @@ func (p preparedDestination) outputFileName(request Request, source string, segm
 		}
 		candidateName = strings.TrimSuffix(candidateName, "."+policy.Extension) + "-" + uniqueSuffix() + "." + policy.Extension
 		if err := validateAllocatedFilename(candidateName); err != nil {
-			return "", fmt.Errorf("%w: %v", ErrInvalidRequest, err)
+			return "", fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 		}
 		_, statErr := p.root.Lstat(candidateName)
 		if errors.Is(statErr, os.ErrNotExist) {

@@ -98,7 +98,7 @@ export function PreviewPlayer(props: { timeline: JSX.Element }) {
 
   return (
     <div class="preview-player">
-      <div class="preview-surface" style={`aspect-ratio: ${aspectRatio()};`}>
+      <div class="preview-surface" style={{ "aspect-ratio": aspectRatio() }}>
         {canStreamPreview() ? (
           <video
             ref={(element) => {

@@ -102,26 +102,25 @@ func credentialFromStorageRecord(storageRecord store.MCPCredentialRecord) (crede
 	if err := decodeJSON(storageRecord.ProjectScopeJSON, &projectScope); err != nil {
 		return credentialRecord{}, fmt.Errorf("%w: project scope", ErrCredentialData)
 	}
-	if normalized, err := normalizePermissions(record.Permissions); err != nil {
+	permissions, err := normalizePermissions(record.Permissions)
+	if err != nil {
 		return credentialRecord{}, fmt.Errorf("%w: permissions", ErrCredentialData)
-	} else {
-		record.Permissions = normalized
 	}
-	if normalized, err := normalizeMediaScope(record.MediaScope); err != nil {
+	record.Permissions = permissions
+	mediaScope, err := normalizeMediaScope(record.MediaScope)
+	if err != nil {
 		return credentialRecord{}, fmt.Errorf("%w: media scope", ErrCredentialData)
-	} else {
-		record.MediaScope = normalized
 	}
-	if normalized, err := normalizeProjectScope(projectScope); err != nil {
+	record.MediaScope = mediaScope
+	normalizedProjectScope, err := normalizeProjectScope(projectScope)
+	if err != nil {
 		return credentialRecord{}, fmt.Errorf("%w: project scope", ErrCredentialData)
-	} else {
-		record.ProjectScope = normalized
 	}
+	record.ProjectScope = normalizedProjectScope
 	if !validCredentialName(record.Name) || storageRecord.UnattendedExports != 0 && storageRecord.UnattendedExports != 1 {
 		return credentialRecord{}, ErrCredentialData
 	}
 	record.UnattendedExports = storageRecord.UnattendedExports == 1
-	var err error
 	if record.CreatedAt, err = parseTime(storageRecord.CreatedAt); err != nil {
 		return credentialRecord{}, fmt.Errorf("%w: created time", ErrCredentialData)
 	}

@@ -122,12 +122,12 @@ func (s *Server) getMCPSettings(w http.ResponseWriter, r *http.Request, id strin
 	}
 	rootIDs := slices.Sorted(maps.Keys(settings.Settings.MediaRoots))
 	roots := make([]struct {
-		Id    string `json:"id"`
+		Id    string `json:"id"` //nolint:revive // Must match the generated MCPSettingsResponse.Roots anonymous type.
 		Label string `json:"label"`
 	}, 0, len(rootIDs))
 	for _, rootID := range rootIDs {
 		roots = append(roots, struct {
-			Id    string `json:"id"`
+			Id    string `json:"id"` //nolint:revive // Must match the generated MCPSettingsResponse.Roots anonymous type.
 			Label string `json:"label"`
 		}{Id: rootID, Label: rootID})
 	}

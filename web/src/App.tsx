@@ -88,6 +88,12 @@ export function App() {
     controller.editor.setShortcutHelpOpen(true);
   };
   const loadProjectFromMenu = () => setProjectToolsOpen(true);
+  const newProject = async () => {
+    const identity = controller.server.registry.get(controller.workspaceIdentity);
+    const accepted = !controller.dirty() || (await confirmation.confirm(discardChanges));
+    if (identity === controller.server.registry.get(controller.workspaceIdentity))
+      controller.projects.newProject(accepted);
+  };
   const toggleSettings = () => {
     if (settingsOpen()) {
       setSettingsOpen(false);
@@ -104,13 +110,18 @@ export function App() {
     scheduledFrames.clear();
   });
   return (
-    <ConfirmationProvider confirm={confirmation.confirm}>
+    <ConfirmationProvider value={confirmation.confirm}>
       <WorkspaceProvider value={controller}>
         <confirmation.View />
         <main
           class="app-shell"
           aria-label="VideoCutlist segment selection"
-          style={`--media-panel-width:${mediaWidth()}px;--segments-panel-width:${segmentsWidth()}px;--media-handle-width:${mediaOpen() ? 12 : 0}px;--segments-handle-width:${tasksOpen() ? 12 : 0}px`}
+          style={{
+            "--media-panel-width": `${mediaWidth()}px`,
+            "--segments-panel-width": `${segmentsWidth()}px`,
+            "--media-handle-width": `${mediaOpen() ? 12 : 0}px`,
+            "--segments-handle-width": `${tasksOpen() ? 12 : 0}px`,
+          }}
           onKeyDown={(event) => {
             if (
               narrowViewport() &&
@@ -321,17 +332,10 @@ export function App() {
                         <DropdownMenu.Item
                           as="button"
                           class="data-highlighted:bg-base-300"
-                          onSelect={async () => {
-                            const identity = controller.server.registry.get(
-                              controller.workspaceIdentity,
+                          onSelect={() => {
+                            newProject().catch((error: unknown) =>
+                              controller.setStatus(`Could not create project: ${String(error)}`),
                             );
-                            const accepted =
-                              !controller.dirty() || (await confirmation.confirm(discardChanges));
-                            if (
-                              identity ===
-                              controller.server.registry.get(controller.workspaceIdentity)
-                            )
-                              controller.projects.newProject(accepted);
                           }}
                         >
                           New project

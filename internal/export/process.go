@@ -67,7 +67,7 @@ func (s Service) runWithOutput(ctx context.Context, source, output, directory *o
 	cmd.Stderr = stderr
 	if err := runCommand(ctx, cmd); err != nil {
 		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return fmt.Errorf("%w: %v", ErrCancelled, err)
+			return fmt.Errorf("%w: %w", ErrCancelled, err)
 		}
 		if stderr.Err() != nil {
 			return fmt.Errorf("ffmpeg output exceeded limit: %w", stderr.Err())

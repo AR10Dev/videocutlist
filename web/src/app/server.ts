@@ -6,7 +6,7 @@ import * as AsyncResult from "effect/reactivity/AsyncResult";
 import * as Atom from "effect/reactivity/Atom";
 import * as AtomRegistry from "effect/reactivity/AtomRegistry";
 import * as AtomHttpApi from "effect/reactivity/AtomHttpApi";
-import * as KeyValueStore from "effect/persistence/KeyValueStore";
+import type * as KeyValueStore from "effect/persistence/KeyValueStore";
 import { createMemo, type Accessor } from "solid-js";
 import {
   ApiFailure,

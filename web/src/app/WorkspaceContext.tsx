@@ -1,13 +1,9 @@
-import { createContext, useContext, type JSX } from "solid-js";
+import { createContext, useContext } from "solid-js";
 import type { WorkspaceController } from "./controller";
 
 const WorkspaceContext = createContext<WorkspaceController>();
 
-export function WorkspaceProvider(props: { value: WorkspaceController; children: JSX.Element }) {
-  return (
-    <WorkspaceContext.Provider value={props.value}>{props.children}</WorkspaceContext.Provider>
-  );
-}
+export const WorkspaceProvider = WorkspaceContext.Provider;
 
 export function useWorkspace(): WorkspaceController {
   const controller = useContext(WorkspaceContext);

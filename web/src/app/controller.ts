@@ -2,7 +2,7 @@ import type * as EffectApiTypes from "../generated/effect-api";
 import { RegistryContext, useAtomValue } from "@effect/atom-solid";
 import * as AsyncResult from "effect/reactivity/AsyncResult";
 import * as Atom from "effect/reactivity/Atom";
-import { createEffect, onCleanup, useContext } from "solid-js";
+import { createEffect, onCleanup, useContext, type Setter } from "solid-js";
 import { createApiClient, resolveBrowserConfiguration } from "../api";
 import { createPreviewController } from "../features/preview/controller";
 import {
@@ -46,17 +46,17 @@ export function createWorkspaceController() {
   const activeItemId = () => workspaceState().activeItemId;
   const editorVersion = () => workspaceState().editVersion;
   const editorContext = useAtomValue(() => identity.context);
-  const setStatus: import("solid-js").Setter<string> = (input) => {
+  const setStatus: Setter<string> = (input) => {
     const value = typeof input === "function" ? input(status()) : input;
     identity.setStatus(value);
     return value;
   };
-  const setDirty: import("solid-js").Setter<boolean> = (input) => {
+  const setDirty: Setter<boolean> = (input) => {
     const value = typeof input === "function" ? input(dirty()) : input;
     identity.setDirty(value);
     return value;
   };
-  const setRevision: import("solid-js").Setter<number> = (input) => {
+  const setRevision: Setter<number> = (input) => {
     const value = typeof input === "function" ? input(revision()) : input;
     identity.setRevision(value);
     return value;
@@ -104,7 +104,7 @@ export function createWorkspaceController() {
     },
   );
 
-  const setProjectItems: import("solid-js").Setter<EditableProjectItem[]> = (
+  const setProjectItems: Setter<EditableProjectItem[]> = (
     input: EditableProjectItem[] | ((items: EditableProjectItem[]) => EditableProjectItem[]),
   ) => {
     const items = typeof input === "function" ? input(registry.get(projectItemsAtom)) : input;
@@ -129,9 +129,7 @@ export function createWorkspaceController() {
     },
   );
   const muted = useAtomValue(() => mutedAtom);
-  const setMuted: import("solid-js").Setter<boolean> = (
-    input: boolean | ((value: boolean) => boolean),
-  ) => {
+  const setMuted: Setter<boolean> = (input: boolean | ((value: boolean) => boolean)) => {
     const value = typeof input === "function" ? input(registry.get(mutedAtom)) : input;
     registry.set(mutedAtom, value);
     return value;

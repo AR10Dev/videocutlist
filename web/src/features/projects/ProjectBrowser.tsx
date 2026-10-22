@@ -7,7 +7,7 @@ import { useConfirmation, discardChanges } from "../../components/ConfirmDialog"
 import { createProjectBrowser } from "./browser";
 
 export function ProjectBrowser() {
-  const { projects, server, dirty, workspaceIdentity } = useWorkspace();
+  const { projects, server, dirty, workspaceIdentity, setStatus } = useWorkspace();
   const confirm = useConfirmation();
   const browser = createProjectBrowser(server);
   const page = useAtomValue(() => browser.page);
@@ -17,6 +17,12 @@ export function ProjectBrowser() {
     if (AsyncResult.isSuccess(operation.result()) && !page().items.length)
       return "No saved projects yet. Choose media and save your first project.";
     return "";
+  };
+  const loadProject = async (id: string) => {
+    const identity = server.registry.get(workspaceIdentity);
+    const accepted = !dirty() || (await confirm(discardChanges));
+    if (identity === server.registry.get(workspaceIdentity))
+      projects.loadProject(id, undefined, accepted);
   };
   onCleanup(browser.close);
   return (
@@ -43,11 +49,10 @@ export function ProjectBrowser() {
             <li>
               <button
                 class="btn btn-ghost btn-sm"
-                onClick={async () => {
-                  const identity = server.registry.get(workspaceIdentity);
-                  const accepted = !dirty() || (await confirm(discardChanges));
-                  if (identity === server.registry.get(workspaceIdentity))
-                    void projects.loadProject(project.id, undefined, accepted);
+                onClick={() => {
+                  loadProject(project.id).catch((error: unknown) =>
+                    setStatus(`Could not load project: ${String(error)}`),
+                  );
                 }}
               >
                 {project.name}

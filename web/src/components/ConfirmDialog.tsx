@@ -1,5 +1,5 @@
 import { Dialog } from "@kobalte/core/dialog";
-import { createContext, createSignal, onCleanup, useContext, type JSX } from "solid-js";
+import { createContext, createSignal, onCleanup, useContext } from "solid-js";
 
 type Confirmation = { title: string; message: string; action: string };
 type Confirm = (decision: Confirmation) => Promise<boolean>;
@@ -62,13 +62,7 @@ export function createConfirmation() {
   return { confirm, View };
 }
 
-export function ConfirmationProvider(props: { confirm: Confirm; children: JSX.Element }) {
-  return (
-    <ConfirmationContext.Provider value={props.confirm}>
-      {props.children}
-    </ConfirmationContext.Provider>
-  );
-}
+export const ConfirmationProvider = ConfirmationContext.Provider;
 
 export function useConfirmation() {
   const confirm = useContext(ConfirmationContext);

@@ -295,7 +295,7 @@ func runWithCleanupExit(ctx context.Context, cleanupExited chan struct{}) (runEr
 	case serveErr := <-failed:
 		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		shutdownErr := shutdownHTTPServer(server, mcpTransport, shutdown, 10*time.Second)
+		shutdownErr := shutdownHTTPServer(shutdown, server, mcpTransport, 10*time.Second)
 		if errors.Is(serveErr, http.ErrServerClosed) {
 			return shutdownErr
 		}
@@ -303,11 +303,11 @@ func runWithCleanupExit(ctx context.Context, cleanupExited chan struct{}) (runEr
 	case <-ctx.Done():
 		shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		return shutdownHTTPServer(server, mcpTransport, shutdown, 10*time.Second)
+		return shutdownHTTPServer(shutdown, server, mcpTransport, 10*time.Second)
 	}
 }
 
-func shutdownHTTPServer(server *http.Server, mcpTransport *mcp.Transport, gracefulCtx context.Context, cleanupTimeout time.Duration) error {
+func shutdownHTTPServer(gracefulCtx context.Context, server *http.Server, mcpTransport *mcp.Transport, cleanupTimeout time.Duration) error {
 	httpErr := server.Shutdown(gracefulCtx)
 	var closeErr error
 	if httpErr != nil {

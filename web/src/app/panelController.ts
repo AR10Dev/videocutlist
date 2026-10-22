@@ -2,7 +2,7 @@ import { useAtomValue } from "@effect/atom-solid";
 import { Effect } from "effect";
 import * as Atom from "effect/reactivity/Atom";
 import * as AtomRegistry from "effect/reactivity/AtomRegistry";
-import { createEffect, createSignal, onCleanup, type Accessor } from "solid-js";
+import { createEffect, createSignal, onCleanup, untrack, type Accessor } from "solid-js";
 import type { ServerState } from "./server";
 import {
   clampPanelPreferences,
@@ -270,7 +270,7 @@ export function createWorkspacePanelController(deps: {
   const closeMediaPanel = (restoreFocus = true) => {
     void dispatch(
       { type: "media", open: false, persist: true, narrow: narrowViewport() },
-      () => restoreFocus && narrowViewport() && restoreTriggerFocus("media"),
+      () => restoreFocus && untrack(narrowViewport) && restoreTriggerFocus("media"),
     );
   };
   const hideMediaPanel = () => {
@@ -287,7 +287,7 @@ export function createWorkspacePanelController(deps: {
   const closeTaskPanel = (restoreFocus = true) => {
     void dispatch(
       { type: "tasks", open: false, narrow: narrowViewport() },
-      () => restoreFocus && narrowViewport() && restoreTriggerFocus("segments"),
+      () => restoreFocus && untrack(narrowViewport) && restoreTriggerFocus("segments"),
     );
   };
   const selectTask = (task: WorkspaceTask) => {

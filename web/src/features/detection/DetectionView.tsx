@@ -420,7 +420,11 @@ export function DetectionView() {
                 type="button"
                 title="Accept all valid candidates"
                 disabled={active()}
-                onClick={acceptAll}
+                onClick={() => {
+                  acceptAll().catch((error: unknown) =>
+                    workspace.setStatus(`Could not accept candidates: ${String(error)}`),
+                  );
+                }}
               >
                 <CheckCircle2 size={15} aria-hidden="true" /> Accept all valid
               </button>

@@ -1,6 +1,6 @@
 import type { Accessor } from "solid-js";
 import type { ServerState } from "../../app/server";
-import * as Atom from "effect/reactivity/Atom";
+import type * as Atom from "effect/reactivity/Atom";
 import { parseTimecode, validateSegmentLabel, type Segment } from "../preview/model";
 
 export type EditorInteraction = {

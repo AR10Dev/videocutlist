@@ -3,7 +3,21 @@ version: "2"
 linters:
   default: standard
   enable:
-    - bodyclose # HTTP response bodies must not leak; current baseline is clean.
+    - bodyclose
+    - errorlint
+    - revive
+  settings:
+    revive:
+      severity: error
+      rules:
+        - name: context-as-argument
+        - name: error-naming
+        - name: error-return
+        - name: error-strings
+        - name: errorf
+        - name: indent-error-flow
+        - name: receiver-naming
+        - name: var-naming
 
 formatters:
   enable:

@@ -145,7 +145,7 @@ func jobResultTransport(result view.JobResult) *struct {
 		Strategy   string  `json:"strategy"`
 	} `json:"appliedStrategies,omitempty"`
 	Container       *transport.JobResultContainer       `json:"container,omitempty"`
-	DestinationId   *string                             `json:"destinationId,omitempty"`
+	DestinationId   *string                             `json:"destinationId,omitempty"` //nolint:revive // Must match the generated Job.Result anonymous type.
 	DestinationKind *transport.JobResultDestinationKind `json:"destinationKind,omitempty"`
 	OutputFailures  *[]struct {
 		Code    string `json:"code"`
@@ -164,7 +164,7 @@ func jobResultTransport(result view.JobResult) *struct {
 			Strategy   string  `json:"strategy"`
 		} `json:"appliedStrategies,omitempty"`
 		Container       *transport.JobResultContainer       `json:"container,omitempty"`
-		DestinationId   *string                             `json:"destinationId,omitempty"`
+		DestinationId   *string                             `json:"destinationId,omitempty"` //nolint:revive // Must match the generated Job.Result anonymous type.
 		DestinationKind *transport.JobResultDestinationKind `json:"destinationKind,omitempty"`
 		OutputFailures  *[]struct {
 			Code    string `json:"code"`

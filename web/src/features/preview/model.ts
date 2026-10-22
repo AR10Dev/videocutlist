@@ -1,6 +1,7 @@
 import type { NativeMediaApiClient } from "../../api";
 import type * as EffectApiTypes from "../../generated/effect-api";
 import { Cause, Effect } from "effect";
+import type { Scope } from "effect/Scope";
 
 export type Media = EffectApiTypes.Media;
 
@@ -214,7 +215,7 @@ export function streamPreview(
   onError: (error: Error) => void,
   shouldPlay: () => boolean = () => true,
   nextRequest?: (endMs: number) => ((signal: AbortSignal) => Promise<Response>) | undefined,
-): Effect.Effect<void, never, import("effect/Scope").Scope> {
+): Effect.Effect<void, never, Scope> {
   const failure = (message: string) =>
     new Error(
       message.includes("not supported")
