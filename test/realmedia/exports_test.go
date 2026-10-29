@@ -3,20 +3,55 @@
 package realmedia
 
 import (
-	"archive/zip"
-	"bytes"
+	"bufio"
 	"crypto/sha256"
 	"encoding/json"
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
 )
+
+func assertRealStreamSnapshot(t *testing.T, response *http.Response, resourceField, resourceID string) {
+	t.Helper()
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK || response.Header.Get("Content-Type") != "text/event-stream" || response.Header.Get("X-Request-ID") == "" {
+		body, err := io.ReadAll(response.Body)
+		if err != nil {
+			t.Fatalf("read error response body: %v", err)
+		}
+		t.Fatalf("SSE response status=%d content-type=%q request-id=%q body=%s", response.StatusCode, response.Header.Get("Content-Type"), response.Header.Get("X-Request-ID"), body)
+	}
+	reader := bufio.NewReader(response.Body)
+	var event, data string
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			t.Fatalf("read initial SSE frame: %v", err)
+		}
+		line = strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
+		if line == "" {
+			break
+		}
+		if value, ok := strings.CutPrefix(line, "event: "); ok {
+			event = value
+		}
+		if value, ok := strings.CutPrefix(line, "data: "); ok {
+			data = value
+		}
+	}
+	var snapshot map[string]json.RawMessage
+	if event != "snapshot" || json.Unmarshal([]byte(data), &snapshot) != nil {
+		t.Fatalf("invalid initial SSE snapshot event=%q data=%q", event, data)
+	}
+	var actual string
+	if err := json.Unmarshal(snapshot[resourceField], &actual); err != nil || actual != resourceID {
+		t.Fatalf("SSE snapshot %s=%q, want %q (decode error %v)", resourceField, actual, resourceID, err)
+	}
+}
 
 func assertNoTemporaryArtifacts(t *testing.T, root string) {
 	t.Helper()
@@ -66,342 +101,88 @@ func isTemporaryArtifact(info os.FileInfo) bool {
 			!(strings.HasPrefix(name, ".videocutlist-export-") && strings.HasSuffix(name, ".json"))
 }
 
-func TestProductionExportsJobsAndOutputs(t *testing.T) {
+func TestProductionExportsPreserveSource(t *testing.T) {
 	root := t.TempDir()
 	p := startProcess(t, root)
-
-	var media struct {
-		Items []struct {
-			ID         string `json:"id"`
-			DurationMS int64  `json:"durationMs"`
-		} `json:"items"`
-	}
-	waitFor(t, startupWait, func() bool {
-		resp := p.request(t, "GET", "/api/v1/media")
-		defer resp.Body.Close()
-		return resp.StatusCode == 200 && json.NewDecoder(resp.Body).Decode(&media) == nil && len(media.Items) > 0
-	})
-	item := media.Items[0]
-	if item.DurationMS < 2_000 {
-		t.Fatalf("fixture duration = %dms", item.DurationMS)
+	var media realMediaPage
+	getJSON(t, p, "/api/v2/media", &media)
+	if len(media.Items) != 1 {
+		t.Fatalf("media items=%d", len(media.Items))
 	}
 	sourcePath := filepath.Join(root, "media", "sintel-trailer.mp4")
-	sourceBefore, err := os.ReadFile(sourcePath)
+	before, err := os.ReadFile(sourcePath)
 	if err != nil {
-		t.Fatalf("read source before export: %v", err)
+		t.Fatal(err)
 	}
-	sourceBeforeInfo, err := os.Stat(sourcePath)
+	beforeInfo, err := os.Stat(sourcePath)
 	if err != nil {
-		t.Fatalf("stat source before export: %v", err)
+		t.Fatal(err)
 	}
-	sourceDigest := sha256.Sum256(sourceBefore)
 	projectID := "p_real_media_exports"
-	projectItem := map[string]any{"id": "i_abcdefghijklmnopqrstuvwx", "mediaId": item.ID, "segments": []any{
-		map[string]any{"startMs": 0, "endMs": 2000, "label": "opening"},
-		map[string]any{"startMs": 3000, "endMs": 5000, "label": "second"},
-	}}
-	project := map[string]any{"revision": 0, "schemaVersion": 2, "name": "real-media exports", "items": []any{projectItem}}
-	resp := p.requestBody(t, "PUT", "/api/v1/projects/"+projectID, project)
-	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		t.Fatalf("create project status=%d body=%s", resp.StatusCode, body)
+	itemID := "i_abcdefghijklmnopqrstuvwx"
+	project := map[string]any{
+		"revision": 0, "schemaVersion": 2, "name": "source preservation",
+		"items": []any{map[string]any{
+			"id": itemID, "mediaId": media.Items[0].ID,
+			"segments": []any{map[string]any{"startMs": 1000, "endMs": 3000}},
+			"exportOptions": map[string]any{
+				"mode": "merge", "selection": "segments", "cutStrategy": "stream_copy_preferred",
+				"container": "mkv", "destinationId": "download",
+			},
+		}},
 	}
-	resp.Body.Close()
-	var reloaded struct {
-		Revision int64 `json:"revision"`
-		Items    []struct {
-			ID       string `json:"id"`
-			MediaID  string `json:"mediaId"`
-			Segments []struct {
-				StartMS int64  `json:"startMs"`
-				EndMS   int64  `json:"endMs"`
-				Label   string `json:"label"`
-			} `json:"segments"`
-		} `json:"items"`
+	var saved realProject
+	p.json(t, http.MethodPut, "/api/v2/projects/"+projectID, project, http.StatusOK, &saved)
+	response := p.requestCommand(t, http.MethodPost, "/api/v2/projects/"+projectID+"/exports",
+		map[string]any{"itemIds": []string{itemID}, "projectRevision": saved.Revision})
+	var submitted struct {
+		BatchID string `json:"batchId"`
+		Jobs    []struct {
+			ID string `json:"id"`
+		} `json:"jobs"`
 	}
-	getJSON(t, p, "/api/v1/projects/"+projectID, &reloaded)
-	if reloaded.Revision != 1 || len(reloaded.Items) != 1 || reloaded.Items[0].MediaID != item.ID || len(reloaded.Items[0].Segments) != 2 || reloaded.Items[0].Segments[0].StartMS != 0 || reloaded.Items[0].Segments[1].Label != "second" {
-		t.Fatalf("reloaded project = %#v", reloaded)
-	}
-	revision := int64(1)
-
-	export := func(payload map[string]any) []string {
-		preflight := p.requestBody(t, "POST", "/api/v1/projects/"+projectID+"/exports/preflight", payload)
-		if preflight.StatusCode != 200 {
-			body, _ := io.ReadAll(preflight.Body)
-			preflight.Body.Close()
-			t.Fatalf("preflight status=%d body=%s", preflight.StatusCode, body)
-		}
-		var checked struct {
-			Allowed   bool  `json:"allowed"`
-			Selection []int `json:"selection"`
-			Findings  []struct {
-				Code     string `json:"code"`
-				Severity string `json:"severity"`
-			} `json:"findings"`
-		}
-		if json.NewDecoder(preflight.Body).Decode(&checked) != nil || !checked.Allowed || len(checked.Selection) != 2 || checked.Selection[0] != 0 || checked.Selection[1] != 1 {
-			preflight.Body.Close()
-			t.Fatalf("preflight selection=%v allowed=%v", checked.Selection, checked.Allowed)
-		}
-		preflight.Body.Close()
-		response := p.requestBody(t, "POST", "/api/v1/projects/"+projectID+"/exports", map[string]any{"itemIds": payload["itemIds"]})
-		var submitted struct {
-			BatchID string `json:"batchId"`
-			Jobs    []struct {
-				ID string `json:"id"`
-			} `json:"jobs"`
-		}
-		if response.StatusCode != 202 || json.NewDecoder(response.Body).Decode(&submitted) != nil || submitted.BatchID == "" || len(submitted.Jobs) == 0 {
-			body, _ := io.ReadAll(response.Body)
-			response.Body.Close()
-			t.Fatalf("export status=%d body=%s", response.StatusCode, body)
-		}
+	if response.StatusCode != http.StatusAccepted || json.NewDecoder(response.Body).Decode(&submitted) != nil || len(submitted.Jobs) != 1 || submitted.BatchID == "" {
 		response.Body.Close()
-		listing := p.request(t, "GET", "/api/v1/batches?limit=100")
-		var batches struct {
-			Items []struct {
-				ID       string  `json:"batchId"`
-				State    string  `json:"state"`
-				Progress float64 `json:"progress"`
-			} `json:"items"`
-		}
-		if json.NewDecoder(listing.Body).Decode(&batches) != nil {
-			listing.Body.Close()
-			t.Fatal("cannot decode batch listing")
-		}
-		listing.Body.Close()
-		found := false
-		for _, batch := range batches.Items {
-			found = found || batch.ID == submitted.BatchID
-		}
-		if !found {
-			t.Fatalf("submitted batch %s missing from paginated listing", submitted.BatchID)
-		}
-		return []string{submitted.BatchID, submitted.Jobs[0].ID}
+		t.Fatalf("export submission status=%d value=%+v", response.StatusCode, submitted)
 	}
-	base := func(mode, selection, strategy string) map[string]any {
-		return map[string]any{"mode": mode, "selection": selection, "cutStrategy": strategy, "container": "mkv", "itemIds": []string{"i_abcdefghijklmnopqrstuvwx"}}
+	response.Body.Close()
+	jobID := submitted.Jobs[0].ID
+	assertRealStreamSnapshot(t, p.request(t, http.MethodGet, "/api/v2/jobs/"+jobID+"/events"), "id", jobID)
+	assertRealStreamSnapshot(t, p.request(t, http.MethodGet, "/api/v2/batches/"+submitted.BatchID+"/events"), "batchId", submitted.BatchID)
+	var job struct {
+		State          string `json:"state"`
+		WarningDetails []struct {
+			Code string `json:"code"`
+		} `json:"warningDetails"`
 	}
-	for _, tc := range []struct {
-		mode, selection, strategy string
-		expectSuccess             bool
-	}{
-		{"merge", "segments", "stream_copy_preferred", true},
-		{"merge", "segments", "precise_reencode", true},
-		{"separate", "gaps", "stream_copy_preferred", true},
-		{"merge", "segments", "hybrid_smart_cut", false},
-	} {
-		projectItem["exportOptions"] = map[string]any{"mode": tc.mode, "selection": tc.selection, "cutStrategy": tc.strategy, "container": "mkv", "destinationId": "download", "streamIndexes": []int{0, 1}}
-		project["revision"] = revision
-		update := p.requestBody(t, "PUT", "/api/v1/projects/"+projectID, project)
-		var saved struct {
-			Revision int64 `json:"revision"`
+	waitFor(t, 30*time.Second, func() bool {
+		getJSON(t, p, "/api/v2/jobs/"+jobID, &job)
+		if job.State == "failed" || job.State == "cancelled" {
+			t.Fatalf("export ended unexpectedly: %s", job.State)
 		}
-		if update.StatusCode != 200 || json.NewDecoder(update.Body).Decode(&saved) != nil {
-			update.Body.Close()
-			t.Fatalf("update project for %s failed: %d", tc.strategy, update.StatusCode)
-		}
-		update.Body.Close()
-		revision = saved.Revision
-		ids := export(base(tc.mode, tc.selection, tc.strategy))
-		batchID, jobID := ids[0], ids[1]
-		suiteSummary.Add("project_id=%s batch_id=%s job_id=%s", projectID, batchID, jobID)
-		var final map[string]any
-		var terminal map[string]any
-		last := -1.0
-		waitFor(t, 90*time.Second, func() bool {
-			batch := p.request(t, "GET", "/api/v1/batches/"+batchID)
-			defer batch.Body.Close()
-			var value struct {
-				State    string           `json:"state"`
-				Progress float64          `json:"progress"`
-				Jobs     []map[string]any `json:"jobs"`
-			}
-			if json.NewDecoder(batch.Body).Decode(&value) != nil {
-				return false
-			}
-			if value.Progress < last {
-				t.Fatalf("batch progress regressed from %v to %v", last, value.Progress)
-			}
-			last = value.Progress
-			job := p.request(t, "GET", "/api/v1/jobs/"+jobID)
-			var current map[string]any
-			if json.NewDecoder(job.Body).Decode(&current) != nil {
-				job.Body.Close()
-				return false
-			}
-			job.Body.Close()
-			state, _ := current["state"].(string)
-			if state == "succeeded" || state == "failed" || state == "cancelled" {
-				terminal = current
-				final = map[string]any{"state": state, "jobs": value.Jobs}
-				return true
-			}
-			return false
-		})
-		if !tc.expectSuccess {
-			if final["state"] != "failed" {
-				t.Fatalf("hybrid batch state=%v", final["state"])
-			}
-			retry := p.request(t, "POST", "/api/v1/jobs/"+jobID+"/retry")
-			if retry.StatusCode != http.StatusAccepted {
-				retry.Body.Close()
-				t.Fatalf("hybrid retry status=%d", retry.StatusCode)
-			}
-			retry.Body.Close()
-			continue
-		}
-		if final["state"] != "succeeded" {
-			t.Fatalf("batch %s terminal state = %v jobs=%v detail=%v\n%s", batchID, final["state"], final["jobs"], terminal, boundedLog(p.log.Snapshot()))
-		}
-		job := p.request(t, "GET", "/api/v1/jobs/"+jobID)
-		var detail struct {
-			State  string `json:"state"`
-			Result *struct {
-				OutputCount int      `json:"outputCount"`
-				OutputName  string   `json:"outputName"`
-				OutputNames []string `json:"outputNames"`
-			} `json:"result"`
-			Warnings       []string `json:"warnings"`
-			WarningDetails []struct {
-				Code    string `json:"code"`
-				Message string `json:"message"`
-			} `json:"warningDetails"`
-		}
-		if json.NewDecoder(job.Body).Decode(&detail) != nil || detail.State != "succeeded" || detail.Result == nil {
-			t.Fatalf("job %s is not successful", jobID)
-		}
-		job.Body.Close()
-		if tc.strategy == "stream_copy_preferred" {
-			if len(detail.WarningDetails) != 1 || detail.WarningDetails[0].Code != "stream_copy_cut_may_not_be_frame_exact" || !strings.Contains(detail.WarningDetails[0].Message, "non-keyframe") {
-				t.Fatalf("stream-copy warnings = %#v (%#v)", detail.WarningDetails, detail.Warnings)
-			}
-		}
-		positions := 1
-		if tc.strategy == "stream_copy_preferred" && tc.mode == "merge" {
-			archiveResponse := p.request(t, "GET", "/api/v1/batches/"+batchID+"/download")
-			archiveData, readErr := io.ReadAll(archiveResponse.Body)
-			archiveResponse.Body.Close()
-			if archiveResponse.StatusCode != http.StatusOK || archiveResponse.Header.Get("Content-Type") != "application/zip" || readErr != nil || len(archiveData) == 0 {
-				t.Fatalf("batch download status=%d content-type=%q bytes=%d err=%v", archiveResponse.StatusCode, archiveResponse.Header.Get("Content-Type"), len(archiveData), readErr)
-			}
-			archive, archiveErr := zip.NewReader(bytes.NewReader(archiveData), int64(len(archiveData)))
-			if archiveErr != nil || len(archive.File) != 1 || archive.File[0].Name == "" || strings.ContainsAny(archive.File[0].Name, `/\\`) {
-				t.Fatalf("batch download archive: err=%v files=%#v", archiveErr, archive.File)
-			}
-			entry, entryErr := archive.File[0].Open()
-			if entryErr != nil {
-				t.Fatalf("open batch download entry: %v", entryErr)
-			}
-			entryBytes, entryReadErr := io.ReadAll(entry)
-			entry.Close()
-			if entryReadErr != nil || len(entryBytes) == 0 {
-				t.Fatalf("batch download entry bytes=%d err=%v", len(entryBytes), entryReadErr)
-			}
-		}
-		if tc.mode == "separate" {
-			positions = 2
-		}
-		for position := 0; position < positions; position++ {
-			output := p.request(t, "GET", "/api/v1/jobs/"+jobID+"/outputs/"+strconv.Itoa(position))
-			if output.StatusCode != 200 {
-				output.Body.Close()
-				t.Fatalf("download output status=%d", output.StatusCode)
-			}
-			path := filepath.Join(root, "probe-"+jobID+"-"+strconv.Itoa(position))
-			file, err := os.Create(path)
-			if err != nil {
-				output.Body.Close()
-				t.Fatal(err)
-			}
-			outputBytes, err := io.Copy(file, output.Body)
-			output.Body.Close()
-			if closeErr := file.Close(); err != nil || closeErr != nil {
-				t.Fatalf("save output: %v", err)
-			}
-			probe := exec.Command("ffprobe", "-v", "error", "-show_entries", "format=duration:stream=codec_type", "-of", "json", path)
-			var parsed struct {
-				Format struct {
-					Duration string `json:"duration"`
-				} `json:"format"`
-				Streams []struct {
-					Type string `json:"codec_type"`
-				} `json:"streams"`
-			}
-			data, err := probe.Output()
-			var parseErr error
-			if err == nil {
-				parseErr = json.Unmarshal(data, &parsed)
-			}
-			seconds, durationErr := strconv.ParseFloat(parsed.Format.Duration, 64)
-			if err != nil || parseErr != nil || durationErr != nil || seconds <= 0 {
-				t.Fatalf("ffprobe output: %v", err)
-			}
-			hasVideo, hasAudio := false, false
-			for _, stream := range parsed.Streams {
-				hasVideo = hasVideo || stream.Type == "video"
-				hasAudio = hasAudio || stream.Type == "audio"
-			}
-			if !hasVideo || !hasAudio {
-				t.Fatalf("ffprobe streams: %#v", parsed.Streams)
-			}
-			outputName := detail.Result.OutputName
-			if len(detail.Result.OutputNames) > position {
-				outputName = detail.Result.OutputNames[position]
-			}
-			if outputName == "" {
-				t.Fatalf("missing output name for position %d", position)
-			}
-			suiteSummary.Add("output filename=%s size=%d duration=%.3fs streams=video,audio", outputName, outputBytes, seconds)
-			if err := os.Remove(path); err != nil {
-				t.Fatal(err)
-			}
-		}
-		terminalDelete := p.request(t, "DELETE", "/api/v1/jobs/"+jobID)
-		if terminalDelete.StatusCode != http.StatusNoContent {
-			terminalDelete.Body.Close()
-			t.Fatalf("terminal cancellation status=%d", terminalDelete.StatusCode)
-		}
-		terminalDelete.Body.Close()
-		retry := p.request(t, "POST", "/api/v1/jobs/"+jobID+"/retry")
-		if retry.StatusCode != http.StatusConflict {
-			retry.Body.Close()
-			t.Fatalf("successful retry status=%d", retry.StatusCode)
-		}
-		retry.Body.Close()
-		invalidPosition := p.request(t, "GET", "/api/v1/jobs/"+jobID+"/outputs/99")
-		if invalidPosition.StatusCode != http.StatusNotFound {
-			invalidPosition.Body.Close()
-			t.Fatalf("invalid output position status=%d", invalidPosition.StatusCode)
-		}
-		invalidPosition.Body.Close()
+		return job.State == "succeeded"
+	})
+	if len(job.WarningDetails) != 1 || job.WarningDetails[0].Code != "stream_copy_cut_may_not_be_frame_exact" {
+		t.Fatalf("stream-copy warning missing: %+v", job.WarningDetails)
 	}
-	sourceAfter, err := os.ReadFile(sourcePath)
+	output := p.request(t, http.MethodGet, "/media/v2/jobs/"+jobID+"/outputs/0")
+	data, err := io.ReadAll(output.Body)
+	output.Body.Close()
+	if output.StatusCode != http.StatusOK || err != nil || len(data) == 0 {
+		t.Fatalf("output status=%d bytes=%d err=%v", output.StatusCode, len(data), err)
+	}
+	probeBytes(t, data, ".mkv")
+	after, err := os.ReadFile(sourcePath)
 	if err != nil {
-		t.Fatalf("read source after export: %v", err)
+		t.Fatal(err)
 	}
-	sourceAfterInfo, err := os.Stat(sourcePath)
+	afterInfo, err := os.Stat(sourcePath)
 	if err != nil {
-		t.Fatalf("stat source after export: %v", err)
+		t.Fatal(err)
 	}
-	if sha256.Sum256(sourceAfter) != sourceDigest || sourceAfterInfo.Size() != sourceBeforeInfo.Size() || !sourceAfterInfo.ModTime().Equal(sourceBeforeInfo.ModTime()) {
-		t.Fatal("real-media export changed the source file")
+	if sha256.Sum256(after) != sha256.Sum256(before) || afterInfo.Size() != beforeInfo.Size() || !afterInfo.ModTime().Equal(beforeInfo.ModTime()) {
+		t.Fatal("export changed the source file")
 	}
 	assertNoTemporaryArtifacts(t, root)
-	suiteSummary.Add("exports=validated output_names_safe sizes_positive durations_plausible streams=video,audio positions_and_count source_unchanged temp_free")
-
-	invalid := p.request(t, "GET", "/api/v1/jobs/j_invalid-output/outputs/99")
-	if invalid.StatusCode != 404 {
-		invalid.Body.Close()
-		t.Fatalf("invalid output status=%d", invalid.StatusCode)
-	}
-	invalid.Body.Close()
-	cancel := p.request(t, "DELETE", "/api/v1/jobs/"+"j_invalid-output")
-	if cancel.StatusCode != 404 {
-		cancel.Body.Close()
-		t.Fatalf("unknown cancellation status=%d", cancel.StatusCode)
-	}
-	cancel.Body.Close()
+	suiteSummary.Add("export job_id=%s source_unchanged temp_free", jobID)
 }

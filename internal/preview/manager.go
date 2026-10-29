@@ -1,0 +1,148 @@
+package preview
+
+import (
+	"context"
+	"errors"
+	"io"
+	"os"
+	"sync"
+
+	"videocutlist/internal/preview/cache"
+)
+
+type CacheStatus string
+
+const (
+	CacheHit  CacheStatus = "hit"
+	CacheMiss CacheStatus = "miss"
+)
+
+type PreviewPartial interface {
+	io.Writer
+	Commit(context.Context, func(context.Context, *os.File) error) error
+	Discard() error
+}
+
+type PreviewCache interface {
+	Open(context.Context, string, func(context.Context, *os.File) error) (io.ReadCloser, error)
+	Begin(string) (PreviewPartial, error)
+}
+
+type RunningPreview struct {
+	Stdout io.ReadCloser
+	PID    int
+	Wait   func() error
+}
+
+type PreviewRunner interface {
+	Start(context.Context, TranscodeSpec) (*RunningPreview, error)
+}
+
+type Result struct {
+	Key    string
+	Status CacheStatus
+}
+
+type PreviewManager struct {
+	cache     PreviewCache
+	runner    PreviewRunner
+	validator func(context.Context, *os.File) error
+	limits    *PreviewLimits
+}
+
+func NewPreviewManager(store PreviewCache, runner PreviewRunner, validator func(context.Context, *os.File) error, limiter *PreviewLimits) (*PreviewManager, error) {
+	if store == nil || runner == nil || validator == nil || limiter == nil {
+		return nil, errors.New("cache, runner, validator, and limiter are required")
+	}
+	return &PreviewManager{cache: store, runner: runner, validator: validator, limits: limiter}, nil
+}
+
+// Preview streams a cache hit directly. A miss starts exactly one FFmpeg
+// process for this request; cancellation or a closed reader discards output.
+func (m *PreviewManager) Preview(ctx context.Context, spec TranscodeSpec) (io.ReadCloser, Result, error) {
+	key := PreviewKey(spec)
+	if hit, err := m.cache.Open(ctx, key, m.validator); err == nil {
+		return hit, Result{Key: key, Status: CacheHit}, nil
+	} else if !errors.Is(err, cache.ErrMiss) {
+		return nil, Result{}, err
+	}
+	releaseProcess, err := m.limits.AcquireProcessContext(ctx)
+	if err != nil {
+		return nil, Result{}, err
+	}
+	partial, err := m.cache.Begin(key)
+	if err != nil {
+		releaseProcess()
+		return nil, Result{}, err
+	}
+	reader, writer := io.Pipe()
+	runCtx, cancel := context.WithCancel(ctx)
+	running, err := m.runner.Start(runCtx, spec)
+	if err != nil {
+		cancel()
+		_ = partial.Discard()
+		releaseProcess()
+		_ = reader.Close()
+		return nil, Result{}, err
+	}
+	go streamPreview(runCtx, cancel, running, partial, writer, m.validator, releaseProcess)
+	return &previewReader{ReadCloser: reader, cancel: cancel}, Result{Key: key, Status: CacheMiss}, nil
+}
+
+func streamPreview(ctx context.Context, cancel context.CancelFunc, running *RunningPreview, partial PreviewPartial, writer *io.PipeWriter, validator func(context.Context, *os.File) error, releaseProcess func()) {
+	defer releaseProcess()
+	defer func() { _ = running.Stdout.Close() }()
+	defer cancel()
+	go func() {
+		<-ctx.Done()
+		_ = writer.CloseWithError(ctx.Err())
+	}()
+
+	buf := make([]byte, 32*1024)
+	var streamErr error
+	for streamErr == nil {
+		n, err := running.Stdout.Read(buf)
+		if n > 0 {
+			if _, streamErr = partial.Write(buf[:n]); streamErr == nil {
+				_, streamErr = writer.Write(buf[:n])
+			}
+		}
+		if err != nil {
+			if !errors.Is(err, io.EOF) && streamErr == nil {
+				streamErr = err
+			}
+		}
+		if streamErr != nil || err != nil {
+			break
+		}
+	}
+	if streamErr != nil {
+		// Stop the process before waiting: stdout is no longer being drained.
+		_ = writer.CloseWithError(streamErr)
+		cancel()
+	}
+	waitErr := running.Wait()
+	if streamErr == nil && waitErr != nil {
+		streamErr = waitErr
+	}
+	if streamErr == nil && ctx.Err() == nil {
+		streamErr = partial.Commit(ctx, validator)
+	} else {
+		_ = partial.Discard()
+		if streamErr == nil {
+			streamErr = ctx.Err()
+		}
+	}
+	_ = writer.CloseWithError(streamErr)
+}
+
+type previewReader struct {
+	io.ReadCloser
+	cancel func()
+	once   sync.Once
+}
+
+func (r *previewReader) Close() error {
+	r.once.Do(r.cancel)
+	return r.ReadCloser.Close()
+}

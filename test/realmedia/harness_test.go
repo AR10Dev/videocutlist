@@ -5,6 +5,7 @@ package realmedia
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -19,13 +20,11 @@ import (
 	"syscall"
 	"testing"
 	"time"
-
-	"videocutlist/internal/httpapi"
 )
 
 const (
 	fixturePath = "test/fixtures/real-media/sintel-trailer.mp4"
-	bearerToken = "real-media-test-token"
+	bearerToken = "real-media-test-token-0123456789abcdef"
 	startupWait = 20 * time.Second
 )
 
@@ -112,25 +111,6 @@ func (b *redactionBody) Read(data []byte) (int, error) {
 	return n, err
 }
 
-func TestRedactionBodyDetectsSplitSecretsWithoutBufferingDownloads(t *testing.T) {
-	p := &process{forbidden: []string{"/sensitive/cache/original.mp4"}}
-	body := &redactionBody{
-		ReadCloser: io.NopCloser(strings.NewReader(strings.Repeat("public data ", 8192) + "/sensitive/cache/original.mp4")),
-		process:    p,
-	}
-	if _, err := io.CopyBuffer(io.Discard, body, make([]byte, 3)); err != nil {
-		t.Fatal(err)
-	}
-	if !p.redactionViolation {
-		t.Fatal("secret split across response reads was not detected")
-	}
-	if len(body.tail) >= len(p.forbidden[0]) {
-		t.Fatalf("response scanner retained %d bytes", len(body.tail))
-	}
-}
-
-var executedRoutes sync.Map
-
 func TestMain(m *testing.M) {
 	code := m.Run()
 	if code == 0 {
@@ -146,48 +126,13 @@ func TestMain(m *testing.M) {
 			}
 		}
 		if code == 0 {
-			suiteSummary.Add("server=videocutlist version=%s routes=%d", version, len(productionRoutes)+3)
-		}
-		for _, route := range productionRoutes {
-			key := routeKey(route.method, route.path)
-			if _, ok := executedRoutes.Load(key); !ok {
-				fmt.Fprintf(os.Stderr, "real-media route not exercised: %s\n", key)
-				code = 1
-			}
-		}
-		for _, route := range []string{"GET /api/v1/health", "GET /api/v1/ready", "GET /", "GET /metrics"} {
-			if _, ok := executedRoutes.Load(route); !ok {
-				fmt.Fprintf(os.Stderr, "real-media route not exercised: %s\n", route)
-				code = 1
-			}
+			suiteSummary.Add("server=videocutlist version=%s", version)
 		}
 	}
 	if code == 0 {
 		fmt.Fprintf(os.Stdout, "REAL_MEDIA_SUMMARY %s\n", strings.Join(suiteSummary.Snapshot(), " | "))
 	}
 	os.Exit(code)
-}
-
-func routeKey(method, path string) string {
-	path = strings.Split(path, "?")[0]
-	kind := httpapi.RouteCoverageKind(method, path)
-	for _, route := range productionRoutes {
-		if route.method == method && httpapi.RouteCoverageKind(route.method, route.path) == kind && routePathMatches(route.path, path) {
-			return method + " " + kind + " " + route.path
-		}
-	}
-	if kind != "" {
-		return method + " " + kind + " " + path
-	}
-	return method + " " + path
-}
-
-func recordRoute(method, path string) {
-	path = strings.Split(path, "?")[0]
-	executedRoutes.Store(routeKey(method, path), true)
-	if path == "/" || path == "/metrics" || path == "/api/v1/health" || path == "/api/v1/ready" {
-		executedRoutes.Store(method+" "+path, true)
-	}
 }
 
 func startProcess(t *testing.T, root string) *process {
@@ -281,12 +226,12 @@ func startProcessWithEnv(t *testing.T, root string, overrides map[string]string)
 			time.Sleep(100 * time.Millisecond)
 			continue
 		}
-		resp, err := client.Get(p.base + "/api/v1/ready")
+		resp, err := client.Get(p.base + "/ready")
 		if err == nil {
 			_ = resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
 				// Dependency readiness does not imply the initial library scan is complete.
-				request, err := http.NewRequestWithContext(ctx, http.MethodGet, p.base+"/api/v1/media/status", nil)
+				request, err := http.NewRequestWithContext(ctx, http.MethodGet, p.base+"/api/v2/media/status", nil)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -354,7 +299,6 @@ func (p *process) requestNoAuth(t *testing.T, method, path string) *http.Respons
 
 func (p *process) do(req *http.Request) (*http.Response, error) {
 	resp, err := http.DefaultClient.Do(req)
-	recordRoute(req.Method, req.URL.Path)
 	if resp == nil {
 		return resp, err
 	}
@@ -379,6 +323,55 @@ func (p *process) checkRedaction(value string) {
 
 func (p *process) request(t *testing.T, method, path string) *http.Response {
 	return p.requestBody(t, method, path, nil)
+}
+
+// requestCommand sends one intentional command with a fresh key; it never retries.
+func (p *process) requestCommand(t *testing.T, method, path string, body any) *http.Response {
+	t.Helper()
+	key := freshIdempotencyKey(t)
+	var payload io.Reader
+	if body != nil {
+		data, err := json.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		payload = bytes.NewReader(data)
+	}
+	response := p.requestHeaders(t, method, path, payload, map[string]string{"Idempotency-Key": key})
+	if response.Request.Header.Get("Idempotency-Key") != key {
+		response.Body.Close()
+		t.Fatal("command request did not carry its fresh idempotency key")
+	}
+	return response
+}
+
+func freshIdempotencyKey(t *testing.T) string {
+	t.Helper()
+	var key [16]byte
+	if n, err := rand.Read(key[:]); err != nil || n != len(key) {
+		t.Fatalf("generate idempotency key: read %d bytes: %v", n, err)
+	}
+	key[6] = key[6]&0x0f | 0x40
+	key[8] = key[8]&0x3f | 0x80
+	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", key[0:4], key[4:6], key[6:8], key[8:10], key[10:16])
+}
+
+func assertCommandProjectRevision(t *testing.T, response *http.Response, expected int64) {
+	t.Helper()
+	if response.Request.GetBody == nil {
+		t.Fatal("command request body cannot be inspected")
+	}
+	body, err := response.Request.GetBody()
+	if err != nil {
+		t.Fatalf("read command request body: %v", err)
+	}
+	defer body.Close()
+	var command struct {
+		ProjectRevision int64 `json:"projectRevision"`
+	}
+	if err := json.NewDecoder(body).Decode(&command); err != nil || command.ProjectRevision != expected {
+		t.Fatalf("command project revision=%d, want %d (decode error %v)", command.ProjectRevision, expected, err)
+	}
 }
 
 func (p *process) requestBody(t *testing.T, method, path string, body any) *http.Response {

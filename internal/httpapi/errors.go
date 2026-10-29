@@ -5,7 +5,7 @@ import (
 	"net/http"
 
 	store "videocutlist/internal/db"
-	"videocutlist/internal/jobs"
+	jobs "videocutlist/internal/jobs/model"
 	"videocutlist/internal/projects"
 )
 
@@ -14,7 +14,7 @@ func resourceError(w http.ResponseWriter, id string, err error) {
 	case errors.Is(err, store.ErrProjectNotFound), errors.Is(err, store.ErrMediaNotFound), errors.Is(err, jobs.ErrJobNotFound):
 		notFound(w, id)
 	default:
-		internalError(w, id)
+		internalError(w, id, err)
 	}
 }
 
@@ -32,7 +32,7 @@ func projectError(w http.ResponseWriter, id string, err error) {
 				message = "A project item has invalid editor or export settings. Reload the project and try again."
 			}
 		}
-		httpx.Error(w, http.StatusUnprocessableEntity, "invalid_project", message, id)
+		httpx.Error(w, http.StatusBadRequest, "invalid_project", message, id)
 	default:
 		resourceError(w, id, err)
 	}

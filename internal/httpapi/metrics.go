@@ -1,36 +1,83 @@
-// Package metrics exports the small fixed Prometheus surface used by the API.
 package httpapi
 
 import (
+	"database/sql"
 	"fmt"
 	"io"
-	"maps"
 	"net/http"
-	"slices"
-	"strings"
-	"sync"
+	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/common/expfmt"
 )
 
+// Metrics owns a per-server registry; labels are bounded at the HTTP boundary.
 type Metrics struct {
-	mu        sync.Mutex
-	http      map[string]uint64
-	durations map[string]float64
-	preview   map[string]uint64
-	counters  map[string]uint64
+	registry             *prometheus.Registry
+	http                 *prometheus.CounterVec
+	durations            *prometheus.SummaryVec
+	preview              *prometheus.CounterVec
+	counters             map[string]prometheus.Counter
+	pool                 [4]prometheus.Gauge
+	terminalFailures     prometheus.Counter
+	terminalFinalization prometheus.Observer
 }
 
 func NewMetrics() *Metrics {
-	return &Metrics{
-		http:      map[string]uint64{},
-		durations: map[string]float64{},
-		preview:   map[string]uint64{},
-		counters: map[string]uint64{
-			"preview_cache_hits_total":   0,
-			"preview_cache_misses_total": 0,
-			"ffmpeg_failures_total":      0,
-			"export_jobs_total":          0,
-		},
+	m := &Metrics{
+		registry: prometheus.NewRegistry(),
+		http: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "http_requests_total", Help: "HTTP requests by normalized route, method and status class.",
+		}, []string{"route", "method", "status_class"}),
+		durations: prometheus.NewSummaryVec(prometheus.SummaryOpts{
+			Name: "http_request_duration_seconds", Help: "HTTP request duration in seconds.",
+		}, []string{"route", "method", "status_class"}),
+		preview: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "preview_requests_total", Help: "Preview requests by cache status.",
+		}, []string{"cache_status"}),
+		counters: make(map[string]prometheus.Counter),
 	}
+	m.registry.MustRegister(m.http, m.durations, m.preview)
+	m.terminalFailures = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "job_terminal_finalization_failures_total", Help: "Terminal job finalization attempts that remained unresolved.",
+	})
+	terminalDuration := prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name: "job_terminal_finalization_duration_seconds", Help: "Whole terminal job finalization duration in seconds, including reads and retries.",
+		Buckets: prometheus.DefBuckets,
+	})
+	m.terminalFinalization = terminalDuration
+	m.registry.MustRegister(m.terminalFailures, terminalDuration)
+	for i, metric := range []struct{ name, help string }{
+		{"database_pool_wait_count", "Cumulative database pool wait count."},
+		{"database_pool_wait_duration_seconds", "Cumulative database pool wait duration in seconds."},
+		{"database_pool_in_use_connections", "Database connections currently in use."},
+		{"database_pool_open_connections", "Database connections currently open."},
+	} {
+		m.pool[i] = prometheus.NewGauge(prometheus.GaugeOpts{Name: metric.name, Help: metric.help})
+		m.registry.MustRegister(m.pool[i])
+	}
+	for _, name := range []string{"preview_cache_hits_total", "preview_cache_misses_total", "ffmpeg_failures_total", "export_jobs_total"} {
+		counter := prometheus.NewCounter(prometheus.CounterOpts{Name: name, Help: name})
+		m.registry.MustRegister(counter)
+		m.counters[name] = counter
+	}
+	return m
+}
+
+// TerminalFinalization records the whole finalization attempt, including reads and retries.
+func (m *Metrics) TerminalFinalization(duration time.Duration, failed bool) {
+	m.terminalFinalization.Observe(duration.Seconds())
+	if failed {
+		m.terminalFailures.Inc()
+	}
+}
+
+// DatabasePool records database/sql pool statistics; wait duration is seconds.
+func (m *Metrics) DatabasePool(stats sql.DBStats) {
+	m.pool[0].Set(float64(stats.WaitCount))
+	m.pool[1].Set(stats.WaitDuration.Seconds())
+	m.pool[2].Set(float64(stats.InUse))
+	m.pool[3].Set(float64(stats.OpenConnections))
 }
 
 func (m *Metrics) HTTP(route, method, statusClass string, seconds float64) {
@@ -40,62 +87,37 @@ func (m *Metrics) HTTP(route, method, statusClass string, seconds float64) {
 	default:
 		method = "OTHER"
 	}
-	m.mu.Lock()
-	key := route + "\x00" + method + "\x00" + statusClass
-	m.http[key]++
-	m.durations[key] += seconds
-	m.mu.Unlock()
+	m.http.WithLabelValues(route, method, statusClass).Inc()
+	m.durations.WithLabelValues(route, method, statusClass).Observe(seconds)
 }
 
 func (m *Metrics) Preview(cache string) {
-	m.mu.Lock()
-	m.preview[cache]++
+	m.preview.WithLabelValues(cache).Inc()
 	if cache == "hit" {
-		m.counters["preview_cache_hits_total"]++
+		m.counters["preview_cache_hits_total"].Inc()
 	}
 	if cache == "miss" {
-		m.counters["preview_cache_misses_total"]++
+		m.counters["preview_cache_misses_total"].Inc()
 	}
-	m.mu.Unlock()
 }
 
 func (m *Metrics) Add(name string, amount uint64) {
-	m.mu.Lock()
-	m.counters[name] += amount
-	m.mu.Unlock()
+	if counter, ok := m.counters[name]; ok {
+		counter.Add(float64(amount))
+	}
 }
 
+// WritePrometheus gathers only this server's collectors and writes the standard
+// text format without changing the existing metric names or summary series.
 func (m *Metrics) WritePrometheus(writer io.Writer) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	var output []byte
-	for _, name := range []string{"http_requests_total", "preview_requests_total", "preview_cache_hits_total", "preview_cache_misses_total", "ffmpeg_failures_total", "export_jobs_total"} {
-		output = fmt.Appendf(output, "# TYPE %s counter\n", name)
-	}
-	output = append(output, "# TYPE http_request_duration_seconds summary\n"...)
-	keys := sorted(m.http)
-	for _, key := range keys {
-		parts := strings.Split(key, "\x00")
-		output = fmt.Appendf(output, "http_requests_total{route=%q,method=%q,status_class=%q} %d\n", parts[0], parts[1], parts[2], m.http[key])
-		output = fmt.Appendf(output, "http_request_duration_seconds_sum{route=%q,method=%q,status_class=%q} %g\n", parts[0], parts[1], parts[2], m.durations[key])
-		output = fmt.Appendf(output, "http_request_duration_seconds_count{route=%q,method=%q,status_class=%q} %d\n", parts[0], parts[1], parts[2], m.http[key])
-	}
-	keys = sorted(m.preview)
-	for _, key := range keys {
-		output = fmt.Appendf(output, "preview_requests_total{cache_status=%q} %d\n", key, m.preview[key])
-	}
-	keys = sorted(m.counters)
-	for _, key := range keys {
-		output = fmt.Appendf(output, "%s %d\n", key, m.counters[key])
-	}
-	n, err := writer.Write(output)
+	families, err := m.registry.Gather()
 	if err != nil {
-		return fmt.Errorf("write prometheus metrics: %w", err)
+		return fmt.Errorf("gather prometheus metrics: %w", err)
 	}
-	if n != len(output) {
-		return io.ErrShortWrite
+	for _, family := range families {
+		if _, err := expfmt.MetricFamilyToText(writer, family); err != nil {
+			return fmt.Errorf("write prometheus metrics: %w", err)
+		}
 	}
 	return nil
 }
-
-func sorted(values map[string]uint64) []string { return slices.Sorted(maps.Keys(values)) }

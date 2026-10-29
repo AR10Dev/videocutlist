@@ -8,8 +8,7 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
-
-	"videocutlist/internal/projects"
+	librarymedia "videocutlist/internal/library/media"
 )
 
 const (
@@ -20,8 +19,8 @@ const (
 
 // MediaReader is the safe media read surface used by the MCP media tools.
 type MediaReader interface {
-	List(ctx context.Context, cursor string, limit int) (projects.MediaPage, error)
-	Get(ctx context.Context, id string) (projects.Media, error)
+	List(ctx context.Context, cursor string, limit int) (librarymedia.MediaPage, error)
+	Get(ctx context.Context, id string) (librarymedia.Media, error)
 }
 
 // MediaTools provides the bounded, path-free media read tools.
@@ -129,11 +128,11 @@ func listMedia(ctx Context, media MediaReader, raw json.RawMessage) (ToolResult,
 	return ToolResult{Content: []ToolContent{{Type: "text", Text: "Media listed."}}, StructuredContent: result}, nil
 }
 
-func mediaResult(item projects.Media) ToolResult {
+func mediaResult(item librarymedia.Media) ToolResult {
 	return ToolResult{Content: []ToolContent{{Type: "text", Text: "Media retrieved."}}, StructuredContent: safeMedia(item)}
 }
 
-func safeMedia(item projects.Media) map[string]any {
+func safeMedia(item librarymedia.Media) map[string]any {
 	return map[string]any{
 		"id":         item.ID,
 		"name":       item.Name,

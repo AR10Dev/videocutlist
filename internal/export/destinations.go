@@ -134,6 +134,17 @@ func (p preparedDestination) publishFrom(sourceDirectory *os.File, tempName, out
 	return PublishOpenedNoReplace(sourceDirectory, p.directory, tempName, outputName)
 }
 
+func (s Service) destinationForResult(result Result) (Destination, bool) {
+	destination := Destination{ID: "download", Kind: KindDownload, Root: s.OutputDir}
+	for _, candidate := range s.Destinations {
+		if candidate.ID == result.DestinationID {
+			destination = candidate
+			break
+		}
+	}
+	return destination, destination.Root != "" && destination.Kind == result.DestinationKind && result.DestinationKind == KindDownload
+}
+
 func (d Destination) Public() PublicDestination {
 	return PublicDestination{d.ID, d.Label, d.Description, d.Kind, d.RetentionText}
 }

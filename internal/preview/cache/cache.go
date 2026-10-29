@@ -13,12 +13,10 @@ import (
 	"slices"
 	"strings"
 	"sync"
-
-	"videocutlist/internal/projects/model"
 )
 
 var (
-	ErrMiss      = model.ErrCacheMiss
+	ErrMiss      = errors.New("preview cache miss")
 	ErrDiskLimit = errors.New("preview cache disk limit exceeded")
 )
 

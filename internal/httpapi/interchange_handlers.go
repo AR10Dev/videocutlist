@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 
+	"videocutlist/internal/httpapi/transport"
 	"videocutlist/internal/projects"
 	"videocutlist/internal/projects/interchange"
 	"videocutlist/internal/projects/model"
@@ -21,6 +22,26 @@ type automationCommand struct {
 	JobID         string `json:"jobId,omitempty"`
 	Format        string `json:"format,omitempty"`
 	Input         string `json:"input,omitempty"`
+}
+
+func automationCommandFromTransport(input transport.AutomationCommand) automationCommand {
+	command := automationCommand{Action: string(input.Action)}
+	if input.ProjectId != nil {
+		command.ProjectID = *input.ProjectId
+	}
+	if input.ProjectItemId != nil {
+		command.ProjectItemID = *input.ProjectItemId
+	}
+	if input.JobId != nil {
+		command.JobID = *input.JobId
+	}
+	if input.Format != nil {
+		command.Format = string(*input.Format)
+	}
+	if input.Input != nil {
+		command.Input = *input.Input
+	}
+	return command
 }
 
 func (s *Server) automation(w http.ResponseWriter, r *http.Request, id string) {
@@ -37,22 +58,23 @@ func (s *Server) automation(w http.ResponseWriter, r *http.Request, id string) {
 		httpx.Error(w, http.StatusRequestEntityTooLarge, "body_too_large", "Request body is too large.", id)
 		return
 	}
-	var command automationCommand
+	var requestBody transport.AutomationCommand
 	decoder := json.NewDecoder(strings.NewReader(string(body)))
 	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&command); err != nil || command.Action == "" {
-		httpx.Error(w, http.StatusUnprocessableEntity, "invalid_command", "Command is invalid.", id)
+	if err := decoder.Decode(&requestBody); err != nil || requestBody.Action == "" {
+		httpx.Error(w, http.StatusBadRequest, "invalid_command", "Command is invalid.", id)
 		return
 	}
 	var extra any
 	if decoder.Decode(&extra) != io.EOF {
-		httpx.Error(w, http.StatusUnprocessableEntity, "invalid_command", "Command is invalid.", id)
+		httpx.Error(w, http.StatusBadRequest, "invalid_command", "Command is invalid.", id)
 		return
 	}
+	command := automationCommandFromTransport(requestBody)
 	switch command.Action {
 	case "project.import":
 		if !validProjectID(command.ProjectID) || (command.Format != "csv" && command.Format != "chapters") || command.Input == "" {
-			httpx.Error(w, http.StatusUnprocessableEntity, "invalid_command", "Command is invalid.", id)
+			httpx.Error(w, http.StatusBadRequest, "invalid_command", "Command is invalid.", id)
 			return
 		}
 		// Reuse the canonical HTTP interchange path and return only its opaque project ID.
@@ -78,7 +100,7 @@ func (s *Server) automation(w http.ResponseWriter, r *http.Request, id string) {
 			segments, err = interchange.ParseChapters([]byte(command.Input), media.DurationMS)
 		}
 		if err != nil {
-			httpx.Error(w, http.StatusUnprocessableEntity, "invalid_interchange", "Interchange input is invalid.", id)
+			httpx.Error(w, http.StatusBadRequest, "invalid_interchange", "Interchange input is invalid.", id)
 			return
 		}
 		item.Segments = slices.Clone(segments)
@@ -87,10 +109,15 @@ func (s *Server) automation(w http.ResponseWriter, r *http.Request, id string) {
 			projectError(w, id, err)
 			return
 		}
-		httpx.WriteJSON(w, http.StatusOK, map[string]string{"projectId": saved.ID})
+		var response transport.Automation200JSONResponseBody
+		if err := response.FromAutomation200JSONResponseBody0(transport.Automation200JSONResponseBody0{ProjectId: saved.ID}); err != nil {
+			internalError(w, id, err)
+			return
+		}
+		httpx.WriteJSON(w, http.StatusOK, response)
 	case "project.export":
 		if !validProjectID(command.ProjectID) || (command.Format != "csv" && command.Format != "chapters") {
-			httpx.Error(w, http.StatusUnprocessableEntity, "invalid_command", "Command is invalid.", id)
+			httpx.Error(w, http.StatusBadRequest, "invalid_command", "Command is invalid.", id)
 			return
 		}
 		project, err := s.config.Projects.Get(r.Context(), command.ProjectID)
@@ -110,13 +137,18 @@ func (s *Server) automation(w http.ResponseWriter, r *http.Request, id string) {
 			data, err = interchange.ExportChapters(item.Segments)
 		}
 		if err != nil {
-			internalError(w, id)
+			internalError(w, id, err)
 			return
 		}
-		httpx.WriteJSON(w, http.StatusOK, map[string]string{"filename": "cutlist." + command.Format, "content": string(data)})
+		var response transport.Automation200JSONResponseBody
+		if err := response.FromAutomation200JSONResponseBody1(transport.Automation200JSONResponseBody1{Filename: "cutlist." + command.Format, Content: string(data)}); err != nil {
+			internalError(w, id, err)
+			return
+		}
+		httpx.WriteJSON(w, http.StatusOK, response)
 	case "job.status":
 		if !validJobID(command.JobID) {
-			httpx.Error(w, http.StatusUnprocessableEntity, "invalid_command", "Command is invalid.", id)
+			httpx.Error(w, http.StatusBadRequest, "invalid_command", "Command is invalid.", id)
 			return
 		}
 		job, err := s.config.Jobs.Get(r.Context(), command.JobID)
@@ -124,9 +156,23 @@ func (s *Server) automation(w http.ResponseWriter, r *http.Request, id string) {
 			resourceError(w, id, err)
 			return
 		}
-		httpx.WriteJSON(w, http.StatusOK, job)
+		mapped, ok, err := jobTransport(job)
+		if err != nil {
+			internalError(w, id, err)
+			return
+		}
+		if !ok {
+			writeDomainJobResponse(w, http.StatusOK, job)
+			return
+		}
+		var response transport.Automation200JSONResponseBody
+		if err := response.FromJob(mapped); err != nil {
+			internalError(w, id, err)
+			return
+		}
+		httpx.WriteJSON(w, http.StatusOK, response)
 	default:
-		httpx.Error(w, http.StatusUnprocessableEntity, "unsupported_command", "Command is not supported.", id)
+		httpx.Error(w, http.StatusBadRequest, "unsupported_command", "Command is not supported.", id)
 	}
 }
 
@@ -169,7 +215,7 @@ func (s *Server) importInterchange(w http.ResponseWriter, r *http.Request, route
 	}
 	body, err := io.ReadAll(io.LimitReader(r.Body, interchange.MaxInputBytes+1))
 	if err != nil || len(body) > interchange.MaxInputBytes {
-		httpx.Error(w, 422, "invalid_interchange", "Interchange input is invalid.", id)
+		httpx.Error(w, 400, "invalid_interchange", "Interchange input is invalid.", id)
 		return
 	}
 	var segments []model.Segment
@@ -179,7 +225,7 @@ func (s *Server) importInterchange(w http.ResponseWriter, r *http.Request, route
 		segments, err = interchange.ParseChapters(body, media.DurationMS)
 	}
 	if err != nil {
-		httpx.Error(w, 422, "invalid_interchange", "Interchange input is invalid.", id)
+		httpx.Error(w, 400, "invalid_interchange", "Interchange input is invalid.", id)
 		return
 	}
 	item.Segments = slices.Clone(segments)
@@ -188,7 +234,7 @@ func (s *Server) importInterchange(w http.ResponseWriter, r *http.Request, route
 		projectError(w, id, err)
 		return
 	}
-	httpx.WriteJSON(w, 200, saved)
+	writeProjectJSON(w, http.StatusOK, id, saved)
 }
 func (s *Server) exportInterchange(w http.ResponseWriter, r *http.Request, routeID, id string) {
 	parts := strings.SplitN(routeID, ":", 2)
@@ -212,7 +258,7 @@ func (s *Server) exportInterchange(w http.ResponseWriter, r *http.Request, route
 		data, err = interchange.ExportChapters(item.Segments)
 	}
 	if err != nil {
-		internalError(w, id)
+		internalError(w, id, err)
 		return
 	}
 	if parts[1] == "csv" {

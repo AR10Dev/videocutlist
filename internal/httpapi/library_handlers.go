@@ -6,70 +6,87 @@ import (
 	"errors"
 	"net/http"
 
-	"videocutlist/internal/projects"
+	jobqueue "videocutlist/internal/jobs/model"
+	librarymedia "videocutlist/internal/library/media"
 )
 
 func (s *Server) browseMedia(writer http.ResponseWriter, request *http.Request, id string) {
 	if !queryKeys(request, "folderId", "cursor", "limit") {
-		httpx.Error(writer, 422, "invalid_query", "Query parameters are invalid.", id)
+		httpx.Error(writer, 400, "invalid_query", "Query parameters are invalid.", id)
 		return
 	}
 	q := request.URL.Query()
 	folderID, cursor := q.Get("folderId"), q.Get("cursor")
 	if folderID != "" && !validFolderID(folderID) || cursor != "" && !validMediaID(cursor) {
-		httpx.Error(writer, 422, "invalid_query", "Query parameters are invalid.", id)
+		httpx.Error(writer, 400, "invalid_query", "Query parameters are invalid.", id)
 		return
 	}
 	limit, err := parseLimit(q.Get("limit"))
 	if err != nil {
-		httpx.Error(writer, 422, "invalid_query", "Query parameters are invalid.", id)
+		httpx.Error(writer, 400, "invalid_query", "Query parameters are invalid.", id)
 		return
 	}
 	page, err := s.config.Media.Browse(request.Context(), folderID, cursor, limit)
 	if err != nil {
-		internalError(writer, id)
+		internalError(writer, id, err)
 		return
 	}
-	httpx.WriteJSON(writer, 200, page)
+	writeFolderPageJSON(writer, id, page)
 }
 
 func (s *Server) listMedia(writer http.ResponseWriter, request *http.Request, id string) {
 	if !queryKeys(request, "limit", "cursor") {
-		httpx.Error(writer, 422, "invalid_query", "Query parameters are invalid.", id)
+		httpx.Error(writer, 400, "invalid_query", "Query parameters are invalid.", id)
 		return
 	}
 	limit, err := parseLimit(request.URL.Query().Get("limit"))
 	if err != nil {
-		httpx.Error(writer, 422, "invalid_query", "Query parameters are invalid.", id)
+		httpx.Error(writer, 400, "invalid_query", "Query parameters are invalid.", id)
 		return
 	}
 	cursor := request.URL.Query().Get("cursor")
 	if len(cursor) > 128 || cursor != "" && !validMediaID(cursor) {
-		httpx.Error(writer, 422, "invalid_query", "Query parameters are invalid.", id)
+		httpx.Error(writer, 400, "invalid_query", "Query parameters are invalid.", id)
 		return
 	}
 	page, err := s.config.Media.List(request.Context(), cursor, limit)
 	if err != nil {
-		internalError(writer, id)
+		internalError(writer, id, err)
 		return
 	}
-	httpx.WriteJSON(writer, 200, page)
+	writeMediaPageJSON(writer, id, page)
 }
 
 func (s *Server) refreshMedia(writer http.ResponseWriter, request *http.Request, id string) {
-	job, err := s.startMediaScan(request.Context())
-	if err != nil {
-		internalError(writer, id)
+	key := request.Header.Get("Idempotency-Key")
+	if !jobqueue.ValidCommandKey(key) {
+		httpx.Error(writer, http.StatusBadRequest, "invalid_idempotency_key", "A valid Idempotency-Key is required.", id)
 		return
 	}
-	httpx.WriteJSON(writer, http.StatusAccepted, job)
+	job, err := s.startMediaScan(request.Context(), key)
+	if err != nil {
+		writeMediaScanError(writer, err, id)
+		return
+	}
+	writeImportJobJSON(writer, http.StatusAccepted, job)
 }
 
-func (s *Server) startMediaScan(ctx context.Context) (projects.ImportJob, error) {
+func (s *Server) startMediaScan(ctx context.Context, key string) (librarymedia.ImportJob, error) {
 	if s.config.MediaImport == nil {
-		return projects.ImportJob{}, errors.New("unified media scan is not configured")
+		return librarymedia.ImportJob{}, errors.New("unified media scan is not configured")
 	}
-	return s.config.MediaImport.StartImport(ctx)
+	return s.config.MediaImport.StartImport(ctx, key)
+}
+
+func writeMediaScanError(writer http.ResponseWriter, err error, id string) {
+	switch {
+	case errors.Is(err, jobqueue.ErrAdmissionConflict):
+		httpx.Error(writer, http.StatusConflict, "idempotency_conflict", "Idempotency-Key was already used for a different command.", id)
+	case errors.Is(err, jobqueue.ErrQueueFull):
+		httpx.Error(writer, http.StatusTooManyRequests, "library_busy", "Library scan capacity is full.", id)
+	default:
+		internalError(writer, id, err)
+	}
 }
 func (s *Server) getMedia(writer http.ResponseWriter, request *http.Request, media string, id string) {
 	result, err := s.config.Media.Get(request.Context(), media)
@@ -77,5 +94,5 @@ func (s *Server) getMedia(writer http.ResponseWriter, request *http.Request, med
 		resourceError(writer, id, err)
 		return
 	}
-	httpx.WriteJSON(writer, 200, result)
+	writeMediaJSON(writer, id, result)
 }

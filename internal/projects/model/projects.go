@@ -81,6 +81,13 @@ func (s Segment) IsIncluded() bool {
 	return !s.includedSet || s.Included
 }
 
+// WithIncluded records an explicit inclusion choice without changing the legacy zero-value default.
+func (s Segment) WithIncluded(included bool) Segment {
+	s.Included = included
+	s.includedSet = true
+	return s
+}
+
 type UIState struct {
 	PlayheadMS int64   `json:"playheadMs"`
 	Zoom       float64 `json:"zoom"`

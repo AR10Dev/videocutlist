@@ -4,7 +4,6 @@ package store
 import (
 	"context"
 	"database/sql"
-	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,9 +14,6 @@ var (
 	ErrProjectNotFound  = errors.New("project not found")
 	ErrRevisionConflict = errors.New("project revision conflict")
 )
-
-//go:embed migrations/002_projects.sql
-var projectsMigration string
 
 type ProjectRecord struct {
 	ID           string

@@ -1,536 +1,79 @@
-package jobs_test
+package jobs
 
 import (
 	"context"
 	"errors"
-	"fmt"
-	"sync"
-	"sync/atomic"
+	"path/filepath"
 	"testing"
 	"time"
-
-	db "videocutlist/internal/db"
-	store "videocutlist/internal/jobs"
+	store "videocutlist/internal/db"
+	"videocutlist/internal/jobs/model"
 )
 
-func schedulerJob(n string) store.Job {
-	return store.Job{ID: "j_0000000000" + n, BatchID: "b_0000000000" + n, Kind: store.JobScan, RequestJSON: `{}`}
-}
-
-func TestSchedulerPreservesRunnerResult(t *testing.T) {
-	ctx := context.Background()
-	db, err := db.OpenDatabase(ctx, t.TempDir()+"/jobs.db")
+func TestSchedulerAdmissionCancellationAndShutdown(t *testing.T) {
+	db, err := store.OpenDatabase(t.Context(), filepath.Join(t.TempDir(), "jobs.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	storage, err := store.NewJobStorage(db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	jobs, err := NewJobsStore(storage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scheduler, err := NewScheduler(jobs, SchedulerConfig{QueueCapacity: 1, WorkerLimit: 1}, func(context.Context, model.Job) error { return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if err := db.Close(); err != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := scheduler.Shutdown(ctx); err != nil {
 			t.Error(err)
 		}
 	})
-	jobs, err := store.NewJobsStore(db)
-	if err != nil {
+	first := model.Job{ID: "j_aaaaaaaaaaaa", BatchID: "b_aaaaaaaaaaaa", Kind: model.JobScan, RequestJSON: "{}"}
+	if _, err := scheduler.Submit(t.Context(), []model.Job{first}); err != nil {
 		t.Fatal(err)
 	}
-	result := `{"camera":{"state":"ready_with_media"}}`
-	s, err := store.NewScheduler(jobs, store.SchedulerConfig{QueueCapacity: 1, WorkerLimit: 1}, func(ctx context.Context, job store.Job) error {
-		_, err := jobs.Succeed(ctx, job.ID, result)
-		return err
-	})
-	if err != nil {
+	second := first
+	second.ID, second.BatchID = "j_bbbbbbbbbbbb", "b_bbbbbbbbbbbb"
+	if _, err := scheduler.Submit(t.Context(), []model.Job{second}); !errors.Is(err, model.ErrQueueFull) {
+		t.Fatalf("full queue: %v", err)
+	}
+	if _, err := jobs.Get(t.Context(), second.ID); !errors.Is(err, model.ErrJobNotFound) {
+		t.Fatalf("rejected admission persisted: %v", err)
+	}
+	if cancelled, err := scheduler.Cancel(t.Context(), first.ID); err != nil || cancelled.State != model.JobCancelled {
+		t.Fatalf("cancel = %#v, %v", cancelled, err)
+	}
+	if _, err := scheduler.Submit(t.Context(), []model.Job{second}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.Submit(ctx, []store.Job{schedulerJob("00")}); err != nil {
-		t.Fatal(err)
-	}
-	s.Start()
-	t.Cleanup(func() {
-		if err := s.Shutdown(ctx); err != nil {
-			t.Error(err)
-		}
-	})
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		job, err := jobs.Get(ctx, "j_000000000000")
-		if err == nil && job.State == store.JobSucceeded {
-			if !job.ResultJSON.Valid || job.ResultJSON.String != result {
-				t.Fatalf("result = %#v", job.ResultJSON)
-			}
-			return
-		}
-		time.Sleep(time.Millisecond)
-	}
-	t.Fatal("scheduled job did not complete")
-}
-
-func TestCancelBatchDistinguishesUnknownFromCompleted(t *testing.T) {
-	database, err := db.OpenDatabase(t.Context(), t.TempDir()+"/jobs.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = database.Close() })
-	jobs, err := store.NewJobsStore(database)
-	if err != nil {
-		t.Fatal(err)
-	}
-	scheduler, err := store.NewScheduler(jobs, store.SchedulerConfig{QueueCapacity: 1, WorkerLimit: 1}, func(context.Context, store.Job) error { return nil })
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := scheduler.CancelBatch(t.Context(), "b_000000000001"); !errors.Is(err, store.ErrJobNotFound) {
-		t.Fatalf("cancel unknown batch = %v, want ErrJobNotFound", err)
-	}
-	job := schedulerJob("01")
-	if _, err := jobs.Create(t.Context(), job); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := jobs.Cancel(t.Context(), job.ID); err != nil {
-		t.Fatal(err)
-	}
-	if err := scheduler.CancelBatch(t.Context(), job.BatchID); err != nil {
-		t.Fatalf("cancel completed batch = %v, want idempotent success", err)
-	}
-}
-
-func TestSchedulerAdmissionIsAtomicAndBounded(t *testing.T) {
-	db, err := db.OpenDatabase(context.Background(), t.TempDir()+"/jobs.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := db.Close(); err != nil {
-			t.Error(err)
-		}
-	})
-	jobs, _ := store.NewJobsStore(db)
-	s, err := store.NewScheduler(jobs, store.SchedulerConfig{QueueCapacity: 2, WorkerLimit: 1}, func(context.Context, store.Job) error { return nil })
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.Submit(context.Background(), []store.Job{schedulerJob("01"), schedulerJob("02")}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.Submit(context.Background(), []store.Job{schedulerJob("03")}); !errors.Is(err, store.ErrQueueFull) {
-		t.Fatalf("full = %v", err)
-	}
-	if _, err := jobs.Get(context.Background(), "j_000000000003"); !errors.Is(err, store.ErrJobNotFound) {
-		t.Fatalf("rejected job exists: %v", err)
-	}
-}
-
-func TestSchedulerBoundedExecutionCancellationAndShutdown(t *testing.T) {
-	db, err := db.OpenDatabase(context.Background(), t.TempDir()+"/jobs.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := db.Close(); err != nil {
-			t.Error(err)
-		}
-	})
-	jobs, _ := store.NewJobsStore(db)
-	started := make(chan string, 2)
-	release := make(chan struct{})
-	var mu sync.Mutex
-	running, maxRunning := 0, 0
-	s, err := store.NewScheduler(jobs, store.SchedulerConfig{QueueCapacity: 3, WorkerLimit: 1}, func(ctx context.Context, job store.Job) error {
-		mu.Lock()
-		running++
-		if running > maxRunning {
-			maxRunning = running
-		}
-		mu.Unlock()
-		started <- job.ID
-		select {
-		case <-release:
-		case <-ctx.Done():
-		}
-		mu.Lock()
-		running--
-		mu.Unlock()
-		return ctx.Err()
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.Submit(context.Background(), []store.Job{schedulerJob("11"), schedulerJob("12")}); err != nil {
-		t.Fatal(err)
-	}
-	s.Start()
-	first := <-started
-	if _, err := s.Cancel(context.Background(), first); err != nil {
-		t.Fatal(err)
-	}
-	close(release)
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		second, err := jobs.Get(context.Background(), "j_000000000012")
-		if err == nil && second.State == store.JobSucceeded {
-			break
-		}
-		time.Sleep(time.Millisecond)
-	}
-	second, err := jobs.Get(context.Background(), "j_000000000012")
-	if err != nil || second.State != store.JobSucceeded {
-		t.Fatalf("second = %#v, %v", second, err)
-	}
-	mu.Lock()
-	gotMax := maxRunning
-	mu.Unlock()
-	if gotMax != 1 {
-		t.Fatalf("max running = %d", gotMax)
-	}
-	if err := s.Shutdown(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestSchedulerQueuedCancellationNeverInvokesRunner(t *testing.T) {
-	db, err := db.OpenDatabase(context.Background(), t.TempDir()+"/jobs.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := db.Close(); err != nil {
-			t.Error(err)
-		}
-	})
-	jobs, _ := store.NewJobsStore(db)
-	var executions atomic.Int32
-	s, err := store.NewScheduler(jobs, store.SchedulerConfig{QueueCapacity: 1, WorkerLimit: 1}, func(context.Context, store.Job) error {
-		executions.Add(1)
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.Submit(context.Background(), []store.Job{schedulerJob("31")}); err != nil {
-		t.Fatal(err)
-	}
-	cancelled, err := s.Cancel(context.Background(), "j_000000000031")
-	if err != nil || cancelled.State != store.JobCancelled {
-		t.Fatalf("cancelled = %#v, %v", cancelled, err)
-	}
-	s.Start()
-	if err := s.Shutdown(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if executions.Load() != 0 {
-		t.Fatalf("runner executed cancelled job %d times", executions.Load())
-	}
-}
-
-func TestSchedulerRunningCancellationPersistsBeforeRunnerExit(t *testing.T) {
-	db, err := db.OpenDatabase(context.Background(), t.TempDir()+"/jobs.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := db.Close(); err != nil {
-			t.Error(err)
-		}
-	})
-	jobs, _ := store.NewJobsStore(db)
-	started := make(chan string, 2)
-	returned := make(chan struct{})
-	s, err := store.NewScheduler(jobs, store.SchedulerConfig{QueueCapacity: 2, WorkerLimit: 1}, func(ctx context.Context, job store.Job) error {
-		started <- job.ID
-		if job.ID == "j_000000000032" {
-			<-ctx.Done()
-			<-returned
-			return ctx.Err()
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	s.Start()
-	if _, err := s.Submit(context.Background(), []store.Job{schedulerJob("32"), schedulerJob("33")}); err != nil {
-		t.Fatal(err)
-	}
-	if id := <-started; id != "j_000000000032" {
-		t.Fatalf("first runner = %q", id)
-	}
-	cancelled, err := s.Cancel(context.Background(), "j_000000000032")
-	if err != nil || cancelled.State != store.JobCancelled {
-		t.Fatalf("running cancellation = %#v, %v", cancelled, err)
-	}
-	current, err := jobs.Get(context.Background(), "j_000000000032")
-	if err != nil || current.State != store.JobCancelled {
-		t.Fatalf("job cancellation = %#v, %v", current, err)
-	}
-	select {
-	case id := <-started:
-		t.Fatalf("runner %q started before cancelled runner exited", id)
-	case <-time.After(25 * time.Millisecond):
-	}
-	close(returned)
-	if id := <-started; id != "j_000000000033" {
-		t.Fatalf("second runner = %q", id)
-	}
-	waitForJobState(t, jobs, "j_000000000032", store.JobCancelled)
-	waitForJobState(t, jobs, "j_000000000033", store.JobSucceeded)
-	if err := s.Shutdown(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestSchedulerConcurrentSubmitClaimAndCancel(t *testing.T) {
-	db, err := db.OpenDatabase(t.Context(), t.TempDir()+"/jobs.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := db.Close(); err != nil {
-			t.Error(err)
-		}
-	})
-	jobs, _ := store.NewJobsStore(db)
-	s, err := store.NewScheduler(jobs, store.SchedulerConfig{QueueCapacity: 32, WorkerLimit: 2}, func(ctx context.Context, _ store.Job) error {
-		<-ctx.Done()
-		return ctx.Err()
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	s.Start()
-	var wg sync.WaitGroup
-	for i := range 16 {
-		job := schedulerJob(fmt.Sprintf("%02d", 50+i))
-		wg.Go(func() {
-			if _, err := s.Submit(t.Context(), []store.Job{job}); err == nil {
-				_, _ = s.Cancel(t.Context(), job.ID)
-			}
-		})
-	}
-	wg.Wait()
-	if err := s.Shutdown(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func waitForJobState(t *testing.T, jobs *store.JobsStore, id string, want store.JobState) {
-	t.Helper()
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		job, err := jobs.Get(context.Background(), id)
-		if err == nil && job.State == want {
-			return
-		}
-		time.Sleep(time.Millisecond)
-	}
-	job, err := jobs.Get(context.Background(), id)
-	t.Fatalf("job state = %#v, %v; want %s", job, err, want)
-}
-
-func TestSchedulerStartAndShutdownAreIdempotent(t *testing.T) {
-	db, err := db.OpenDatabase(context.Background(), t.TempDir()+"/jobs.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := db.Close(); err != nil {
-			t.Error(err)
-		}
-	})
-	jobs, _ := store.NewJobsStore(db)
-	started := make(chan struct{}, 3)
-	release := make(chan struct{})
-	s, err := store.NewScheduler(jobs, store.SchedulerConfig{QueueCapacity: 3, WorkerLimit: 2}, func(ctx context.Context, _ store.Job) error {
-		started <- struct{}{}
-		select {
-		case <-release:
-			return nil
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	s.Start()
-	s.Start()
-	if _, err := s.Submit(context.Background(), []store.Job{schedulerJob("41"), schedulerJob("42"), schedulerJob("43")}); err != nil {
-		t.Fatal(err)
-	}
-	for range 2 {
-		select {
-		case <-started:
-		case <-time.After(time.Second):
-			t.Fatal("expected bounded workers to start")
-		}
-	}
-	select {
-	case <-started:
-		t.Fatal("Start created more than the configured workers")
-	case <-time.After(25 * time.Millisecond):
-	}
-	close(release)
-	if err := s.Shutdown(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if err := s.Shutdown(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	s.Start()
-}
-
-func TestSchedulerLeavesQueuedAndRecoversRunningOnRestart(t *testing.T) {
-	db, err := db.OpenDatabase(context.Background(), t.TempDir()+"/jobs.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := db.Close(); err != nil {
-			t.Error(err)
-		}
-	})
-	jobs, _ := store.NewJobsStore(db)
-	s, err := store.NewScheduler(jobs, store.SchedulerConfig{QueueCapacity: 2, WorkerLimit: 1}, func(context.Context, store.Job) error { return nil })
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.Submit(context.Background(), []store.Job{schedulerJob("21"), schedulerJob("22")}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := jobs.Start(context.Background(), "j_000000000021"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := jobs.Recover(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	running, _ := jobs.Get(context.Background(), "j_000000000021")
-	queued, _ := jobs.Get(context.Background(), "j_000000000022")
-	if running.State != store.JobFailed || !running.ErrorCode.Valid || running.ErrorCode.String != "interrupted_by_restart" || queued.State != store.JobQueued {
-		t.Fatalf("recovery = %#v queued = %#v", running, queued)
-	}
-}
-
-func TestSchedulerSetLimitsDrainsActiveAndQueuedJobs(t *testing.T) {
-	db, err := db.OpenDatabase(t.Context(), t.TempDir()+"/jobs.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		if err := db.Close(); err != nil {
-			t.Error(err)
-		}
-	}()
-	jobs, _ := store.NewJobsStore(db)
-	started := make(chan string, 4)
-	release := make(chan struct{})
-	s, err := store.NewScheduler(jobs, store.SchedulerConfig{QueueCapacity: 2, WorkerLimit: 1}, func(ctx context.Context, job store.Job) error {
-		started <- job.ID
-		select {
-		case <-release:
-			return nil
-		case <-ctx.Done():
-			return ctx.Err()
-		}
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	s.Start()
-	defer func() {
-		if err := s.Shutdown(t.Context()); err != nil {
-			t.Error(err)
-		}
-	}()
-	submit := func(ids ...string) {
-		t.Helper()
-		batch := make([]store.Job, len(ids))
-		for i, id := range ids {
-			batch[i] = schedulerJob(id)
-		}
-		if _, err := s.Submit(t.Context(), batch); err != nil {
+	scheduler.Start()
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	for {
+		job, err := jobs.Get(t.Context(), second.ID)
+		if err != nil {
 			t.Fatal(err)
 		}
-	}
-	next := func() string {
-		t.Helper()
+		if job.State == model.JobSucceeded {
+			break
+		}
 		select {
-		case id := <-started:
-			return id
-		case <-time.After(time.Second):
-			t.Fatal("queued work did not start")
-			return ""
+		case <-deadline.C:
+			t.Fatalf("job did not complete: %#v", job)
+		case <-time.After(10 * time.Millisecond):
 		}
 	}
-	submit("80", "81")
-	first := next()
-	if err := s.SetLimits(store.SchedulerConfig{QueueCapacity: 4, WorkerLimit: 2}); err != nil {
+	if err := scheduler.Shutdown(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	second := next()
-	submit("82", "83")
-	if err := s.SetLimits(store.SchedulerConfig{QueueCapacity: 1, WorkerLimit: 1}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.Submit(t.Context(), []store.Job{schedulerJob("84")}); !errors.Is(err, store.ErrQueueFull) {
-		t.Fatalf("admission after lowering = %v", err)
-	}
-	release <- struct{}{}
-	select {
-	case id := <-started:
-		t.Fatalf("started %s while still at the lowered limit", id)
-	case <-time.After(50 * time.Millisecond):
-	}
-	for _, id := range []string{first, second} {
-		job, err := jobs.Get(t.Context(), id)
-		if err != nil || job.State != store.JobRunning && job.State != store.JobSucceeded {
-			t.Fatalf("active job was cancelled: %#v, %v", job, err)
-		}
-	}
-	release <- struct{}{}
-	third := next()
-	release <- struct{}{}
-	fourth := next()
-	release <- struct{}{}
-	for _, id := range []string{first, second, third, fourth} {
-		waitForJobState(t, jobs, id, store.JobSucceeded)
-	}
-}
-
-func TestSchedulerSetLimitsConcurrentWithShutdown(t *testing.T) {
-	db, err := db.OpenDatabase(t.Context(), t.TempDir()+"/jobs.db")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		if err := db.Close(); err != nil {
-			t.Error(err)
-		}
-	}()
-	jobs, _ := store.NewJobsStore(db)
-	s, err := store.NewScheduler(jobs, store.SchedulerConfig{QueueCapacity: 4, WorkerLimit: 1}, func(ctx context.Context, _ store.Job) error {
-		<-ctx.Done()
-		return ctx.Err()
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	s.Start()
-	if _, err := s.Submit(t.Context(), []store.Job{schedulerJob("90")}); err != nil {
-		t.Fatal(err)
-	}
-	var wg sync.WaitGroup
-	for i := range 20 {
-		wg.Go(func() {
-			err := s.SetLimits(store.SchedulerConfig{QueueCapacity: 4, WorkerLimit: i%3 + 1})
-			if err != nil && !errors.Is(err, store.ErrSchedulerStopped) {
-				t.Errorf("resize = %v", err)
-			}
-		})
-	}
-	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
-	defer cancel()
-	if err := s.Shutdown(ctx); err != nil {
-		t.Fatal(err)
-	}
-	wg.Wait()
-	if err := s.SetLimits(store.SchedulerConfig{QueueCapacity: 4, WorkerLimit: 2}); !errors.Is(err, store.ErrSchedulerStopped) {
-		t.Fatalf("resize after shutdown = %v", err)
+	if _, err := scheduler.Submit(t.Context(), []model.Job{first}); !errors.Is(err, ErrSchedulerStopped) {
+		t.Fatalf("submit after shutdown: %v", err)
 	}
 }

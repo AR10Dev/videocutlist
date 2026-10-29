@@ -9,8 +9,9 @@ import (
 	"strconv"
 	"strings"
 
+	exporter "videocutlist/internal/export"
 	"videocutlist/internal/exportpolicy"
-	jobqueue "videocutlist/internal/jobs"
+	jobqueue "videocutlist/internal/jobs/model"
 	"videocutlist/internal/projects"
 	"videocutlist/internal/projects/model"
 )
@@ -22,7 +23,7 @@ const exportDownloadPath = "/mcp/download/"
 func ExportTools(proposals *ProposalService, jobs interface {
 	Get(context.Context, string) (jobqueue.Job, error)
 	Cancel(context.Context, string) (jobqueue.Job, error)
-}, downloads projects.ExportDownloadService) []Tool {
+}, downloads exporter.ExportDownloadService) []Tool {
 	if proposals == nil || jobs == nil || downloads == nil {
 		return nil
 	}
@@ -263,7 +264,7 @@ func safeJob(job jobqueue.Job) map[string]any {
 func ExportDownloadHandler(config TransportConfig, proposals *ProposalService, jobs interface {
 	Get(context.Context, string) (jobqueue.Job, error)
 	Cancel(context.Context, string) (jobqueue.Job, error)
-}, downloads projects.ExportDownloadService) (http.Handler, error) {
+}, downloads exporter.ExportDownloadService) (http.Handler, error) {
 	if proposals == nil || jobs == nil || downloads == nil {
 		return nil, errors.New("mcp download dependencies are required")
 	}
@@ -272,7 +273,7 @@ func ExportDownloadHandler(config TransportConfig, proposals *ProposalService, j
 		return nil, err
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		transport := handler.(*transport)
+		transport := handler
 		if !transport.enabled() {
 			http.NotFound(w, r)
 			return

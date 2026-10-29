@@ -11,24 +11,42 @@ import (
 	"strconv"
 	"time"
 
+	"videocutlist/internal/httpapi/transport"
 	"videocutlist/internal/mcp"
 )
 
 const maxMCPCredentialBodyBytes = 64 << 10
 
-type mcpCredentialCreateRequest struct {
-	Name              string           `json:"name"`
-	Permissions       []mcp.Permission `json:"permissions"`
-	MediaScope        mcp.MediaScope   `json:"mediaScope"`
-	ProjectScope      mcp.ProjectScope `json:"projectScope"`
-	ExpiresAt         *time.Time       `json:"expiresAt"`
-	AllowNonExpiring  bool             `json:"allowNonExpiring"`
-	UnattendedExports bool             `json:"unattendedExports"`
-}
-
-type mcpCredentialView struct {
-	mcp.Credential
-	Status string `json:"status"`
+func domainMCPCredentialInput(input transport.MCPCredentialCreate) mcp.CredentialInput {
+	var permissions []mcp.Permission
+	if input.Permissions != nil {
+		permissions = make([]mcp.Permission, len(input.Permissions))
+		for index, permission := range input.Permissions {
+			permissions[index] = mcp.Permission(permission)
+		}
+	}
+	mediaScope := mcp.MediaScope{Kind: mcp.MediaScopeKind(input.MediaScope.Kind)}
+	if input.MediaScope.RootIds != nil {
+		mediaScope.RootIDs = *input.MediaScope.RootIds
+	}
+	if input.MediaScope.MediaIds != nil {
+		mediaScope.MediaIDs = *input.MediaScope.MediaIds
+	}
+	projectScope := mcp.ProjectScope{Kind: mcp.ProjectScopeKind(input.ProjectScope.Kind)}
+	if input.ProjectScope.ProjectIds != nil {
+		projectScope.ProjectIDs = *input.ProjectScope.ProjectIds
+	}
+	credential := mcp.CredentialInput{
+		Name: input.Name, Permissions: permissions, MediaScope: mediaScope,
+		ProjectScope: projectScope, ExpiresAt: input.ExpiresAt,
+	}
+	if input.AllowNonExpiring != nil {
+		credential.AllowNonExpiring = *input.AllowNonExpiring
+	}
+	if input.UnattendedExports != nil {
+		credential.UnattendedExports = *input.UnattendedExports
+	}
+	return credential
 }
 
 func (s *Server) getMCPSettings(w http.ResponseWriter, r *http.Request, id string) {
@@ -61,7 +79,7 @@ func (s *Server) getMCPSettings(w http.ResponseWriter, r *http.Request, id strin
 	}
 	settings, err := s.config.Settings.Get(r.Context())
 	if err != nil {
-		httpx.Error(w, http.StatusInternalServerError, "mcp_settings_unavailable", "MCP settings are temporarily unavailable.", id)
+		internalServerError(w, http.StatusInternalServerError, "mcp_settings_unavailable", "MCP settings are temporarily unavailable.", id, err)
 		return
 	}
 	credentials, next, err := s.config.MCPCredentials.List(r.Context(), query.Get("cursor"), limit)
@@ -69,7 +87,7 @@ func (s *Server) getMCPSettings(w http.ResponseWriter, r *http.Request, id strin
 		if errors.Is(err, mcp.ErrCredentialNotFound) {
 			httpx.Error(w, http.StatusBadRequest, "invalid_query", "Query parameters are invalid.", id)
 		} else {
-			httpx.Error(w, http.StatusInternalServerError, "mcp_settings_unavailable", "MCP settings are temporarily unavailable.", id)
+			internalServerError(w, http.StatusInternalServerError, "mcp_settings_unavailable", "MCP settings are temporarily unavailable.", id, err)
 		}
 		return
 	}
@@ -81,12 +99,12 @@ func (s *Server) getMCPSettings(w http.ResponseWriter, r *http.Request, id strin
 			if errors.Is(err, mcp.ErrInvalidProposalCursor) {
 				httpx.Error(w, http.StatusBadRequest, "invalid_query", "Query parameters are invalid.", id)
 			} else {
-				httpx.Error(w, http.StatusInternalServerError, "export_proposals_unavailable", "Export proposals are temporarily unavailable.", id)
+				internalServerError(w, http.StatusInternalServerError, "export_proposals_unavailable", "Export proposals are temporarily unavailable.", id, err)
 			}
 			return
 		}
 	}
-	views := make([]mcpCredentialView, 0, len(credentials))
+	views := make([]transport.MCPCredential, 0, len(credentials))
 	now := time.Now().UTC()
 	for _, credential := range credentials {
 		status := "active"
@@ -95,29 +113,35 @@ func (s *Server) getMCPSettings(w http.ResponseWriter, r *http.Request, id strin
 		} else if !credential.ActiveAt(now) {
 			status = "expired"
 		}
-		views = append(views, mcpCredentialView{Credential: credential, Status: status})
+		views = append(views, mcpCredentialToTransport(credential, status))
+	}
+	mappedProposals, err := mcpExportProposalsToTransport(proposals)
+	if err != nil {
+		internalError(w, id, err)
+		return
 	}
 	rootIDs := slices.Sorted(maps.Keys(settings.Settings.MediaRoots))
-	roots := make([]map[string]string, 0, len(rootIDs))
+	roots := make([]struct {
+		Id    string `json:"id"` //nolint:revive // Must match the generated MCPSettingsResponse.Roots anonymous type.
+		Label string `json:"label"`
+	}, 0, len(rootIDs))
 	for _, rootID := range rootIDs {
-		roots = append(roots, map[string]string{"id": rootID, "label": rootID})
+		roots = append(roots, struct {
+			Id    string `json:"id"` //nolint:revive // Must match the generated MCPSettingsResponse.Roots anonymous type.
+			Label string `json:"label"`
+		}{Id: rootID, Label: rootID})
 	}
-	response := map[string]any{
-		"enabled":              settings.Settings.MCPEnabled,
-		"endpoint":             "/mcp",
-		"authentication":       "Bearer token",
-		"remoteAccessGuidance": "Keep the server loopback-only unless remote access is deliberately configured. Use HTTPS for every remote connection.",
-		"clientCompatibility":  "Tested with MCP Inspector using Streamable HTTP bearer tokens (protocol 2025-06-18). OAuth-only clients are not supported.",
-		"permissions":          mcp.KnownPermissions(),
-		"roots":                roots,
-		"credentials":          views,
-		"proposals":            proposals,
+	response := transport.MCPSettingsResponse{
+		Enabled: settings.Settings.MCPEnabled, Endpoint: "/mcp", Authentication: "Bearer token",
+		RemoteAccessGuidance: "Keep the server loopback-only unless remote access is deliberately configured. Use HTTPS for every remote connection.",
+		ClientCompatibility:  "Tested with MCP Inspector using Streamable HTTP bearer tokens (protocol 2025-06-18). OAuth-only clients are not supported.",
+		Permissions:          mcpPermissionsToTransport(mcp.KnownPermissions()), Roots: roots, Credentials: views, Proposals: mappedProposals,
 	}
 	if next != nil {
-		response["nextCursor"] = *next
+		response.NextCursor = next
 	}
 	if proposalNext != nil {
-		response["proposalNextCursor"] = *proposalNext
+		response.ProposalNextCursor = proposalNext
 	}
 	httpx.WriteJSON(w, http.StatusOK, response)
 }
@@ -127,38 +151,35 @@ func (s *Server) createMCPCredential(w http.ResponseWriter, r *http.Request, id 
 		httpx.Error(w, http.StatusNotFound, "mcp_settings_unavailable", "MCP settings are not available.", id)
 		return
 	}
-	var input mcpCredentialCreateRequest
-	if err := decodeMCPRequest(r, &input); err != nil {
-		httpx.Error(w, http.StatusUnprocessableEntity, "invalid_mcp_credential", "Credential settings are invalid.", id)
+	var requestBody transport.MCPCredentialCreate
+	if err := decodeMCPRequest(r, &requestBody); err != nil {
+		httpx.Error(w, http.StatusBadRequest, "invalid_mcp_credential", "Credential settings are invalid.", id)
 		return
 	}
+	input := domainMCPCredentialInput(requestBody)
 	if input.MediaScope.Kind == mcp.MediaScopeRoots {
 		settings, err := s.config.Settings.Get(r.Context())
 		if err != nil {
-			httpx.Error(w, http.StatusInternalServerError, "mcp_settings_unavailable", "Credential settings are temporarily unavailable.", id)
+			internalServerError(w, http.StatusInternalServerError, "mcp_settings_unavailable", "Credential settings are temporarily unavailable.", id, err)
 			return
 		}
 		for _, rootID := range input.MediaScope.RootIDs {
 			if _, ok := settings.Settings.MediaRoots[rootID]; !ok {
-				httpx.Error(w, http.StatusUnprocessableEntity, "invalid_mcp_credential", "Credential settings are invalid.", id)
+				httpx.Error(w, http.StatusBadRequest, "invalid_mcp_credential", "Credential settings are invalid.", id)
 				return
 			}
 		}
 	}
-	created, err := s.config.MCPCredentials.Create(r.Context(), mcp.CredentialInput{
-		Name: input.Name, Permissions: input.Permissions, MediaScope: input.MediaScope,
-		ProjectScope: input.ProjectScope, ExpiresAt: input.ExpiresAt,
-		AllowNonExpiring: input.AllowNonExpiring, UnattendedExports: input.UnattendedExports,
-	})
+	created, err := s.config.MCPCredentials.Create(r.Context(), input)
 	if err != nil {
 		if errors.Is(err, mcp.ErrCredentialInvalid) || errors.Is(err, mcp.ErrCredentialExpired) || errors.Is(err, mcp.ErrNonExpiringCredentialNeedsAck) {
-			httpx.Error(w, http.StatusUnprocessableEntity, "invalid_mcp_credential", "Credential settings are invalid.", id)
+			httpx.Error(w, http.StatusBadRequest, "invalid_mcp_credential", "Credential settings are invalid.", id)
 			return
 		}
-		httpx.Error(w, http.StatusInternalServerError, "mcp_settings_unavailable", "Credential could not be created.", id)
+		internalServerError(w, http.StatusInternalServerError, "mcp_settings_unavailable", "Credential could not be created.", id, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusCreated, created)
+	httpx.WriteJSON(w, http.StatusCreated, mcpCreatedCredentialToTransport(created))
 }
 
 func (s *Server) revokeMCPCredential(w http.ResponseWriter, r *http.Request, credentialID, id string) {
@@ -172,10 +193,10 @@ func (s *Server) revokeMCPCredential(w http.ResponseWriter, r *http.Request, cre
 		return
 	}
 	if err != nil {
-		httpx.Error(w, http.StatusInternalServerError, "mcp_settings_unavailable", "Credential could not be revoked.", id)
+		internalServerError(w, http.StatusInternalServerError, "mcp_settings_unavailable", "Credential could not be revoked.", id, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, mcpCredentialView{Credential: credential, Status: "revoked"})
+	httpx.WriteJSON(w, http.StatusOK, mcpCredentialToTransport(credential, "revoked"))
 }
 
 func decodeMCPRequest(r *http.Request, destination any) error {

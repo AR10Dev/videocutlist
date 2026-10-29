@@ -2,17 +2,14 @@
 
 ## Supported versions
 
-Only the latest commit on the default branch is supported until the first
-stable release. There are no versioned security-support guarantees yet.
+Only the latest release is supported for security fixes. Upgrade to the latest release before reporting an issue where possible. Backward compatibility with older database or configuration formats is not promised; back up application data before upgrading.
 
 ## Reporting a vulnerability
 
-Please report vulnerabilities privately through GitHub's **Report a
-vulnerability** link in the repository's Security tab. Do not open a public
-issue for an undisclosed vulnerability.
+Please report vulnerabilities privately using GitHub's **Report a vulnerability** feature on this repository's Security tab. Private vulnerability reporting is enabled for this repository. Do not open a public issue for an unpatched vulnerability. Include the affected release/commit, impact, and minimal reproduction details; do not include real credentials or private media.
 
-Include the affected commit, deployment configuration, reproduction steps, and
-impact. Remove media paths, tokens, and original media from reports.
+We will acknowledge reports and coordinate remediation and disclosure through GitHub Security Advisories. No response-time guarantee is provided. If GitHub's private reporting feature is unavailable, contact the repository maintainers privately through GitHub rather than publishing exploit details.
 
-We will acknowledge valid reports, investigate them, and coordinate disclosure
-with the reporter. Response times may vary while the project is pre-release.
+## Deployment guidance
+
+Do not expose an unauthenticated (`none`) listener beyond loopback. Protect bearer tokens, restrict trusted-proxy mode to exact proxy peers, and keep MCP disabled unless required. See the [container runbook](docs/runbooks/containers.md) for network and proxy guidance.

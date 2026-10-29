@@ -14,8 +14,10 @@ import (
 	"sync"
 	"time"
 
+	"videocutlist/internal/contextio"
 	"videocutlist/internal/exportpolicy"
-	jobqueue "videocutlist/internal/jobs"
+	jobs "videocutlist/internal/jobs"
+	jobqueue "videocutlist/internal/jobs/model"
 	"videocutlist/internal/library/media/probe"
 )
 
@@ -404,7 +406,7 @@ func removeManifestOutputs(manifestPath string, outputs []manifestOutput) (err e
 
 // Reconcile validates job-owned published outputs before ordinary job restart
 // recovery. Unfinished manifests and their exact listed outputs are removed.
-func (s *ArtifactStore) Reconcile(ctx context.Context, jobs *jobqueue.JobsStore, ffprobePath string, destinations []Destination) error {
+func (s *ArtifactStore) Reconcile(ctx context.Context, jobs *jobs.JobsStore, ffprobePath string, destinations []Destination) error {
 	if jobs == nil {
 		return errors.New("job store is required")
 	}
@@ -592,7 +594,7 @@ func validateManifestArchive(ctx context.Context, path string) error {
 			return ErrOutputUnavailable
 		}
 		limit := int64(entry.UncompressedSize64) + 1
-		copied, copyErr := io.Copy(io.Discard, io.LimitReader(manifestContextReader{ctx: ctx, reader: reader}, limit))
+		copied, copyErr := io.Copy(io.Discard, io.LimitReader(contextio.NewReader(ctx, reader), limit))
 		closeErr := reader.Close()
 		if copyErr != nil {
 			return copyErr
@@ -603,20 +605,6 @@ func validateManifestArchive(ctx context.Context, path string) error {
 		total += copied
 	}
 	return nil
-}
-
-type manifestContextReader struct {
-	ctx    context.Context
-	reader io.Reader
-}
-
-func (r manifestContextReader) Read(p []byte) (int, error) {
-	select {
-	case <-r.ctx.Done():
-		return 0, r.ctx.Err()
-	default:
-		return r.reader.Read(p)
-	}
 }
 
 // adoptManifestOutputs registers valid outputs of an already-successful owner

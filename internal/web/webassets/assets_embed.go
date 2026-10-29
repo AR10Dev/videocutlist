@@ -8,7 +8,7 @@ import (
 	"net/http"
 )
 
-// The release build copies client/dist here before compiling with embed_frontend.
+// The release build copies web/dist here before compiling with embed_frontend.
 //
 //go:embed dist
 var embeddedAssets embed.FS

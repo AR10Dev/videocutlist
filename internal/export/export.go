@@ -2,29 +2,25 @@
 package export
 
 import (
-	"bytes"
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"time"
-
 	"videocutlist/internal/exportpolicy"
-	"videocutlist/internal/fdinput"
 	"videocutlist/internal/library/media/probe"
-	"videocutlist/internal/projects"
+	"videocutlist/internal/preview"
 	"videocutlist/internal/projects/model"
 )
 
-const maxStderrBytes = 64 << 10
+const (
+	maxStderrBytes            = 64 << 10
+	maxAllocatedFilenameBytes = 255
+)
 
 // MaxExportOutputs is the shared separate-export artifact bound.
 const MaxExportOutputs = exportpolicy.MaxOutputs
@@ -81,6 +77,16 @@ type OutputFailure struct {
 	Message string `json:"message"`
 }
 
+type StrategyCapability struct {
+	Strategy  string   `json:"strategy"`
+	Supported bool     `json:"supported"`
+	Reasons   []string `json:"reasons"`
+}
+
+type Capabilities struct {
+	Strategies []StrategyCapability `json:"strategies"`
+}
+
 // Result deliberately contains only an output name, never a filesystem path.
 type Result struct {
 	Container         string            `json:"container"`
@@ -97,10 +103,6 @@ type Result struct {
 	Verified          bool              `json:"verified"`
 }
 
-type ProcessLimiter interface {
-	AcquireProcess() (func(), error)
-}
-
 type Service struct {
 	FFmpegPath   string
 	FFprobePath  string
@@ -109,7 +111,7 @@ type Service struct {
 	Artifacts    *ArtifactStore
 	Retention    time.Duration
 	Now          func() time.Time
-	Capacity     ProcessLimiter
+	Capacity     preview.ProcessLimiter
 }
 
 func (s Service) Run(ctx context.Context, source *os.File, document model.Document, request Request) (Result, error) {
@@ -130,7 +132,7 @@ func (s Service) Run(ctx context.Context, source *os.File, document model.Docume
 		sourceName = source.Name()
 	}
 	if s.Capacity != nil {
-		release, err := projects.AcquireProcess(ctx, s.Capacity)
+		release, err := preview.AcquireProcess(ctx, s.Capacity)
 		if err != nil {
 			return Result{}, err
 		}
@@ -145,12 +147,12 @@ func (s Service) Run(ctx context.Context, source *os.File, document model.Docume
 	var metadata probe.Metadata
 	var probeErr error
 	if err := ctx.Err(); err != nil {
-		return Result{}, fmt.Errorf("%w: %v", ErrCancelled, err)
+		return Result{}, fmt.Errorf("%w: %w", ErrCancelled, err)
 	}
 	metadata, probeErr = (probe.Client{Path: s.FFprobePath}).ProbeFile(ctx, source)
 	if probeErr != nil {
 		if err := ctx.Err(); err != nil {
-			return Result{}, fmt.Errorf("%w: %v", ErrCancelled, err)
+			return Result{}, fmt.Errorf("%w: %w", ErrCancelled, err)
 		}
 		return Result{}, fmt.Errorf("probe export source: %w", probeErr)
 	}
@@ -160,9 +162,9 @@ func (s Service) Run(ctx context.Context, source *os.File, document model.Docume
 	}
 	if err := s.checkCapabilities(ctx, policy, request.CutStrategy); err != nil {
 		if ctx.Err() != nil {
-			return Result{}, fmt.Errorf("%w: %v", ErrCancelled, err)
+			return Result{}, fmt.Errorf("%w: %w", ErrCancelled, err)
 		}
-		return Result{}, fmt.Errorf("%w: %v", ErrInvalidRequest, err)
+		return Result{}, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
 	request.StreamIndexes = preflight.Selection
 	if len(document.Items) != 1 {
@@ -180,21 +182,32 @@ func (s Service) Run(ctx context.Context, source *os.File, document model.Docume
 			return Result{}, fmt.Errorf("%w: invalid segment bounds", ErrInvalidRequest)
 		}
 	}
+	if request.CutStrategy == "hybrid_smart_cut" {
+		if reasons := hybridMetadataCapabilityReasons(metadata, sourceName); len(reasons) > 0 {
+			return Result{}, fmt.Errorf("%w: %w: hybrid smart cut unsupported: %s", ErrInvalidRequest, ErrHybridSmartCutUnsupportedMedia, strings.Join(reasons, ","))
+		}
+	}
 	var keyframes []int64
 	hybridInterior := false
 	if request.CutStrategy != "precise_reencode" {
 		var err error
 		keyframes, err = (probe.Client{Path: s.FFprobePath}).Keyframes(ctx, source)
 		if err != nil {
+			if ctx.Err() != nil {
+				return Result{}, fmt.Errorf("%w: %w", ErrCancelled, ctx.Err())
+			}
 			return Result{}, fmt.Errorf("probe export keyframes: %w", err)
 		}
 		if request.CutStrategy == "hybrid_smart_cut" {
-			if !hybridSupported(metadata) || strings.ToLower(filepath.Ext(sourceName)) != ".mkv" {
-				return Result{}, fmt.Errorf("%w: %w: hybrid smart cut requires H.264 CFR MKV", ErrInvalidRequest, ErrHybridSmartCutUnsupportedMedia)
-			}
 			frameTimes, err := (probe.Client{Path: s.FFprobePath}).FrameTimes(ctx, source)
-			if err != nil || !constantFrameTimes(frameTimes) {
-				return Result{}, fmt.Errorf("%w: %w: hybrid smart cut requires finite CFR timestamps", ErrInvalidRequest, ErrHybridSmartCutUnsupportedMedia)
+			if err != nil {
+				if ctx.Err() != nil {
+					return Result{}, fmt.Errorf("%w: %w", ErrCancelled, ctx.Err())
+				}
+				return Result{}, fmt.Errorf("%w: %w: hybrid smart cut requires finite CFR timestamps: %w", ErrInvalidRequest, ErrHybridSmartCutUnsupportedMedia, err)
+			}
+			if reasons := hybridCapabilityReasons(metadata, sourceName, frameTimes); len(reasons) > 0 {
+				return Result{}, fmt.Errorf("%w: %w: hybrid smart cut unsupported: %s", ErrInvalidRequest, ErrHybridSmartCutUnsupportedMedia, strings.Join(reasons, ","))
 			}
 			for _, segment := range segments {
 				if hasInteriorKeyframe(segment, keyframes) {
@@ -212,11 +225,11 @@ func (s Service) Run(ctx context.Context, source *os.File, document model.Docume
 	}
 	destination, err := s.destinationForRequest(request)
 	if err != nil {
-		return Result{}, fmt.Errorf("%w: %v", ErrInvalidRequest, err)
+		return Result{}, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
 	prepared, err := prepareDestination(destination, source, sourceName, SourceLocation{RootPath: request.SourceRoot, RelativePath: request.SourceRelative})
 	if err != nil {
-		return Result{}, fmt.Errorf("%w: %v", ErrInvalidRequest, err)
+		return Result{}, fmt.Errorf("%w: %w", ErrInvalidRequest, err)
 	}
 	defer prepared.close()
 	outputDir := prepared.path
@@ -293,7 +306,9 @@ func (s Service) Run(ctx context.Context, source *os.File, document model.Docume
 	}
 	appliedStrategies := segmentStrategies(request.CutStrategy, segments, keyframes)
 	if request.Mode == "separate" {
-		result := Result{Container: request.Container, OutputNames: make([]string, 0, len(segmentFiles)), OutputFailures: segmentFailures, RetainUntil: now(s).Add(destinationRetention(destination, s)), DestinationID: destination.ID, DestinationKind: destination.Kind, AppliedStrategy: uniformStrategy(appliedStrategies), AppliedStrategies: appliedStrategies}
+		result := newResult(request.Container, destination, s, appliedStrategies)
+		result.OutputNames = make([]string, 0, len(segmentFiles))
+		result.OutputFailures = segmentFailures
 		publishedOwners := make([]manifestOutput, 0, len(segmentFiles))
 		committed := false
 		separateNames := make([]string, len(segmentFiles))
@@ -312,6 +327,11 @@ func (s Service) Run(ctx context.Context, source *os.File, document model.Docume
 			for suffix := 1; reservedNames[separateNames[i]]; suffix++ {
 				extension := filepath.Ext(base)
 				separateNames[i] = fmt.Sprintf("%s-%d%s", strings.TrimSuffix(base, extension), suffix, extension)
+			}
+			if err := validateAllocatedFilename(separateNames[i]); err != nil {
+				result.OutputFailures = append(result.OutputFailures, OutputFailure{Segment: i + 1, Code: "output_name_failed", Message: safeFailureMessage(err)})
+				separateNames[i] = ""
+				continue
 			}
 			reservedNames[separateNames[i]] = true
 			info, statErr := workRoot.Stat(segmentFiles[i])
@@ -418,14 +438,7 @@ func (s Service) Run(ctx context.Context, source *os.File, document model.Docume
 			result.AppliedStrategies[i].OutputName = name
 			result.SizeBytes += info.Size()
 		}
-		if request.CutStrategy == "precise_reencode" {
-			result.Warnings = []Warning{{Code: "experimental_precise_reencode", Message: "Experimental full re-encode mode; output boundaries and codec behavior require inspection."}}
-		} else if request.CutStrategy == "hybrid_smart_cut" {
-			result.Warnings = hybridWarnings(segments, keyframes, hybridInterior)
-		} else if hasPotentiallyInexactCut(segments, keyframes) {
-			result.Warnings = []Warning{{Code: "stream_copy_cut_may_not_be_frame_exact", Message: "Stream-copy cuts can start on an earlier keyframe; requested non-keyframe boundaries are not frame-exact."}}
-		}
-		result.Verified = request.CutStrategy != "precise_reencode"
+		applyResultMetadata(&result, request.CutStrategy, segments, keyframes, hybridInterior)
 		if len(result.OutputNames) == 0 {
 			return Result{}, errors.New("all separate outputs failed")
 		}
@@ -516,379 +529,16 @@ func (s Service) Run(ctx context.Context, source *os.File, document model.Docume
 	if !info.Mode().IsRegular() || !os.SameFile(temporaryInfo, info) {
 		return Result{}, errors.New("published output changed")
 	}
-	result := Result{Container: request.Container, OutputName: outputName, SizeBytes: info.Size(), RetainUntil: now(s).Add(destinationRetention(destination, s)), DestinationID: destination.ID, DestinationKind: destination.Kind, AppliedStrategy: uniformStrategy(appliedStrategies), AppliedStrategies: appliedStrategies, Verified: request.CutStrategy != "precise_reencode"}
+	result := newResult(request.Container, destination, s, appliedStrategies)
+	result.OutputName = outputName
+	result.SizeBytes = info.Size()
+	applyResultMetadata(&result, request.CutStrategy, segments, keyframes, hybridInterior)
 	if s.Artifacts != nil {
 		s.Artifacts.Put(request.JobID, []Artifact{{Path: finalPath, Name: outputName, Kind: destination.Kind, Expires: result.RetainUntil}})
-	}
-	if request.CutStrategy == "precise_reencode" {
-		result.Warnings = []Warning{{Code: "experimental_precise_reencode", Message: "Experimental full re-encode mode; output boundaries and codec behavior require inspection."}}
-	} else if request.CutStrategy == "hybrid_smart_cut" {
-		result.Warnings = hybridWarnings(segments, keyframes, hybridInterior)
-	} else if hasPotentiallyInexactCut(segments, keyframes) {
-		result.Warnings = []Warning{{
-			Code:    "stream_copy_cut_may_not_be_frame_exact",
-			Message: "Stream-copy cuts can start on an earlier keyframe; requested non-keyframe boundaries are not frame-exact.",
-		}}
 	}
 	manifestPublished = true
 	mergeCommitted = true
 	return result, nil
-}
-
-func (s Service) copySegment(ctx context.Context, source *os.File, segment model.Segment, output *os.File, workRoot *os.Root, workDirectory *os.File, request Request, keyframes []int64, policy exportpolicy.Policy) error {
-	if output == nil || workRoot == nil || workDirectory == nil {
-		return errors.New("segment output is not open")
-	}
-	if request.CutStrategy == "hybrid_smart_cut" {
-		return s.hybridSegment(ctx, source, segment, output, workRoot, workDirectory, keyframes, request.StreamIndexes, policy)
-	}
-	if _, err := source.Seek(0, io.SeekStart); err != nil {
-		return fmt.Errorf("rewind export source: %w", err)
-	}
-	args := []string{"-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-ss", seconds(segment.StartMS), "-i", sourceArgument(), "-t", seconds(segment.EndMS - segment.StartMS)}
-	if len(request.StreamIndexes) == 0 {
-		args = append(args, "-map", "0")
-	} else {
-		for _, index := range request.StreamIndexes {
-			args = append(args, "-map", fmt.Sprintf("0:%d", index))
-		}
-	}
-	args = append(args, "-avoid_negative_ts", "make_zero")
-	if request.CutStrategy == "precise_reencode" {
-		args = append(args, "-c:v", "libx264", "-c:a", "aac")
-	} else {
-		args = append(args, "-c", "copy")
-	}
-	args = append(args, output.Name())
-	return s.runWithOutput(ctx, source, output, workDirectory, args, policy)
-}
-
-func hybridSupported(metadata probe.Metadata) bool {
-	return metadata.Container == "matroska,webm" && metadata.Video != nil && metadata.Video.Codec == "h264" && validCFR(metadata.Video.AvgFrameRate, metadata.Video.FrameRate)
-}
-
-func validCFR(avg, rate string) bool {
-	parse := func(value string) (int64, int64, bool) {
-		parts := strings.Split(value, "/")
-		if len(parts) != 2 {
-			return 0, 0, false
-		}
-		n, e1 := strconv.ParseInt(parts[0], 10, 64)
-		d, e2 := strconv.ParseInt(parts[1], 10, 64)
-		return n, d, e1 == nil && e2 == nil && n > 0 && d > 0
-	}
-	an, ad, ok := parse(avg)
-	rn, rd, rok := parse(rate)
-	return ok && rok && an*rd == rn*ad
-}
-
-func constantFrameTimes(times []int64) bool {
-	if len(times) < 2 {
-		return false
-	}
-	delta := times[1] - times[0]
-	if delta <= 0 {
-		return false
-	}
-	for i := 2; i < len(times); i++ {
-		step := times[i] - times[i-1]
-		if step <= 0 || abs64(step-delta) > 1 {
-			return false
-		}
-	}
-	return true
-}
-
-func abs64(value int64) int64 {
-	if value < 0 {
-		return -value
-	}
-	return value
-}
-
-func hasInteriorKeyframe(segment model.Segment, keyframes []int64) bool {
-	for _, keyframe := range keyframes {
-		if keyframe > segment.StartMS && keyframe < segment.EndMS {
-			return true
-		}
-	}
-	return false
-}
-
-func hybridWarnings(segments []model.Segment, keyframes []int64, interior bool) []Warning {
-	warnings := make([]Warning, 0, 1+len(segments))
-	if interior {
-		warnings = append(warnings, Warning{Code: "experimental_hybrid_smart_cut", Message: hybridWarning(true)})
-	}
-	for index, segment := range segments {
-		if !hasInteriorKeyframe(segment, keyframes) {
-			warnings = append(warnings, Warning{Code: "hybrid_smart_cut_stream_copy_fallback", Message: fmt.Sprintf("Segment %d had no compatible interior keyframe; the requested span was stream-copied and may not be frame-exact.", index+1)})
-		}
-	}
-	if len(warnings) == 0 {
-		warnings = append(warnings, Warning{Code: hybridWarningCode(false), Message: hybridWarning(false)})
-	}
-	return warnings
-}
-
-func hybridWarningCode(interior bool) string {
-	if interior {
-		return "experimental_hybrid_smart_cut"
-	}
-	return "hybrid_smart_cut_stream_copy_fallback"
-}
-
-func hybridWarning(interior bool) string {
-	if interior {
-		return "Experimental H.264 CFR MKV hybrid cut; the leading video boundary is re-encoded, the remaining video span is stream-copied, and audio is consistently AAC-encoded. Output is not frame-exact without probe confirmation."
-	}
-	return "Hybrid Smart Cut found no compatible interior keyframe; the requested span was stream-copied and may not be frame-exact."
-}
-
-func hybridArgs(input string, startMS, durationMS int64, streamIndexes []int, videoCodec, audioCodec, output string) []string {
-	args := []string{"-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", input, "-ss", seconds(startMS), "-t", seconds(durationMS)}
-	if len(streamIndexes) == 0 {
-		args = append(args, "-map", "0")
-	} else {
-		for _, index := range streamIndexes {
-			args = append(args, "-map", fmt.Sprintf("0:%d", index))
-		}
-	}
-	return append(args, "-avoid_negative_ts", "make_zero", "-c:v", videoCodec, "-c:a", audioCodec, output)
-}
-
-func (s Service) hybridSegment(ctx context.Context, source *os.File, segment model.Segment, output *os.File, workRoot *os.Root, workDirectory *os.File, keyframes []int64, streamIndexes []int, policy exportpolicy.Policy) (returnErr error) {
-	boundary := int64(-1)
-	for _, keyframe := range keyframes {
-		if keyframe >= segment.StartMS {
-			boundary = keyframe
-			break
-		}
-	}
-	if boundary <= segment.StartMS || boundary >= segment.EndMS {
-		return s.copySegment(ctx, source, segment, output, workRoot, workDirectory, Request{CutStrategy: "stream_copy_preferred", Container: "mkv", StreamIndexes: streamIndexes}, nil, policy)
-	}
-	prefixName, suffixName := "prefix.mkv", "suffix.mkv"
-	prefix, err := workRoot.OpenFile(prefixName, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if err := prefix.Close(); err != nil {
-			returnErr = errors.Join(returnErr, fmt.Errorf("close hybrid prefix: %w", err))
-		}
-		if err := workRoot.Remove(prefixName); err != nil {
-			returnErr = errors.Join(returnErr, fmt.Errorf("remove hybrid prefix: %w", err))
-		}
-	}()
-	suffix, err := workRoot.OpenFile(suffixName, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if err := suffix.Close(); err != nil {
-			returnErr = errors.Join(returnErr, fmt.Errorf("close hybrid suffix: %w", err))
-		}
-		if err := workRoot.Remove(suffixName); err != nil {
-			returnErr = errors.Join(returnErr, fmt.Errorf("remove hybrid suffix: %w", err))
-		}
-	}()
-	if _, err := source.Seek(0, io.SeekStart); err != nil {
-		return err
-	}
-	prefixArgs := hybridArgs(sourceArgument(), segment.StartMS, boundary-segment.StartMS, streamIndexes, "libx264", "aac", "prefix.mkv")
-	if err := s.runWithOutput(ctx, source, prefix, workDirectory, prefixArgs, policy); err != nil {
-		return err
-	}
-	if _, err := source.Seek(0, io.SeekStart); err != nil {
-		return err
-	}
-	suffixArgs := hybridArgs(sourceArgument(), boundary, segment.EndMS-boundary, streamIndexes, "copy", "aac", "suffix.mkv")
-	if err := s.runWithOutput(ctx, source, suffix, workDirectory, suffixArgs, policy); err != nil {
-		return err
-	}
-	return s.concatToFile(ctx, workRoot, workDirectory, []string{prefixName, suffixName}, output, policy)
-}
-
-func (s Service) concatToFile(ctx context.Context, workRoot *os.Root, workDirectory *os.File, segments []string, output *os.File, policy exportpolicy.Policy) error {
-	manifest := "ffconcat version 1.0\n"
-	for _, segment := range segments {
-		manifest += "file '" + filepath.Base(segment) + "'\n"
-	}
-	if err := workRoot.WriteFile("segments.ffconcat", []byte(manifest), 0o600); err != nil {
-		return err
-	}
-	args := []string{"-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-f", "concat", "-safe", "1", "-i", "segments.ffconcat", "-c", "copy", "output." + policy.Extension}
-	return s.runWithOutput(ctx, nil, output, workDirectory, args, policy)
-}
-
-func (s Service) runWithOutput(ctx context.Context, source, output, directory *os.File, args []string, policy exportpolicy.Policy) error {
-	path := s.FFmpegPath
-	if path == "" {
-		path = "ffmpeg"
-	}
-	args = slices.Clone(args)
-	extraFiles := make([]*os.File, 0, 3)
-	if source != nil {
-		extraFiles = append(extraFiles, source) // Child descriptor 3; no original pathname is passed.
-	}
-	if output != nil {
-		extraFiles = append(extraFiles, output)
-		if len(args) == 0 {
-			return errors.New("ffmpeg output arguments are required")
-		}
-		outputArgs := slices.Clone(args[:len(args)-1])
-		outputLabel := filepath.Base(args[len(args)-1])
-		if outputLabel != "" && outputLabel != "." {
-			outputArgs = append(outputArgs, "-metadata", "videocutlist-output="+outputLabel)
-		}
-		if policy.FastStart {
-			outputArgs = append(outputArgs, "-movflags", "+faststart")
-		}
-		outputArgs = append(outputArgs, "-f", policy.Muxer)
-		outputDescriptor := 3 + len(extraFiles) - 1
-		args = append(outputArgs, fdinput.Path(uintptr(outputDescriptor)))
-	}
-	if directory != nil {
-		extraFiles = append(extraFiles, directory)
-	}
-	cmd := exec.Command(path, args...)
-	if directory != nil {
-		// Cmd.Dir is resolved before ExtraFiles are installed in the child;
-		// use the already-open parent descriptor, not its child slot.
-		cmd.Dir = fdinput.Directory(directory)
-	}
-	cmd.ExtraFiles = extraFiles
-	var stderr limitedBuffer
-	stderr.limit = maxStderrBytes
-	cmd.Stderr = &stderr
-	if err := runCommand(ctx, cmd); err != nil {
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-			return fmt.Errorf("%w: %v", ErrCancelled, err)
-		}
-		if stderr.err != nil {
-			return fmt.Errorf("ffmpeg output exceeded limit: %w", stderr.err)
-		}
-		return fmt.Errorf("ffmpeg export failed: %w", err)
-	}
-	if stderr.err != nil {
-		return fmt.Errorf("ffmpeg output exceeded limit: %w", stderr.err)
-	}
-	return nil
-}
-
-func runCommand(ctx context.Context, cmd *exec.Cmd) error {
-	if err := cmd.Start(); err != nil {
-		return err
-	}
-	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
-	select {
-	case err := <-done:
-		return err
-	case <-ctx.Done():
-		_ = terminate(cmd.Process)
-		timer := time.NewTimer(2 * time.Second)
-		defer timer.Stop()
-		select {
-		case <-done:
-		case <-timer.C:
-			_ = cmd.Process.Kill()
-			<-done
-		}
-		return ctx.Err()
-	}
-}
-
-// sourceArgument names the inherited source descriptor for FFmpeg input. The
-// Linux and Darwin paths are seekable so input-side -ss works; other platforms
-// fall back to FFmpeg pipe syntax, where only output-side seeks work.
-func sourceArgument() string {
-	return fdinput.Path(3)
-}
-
-func validateStreamIndexes(indexes []int, streams []probe.Stream) error {
-	if len(indexes) == 0 {
-		return nil
-	}
-	known := map[int]bool{}
-	for _, stream := range streams {
-		known[stream.Index] = true
-	}
-	seen := map[int]bool{}
-	for _, index := range indexes {
-		if index < 0 || !known[index] {
-			return fmt.Errorf("unknown stream index %d", index)
-		}
-		if seen[index] {
-			return fmt.Errorf("duplicate stream index %d", index)
-		}
-		seen[index] = true
-	}
-	return nil
-}
-
-// ResolveRanges freezes the exact included ranges for an export selection.
-func ResolveRanges(segments []model.Segment, selection string, duration int64) []model.Segment {
-	included := make([]model.Segment, 0, len(segments))
-	for _, segment := range segments {
-		if segment.IsIncluded() {
-			included = append(included, segment)
-		}
-	}
-	if selection == "segments" {
-		return included
-	}
-	ordered := slices.Clone(included)
-	slices.SortFunc(ordered, func(a, b model.Segment) int { return cmp.Compare(a.StartMS, b.StartMS) })
-	var gaps []model.Segment
-	cursor := int64(0)
-	for _, segment := range ordered {
-		if cursor < segment.StartMS {
-			gaps = append(gaps, model.Segment{StartMS: cursor, EndMS: segment.StartMS})
-		}
-		if segment.EndMS > cursor {
-			cursor = segment.EndMS
-		}
-	}
-	if cursor < duration {
-		gaps = append(gaps, model.Segment{StartMS: cursor, EndMS: duration})
-	}
-	return gaps
-}
-
-func segmentStrategies(requested string, segments []model.Segment, keyframes []int64) []AppliedStrategy {
-	strategies := make([]AppliedStrategy, len(segments))
-	for i, segment := range segments {
-		strategy := requested
-		if requested == "hybrid_smart_cut" && !hasInteriorKeyframe(segment, keyframes) {
-			strategy = "stream_copy"
-		}
-		strategies[i] = AppliedStrategy{Segment: i + 1, Strategy: strategy}
-	}
-	return strategies
-}
-
-func uniformStrategy(strategies []AppliedStrategy) string {
-	if len(strategies) == 0 {
-		return ""
-	}
-	strategy := strategies[0].Strategy
-	for _, value := range strategies[1:] {
-		if value.Strategy != strategy {
-			return ""
-		}
-	}
-	return strategy
-}
-
-func hasPotentiallyInexactCut(segments []model.Segment, keyframes []int64) bool {
-	for _, segment := range segments {
-		if !slices.Contains(keyframes, segment.StartMS) {
-			return true
-		}
-	}
-	return false
 }
 
 func seconds(milliseconds int64) string {
@@ -927,86 +577,3 @@ func destinationRetention(d Destination, s Service) time.Duration {
 	}
 	return retention(s)
 }
-
-func (p preparedDestination) outputFileName(request Request, source string, segment int, at time.Time) (string, error) {
-	policy, ok := exportpolicy.For(request.Container)
-	if !ok {
-		return "", fmt.Errorf("%w: unsupported export container", ErrInvalidRequest)
-	}
-	values := map[string]string{"source": strings.TrimSuffix(filepath.Base(source), filepath.Ext(source)), "date": at.Format("20060102"), "time": at.Format("150405"), "segment": strconv.Itoa(segment + 1), "mode": request.Mode, "ext": policy.Extension}
-	name, err := RenderTemplate(request.FilenameTemplate, values)
-	if err != nil {
-		return "", fmt.Errorf("%w: %v", ErrInvalidRequest, err)
-	}
-	for range 100 {
-		candidateName := name
-		if candidateName == "" {
-			candidateName = "cut-" + uniqueSuffix()
-		}
-		candidateName = strings.TrimSuffix(candidateName, "."+policy.Extension) + "-" + uniqueSuffix() + "." + policy.Extension
-		_, statErr := p.root.Lstat(candidateName)
-		if errors.Is(statErr, os.ErrNotExist) {
-			return candidateName, nil
-		}
-		if statErr != nil {
-			return "", statErr
-		}
-	}
-	return "", errors.New("could not allocate collision-safe export name")
-}
-
-func safeFailureMessage(err error) string {
-	if err == nil {
-		return "output could not be created"
-	}
-	var b strings.Builder
-	for _, character := range err.Error() {
-		if character < 32 || character == 127 {
-			b.WriteByte(' ')
-		} else if character == '/' || character == '\\' {
-			b.WriteByte('_')
-		} else {
-			b.WriteRune(character)
-		}
-		if b.Len() == 500 {
-			break
-		}
-	}
-	if b.Len() == 0 {
-		return "output could not be created"
-	}
-	return b.String()
-}
-
-func copyOpenFileToOpen(source, destination *os.File) error {
-	if source == nil || destination == nil {
-		return errors.New("copy file descriptors are required")
-	}
-	if _, err := destination.Seek(0, io.SeekStart); err != nil {
-		return err
-	}
-	if err := destination.Truncate(0); err != nil {
-		return err
-	}
-	_, err := io.Copy(destination, source)
-	return err
-}
-
-type limitedBuffer struct {
-	bytes.Buffer
-	limit int
-	err   error
-}
-
-func (b *limitedBuffer) Write(data []byte) (int, error) {
-	if b.err != nil {
-		return 0, b.err
-	}
-	if b.Len()+len(data) > b.limit {
-		b.err = errors.New("stderr exceeds limit")
-		return 0, b.err
-	}
-	return b.Buffer.Write(data)
-}
-
-var _ io.Writer = (*limitedBuffer)(nil)

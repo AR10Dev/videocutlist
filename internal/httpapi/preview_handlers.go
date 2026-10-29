@@ -9,9 +9,9 @@ import (
 	"os"
 	"strconv"
 
+	librarymedia "videocutlist/internal/library/media"
 	"videocutlist/internal/library/media/index"
-	"videocutlist/internal/projects"
-	"videocutlist/internal/projects/model"
+	"videocutlist/internal/preview"
 )
 
 func (s *Server) preview(writer http.ResponseWriter, request *http.Request, media string, id string) {
@@ -22,7 +22,7 @@ func (s *Server) preview(writer http.ResponseWriter, request *http.Request, medi
 	}
 	spec, err := s.previewSpec(request, item)
 	if err != nil {
-		httpx.Error(writer, 422, "invalid_preview", "Preview parameters are invalid.", id)
+		httpx.Error(writer, 400, "invalid_preview", "Preview parameters are invalid.", id)
 		return
 	}
 	if request.Method == http.MethodHead {
@@ -70,7 +70,7 @@ func (s *Server) preview(writer http.ResponseWriter, request *http.Request, medi
 	}
 }
 
-func (s *Server) assetSpec(request *http.Request, item Media, waveform bool) (AssetSpec, error) {
+func (s *Server) assetSpec(request *http.Request, item librarymedia.Media, waveform bool) (AssetSpec, error) {
 	keys := []string{"startMs", "durationMs"}
 	if waveform {
 		keys = append(keys, "samples")
@@ -116,7 +116,7 @@ func (s *Server) assetSpec(request *http.Request, item Media, waveform bool) (As
 
 func (s *Server) thumbnails(w http.ResponseWriter, r *http.Request, media, id string) {
 	if s.config.Assets == nil {
-		internalError(w, id)
+		internalError(w, id, nil)
 		return
 	}
 	item, err := s.config.Media.Get(r.Context(), media)
@@ -126,7 +126,7 @@ func (s *Server) thumbnails(w http.ResponseWriter, r *http.Request, media, id st
 	}
 	spec, err := s.assetSpec(r, item, false)
 	if err != nil {
-		httpx.Error(w, 422, "invalid_asset", "Thumbnail parameters are invalid.", id)
+		httpx.Error(w, 400, "invalid_asset", "Thumbnail parameters are invalid.", id)
 		return
 	}
 	if err := s.config.Assets.ValidateSource(r.Context(), item.ID); err != nil {
@@ -149,7 +149,7 @@ func (s *Server) thumbnails(w http.ResponseWriter, r *http.Request, media, id st
 
 func (s *Server) waveform(w http.ResponseWriter, r *http.Request, media, id string) {
 	if s.config.Assets == nil {
-		internalError(w, id)
+		internalError(w, id, nil)
 		return
 	}
 	item, err := s.config.Media.Get(r.Context(), media)
@@ -158,12 +158,12 @@ func (s *Server) waveform(w http.ResponseWriter, r *http.Request, media, id stri
 		return
 	}
 	if item.Streams["audio"] == nil {
-		httpx.Error(w, 422, "no_audio", "Media has no audio stream.", id)
+		httpx.Error(w, 400, "no_audio", "Media has no audio stream.", id)
 		return
 	}
 	spec, err := s.assetSpec(r, item, true)
 	if err != nil {
-		httpx.Error(w, 422, "invalid_asset", "Waveform parameters are invalid.", id)
+		httpx.Error(w, 400, "invalid_asset", "Waveform parameters are invalid.", id)
 		return
 	}
 	if err := s.config.Assets.ValidateSource(r.Context(), item.ID); err != nil {
@@ -174,15 +174,20 @@ func (s *Server) waveform(w http.ResponseWriter, r *http.Request, media, id stri
 		return
 	}
 	result, err := s.config.Assets.Waveform(r.Context(), spec)
-	if errors.Is(err, projects.ErrNoAudio) {
-		httpx.Error(w, 422, "no_audio", "Media has no audio stream.", id)
+	if errors.Is(err, preview.ErrNoAudio) {
+		httpx.Error(w, 400, "no_audio", "Media has no audio stream.", id)
 		return
 	}
 	if err != nil {
 		assetError(w, id, err)
 		return
 	}
-	httpx.WriteJSON(w, 200, map[string]any{"startMs": result.StartMS, "durationMs": result.DurationMS, "peaks": result.Peaks})
+	mapped, err := waveformToTransport(result)
+	if err != nil {
+		internalError(w, id, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, mapped)
 }
 
 func previewError(w http.ResponseWriter, id string, err error) {
@@ -190,16 +195,16 @@ func previewError(w http.ResponseWriter, id string, err error) {
 	case errors.Is(err, context.Canceled):
 		return
 	case errors.Is(err, context.DeadlineExceeded):
-		httpx.Error(w, http.StatusGatewayTimeout, "preview_timeout", "Preview timed out.", id)
+		internalServerError(w, http.StatusGatewayTimeout, "preview_timeout", "Preview timed out.", id, err)
 	case errors.Is(err, index.ErrNotFound), errors.Is(err, os.ErrNotExist):
 		notFound(w, id)
 	case errors.Is(err, index.ErrSourceChanged):
 		httpx.Error(w, http.StatusConflict, "source_changed", "Media changed; refresh the library and try again.", id)
-	case errors.Is(err, projects.ErrGlobalLimit):
+	case errors.Is(err, preview.ErrGlobalLimit):
 		w.Header().Set("Retry-After", "1")
 		httpx.Error(w, http.StatusTooManyRequests, "preview_busy", "Preview capacity is full; retry later.", id)
 	default:
-		internalError(w, id)
+		internalError(w, id, err)
 	}
 }
 
@@ -208,17 +213,17 @@ func assetError(w http.ResponseWriter, id string, err error) {
 	case errors.Is(err, context.Canceled):
 		return
 	case errors.Is(err, context.DeadlineExceeded):
-		httpx.Error(w, http.StatusGatewayTimeout, "asset_timeout", "Asset generation timed out.", id)
+		internalServerError(w, http.StatusGatewayTimeout, "asset_timeout", "Asset generation timed out.", id, err)
 	case errors.Is(err, index.ErrNotFound), errors.Is(err, os.ErrNotExist):
 		notFound(w, id)
 	case errors.Is(err, index.ErrSourceChanged):
 		httpx.Error(w, http.StatusConflict, "source_changed", "Media changed; refresh the library and try again.", id)
 	default:
-		internalError(w, id)
+		internalError(w, id, err)
 	}
 }
 
-func (s *Server) previewSpec(request *http.Request, item Media) (PreviewSpec, error) {
+func (s *Server) previewSpec(request *http.Request, item librarymedia.Media) (PreviewSpec, error) {
 	beforeDefault, afterDefault, maxPreview, grid := s.config.BeforeMS, s.config.AfterMS, s.config.MaxPreviewMS, s.config.GridMS
 	if s.config.RuntimeSettings != nil {
 		settings := s.config.RuntimeSettings.Snapshot()
@@ -253,5 +258,5 @@ func (s *Server) previewSpec(request *http.Request, item Media) (PreviewSpec, er
 	if item.DurationMS < 1 {
 		return PreviewSpec{}, errors.New("duration")
 	}
-	return projects.NormalizePreview(item.ID, item.DurationMS, center, mute, model.WindowConfig{BeforeMS: before, AfterMS: after, MaxMS: maxPreview, GridMS: grid})
+	return preview.NormalizePreview(item.ID, item.DurationMS, center, mute, preview.WindowConfig{BeforeMS: before, AfterMS: after, MaxMS: maxPreview, GridMS: grid})
 }

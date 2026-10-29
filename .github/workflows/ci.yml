@@ -18,33 +18,49 @@ jobs:
         runs-on: ubuntu-latest
         timeout-minutes: 30
         steps:
-            - uses: actions/checkout@v7.0.1
-            - uses: actions/setup-go@v7.0.0
+            # v7.0.1
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
               with:
-                  go-version: "1.26.8"
-            - uses: pnpm/action-setup@v6.0.10
+                  persist-credentials: false
+            # v7.0.0
+            - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+              with:
+                  go-version: "1.26.9"
+            # v6.0.10
+            - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
               with:
                   version: 10.34.5
-            - uses: actions/setup-node@v7.0.0
+            # v7.0.0
+            - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
               with:
                   node-version: "26.7.0"
                   cache: pnpm
-                  cache-dependency-path: client/pnpm-lock.yaml
+                  cache-dependency-path: web/pnpm-lock.yaml
             - name: Install check tools
               env:
                   GOBIN: ${{ runner.temp }}/bin
               run: |
                   mkdir -p "$GOBIN"
-                  go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.1
+                  go install \
+                    github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.1
                   go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
                   go install mvdan.cc/sh/v3/cmd/shfmt@v3.13.1
                   sudo apt-get update
-                  sudo apt-get install -y shellcheck
+                  sudo apt-get install -y shellcheck ffmpeg
                   echo "$GOBIN" >> "$GITHUB_PATH"
-            - run: pnpm --dir client install --frozen-lockfile
+            - run: pnpm --dir web install --frozen-lockfile
             - run: >-
-                  pnpm --dir client audit --audit-level high
+                  pnpm --dir web audit --audit-level high
                   --ignore-registry-errors
+            - run: pnpm --dir web run api:generate
+            - run: git diff --exit-code -- web/src/generated/effect-api.ts
+            - run: make generate-go-api
+            - name: Check generated API artifacts are current
+              run: |
+                  git diff --exit-code -- internal/httpapi/transport
+                  untracked=$(git ls-files --others -- \
+                    web/src/generated internal/httpapi/transport)
+                  test -z "$untracked"
             - run: make check
             - run: govulncheck ./...
 
@@ -52,14 +68,44 @@ jobs:
         runs-on: ubuntu-24.04
         timeout-minutes: 30
         steps:
-            - uses: actions/checkout@v7.0.1
-            - uses: pnpm/action-setup@v6.0.10
+            # v7.0.1
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+              with:
+                  persist-credentials: false
+            # v7.0.0
+            - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
+              with:
+                  go-version: "1.26.9"
+            # v6.0.10
+            - uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86
               with:
                   version: 10.34.5
-            - uses: actions/setup-node@v7.0.0
+            # v7.0.0
+            - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
               with:
                   node-version: "26.7.0"
                   cache: pnpm
-                  cache-dependency-path: client/pnpm-lock.yaml
-            - run: pnpm --dir client install --frozen-lockfile
-            - run: make e2e
+                  cache-dependency-path: web/pnpm-lock.yaml
+            - run: pnpm --dir web install --frozen-lockfile
+            - name: Install real-media and browser tools
+              run: |
+                  sudo apt-get update
+                  sudo apt-get install -y ffmpeg
+                  pnpm --dir web exec playwright install --with-deps chromium
+            # actions/cache v5 (checksum is reverified by acquisition)
+            - uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25
+              with:
+                  path: test/fixtures/real-media
+                  key: media-${{ hashFiles('test/harness/acquire-*') }}
+            - name: Real-app acceptance
+              run: make e2e
+            - name: Upload browser evidence
+              if: always()
+              # actions/upload-artifact v7.0.0
+              uses: >-
+                  actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+              with:
+                  name: browser-evidence-${{ github.run_id }}
+                  path: web/test-results/
+                  retention-days: 14
+                  if-no-files-found: warn

@@ -1,7 +1,7 @@
 .git
-client/node_modules
-client/dist
-client/test-results
+web/node_modules
+web/dist
+web/test-results
 node_modules
 test-results
 *.db

@@ -1,125 +1,40 @@
-# VideoCutlist
+# VideoCutList
 
-VideoCutlist is a local-first video review tool. It indexes original media without
-copying it, creates short browser previews, and exports selected segments as MKV,
-MP4, or MOV files. Original-media filesystem paths never leave the server.
+VideoCutList is a self-hosted web application for organizing video media, reviewing clips, and preparing exports. It scans configured media roots and uses FFmpeg/FFprobe for media operations.
 
-## Features
+## Quick start (local source)
 
-- Read-only media indexing below configured media roots
-- Ordered multi-media projects with independent edits per item
-- Browser previews for selecting segments
-- MKV, MP4, and MOV batch exports with fast stream copy, precise re-encode, or
-  experimental hybrid smart cut for compatible H.264 MKV sources
-- Durable SQLite job queue with cancellation and explicit retry
-- Loopback-only service by default
-- Bearer and trusted-proxy authentication options
-- SQLite-backed state and reproducible preview cache
+Requirements: Go 1.26 or newer, Node.js 26.7.0, pnpm 10.34.5, FFmpeg, and FFprobe. From the repository root, install and build the frontend before starting the server:
 
-## Requirements
+```sh
+pnpm --dir web install --frozen-lockfile
+pnpm --dir web run build
 
-Enter `devenv shell` for the project-local Go, gopls, golangci-lint, Node, pnpm,
-FFmpeg, ShellCheck, shfmt, and Hadolint toolchain.
-
-You still need Docker or Podman with Compose for container checks.
-
-## Run locally
-
-```bash
-DATA_DIR="$(mktemp -d)"
-# Replace /path/to/media with the local directory containing originals.
-make client-install
-make build
-VIDEOCUTLIST_DATABASE_PATH="$DATA_DIR/videocutlist.db" \
-VIDEOCUTLIST_CACHE_DIR="$DATA_DIR/cache" \
-VIDEOCUTLIST_EXPORT_DIR="$DATA_DIR/exports" \
-VIDEOCUTLIST_MEDIA_ROOTS_JSON='{"media":"/path/to/media"}' \
-  go run ./cmd/videocutlist
+work=$(mktemp -d)
+port=8787
+mkdir -p "$work"/{media,cache,exports}
+VIDEOCUTLIST_DATABASE_PATH="$work/videocutlist.db" \
+VIDEOCUTLIST_CACHE_DIR="$work/cache" \
+VIDEOCUTLIST_EXPORT_DIR="$work/exports" \
+VIDEOCUTLIST_MEDIA_ROOTS_JSON="{}" \
+VIDEOCUTLIST_PORT="$port" \
+go run ./cmd/videocutlist
 ```
 
-The server listens on `127.0.0.1:8787` by default. Run it as a dedicated
-non-root account with read access to the absolute media root and write access to
-only the database, cache, and export directories. See the [deployment and
-settings guide](docs/runbooks/containers.md) for native permissions and
-container-visible mount paths. Release builds embed the bundled client in the Go
-binary and serve it from the same origin. Local development builds serve the
-generated `client/dist` directory.
+Open <http://127.0.0.1:8787>. Stop with Ctrl-C. To browse media, set `VIDEOCUTLIST_MEDIA_ROOTS_JSON` to a JSON object mapping a safe alias to an existing directory, for example `{"media":"/absolute/path/to/videos"}`. Keep originals outside application-managed cache and export directories. The process defaults to loopback and authentication mode `none`; do not expose that configuration to a network.
 
-## Deploy with Docker or Podman
+The default FFmpeg and FFprobe executable names are `ffmpeg` and `ffprobe`; set `VIDEOCUTLIST_FFMPEG_PATH` and `VIDEOCUTLIST_FFPROBE_PATH` when needed. The `make run` development target uses `.cache/videocutlist` for application data.
 
-The container image includes the server with the frontend embedded in its binary,
-plus FFmpeg and FFprobe.
-The Compose file works with either Docker Compose or Podman Compose:
+## Configuration and deployment
 
-```bash
-cd deployments/containers
-umask 077
-cp videocutlist.env.example videocutlist.env
-printf 'VIDEOCUTLIST_BEARER_TOKEN=%s\n' "$(openssl rand -hex 32)" >> videocutlist.env
-# Put originals in ./media, or set VIDEOCUTLIST_MEDIA_DIR to another directory.
-docker compose up -d
-# podman compose up -d
-```
+The server reads `VIDEOCUTLIST_*` environment variables. Database, cache, and export paths are required. See [`deployments/containers/videocutlist.env.example`](deployments/containers/videocutlist.env.example) for container defaults and authentication examples, and the [container runbook](docs/runbooks/containers.md) for Compose setup, storage, proxy, and exposure guidance.
 
-Open <http://127.0.0.1:8787> and enter the generated bearer token from your private
-`videocutlist.env`. The browser keeps it in memory only; reload requires sign-in
-again. Never commit that file or put the token in a URL or frontend build.
-The host port binding is loopback-only; the container listener requires
-authentication even for local publishing. See the [container deployment
-guide](docs/runbooks/containers.md) for directory permissions and remote TLS.
+Authentication modes are `none`, `bearer`, and `trusted_proxy`. `none` is restricted to a loopback listener. Bearer mode requires a control-free token of at least 32 bytes; generate one with `openssl rand -hex 32` and store it as a secret. Trusted-proxy mode requires explicit trusted peer CIDRs. Only use it when the server is reachable solely through those proxy peers; forwarded client-address headers are not a substitute for network isolation. Review allowed origins and public-base-URL settings when deploying behind a reverse proxy.
 
-## MCP clients
+MCP is disabled by default. Enabling it exposes the `/mcp` endpoint; create scoped MCP credentials through application settings and grant only required permissions/media/project scope. MCP credentials are separate from HTTP bearer authentication. Do not expose MCP to untrusted networks.
 
-MCP is disabled by default. Enable it in **Settings → MCP access**, create a scoped
-credential, and connect a Streamable HTTP client to `http://127.0.0.1:8787/mcp`
-with `Authorization: Bearer <one-time-secret>`. The pinned protocol version is
-`2025-06-18`; the server returns that version during `initialize` and requires it
-on subsequent session requests.
+## Support and development
 
-The bearer-token Streamable HTTP flow is tested with MCP Inspector. OAuth-only
-clients are not supported because VideoCutlist does not provide an OAuth
-authorization server or callback flow. The listener remains loopback-only by
-default. A deliberately remote deployment must terminate HTTPS and retain bearer
-authentication; plain HTTP is rejected for non-loopback clients.
+The project supports the latest release. It supports the current design only; backward compatibility with older databases or configurations is not promised. Back up application data before upgrades. To run the project checks, see `make check`; `make smoke` also runs browser end-to-end tests.
 
-`get_export_download` returns a protected `/mcp/download/...` URL rather than
-embedding an artifact in the MCP response. Fetch it with the same bearer token;
-each download rechecks the credential, scope, and revocation state.
-
-## Repository at a glance
-
-| Location | What you will find |
-| --- | --- |
-| `cmd/videocutlist/` | Go server entry point and startup wiring |
-| `internal/` | Go application code and infrastructure |
-| `client/` | SolidJS/TypeScript frontend and its pnpm tooling |
-| `docs/` | Guides and API contracts |
-| `test/` | Cross-package and media workflow tests |
-
-For setup and checks, use the [contributor guide](CONTRIBUTING.md).
-
-## Development
-
-```bash
-make client-install
-make check             # lint, tests, and production build
-make smoke             # check plus browser tests
-make test-real-media   # opt-in production process and FFmpeg verification
-make clean             # remove generated output, preserving dependencies and local data
-```
-
-CI and release validation install the same `make check` prerequisites as the
-development shell: golangci-lint v2.13.1, shfmt v3.13.1, and ShellCheck.
-Both workflows run `make check`; the CI browser job separately runs `make e2e`.
-CI limits browser tests to two concurrent workers to keep the Vite development
-server responsive on the hosted runner.
-
-## Documentation
-
-See the [documentation index](docs/README.md).
-
-## Security
-
-VideoCutlist handles paths to original media and should not be exposed directly
-to the public internet. Review the [security policy](SECURITY.md) before
-configuring network access.
+See [SECURITY.md](SECURITY.md) for vulnerability reporting and [LICENSE](LICENSE) for license terms.

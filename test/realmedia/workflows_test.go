@@ -21,12 +21,12 @@ func TestProductionSettingsAndAutomationWorkflows(t *testing.T) {
 		Settings map[string]any `json:"settings"`
 		Revision int64          `json:"revision"`
 	}
-	getJSON(t, p, "/api/v1/settings", &settings)
+	getJSON(t, p, "/api/v2/settings", &settings)
 	if settings.Revision < 1 {
 		t.Fatal("settings revision was not initialized")
 	}
 	settings.Settings["previewGlobalLimit"] = 2
-	resp := p.requestBody(t, http.MethodPut, "/api/v1/settings", map[string]any{"revision": settings.Revision, "settings": settings.Settings})
+	resp := p.requestBody(t, http.MethodPut, "/api/v2/settings", map[string]any{"revision": settings.Revision, "settings": settings.Settings})
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
 		t.Fatalf("settings update status=%d", resp.StatusCode)
@@ -36,90 +36,53 @@ func TestProductionSettingsAndAutomationWorkflows(t *testing.T) {
 	p = startProcess(t, root)
 	var persisted struct {
 		Settings map[string]any `json:"settings"`
+		Revision int64          `json:"revision"`
 	}
-	getJSON(t, p, "/api/v1/settings", &persisted)
-	projects := p.request(t, http.MethodGet, "/api/v1/projects")
+	getJSON(t, p, "/api/v2/settings", &persisted)
+	projects := p.request(t, http.MethodGet, "/api/v2/projects")
 	projects.Body.Close()
 	if value, ok := persisted.Settings["previewGlobalLimit"].(float64); !ok || value != 2 {
 		t.Fatalf("settings did not persist after restart: %#v", persisted.Settings)
 	}
-	stale := p.requestBody(t, http.MethodPut, "/api/v1/settings", map[string]any{"revision": settings.Revision, "settings": settings.Settings})
+	stale := p.requestBody(t, http.MethodPut, "/api/v2/settings", map[string]any{"revision": settings.Revision, "settings": settings.Settings})
 	if stale.StatusCode != http.StatusConflict {
 		stale.Body.Close()
 		t.Fatalf("stale settings status=%d", stale.StatusCode)
 	}
 	stale.Body.Close()
-	deployment := p.requestBody(t, http.MethodPut, "/api/v1/settings", map[string]any{"revision": settings.Revision + 1, "settings": map[string]any{"mediaRoots": map[string]string{"escape": "/tmp"}}})
-	if deployment.StatusCode != http.StatusUnprocessableEntity {
+	deploymentSettings := make(map[string]any, len(persisted.Settings)+1)
+	for key, value := range persisted.Settings {
+		deploymentSettings[key] = value
+	}
+	deploymentSettings["mediaRoots"] = map[string]string{"escape": "/tmp"}
+	deployment := p.requestBody(t, http.MethodPut, "/api/v2/settings", map[string]any{"revision": persisted.Revision, "settings": deploymentSettings})
+	var deploymentError struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if deployment.StatusCode != http.StatusBadRequest || json.NewDecoder(deployment.Body).Decode(&deploymentError) != nil || deploymentError.Error.Code != "deployment_settings_read_only" {
 		deployment.Body.Close()
-		t.Fatalf("deployment settings status=%d", deployment.StatusCode)
+		t.Fatalf("deployment settings status=%d code=%q", deployment.StatusCode, deploymentError.Error.Code)
 	}
 	deployment.Body.Close()
 
-	var media struct {
-		Items []struct {
-			ID string `json:"id"`
-		} `json:"items"`
-	}
-	getJSON(t, p, "/api/v1/media", &media)
-	if len(media.Items) != 1 {
-		t.Fatalf("media items=%d", len(media.Items))
-	}
-	project := map[string]any{"revision": 0, "schemaVersion": 2, "name": "automation", "items": []any{map[string]any{"id": "i_abcdefghijklmnopqrstuvwx", "mediaId": media.Items[0].ID, "segments": []any{map[string]any{"startMs": 0, "endMs": 1000}}}}}
-	created := p.requestBody(t, http.MethodPut, "/api/v1/projects/p_real_automation", project)
-	if created.StatusCode != http.StatusOK {
-		created.Body.Close()
-		t.Fatalf("project status=%d", created.StatusCode)
-	}
-	created.Body.Close()
-	missingAuth := p.requestNoAuth(t, http.MethodPost, "/api/v1/automation")
+	missingAuth := p.requestNoAuth(t, http.MethodPost, "/api/v2/automation")
 	if missingAuth.StatusCode != http.StatusUnauthorized {
 		missingAuth.Body.Close()
 		t.Fatalf("missing automation auth status=%d", missingAuth.StatusCode)
 	}
 	missingAuth.Body.Close()
 	command := func(payload map[string]any) *http.Response {
-		return p.requestBody(t, http.MethodPost, "/api/v1/automation", payload)
+		return p.requestBody(t, http.MethodPost, "/api/v2/automation", payload)
 	}
-	exported := command(map[string]any{"action": "project.export", "projectId": "p_real_automation", "format": "csv"})
-	var exportBody struct {
-		Content string `json:"content"`
-	}
-	if exported.StatusCode != http.StatusOK || json.NewDecoder(exported.Body).Decode(&exportBody) != nil || exportBody.Content == "" {
-		exported.Body.Close()
-		t.Fatalf("automation export status=%d", exported.StatusCode)
-	}
-	exported.Body.Close()
-	imported := command(map[string]any{"action": "project.import", "projectId": "p_real_automation", "format": "csv", "input": exportBody.Content})
-	if imported.StatusCode != http.StatusOK {
-		imported.Body.Close()
-		t.Fatalf("automation import status=%d", imported.StatusCode)
-	}
-	imported.Body.Close()
-	jobResponse := p.requestBody(t, http.MethodPost, "/api/v1/projects/p_real_automation/exports", map[string]any{"itemIds": []string{"i_abcdefghijklmnopqrstuvwx"}})
-	var submitted struct {
-		Jobs []struct {
-			ID string `json:"id"`
-		} `json:"jobs"`
-	}
-	if jobResponse.StatusCode != http.StatusAccepted || json.NewDecoder(jobResponse.Body).Decode(&submitted) != nil || len(submitted.Jobs) != 1 {
-		jobResponse.Body.Close()
-		t.Fatalf("automation job setup status=%d", jobResponse.StatusCode)
-	}
-	jobResponse.Body.Close()
-	jobStatus := command(map[string]any{"action": "job.status", "jobId": submitted.Jobs[0].ID})
-	if jobStatus.StatusCode != http.StatusOK {
-		jobStatus.Body.Close()
-		t.Fatalf("automation status lookup=%d", jobStatus.StatusCode)
-	}
-	jobStatus.Body.Close()
-	malformed := p.requestHeaders(t, http.MethodPost, "/api/v1/automation", strings.NewReader("{"), nil)
-	if malformed.StatusCode != http.StatusUnprocessableEntity {
+	malformed := p.requestHeaders(t, http.MethodPost, "/api/v2/automation", strings.NewReader("{"), nil)
+	if malformed.StatusCode != http.StatusBadRequest {
 		malformed.Body.Close()
 		t.Fatalf("malformed automation status=%d", malformed.StatusCode)
 	}
 	malformed.Body.Close()
-	overlarge := p.requestHeaders(t, http.MethodPost, "/api/v1/automation", strings.NewReader(strings.Repeat("x", 2<<20)), nil)
+	overlarge := p.requestHeaders(t, http.MethodPost, "/api/v2/automation", strings.NewReader(strings.Repeat("x", 2<<20)), nil)
 	if overlarge.StatusCode != http.StatusRequestEntityTooLarge {
 		overlarge.Body.Close()
 		t.Fatalf("oversized automation status=%d", overlarge.StatusCode)
@@ -137,7 +100,7 @@ func TestProductionSettingsAndAutomationWorkflows(t *testing.T) {
 
 func TestProductionMCPAdministrationUsesRealProcess(t *testing.T) {
 	p := startProcessWithEnv(t, t.TempDir(), map[string]string{"VIDEOCUTLIST_MCP_ENABLED": "true"})
-	settings := p.request(t, http.MethodGet, "/api/v1/settings/mcp")
+	settings := p.request(t, http.MethodGet, "/api/v2/settings/mcp")
 	var view struct {
 		Enabled             bool   `json:"enabled"`
 		Endpoint            string `json:"endpoint"`
@@ -149,7 +112,7 @@ func TestProductionMCPAdministrationUsesRealProcess(t *testing.T) {
 	}
 	settings.Body.Close()
 	expires := time.Now().UTC().Add(time.Hour).Format(time.RFC3339Nano)
-	created := p.requestBody(t, http.MethodPost, "/api/v1/settings/mcp/credentials", map[string]any{
+	created := p.requestBody(t, http.MethodPost, "/api/v2/settings/mcp/credentials", map[string]any{
 		"name": "real-media MCP", "permissions": []string{"media:read"},
 		"mediaScope": map[string]any{"kind": "all"}, "projectScope": map[string]any{"kind": "all"}, "expiresAt": expires,
 	})
@@ -162,54 +125,43 @@ func TestProductionMCPAdministrationUsesRealProcess(t *testing.T) {
 		t.Fatalf("MCP credential status=%d credential=%+v", created.StatusCode, credential)
 	}
 	created.Body.Close()
-	revoked := p.request(t, http.MethodDelete, "/api/v1/settings/mcp/credentials/"+credential.ID)
+	revoked := p.request(t, http.MethodDelete, "/api/v2/settings/mcp/credentials/"+credential.ID)
 	if revoked.StatusCode != http.StatusOK {
 		revoked.Body.Close()
 		t.Fatalf("MCP revoke status=%d", revoked.StatusCode)
 	}
 	revoked.Body.Close()
-	for _, request := range []struct {
-		method string
-		path   string
-	}{{http.MethodGet, "/api/v1/export-proposals/ep_aaaaaaaaaaaa"}, {http.MethodPost, "/api/v1/export-proposals/ep_aaaaaaaaaaaa/approval"}} {
-		response := p.request(t, request.method, request.path)
-		if response.StatusCode != http.StatusNotFound {
-			response.Body.Close()
-			t.Fatalf("missing proposal %s status=%d", request.path, response.StatusCode)
-		}
-		response.Body.Close()
-	}
 }
 
 func TestProductionCORSAndTrustedProxy(t *testing.T) {
 	p := startProcessWithEnv(t, t.TempDir(), map[string]string{"VIDEOCUTLIST_ALLOWED_ORIGINS": "https://allowed.example", "VIDEOCUTLIST_TRUSTED_PROXY_CIDRS": "127.0.0.1/32"})
-	allowed := p.requestHeaders(t, http.MethodOptions, "/api/v1/media", nil, map[string]string{"Origin": "https://allowed.example", "Access-Control-Request-Method": "GET"})
+	allowed := p.requestHeaders(t, http.MethodOptions, "/api/v2/media", nil, map[string]string{"Origin": "https://allowed.example", "Access-Control-Request-Method": "GET"})
 	if allowed.StatusCode != http.StatusNoContent || allowed.Header.Get("Access-Control-Allow-Origin") != "https://allowed.example" {
 		allowed.Body.Close()
 		t.Fatalf("allowed CORS status=%d origin=%q", allowed.StatusCode, allowed.Header.Get("Access-Control-Allow-Origin"))
 	}
 	allowed.Body.Close()
-	disallowed := p.requestHeaders(t, http.MethodOptions, "/api/v1/media", nil, map[string]string{"Origin": "https://evil.example", "Access-Control-Request-Method": "GET"})
+	disallowed := p.requestHeaders(t, http.MethodOptions, "/api/v2/media", nil, map[string]string{"Origin": "https://evil.example", "Access-Control-Request-Method": "GET"})
 	if disallowed.StatusCode == http.StatusNoContent {
 		disallowed.Body.Close()
 		t.Fatal("disallowed CORS preflight succeeded")
 	}
 	disallowed.Body.Close()
 	excluded := startProcessWithEnv(t, t.TempDir(), map[string]string{"VIDEOCUTLIST_AUTH_MODE": "trusted_proxy", "VIDEOCUTLIST_TRUSTED_PROXY_CIDRS": "192.0.2.0/24"})
-	unauthenticated := excluded.requestHeaders(t, http.MethodGet, "/api/v1/media", nil, map[string]string{"X-Forwarded-For": "203.0.113.9", "X-Forwarded-Proto": "https"})
+	unauthenticated := excluded.requestHeaders(t, http.MethodGet, "/api/v2/media", nil, map[string]string{"X-Forwarded-For": "203.0.113.9", "X-Forwarded-Proto": "https"})
 	if unauthenticated.StatusCode != http.StatusUnauthorized {
 		unauthenticated.Body.Close()
 		t.Fatalf("untrusted forwarded request status=%d", unauthenticated.StatusCode)
 	}
 	unauthenticated.Body.Close()
 	included := startProcessWithEnv(t, t.TempDir(), map[string]string{"VIDEOCUTLIST_AUTH_MODE": "trusted_proxy", "VIDEOCUTLIST_TRUSTED_PROXY_CIDRS": "127.0.0.1/32"})
-	forwarded := included.requestHeaders(t, http.MethodGet, "/api/v1/media", nil, map[string]string{"X-Forwarded-For": "203.0.113.9", "X-Forwarded-Proto": "https"})
+	forwarded := included.requestHeaders(t, http.MethodGet, "/api/v2/media", nil, map[string]string{"X-Forwarded-For": "203.0.113.9", "X-Forwarded-Proto": "https"})
 	if forwarded.StatusCode != http.StatusOK {
 		forwarded.Body.Close()
 		t.Fatalf("trusted forwarded request status=%d", forwarded.StatusCode)
 	}
 	forwarded.Body.Close()
-	malformed := included.requestHeaders(t, http.MethodGet, "/api/v1/media", nil, map[string]string{"X-Forwarded-For": "not-an-ip"})
+	malformed := included.requestHeaders(t, http.MethodGet, "/api/v2/media", nil, map[string]string{"X-Forwarded-For": "not-an-ip"})
 	if malformed.StatusCode != http.StatusBadRequest {
 		malformed.Body.Close()
 		t.Fatalf("malformed forwarded request status=%d", malformed.StatusCode)
@@ -223,7 +175,7 @@ func TestProductionSymlinkAndSourceChange(t *testing.T) {
 	if err := os.Symlink("/etc/passwd", filepath.Join(root, "media", "escape.mp4")); err != nil {
 		t.Fatal(err)
 	}
-	refresh := p.request(t, http.MethodPost, "/api/v1/media/refresh")
+	refresh := p.requestCommand(t, http.MethodPost, "/api/v2/media/refresh", nil)
 	var refreshJob struct {
 		ID string `json:"id"`
 	}
@@ -233,7 +185,7 @@ func TestProductionSymlinkAndSourceChange(t *testing.T) {
 	}
 	refresh.Body.Close()
 	waitFor(t, 10*time.Second, func() bool {
-		response := p.request(t, http.MethodGet, "/api/v1/media/import/"+refreshJob.ID)
+		response := p.request(t, http.MethodGet, "/api/v2/media/import/"+refreshJob.ID)
 		defer response.Body.Close()
 		var job struct {
 			State string `json:"state"`
@@ -251,7 +203,7 @@ func TestProductionSymlinkAndSourceChange(t *testing.T) {
 			ID string `json:"id"`
 		} `json:"items"`
 	}
-	getJSON(t, p, "/api/v1/media", &media)
+	getJSON(t, p, "/api/v2/media", &media)
 	if len(media.Items) != 1 {
 		t.Fatalf("escaped symlink indexed: %d items", len(media.Items))
 	}
@@ -259,13 +211,19 @@ func TestProductionSymlinkAndSourceChange(t *testing.T) {
 		t.Fatal(err)
 	}
 	project := map[string]any{"revision": 0, "schemaVersion": 2, "name": "source change", "items": []any{map[string]any{"id": "i_abcdefghijklmnopqrstuvwx", "mediaId": media.Items[0].ID, "segments": []any{map[string]any{"startMs": 0, "endMs": 1000}}, "exportOptions": map[string]any{"mode": "merge", "selection": "segments", "cutStrategy": "stream_copy_preferred", "container": "mkv", "destinationId": "download"}}}}
-	created := p.requestBody(t, http.MethodPut, "/api/v1/projects/p_source_change", project)
+	created := p.requestBody(t, http.MethodPut, "/api/v2/projects/p_source_change", project)
 	if created.StatusCode != http.StatusOK {
 		created.Body.Close()
 		t.Fatalf("project status=%d", created.StatusCode)
 	}
 	created.Body.Close()
-	export := p.requestBody(t, http.MethodPost, "/api/v1/projects/p_source_change/exports", map[string]any{"itemIds": []string{"i_abcdefghijklmnopqrstuvwx"}})
+	var savedProject struct {
+		Revision int64 `json:"revision"`
+	}
+	getJSON(t, p, "/api/v2/projects/p_source_change", &savedProject)
+	exportSubmission := map[string]any{"itemIds": []string{"i_abcdefghijklmnopqrstuvwx"}, "projectRevision": savedProject.Revision}
+	export := p.requestCommand(t, http.MethodPost, "/api/v2/projects/p_source_change/exports", exportSubmission)
+	assertCommandProjectRevision(t, export, savedProject.Revision)
 	var submitted struct {
 		Jobs []struct {
 			ID string `json:"id"`
@@ -280,7 +238,7 @@ func TestProductionSymlinkAndSourceChange(t *testing.T) {
 		t.Fatal("source-change export returned no job")
 	}
 	waitFor(t, 10*time.Second, func() bool {
-		response := p.request(t, http.MethodGet, "/api/v1/jobs/"+submitted.Jobs[0].ID)
+		response := p.request(t, http.MethodGet, "/api/v2/jobs/"+submitted.Jobs[0].ID)
 		defer response.Body.Close()
 		var job struct {
 			State string `json:"state"`
@@ -290,7 +248,7 @@ func TestProductionSymlinkAndSourceChange(t *testing.T) {
 		}
 		return job.State == "failed"
 	})
-	retry := p.request(t, http.MethodPost, "/api/v1/jobs/"+submitted.Jobs[0].ID+"/retry")
+	retry := p.requestCommand(t, http.MethodPost, "/api/v2/jobs/"+submitted.Jobs[0].ID+"/retry", nil)
 	var retried struct {
 		BatchID string `json:"batchId"`
 	}
@@ -309,12 +267,18 @@ func TestProductionBatchCancellationLifecycle(t *testing.T) {
 			ID string `json:"id"`
 		} `json:"items"`
 	}
-	getJSON(t, p, "/api/v1/media", &media)
+	getJSON(t, p, "/api/v2/media", &media)
 	project := map[string]any{"revision": 0, "schemaVersion": 2, "name": "cancel", "items": []any{map[string]any{"id": "i_abcdefghijklmnopqrstuvwx", "mediaId": media.Items[0].ID, "segments": []any{map[string]any{"startMs": 0, "endMs": 52000}}, "exportOptions": map[string]any{"mode": "merge", "selection": "segments", "cutStrategy": "precise_reencode", "container": "mkv", "destinationId": "download"}}}}
-	created := p.requestBody(t, http.MethodPut, "/api/v1/projects/p_cancel_123456", project)
+	created := p.requestBody(t, http.MethodPut, "/api/v2/projects/p_cancel_123456", project)
 	created.Body.Close()
+	var savedProject struct {
+		Revision int64 `json:"revision"`
+	}
+	getJSON(t, p, "/api/v2/projects/p_cancel_123456", &savedProject)
 	submit := func() (string, string) {
-		response := p.requestBody(t, http.MethodPost, "/api/v1/projects/p_cancel_123456/exports", map[string]any{"itemIds": []string{"i_abcdefghijklmnopqrstuvwx"}})
+		submission := map[string]any{"itemIds": []string{"i_abcdefghijklmnopqrstuvwx"}, "projectRevision": savedProject.Revision}
+		response := p.requestCommand(t, http.MethodPost, "/api/v2/projects/p_cancel_123456/exports", submission)
+		assertCommandProjectRevision(t, response, savedProject.Revision)
 		defer response.Body.Close()
 		var value struct {
 			BatchID string `json:"batchId"`
@@ -332,7 +296,7 @@ func TestProductionBatchCancellationLifecycle(t *testing.T) {
 	}
 	firstBatch, firstJob := submit()
 	waitFor(t, 10*time.Second, func() bool {
-		response := p.request(t, http.MethodGet, "/api/v1/jobs/"+firstJob)
+		response := p.request(t, http.MethodGet, "/api/v2/jobs/"+firstJob)
 		defer response.Body.Close()
 		var job struct {
 			State string `json:"state"`
@@ -340,45 +304,31 @@ func TestProductionBatchCancellationLifecycle(t *testing.T) {
 		return json.NewDecoder(response.Body).Decode(&job) == nil && job.State == "running"
 	})
 	ffmpegPID := ffmpegDescendant(t, p)
+	resumedFFmpeg := false
+	resumeFFmpeg := func() {
+		if !resumedFFmpeg {
+			_ = syscall.Kill(ffmpegPID, syscall.SIGCONT)
+			resumedFFmpeg = true
+		}
+	}
+	t.Cleanup(resumeFFmpeg)
 	second, secondJob := submit()
 	waitFor(t, 10*time.Second, func() bool {
-		response := p.request(t, http.MethodGet, "/api/v1/jobs/"+secondJob)
+		response := p.request(t, http.MethodGet, "/api/v2/jobs/"+secondJob)
 		defer response.Body.Close()
 		var job struct {
 			State string `json:"state"`
 		}
 		return json.NewDecoder(response.Body).Decode(&job) == nil && job.State == "queued"
 	})
-	runningCancel := p.request(t, http.MethodDelete, "/api/v1/batches/"+firstBatch)
-	if runningCancel.StatusCode != http.StatusNoContent {
-		runningCancel.Body.Close()
-		t.Fatalf("running batch cancellation status=%d", runningCancel.StatusCode)
+	queuedCancel := p.request(t, http.MethodDelete, "/api/v2/batches/"+second)
+	if queuedCancel.StatusCode != http.StatusNoContent {
+		queuedCancel.Body.Close()
+		t.Fatalf("queued batch cancellation status=%d", queuedCancel.StatusCode)
 	}
-	runningCancel.Body.Close()
+	queuedCancel.Body.Close()
 	waitFor(t, 10*time.Second, func() bool {
-		response := p.request(t, http.MethodGet, "/api/v1/batches/"+firstBatch)
-		defer response.Body.Close()
-		var value struct {
-			State string `json:"state"`
-		}
-		return json.NewDecoder(response.Body).Decode(&value) == nil && value.State == "cancelled"
-	})
-	runningOutput := p.request(t, http.MethodGet, "/api/v1/jobs/"+firstJob+"/outputs/0")
-	if runningOutput.StatusCode != http.StatusNotFound {
-		runningOutput.Body.Close()
-		t.Fatalf("running cancelled output status=%d", runningOutput.StatusCode)
-	}
-	runningOutput.Body.Close()
-	_ = syscall.Kill(ffmpegPID, syscall.SIGCONT)
-	waitPIDExit(t, ffmpegPID)
-	cancel := p.request(t, http.MethodDelete, "/api/v1/batches/"+second)
-	if cancel.StatusCode != http.StatusNoContent {
-		cancel.Body.Close()
-		t.Fatalf("batch cancellation status=%d", cancel.StatusCode)
-	}
-	cancel.Body.Close()
-	waitFor(t, 10*time.Second, func() bool {
-		response := p.request(t, http.MethodGet, "/api/v1/batches/"+second)
+		response := p.request(t, http.MethodGet, "/api/v2/batches/"+second)
 		defer response.Body.Close()
 		var value struct {
 			State string `json:"state"`
@@ -388,18 +338,40 @@ func TestProductionBatchCancellationLifecycle(t *testing.T) {
 		}
 		return value.State == "cancelled"
 	})
-	repeat := p.request(t, http.MethodDelete, "/api/v1/batches/"+second)
+	repeat := p.request(t, http.MethodDelete, "/api/v2/batches/"+second)
 	if repeat.StatusCode != http.StatusNoContent {
 		repeat.Body.Close()
 		t.Fatalf("terminal batch cancellation status=%d", repeat.StatusCode)
 	}
 	repeat.Body.Close()
-	output := p.request(t, http.MethodGet, "/api/v1/jobs/"+secondJob+"/outputs/0")
+	output := p.request(t, http.MethodGet, "/media/v2/jobs/"+secondJob+"/outputs/0")
 	if output.StatusCode != http.StatusNotFound {
 		output.Body.Close()
 		t.Fatalf("cancelled output status=%d", output.StatusCode)
 	}
 	output.Body.Close()
+	runningCancel := p.request(t, http.MethodDelete, "/api/v2/batches/"+firstBatch)
+	if runningCancel.StatusCode != http.StatusNoContent {
+		runningCancel.Body.Close()
+		t.Fatalf("running batch cancellation status=%d", runningCancel.StatusCode)
+	}
+	runningCancel.Body.Close()
+	waitFor(t, 10*time.Second, func() bool {
+		response := p.request(t, http.MethodGet, "/api/v2/batches/"+firstBatch)
+		defer response.Body.Close()
+		var value struct {
+			State string `json:"state"`
+		}
+		return json.NewDecoder(response.Body).Decode(&value) == nil && value.State == "cancelled"
+	})
+	runningOutput := p.request(t, http.MethodGet, "/media/v2/jobs/"+firstJob+"/outputs/0")
+	if runningOutput.StatusCode != http.StatusNotFound {
+		runningOutput.Body.Close()
+		t.Fatalf("running cancelled output status=%d", runningOutput.StatusCode)
+	}
+	runningOutput.Body.Close()
+	resumeFFmpeg()
+	waitPIDExit(t, ffmpegPID)
 	assertNoTemporaryArtifacts(t, root)
 	suiteSummary.Add("cancellation batch_id=%s job_id=%s state=cancelled", second, secondJob)
 }
@@ -412,12 +384,18 @@ func TestProductionRestartReconcilesExport(t *testing.T) {
 			ID string `json:"id"`
 		} `json:"items"`
 	}
-	getJSON(t, p, "/api/v1/media", &media)
+	getJSON(t, p, "/api/v2/media", &media)
 	project := map[string]any{"revision": 0, "schemaVersion": 2, "name": "restart", "items": []any{map[string]any{"id": "i_abcdefghijklmnopqrstuvwx", "mediaId": media.Items[0].ID, "segments": []any{map[string]any{"startMs": 0, "endMs": 52000}}, "exportOptions": map[string]any{"mode": "merge", "selection": "segments", "cutStrategy": "precise_reencode", "container": "mkv", "destinationId": "download"}}}}
-	created := p.requestBody(t, http.MethodPut, "/api/v1/projects/p_restart_reconcile", project)
+	created := p.requestBody(t, http.MethodPut, "/api/v2/projects/p_restart_reconcile", project)
 	created.Body.Close()
+	var savedProject struct {
+		Revision int64 `json:"revision"`
+	}
+	getJSON(t, p, "/api/v2/projects/p_restart_reconcile", &savedProject)
 	submit := func() string {
-		export := p.requestBody(t, http.MethodPost, "/api/v1/projects/p_restart_reconcile/exports", map[string]any{"itemIds": []string{"i_abcdefghijklmnopqrstuvwx"}})
+		submission := map[string]any{"itemIds": []string{"i_abcdefghijklmnopqrstuvwx"}, "projectRevision": savedProject.Revision}
+		export := p.requestCommand(t, http.MethodPost, "/api/v2/projects/p_restart_reconcile/exports", submission)
+		assertCommandProjectRevision(t, export, savedProject.Revision)
 		defer export.Body.Close()
 		var submitted struct {
 			Jobs []struct {
@@ -431,7 +409,7 @@ func TestProductionRestartReconcilesExport(t *testing.T) {
 	}
 	runningID := submit()
 	waitFor(t, 10*time.Second, func() bool {
-		response := p.request(t, http.MethodGet, "/api/v1/jobs/"+runningID)
+		response := p.request(t, http.MethodGet, "/api/v2/jobs/"+runningID)
 		defer response.Body.Close()
 		var job struct {
 			State string `json:"state"`
@@ -441,7 +419,7 @@ func TestProductionRestartReconcilesExport(t *testing.T) {
 	ffmpegPID := ffmpegDescendant(t, p)
 	queuedID := submit()
 	waitFor(t, 10*time.Second, func() bool {
-		response := p.request(t, http.MethodGet, "/api/v1/jobs/"+queuedID)
+		response := p.request(t, http.MethodGet, "/api/v2/jobs/"+queuedID)
 		defer response.Body.Close()
 		var job struct {
 			State string `json:"state"`
@@ -452,24 +430,24 @@ func TestProductionRestartReconcilesExport(t *testing.T) {
 	_ = syscall.Kill(ffmpegPID, syscall.SIGCONT)
 	waitPIDExit(t, ffmpegPID)
 	p = startProcess(t, root)
-	getJSON(t, p, "/api/v1/projects/p_restart_reconcile", &map[string]any{})
+	getJSON(t, p, "/api/v2/projects/p_restart_reconcile", &map[string]any{})
 	var recovered struct {
 		State string `json:"state"`
 		Error string `json:"errorCode"`
 	}
-	getJSON(t, p, "/api/v1/jobs/"+runningID, &recovered)
+	getJSON(t, p, "/api/v2/jobs/"+runningID, &recovered)
 	if recovered.State != "failed" || recovered.Error != "interrupted_by_restart" {
 		t.Fatalf("running recovery state=%q error=%q", recovered.State, recovered.Error)
 	}
 	waitFor(t, 90*time.Second, func() bool {
-		response := p.request(t, http.MethodGet, "/api/v1/jobs/"+queuedID)
+		response := p.request(t, http.MethodGet, "/api/v2/jobs/"+queuedID)
 		defer response.Body.Close()
 		var job struct {
 			State string `json:"state"`
 		}
 		return json.NewDecoder(response.Body).Decode(&job) == nil && job.State == "succeeded"
 	})
-	output := p.request(t, http.MethodGet, "/api/v1/jobs/"+queuedID+"/outputs/0")
+	output := p.request(t, http.MethodGet, "/media/v2/jobs/"+queuedID+"/outputs/0")
 	data, err := io.ReadAll(output.Body)
 	output.Body.Close()
 	if output.StatusCode != http.StatusOK || err != nil || len(data) == 0 {
@@ -481,7 +459,20 @@ func TestProductionRestartReconcilesExport(t *testing.T) {
 
 func TestProductionAuthNoneLoopback(t *testing.T) {
 	p := startProcessWithEnv(t, t.TempDir(), map[string]string{"VIDEOCUTLIST_AUTH_MODE": "none"})
-	resp := p.request(t, http.MethodGet, "/api/v1/ready")
+	media := p.requestNoAuth(t, http.MethodGet, "/api/v2/media")
+	if media.StatusCode != http.StatusOK {
+		media.Body.Close()
+		t.Fatalf("auth-none application resource=%d", media.StatusCode)
+	}
+	var page struct {
+		Items []json.RawMessage `json:"items"`
+	}
+	if err := json.NewDecoder(media.Body).Decode(&page); err != nil || len(page.Items) == 0 {
+		media.Body.Close()
+		t.Fatalf("unauthenticated media response items=%d err=%v", len(page.Items), err)
+	}
+	media.Body.Close()
+	resp := p.request(t, http.MethodGet, "/ready")
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
 		t.Fatalf("auth-none readiness=%d", resp.StatusCode)

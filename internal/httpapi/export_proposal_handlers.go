@@ -18,10 +18,15 @@ func (s *Server) getExportProposal(w http.ResponseWriter, r *http.Request, propo
 		return
 	}
 	if err != nil {
-		httpx.Error(w, http.StatusInternalServerError, "export_proposals_unavailable", "Export proposal could not be loaded.", id)
+		internalServerError(w, http.StatusInternalServerError, "export_proposals_unavailable", "Export proposal could not be loaded.", id, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, proposal)
+	mapped, err := mcpExportProposalToTransport(proposal)
+	if err != nil {
+		internalError(w, id, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, mapped)
 }
 
 func (s *Server) approveExportProposal(w http.ResponseWriter, r *http.Request, proposalID, id string) {
@@ -39,8 +44,13 @@ func (s *Server) approveExportProposal(w http.ResponseWriter, r *http.Request, p
 		return
 	}
 	if err != nil {
-		httpx.Error(w, http.StatusInternalServerError, "export_proposals_unavailable", "Export proposal could not be approved.", id)
+		internalServerError(w, http.StatusInternalServerError, "export_proposals_unavailable", "Export proposal could not be approved.", id, err)
 		return
 	}
-	httpx.WriteJSON(w, http.StatusOK, proposal)
+	mapped, err := mcpExportProposalToTransport(proposal)
+	if err != nil {
+		internalError(w, id, err)
+		return
+	}
+	httpx.WriteJSON(w, http.StatusOK, mapped)
 }

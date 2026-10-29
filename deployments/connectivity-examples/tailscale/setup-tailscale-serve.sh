@@ -29,7 +29,7 @@ systemctl is-active --quiet videocutlist || {
   echo "videocutlist is not active" >&2
   exit 1
 }
-curl --fail --silent --show-error http://127.0.0.1:8787/api/v1/ready >/dev/null
+curl --fail --silent --show-error http://127.0.0.1:8787/ready >/dev/null
 
 tailscale serve --bg --https=443 "--accept-app-caps=$caps" http://127.0.0.1:8787
 serve=$(tailscale serve status --json)

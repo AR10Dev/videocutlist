@@ -9,25 +9,21 @@ import (
 	"strings"
 
 	"videocutlist/internal/exportpolicy"
+	"videocutlist/internal/processio"
 )
 
 func (s Service) checkCapabilities(ctx context.Context, policy exportpolicy.Policy, strategy string) error {
-	features := []struct {
+	type feature struct {
 		listing string
 		name    string
-	}{
+	}
+	features := []feature{
 		{"-muxers", policy.Muxer},
 	}
 	if strategy == "precise_reencode" || strategy == "hybrid_smart_cut" {
 		features = append(features,
-			struct {
-				listing string
-				name    string
-			}{"-encoders", "libx264"},
-			struct {
-				listing string
-				name    string
-			}{"-encoders", "aac"},
+			feature{"-encoders", "libx264"},
+			feature{"-encoders", "aac"},
 		)
 	}
 	for _, feature := range features {
@@ -48,16 +44,17 @@ func (s Service) ffmpegFeature(ctx context.Context, listing, feature string) (bo
 		path = "ffmpeg"
 	}
 	cmd := exec.Command(path, "-hide_banner", listing)
-	var stdout, stderr limitedBuffer
-	stdout.limit, stderr.limit = maxStderrBytes, maxStderrBytes
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	overflow := errors.New("stderr exceeds limit")
+	stdout := processio.NewLimitedBuffer(maxStderrBytes, overflow)
+	stderr := processio.NewLimitedBuffer(maxStderrBytes, overflow)
+	cmd.Stdout, cmd.Stderr = stdout, stderr
 	if err := runCommand(ctx, cmd); err != nil {
 		if ctx.Err() != nil {
 			return false, ctx.Err()
 		}
 		return false, fmt.Errorf("FFmpeg capability check failed: %w", err)
 	}
-	if stdout.err != nil || stderr.err != nil {
+	if stdout.Err() != nil || stderr.Err() != nil {
 		return false, errors.New("FFmpeg capability output exceeded limit")
 	}
 	for line := range strings.SplitSeq(stdout.String(), "\n") {

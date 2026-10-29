@@ -2,7 +2,6 @@ package mcp
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"errors"
 	"slices"
@@ -11,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	store "videocutlist/internal/db"
+	librarymedia "videocutlist/internal/library/media"
 	"videocutlist/internal/projects"
 	"videocutlist/internal/projects/model"
 )
@@ -23,13 +23,12 @@ const (
 	cutlistOpLimit     = 100
 )
 
-// ProjectToolService is the existing project service surface needed for MCP
-// project tools. Creation must use the caller's transaction so project
-// persistence and credential scope changes commit or roll back together.
+// ProjectToolService is the project service surface needed for MCP tools.
+// Creation is validated before storage atomically commits the project and grant.
 type ProjectToolService interface {
 	projects.ProjectService
 	projects.ProjectListService
-	CreateInTx(context.Context, *sql.Tx, string, projects.ProjectInput, []projects.Media) (projects.Project, error)
+	PrepareCreate(context.Context, string, projects.ProjectInput, []librarymedia.Media) (projects.PreparedProject, error)
 }
 
 // ProjectTools provides scoped project inspection and revision-checked cutlist edits.
@@ -185,7 +184,7 @@ func createProject(ctx Context, service ProjectToolService, media MediaReader, c
 	}
 	items := make([]model.ProjectItem, 0, len(args.MediaIDs))
 	resources := make([]MediaResource, 0, len(args.MediaIDs))
-	resolved := make([]projects.Media, 0, len(args.MediaIDs))
+	resolved := make([]librarymedia.Media, 0, len(args.MediaIDs))
 	for _, mediaID := range args.MediaIDs {
 		item, err := media.Get(ctx.Request.Context(), mediaID)
 		if err != nil {
@@ -209,20 +208,16 @@ func createProject(ctx Context, service ProjectToolService, media MediaReader, c
 	if err != nil {
 		return ToolResult{}, err
 	}
-	var project projects.Project
-	err = credentials.withTransaction(ctx.Request.Context(), func(tx *sql.Tx) error {
-		var err error
-		project, err = service.CreateInTx(ctx.Request.Context(), tx, projectID, projects.ProjectInput{Document: model.Document{SchemaVersion: model.ProjectSchemaVersion, Name: args.Name, Items: items}}, resolved)
-		if err != nil {
-			return err
-		}
-		_, err = credentials.grantProjectTx(ctx.Request.Context(), tx, ctx.Credential.ID, project.ID)
-		return err
-	})
+	prepared, err := service.PrepareCreate(ctx.Request.Context(), projectID, projects.ProjectInput{Document: model.Document{SchemaVersion: model.ProjectSchemaVersion, Name: args.Name, Items: items}}, resolved)
 	if err != nil {
 		return ToolResult{}, err
 	}
-	return ToolResult{Content: []ToolContent{{Type: "text", Text: "Project created."}}, StructuredContent: projectResult(project)}, nil
+	created, _, err := credentials.CreateProjectAndGrant(ctx.Request.Context(), store.ProjectRecord{ID: prepared.Project.ID, DocumentJSON: prepared.DocumentJSON}, ctx.Credential.ID)
+	if err != nil {
+		return ToolResult{}, err
+	}
+	prepared.Project.Revision, prepared.Project.UpdatedAt = created.Revision, created.UpdatedAt
+	return ToolResult{Content: []ToolContent{{Type: "text", Text: "Project created."}}, StructuredContent: projectResult(prepared.Project)}, nil
 }
 
 func updateCutlist(ctx Context, service projects.ProjectService, raw json.RawMessage) (ToolResult, error) {

@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"videocutlist/internal/fdinput"
+	"videocutlist/internal/processio"
 )
 
 // ValidateFile accepts only the software-preview fMP4 profile before cache publication.
@@ -32,9 +33,9 @@ func ValidateFile(ctx context.Context, ffprobePath string, file *os.File) error 
 	} else {
 		cmd.ExtraFiles = []*os.File{file}
 	}
-	var stdout, stderr boundedBuffer
-	stdout.limit, stderr.limit = defaultStderr, defaultStderr
-	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	stdout := processio.NewTruncatedBuffer(defaultStderr)
+	stderr := processio.NewTruncatedBuffer(defaultStderr)
+	cmd.Stdout, cmd.Stderr = stdout, stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("ffprobe preview: %w: %s", err, stderr.String())
 	}

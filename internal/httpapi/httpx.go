@@ -1,4 +1,4 @@
-// Package httpx contains bounded HTTP boundary helpers.
+// Package httpapi contains bounded HTTP boundary helpers.
 package httpapi
 
 import (
@@ -11,6 +11,8 @@ import (
 	"io"
 	"log"
 	"net/http"
+
+	"videocutlist/internal/httpapi/transport"
 )
 
 const MaxJSONBody = 1 << 20
@@ -25,7 +27,8 @@ type boundary struct{}
 // committed; changing the response at that point would produce a misleading status.
 func closeResponseBody(logger *log.Logger, resource string, closer io.Closer) {
 	if err := closer.Close(); err != nil && logger != nil {
-		logger.Printf(`{"error_category":"response_cleanup","resource":%q}`, resource)
+		data, _ := json.Marshal(map[string]string{"error_category": "response_cleanup", "resource": resource})
+		logger.Print(string(data))
 	}
 }
 
@@ -62,7 +65,11 @@ func Error(writer http.ResponseWriter, status int, code, message, requestID stri
 	if observed, ok := writer.(*statusWriter); ok {
 		observed.errorCode = code
 	}
-	WriteJSON(writer, status, map[string]any{"error": map[string]string{"code": code, "message": message, "requestId": requestID}})
+	response := transport.Error{}
+	response.Error.Code = code
+	response.Error.Message = message
+	response.Error.RequestId = requestID
+	WriteJSON(writer, status, response)
 }
 
 // ReadJSON rejects oversized, malformed, and trailing JSON values.
